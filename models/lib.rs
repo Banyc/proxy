@@ -9,8 +9,8 @@ use tracing::{instrument, trace};
 pub enum ProxyProtocolError {
     #[error("io error")]
     Io(#[from] io::Error),
-    #[error("decode header error")]
-    DecodeHeader(#[from] bincode::Error),
+    #[error("bincode error")]
+    Bincode(#[from] bincode::Error),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
