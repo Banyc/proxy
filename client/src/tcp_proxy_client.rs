@@ -17,7 +17,7 @@ impl TcpProxyClient {
     pub async fn establish(
         mut self,
         addresses: &[SocketAddr],
-    ) -> Result<TcpStream, ProxyProtocolError> {
+    ) -> Result<TcpProxyStream, ProxyProtocolError> {
         // Convert addresses to headers
         let headers = addresses
             .iter()
@@ -32,6 +32,8 @@ impl TcpProxyClient {
         }
 
         // Return stream
-        Ok(self.stream)
+        Ok(TcpProxyStream(self.stream))
     }
 }
+
+pub struct TcpProxyStream(pub TcpStream);
