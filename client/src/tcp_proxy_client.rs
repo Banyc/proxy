@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use models::{write_header, Header, ProxyProtocolError};
+use models::{read_header, write_header, ProxyProtocolError, RequestHeader, ResponseHeader};
 use tokio::net::TcpStream;
 use tracing::instrument;
 
@@ -21,7 +21,7 @@ impl TcpProxyClient {
         // Convert addresses to headers
         let headers = addresses
             .iter()
-            .map(|addr| Header {
+            .map(|addr| RequestHeader {
                 upstream: addr.clone(),
             })
             .collect::<Vec<_>>();
@@ -29,6 +29,12 @@ impl TcpProxyClient {
         // Write headers to stream
         for header in headers {
             write_header(&mut self.stream, &header).await?;
+        }
+
+        // Read response
+        let resp: ResponseHeader = read_header(&mut self.stream).await?;
+        if let Err(err) = resp.result {
+            return Err(ProxyProtocolError::Response(err));
         }
 
         // Return stream
