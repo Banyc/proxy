@@ -1,11 +1,11 @@
-use std::io;
+use std::{io, net::SocketAddr};
 
 use models::{
     read_header, write_header, ProxyProtocolError, RequestHeader, ResponseError, ResponseErrorKind,
     ResponseHeader,
 };
 use tokio::net::{TcpListener, TcpStream};
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, trace};
 
 pub struct TcpProxy {
     listener: TcpListener,
@@ -22,48 +22,34 @@ impl TcpProxy {
         info!(?addr, "Listening");
         loop {
             let (stream, _) = self.listener.accept().await?;
-            info!(peer_addr = ?stream.peer_addr(), "Accepted connection");
+            trace!(peer_addr = ?stream.peer_addr(), "Accepted connection");
             tokio::spawn(async move {
                 let mut stream = stream;
-                if let Err(e) = proxy(&mut stream).await {
-                    error!(?e, "Error handling connection");
-
-                    // Respond with error
-                    let resp = match e {
-                        ProxyProtocolError::Io(_) => ResponseHeader {
-                            result: Err(ResponseError {
-                                source: addr,
-                                kind: ResponseErrorKind::Io,
-                            }),
-                        },
-                        ProxyProtocolError::Bincode(_) => ResponseHeader {
-                            result: Err(ResponseError {
-                                source: addr,
-                                kind: ResponseErrorKind::Codec,
-                            }),
-                        },
-                        ProxyProtocolError::Loopback => ResponseHeader {
-                            result: Err(ResponseError {
-                                source: addr,
-                                kind: ResponseErrorKind::Loopback,
-                            }),
-                        },
-                        ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
-                    };
-                    if let Err(e) = write_header(&mut stream, &resp).await {
-                        error!(?e, "Error writing response");
-                    }
-                }
+                let res = proxy(&mut stream).await;
+                teardown(&mut stream, res).await;
             });
         }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct StreamMetrics {
+    start: std::time::Instant,
+    end: std::time::Instant,
+    bytes_uplink: u64,
+    bytes_downlink: u64,
+    upstream_addr: SocketAddr,
+    downstream_addr: SocketAddr,
+}
+
 #[instrument(skip_all)]
-async fn proxy(downstream: &mut TcpStream) -> Result<(), ProxyProtocolError> {
+async fn proxy(downstream: &mut TcpStream) -> Result<StreamMetrics, ProxyProtocolError> {
+    let downstream_addr = downstream.peer_addr()?;
+    let start = std::time::Instant::now();
+
     // Decode header
     let header: RequestHeader = read_header(downstream).await?;
-    info!(?header, "Decoded header");
+    trace!(?header, "Decoded header");
 
     // Prevent connections to localhost
     if header.upstream.ip().is_loopback() {
@@ -72,24 +58,64 @@ async fn proxy(downstream: &mut TcpStream) -> Result<(), ProxyProtocolError> {
 
     // Connect to upstream
     let mut upstream = TcpStream::connect(header.upstream).await?;
-    info!(peer_addr = ?upstream.peer_addr(), "Connected to upstream");
+    let upstream_addr = upstream.peer_addr()?;
+    trace!(?upstream_addr, "Connected to upstream");
 
     // Write Ok response
     let resp = ResponseHeader { result: Ok(()) };
     write_header(downstream, &resp).await?;
 
     // Copy data
-    let (mut upstream_reader, mut upstream_writer) = upstream.split();
-    let (mut downstream_reader, mut downstream_writer) = downstream.split();
-    let upstream_to_downstream = tokio::io::copy(&mut upstream_reader, &mut downstream_writer);
-    let downstream_to_upstream = tokio::io::copy(&mut downstream_reader, &mut upstream_writer);
-    tokio::select! {
-        res = upstream_to_downstream => res?,
-        res = downstream_to_upstream => res?,
-    };
-    info!("Connection closed");
+    let (bytes_uplink, bytes_downlink) =
+        tokio::io::copy_bidirectional(downstream, &mut upstream).await?;
 
-    Ok(())
+    let end = std::time::Instant::now();
+    let metrics = StreamMetrics {
+        start,
+        end,
+        bytes_uplink,
+        bytes_downlink,
+        upstream_addr,
+        downstream_addr,
+    };
+    trace!(?metrics, "Stream metrics");
+    Ok(metrics)
+}
+
+#[instrument(skip_all)]
+async fn teardown(stream: &mut TcpStream, res: Result<StreamMetrics, ProxyProtocolError>) {
+    match res {
+        Ok(x) => info!(?x, "Connection closed normally"),
+        Err(e) => {
+            error!(?e, "Connection closed with error");
+
+            let local_addr = stream.local_addr().unwrap();
+
+            // Respond with error
+            let resp = match e {
+                ProxyProtocolError::Io(_) => ResponseHeader {
+                    result: Err(ResponseError {
+                        source: local_addr,
+                        kind: ResponseErrorKind::Io,
+                    }),
+                },
+                ProxyProtocolError::Bincode(_) => ResponseHeader {
+                    result: Err(ResponseError {
+                        source: local_addr,
+                        kind: ResponseErrorKind::Codec,
+                    }),
+                },
+                ProxyProtocolError::Loopback => ResponseHeader {
+                    result: Err(ResponseError {
+                        source: local_addr,
+                        kind: ResponseErrorKind::Loopback,
+                    }),
+                },
+                ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
+            };
+            let _ = write_header(stream, &resp).await;
+        }
+    }
 }
 
 #[cfg(test)]
