@@ -1,0 +1,12 @@
+[package]
+name = "tests"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+client = { path = "../client" }
+server = { path = "../server" }
+tokio = { version = "1.26.0", features = ["full"] }
+models = { path = "../models" }

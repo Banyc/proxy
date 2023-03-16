@@ -10,45 +10,41 @@ use tokio::{
 };
 use tracing::{instrument, trace};
 
-pub struct TcpProxyClient {
-    stream: TcpStream,
-}
-
-impl TcpProxyClient {
-    pub fn new(stream: TcpStream) -> Self {
-        Self { stream }
-    }
-
+impl TcpProxyStream {
     #[instrument(skip_all)]
-    pub async fn establish(
-        mut self,
-        addresses: &[SocketAddr],
-    ) -> Result<TcpProxyStream, ProxyProtocolError> {
+    pub async fn establish(addresses: &[SocketAddr]) -> Result<TcpProxyStream, ProxyProtocolError> {
+        let mut stream = TcpStream::connect(addresses[0]).await?;
+
         // Convert addresses to headers
-        let headers = addresses
+        let headers = addresses[1..]
             .iter()
             .map(|addr| RequestHeader { upstream: *addr })
             .collect::<Vec<_>>();
 
         // Write headers to stream
         for header in headers {
-            write_header(&mut self.stream, &header).await?;
+            write_header(&mut stream, &header).await?;
             trace!(?header, "Wrote header");
         }
 
         // Read response
-        let resp: ResponseHeader = read_header(&mut self.stream).await?;
-        trace!(?resp, "Read response");
-        if let Err(err) = resp.result {
-            return Err(ProxyProtocolError::Response(err));
+        for address in addresses[..addresses.len() - 1].iter() {
+            let resp: ResponseHeader = read_header(&mut stream).await?;
+            trace!(?resp, "Read response");
+            if let Err(mut err) = resp.result {
+                err.source = *address;
+                return Err(ProxyProtocolError::Response(err));
+            }
+            trace!("Response was successful");
         }
-        trace!("Response was successful");
+        trace!("All responses were successful");
 
         // Return stream
-        Ok(TcpProxyStream(self.stream))
+        Ok(TcpProxyStream(stream))
     }
 }
 
+#[derive(Debug)]
 pub struct TcpProxyStream(TcpStream);
 
 impl Deref for TcpProxyStream {
