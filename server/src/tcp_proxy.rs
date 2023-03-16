@@ -45,6 +45,7 @@ struct StreamMetrics {
 #[instrument(skip_all)]
 async fn proxy(downstream: &mut TcpStream) -> Result<StreamMetrics, ProxyProtocolError> {
     let downstream_addr = downstream.peer_addr()?;
+    trace!(?downstream_addr, "Connected to downstream");
     let start = std::time::Instant::now();
 
     // Decode header
@@ -55,19 +56,23 @@ async fn proxy(downstream: &mut TcpStream) -> Result<StreamMetrics, ProxyProtoco
     if header.upstream.ip().is_loopback() {
         return Err(ProxyProtocolError::Loopback);
     }
+    trace!(?header.upstream, "Validated upstream address");
 
     // Connect to upstream
     let mut upstream = TcpStream::connect(header.upstream).await?;
+    trace!(?header.upstream, "Connected to upstream");
     let upstream_addr = upstream.peer_addr()?;
     trace!(?upstream_addr, "Connected to upstream");
 
     // Write Ok response
     let resp = ResponseHeader { result: Ok(()) };
     write_header(downstream, &resp).await?;
+    trace!(?resp, "Wrote response");
 
     // Copy data
     let (bytes_uplink, bytes_downlink) =
         tokio::io::copy_bidirectional(downstream, &mut upstream).await?;
+    trace!(bytes_uplink, bytes_downlink, "Copied data");
 
     let end = std::time::Instant::now();
     let metrics = StreamMetrics {
@@ -78,7 +83,6 @@ async fn proxy(downstream: &mut TcpStream) -> Result<StreamMetrics, ProxyProtoco
         upstream_addr,
         downstream_addr,
     };
-    trace!(?metrics, "Stream metrics");
     Ok(metrics)
 }
 
