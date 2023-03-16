@@ -120,7 +120,7 @@ mod tests {
 
         // Start origin server
         let origin_addr = {
-            let listener = TcpListener::bind("localhost:0").await.unwrap();
+            let listener = TcpListener::bind("[::]:0").await.unwrap();
             let origin_addr = listener.local_addr().unwrap();
             tokio::spawn(async move {
                 let (mut stream, _) = listener.accept().await.unwrap();
