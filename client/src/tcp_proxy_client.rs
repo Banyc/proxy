@@ -1,7 +1,13 @@
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    ops::{Deref, DerefMut},
+};
 
 use models::{read_header, write_header, ProxyProtocolError, RequestHeader, ResponseHeader};
-use tokio::net::TcpStream;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
 use tracing::instrument;
 
 pub struct TcpProxyClient {
@@ -42,4 +48,33 @@ impl TcpProxyClient {
     }
 }
 
-pub struct TcpProxyStream(pub TcpStream);
+pub struct TcpProxyStream(TcpStream);
+
+impl Deref for TcpProxyStream {
+    type Target = TcpStream;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for TcpProxyStream {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl TcpProxyStream {
+    pub fn into_inner(self) -> TcpStream {
+        self.0
+    }
+
+    pub async fn close_gracefully(mut self) -> Result<(), ProxyProtocolError> {
+        // Shutdown write half
+        self.0.shutdown().await?;
+        // Read until EOF
+        let mut buf = [0; 1024];
+        while self.0.read(&mut buf).await? > 0 {}
+        Ok(())
+    }
+}
