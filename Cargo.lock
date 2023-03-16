@@ -48,7 +48,8 @@ dependencies = [
 [[package]]
 name = "get_config"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/get_config.git#396b6aa50ff4babecb6497c37b87d695b97a53af"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "766d1f7591cb7d3527f25814ac631f87ad6d71554e56831497c9b4daedac444e"
 dependencies = [
  "serde",
  "thiserror",
