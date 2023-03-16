@@ -42,6 +42,12 @@ impl TcpProxy {
                                 kind: ResponseErrorKind::Codec,
                             }),
                         },
+                        ProxyProtocolError::Loopback => ResponseHeader {
+                            result: Err(ResponseError {
+                                source: addr,
+                                kind: ResponseErrorKind::Loopback,
+                            }),
+                        },
                         ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
                     };
                     if let Err(e) = write_header(&mut stream, &resp).await {
@@ -58,6 +64,11 @@ async fn proxy(downstream: &mut TcpStream) -> Result<(), ProxyProtocolError> {
     // Decode header
     let header: RequestHeader = read_header(downstream).await?;
     info!(?header, "Decoded header");
+
+    // Prevent connections to localhost
+    if header.upstream.ip().is_loopback() {
+        return Err(ProxyProtocolError::Loopback);
+    }
 
     // Connect to upstream
     let mut upstream = TcpStream::connect(header.upstream).await?;

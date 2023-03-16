@@ -11,6 +11,8 @@ pub enum ProxyProtocolError {
     Io(#[from] io::Error),
     #[error("bincode error")]
     Bincode(#[from] bincode::Error),
+    #[error("loopback error")]
+    Loopback,
     #[error("response error")]
     Response(ResponseError),
 }
@@ -37,6 +39,8 @@ pub enum ResponseErrorKind {
     Io,
     #[error("bincode error")]
     Codec,
+    #[error("loopback error")]
+    Loopback,
 }
 
 #[instrument(skip_all)]
