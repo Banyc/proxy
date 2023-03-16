@@ -7,7 +7,7 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 pub async fn main() {
-    let _ = tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt::init();
     let config: Config = get_config().unwrap();
     let tcp_listener = TcpListener::bind(config.listen_addr).await.unwrap();
     let tcp_proxy = TcpProxy::new(tcp_listener);

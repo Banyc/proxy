@@ -27,9 +27,7 @@ impl TcpProxyClient {
         // Convert addresses to headers
         let headers = addresses
             .iter()
-            .map(|addr| RequestHeader {
-                upstream: addr.clone(),
-            })
+            .map(|addr| RequestHeader { upstream: *addr })
             .collect::<Vec<_>>();
 
         // Write headers to stream
