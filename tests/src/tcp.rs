@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
+    use std::{io, net::SocketAddr};
 
     use client::tcp_proxy_client::TcpProxyStream;
     use models::{ProxyProtocolError, ResponseErrorKind};
@@ -42,6 +42,14 @@ mod tests {
         greet_addr
     }
 
+    async fn read_response(stream: &mut TcpProxyStream, resp_msg: &[u8]) -> io::Result<()> {
+        let mut buf = [0; 1024];
+        let mut msg_buf = &mut buf[..resp_msg.len()];
+        stream.read_exact(&mut msg_buf).await.unwrap();
+        assert_eq!(msg_buf, resp_msg);
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_proxies() {
         // Start proxy servers
@@ -66,10 +74,7 @@ mod tests {
         stream.write_all(req_msg).await.unwrap();
 
         // Read response
-        let mut buf = [0; 1024];
-        let mut msg_buf = &mut buf[..resp_msg.len()];
-        stream.read_exact(&mut msg_buf).await.unwrap();
-        assert_eq!(msg_buf, resp_msg);
+        read_response(&mut stream, resp_msg).await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -105,10 +110,7 @@ mod tests {
                 stream.write_all(req_msg).await.unwrap();
 
                 // Read response
-                let mut buf = [0; 1024];
-                let mut msg_buf = &mut buf[..resp_msg.len()];
-                stream.read_exact(&mut msg_buf).await.unwrap();
-                assert_eq!(msg_buf, resp_msg);
+                read_response(&mut stream, resp_msg).await.unwrap();
 
                 stream.close_gracefully().await.unwrap();
             });
@@ -149,10 +151,7 @@ mod tests {
                     stream.write_all(req_msg).await.unwrap();
 
                     // Read response
-                    let mut buf = [0; 1024];
-                    let mut msg_buf = &mut buf[..resp_msg.len()];
-                    stream.read_exact(&mut msg_buf).await.unwrap();
-                    assert_eq!(msg_buf, resp_msg);
+                    read_response(&mut stream, resp_msg).await.unwrap();
 
                     stream.close_gracefully().await.unwrap();
                 }
@@ -213,9 +212,6 @@ mod tests {
         stream.write_all(req_msg).await.unwrap();
 
         // Read response
-        let mut buf = [0; 1024];
-        let mut msg_buf = &mut buf[..resp_msg.len()];
-        stream.read_exact(&mut msg_buf).await.unwrap();
-        assert_eq!(msg_buf, resp_msg);
+        read_response(&mut stream, resp_msg).await.unwrap();
     }
 }
