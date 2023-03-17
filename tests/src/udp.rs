@@ -1,8 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use std::{io, net::SocketAddr};
+    use std::net::SocketAddr;
 
     use client::udp_proxy_client::UdpProxySocket;
+    use models::{ProxyProtocolError, ResponseErrorKind};
     use server::udp_proxy::UdpProxy;
     use tokio::net::UdpSocket;
 
@@ -33,9 +34,12 @@ mod tests {
         greet_addr
     }
 
-    async fn read_response(socket: &UdpProxySocket, resp_msg: &[u8]) -> io::Result<()> {
+    async fn read_response(
+        socket: &UdpProxySocket,
+        resp_msg: &[u8],
+    ) -> Result<(), ProxyProtocolError> {
         let mut buf = [0; 1024];
-        let n = socket.recv(&mut buf).await.unwrap();
+        let n = socket.recv(&mut buf).await?;
         let msg_buf = &buf[..n];
         assert_eq!(msg_buf, resp_msg);
         Ok(())
@@ -56,8 +60,8 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut socket =
-            UdpProxySocket::establish(&vec![proxy_1_addr, proxy_2_addr, proxy_3_addr, greet_addr])
+        let socket =
+            UdpProxySocket::establish(vec![proxy_1_addr, proxy_2_addr, proxy_3_addr, greet_addr])
                 .await
                 .unwrap();
 
@@ -88,7 +92,7 @@ mod tests {
         for _ in 0..clients {
             handles.spawn(async move {
                 // Connect to proxy server
-                let mut socket = UdpProxySocket::establish(&vec![
+                let socket = UdpProxySocket::establish(vec![
                     proxy_1_addr,
                     proxy_2_addr,
                     // proxy_3_addr,
@@ -134,7 +138,7 @@ mod tests {
             handles.spawn(async move {
                 for _ in 0..10 {
                     // Connect to proxy server
-                    let mut socket = UdpProxySocket::establish(&addresses).await.unwrap();
+                    let socket = UdpProxySocket::establish(addresses.clone()).await.unwrap();
 
                     // Send message
                     socket.send(req_msg).await.unwrap();
@@ -151,6 +155,44 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_bad_proxy() {
+        // Start proxy servers
+        let proxy_1_addr = spawn_proxy("localhost:0").await;
+        let proxy_2_addr = spawn_proxy("localhost:0").await;
+        let proxy_3_addr = spawn_proxy("localhost:0").await;
+
+        // Message to send
+        let req_msg = b"hello world";
+        let resp_msg = b"goodbye world";
+
+        // Start greet server
+        let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
+
+        // Connect to proxy server
+        let socket =
+            UdpProxySocket::establish(vec![proxy_1_addr, proxy_2_addr, proxy_3_addr, greet_addr])
+                .await
+                .unwrap();
+
+        // Send message
+        socket.send(req_msg).await.unwrap();
+
+        // Read response
+        let err = read_response(&socket, resp_msg).await.unwrap_err();
+
+        match err {
+            ProxyProtocolError::Response(err) => {
+                match err.kind {
+                    ResponseErrorKind::Loopback => {}
+                    _ => panic!("Unexpected error: {:?}", err),
+                }
+                assert_eq!(err.source, proxy_1_addr);
+            }
+            _ => panic!("Unexpected error: {:?}", err),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_no_proxies() {
         // Start proxy servers
 
@@ -162,7 +204,7 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut socket = UdpProxySocket::establish(&vec![greet_addr]).await.unwrap();
+        let socket = UdpProxySocket::establish(vec![greet_addr]).await.unwrap();
 
         // Send message
         socket.send(req_msg).await.unwrap();

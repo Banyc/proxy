@@ -1,14 +1,17 @@
 use std::{
     collections::HashMap,
-    io,
+    io::{self, Write},
     net::{IpAddr, SocketAddr},
     sync::{Arc, RwLock},
     time::Duration,
 };
 
-use models::{read_header, ProxyProtocolError, RequestHeader};
+use models::{
+    read_header, write_header, ProxyProtocolError, RequestHeader, ResponseError, ResponseErrorKind,
+    ResponseHeader,
+};
 use tokio::{net::UdpSocket, sync::mpsc};
-use tracing::{error, info};
+use tracing::{error, info, instrument, trace};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct DownstreamAddr(SocketAddr);
@@ -35,6 +38,7 @@ impl UdpProxy {
         Self { listener }
     }
 
+    #[instrument(skip_all)]
     pub async fn serve(self) -> io::Result<()> {
         let flows: FlowMap = HashMap::new();
         let flows = Arc::new(RwLock::new(flows));
@@ -62,13 +66,14 @@ impl UdpProxy {
                 }
                 Err(e) => {
                     error!(?e, "Failed to steer");
-                    // No response
+                    teardown(&downstream_listener, downstream_addr, Err(e)).await;
                 }
             }
         }
     }
 }
 
+#[instrument(skip_all)]
 async fn steer(
     downstream_writer: Arc<UdpSocket>,
     flows: Arc<RwLock<FlowMap>>,
@@ -103,10 +108,12 @@ async fn steer(
             flows.write().unwrap().insert(flow, tx.clone());
 
             tokio::spawn(async move {
-                let res = proxy(Arc::clone(&flows), rx, flow, downstream_writer).await;
+                let res = proxy(rx, flow, Arc::clone(&downstream_writer)).await;
                 if let Err(e) = res {
                     error!(?e, "Failed to proxy");
+                    teardown(&downstream_writer, downstream_addr, Err(e.into())).await;
                 }
+
                 // Remove flow
                 flows.write().unwrap().remove(&flow);
             });
@@ -125,12 +132,12 @@ async fn steer(
 const TIMEOUT: Duration = Duration::from_secs(10);
 const LIVE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
+#[instrument(skip_all)]
 async fn proxy(
-    flows: Arc<RwLock<FlowMap>>,
     mut rx: mpsc::Receiver<Packet>,
     flow: Flow,
     downstream_writer: Arc<UdpSocket>,
-) -> io::Result<()> {
+) -> Result<(), ProxyProtocolError> {
     // Connect to upstream
     let any_ip = match flow.upstream.0.ip() {
         IpAddr::V4(_) => IpAddr::V4("0.0.0.0".parse().unwrap()),
@@ -155,16 +162,25 @@ async fn proxy(
             res = upstream.recv(&mut downlink_buf) => {
                 let n = res?;
                 let pkt = &downlink_buf[..n];
-                downstream_writer.send_to(pkt, flow.downstream.0).await?;
+
+                // Write header
+                let mut writer = io::Cursor::new(Vec::new());
+                let header = ResponseHeader {
+                    result: Ok(()),
+                };
+                write_header(&mut writer, &header)?;
+
+                // Write payload
+                writer.write(pkt)?;
+
+                // Send packet
+                let pkt = writer.into_inner();
+                downstream_writer.send_to(&pkt, flow.downstream.0).await?;
                 last_packet = std::time::Instant::now();
             }
             _ = tick.tick() => {
                 if last_packet.elapsed() > TIMEOUT {
                     info!("Flow timed out");
-
-                    // Remove flow
-                    flows.write().unwrap().remove(&flow);
-
                     return Ok(());
                 }
             }
@@ -172,71 +188,52 @@ async fn proxy(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use models::{write_header, RequestHeader};
-    use tokio::io::AsyncWriteExt;
-
-    #[tokio::test]
-    async fn test_proxy() {
-        // Start proxy server
-        let proxy_addr = {
-            let listener = UdpSocket::bind("localhost:0").await.unwrap();
-            let proxy_addr = listener.local_addr().unwrap();
-            let proxy = UdpProxy::new(listener);
-            tokio::spawn(async move {
-                proxy.serve().await.unwrap();
-            });
-            proxy_addr
-        };
-
-        // Message to send
-        let req_msg = b"hello world";
-        let resp_msg = b"goodbye world";
-
-        // Start origin server
-        let origin_addr = {
-            let listener = UdpSocket::bind("[::]:0").await.unwrap();
-            let origin_addr = listener.local_addr().unwrap();
-            tokio::spawn(async move {
-                let mut buf = [0; 1024];
-                let (n, addr) = listener.recv_from(&mut buf).await.unwrap();
-                let msg_buf = &buf[..n];
-                assert_eq!(msg_buf, req_msg);
-                listener.send_to(resp_msg, addr).await.unwrap();
-            });
-            origin_addr
-        };
-
-        // Connect to proxy server
-        let socket = UdpSocket::bind("localhost:0").await.unwrap();
-        socket.connect(proxy_addr).await.unwrap();
-
-        let mut buf = Vec::new();
-        let mut writer = io::Cursor::new(&mut buf);
-
-        // Establish connection to origin server
-        {
-            // Encode header
-            let header = RequestHeader {
-                upstream: origin_addr,
-            };
-            write_header(&mut writer, &header).unwrap();
+#[instrument(skip_all)]
+async fn teardown(
+    downstream_writer: &UdpSocket,
+    downstream_addr: DownstreamAddr,
+    res: Result<(), ProxyProtocolError>,
+) {
+    match res {
+        Ok(_) => {
+            // No response
         }
+        Err(e) => {
+            error!(?e, "Connection closed with error");
 
-        // Write message
-        writer.write_all(req_msg).await.unwrap();
+            let local_addr = match downstream_writer.local_addr() {
+                Ok(addr) => addr,
+                Err(e) => {
+                    trace!(?e, "Failed to get local address");
+                    return;
+                }
+            };
 
-        // Send message
-        socket.send(&buf).await.unwrap();
-
-        // Read response
-        {
-            let mut buf = [0; 1024];
-            let n = socket.recv(&mut buf).await.unwrap();
-            let msg_buf = &buf[..n];
-            assert_eq!(msg_buf, resp_msg);
+            // Respond with error
+            let resp = match e {
+                ProxyProtocolError::Io(_) => ResponseHeader {
+                    result: Err(ResponseError {
+                        source: local_addr,
+                        kind: ResponseErrorKind::Io,
+                    }),
+                },
+                ProxyProtocolError::Bincode(_) => ResponseHeader {
+                    result: Err(ResponseError {
+                        source: local_addr,
+                        kind: ResponseErrorKind::Codec,
+                    }),
+                },
+                ProxyProtocolError::Loopback => ResponseHeader {
+                    result: Err(ResponseError {
+                        source: local_addr,
+                        kind: ResponseErrorKind::Loopback,
+                    }),
+                },
+                ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
+            };
+            let mut buf = Vec::new();
+            write_header(&mut buf, &resp).unwrap();
+            let _ = downstream_writer.send_to(&buf, downstream_addr.0).await;
         }
     }
 }
