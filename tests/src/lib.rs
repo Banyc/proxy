@@ -127,9 +127,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn stress_test() {
         // Start proxy servers
-        let proxy_1_addr = spawn_proxy("0.0.0.0:0").await;
-        let proxy_2_addr = spawn_proxy("0.0.0.0:0").await;
-        let proxy_3_addr = spawn_proxy("0.0.0.0:0").await;
+        let mut addresses = Vec::new();
+        for _ in 0..10 {
+            let proxy_addr = spawn_proxy("0.0.0.0:0").await;
+            addresses.push(proxy_addr);
+        }
 
         // Message to send
         let req_msg = b"hello world";
@@ -153,21 +155,16 @@ mod tests {
             });
             greet_addr
         };
+        addresses.push(greet_addr);
 
         let mut handles = tokio::task::JoinSet::new();
 
         for _ in 0..100 {
+            let addresses = addresses.clone();
             handles.spawn(async move {
                 for _ in 0..10 {
                     // Connect to proxy server
-                    let mut stream = TcpProxyStream::establish(&vec![
-                        proxy_1_addr,
-                        proxy_2_addr,
-                        proxy_3_addr,
-                        greet_addr,
-                    ])
-                    .await
-                    .unwrap();
+                    let mut stream = TcpProxyStream::establish(&addresses).await.unwrap();
 
                     // Send message
                     stream.write_all(req_msg).await.unwrap();
