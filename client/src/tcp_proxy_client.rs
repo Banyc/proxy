@@ -3,7 +3,9 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use models::{read_header, write_header, ProxyProtocolError, RequestHeader, ResponseHeader};
+use models::{
+    read_header_async, write_header_async, ProxyProtocolError, RequestHeader, ResponseHeader,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -23,13 +25,13 @@ impl TcpProxyStream {
 
         // Write headers to stream
         for header in headers {
-            write_header(&mut stream, &header).await?;
+            write_header_async(&mut stream, &header).await?;
             trace!(?header, "Wrote header");
         }
 
         // Read response
         for address in addresses[..addresses.len() - 1].iter() {
-            let resp: ResponseHeader = read_header(&mut stream).await?;
+            let resp: ResponseHeader = read_header_async(&mut stream).await?;
             trace!(?resp, "Read response");
             if let Err(mut err) = resp.result {
                 err.source = *address;

@@ -1,8 +1,8 @@
 use std::{io, net::SocketAddr};
 
 use models::{
-    read_header, write_header, ProxyProtocolError, RequestHeader, ResponseError, ResponseErrorKind,
-    ResponseHeader,
+    read_header_async, write_header_async, ProxyProtocolError, RequestHeader, ResponseError,
+    ResponseErrorKind, ResponseHeader,
 };
 use tokio::{
     io::AsyncReadExt,
@@ -52,7 +52,7 @@ async fn proxy(downstream: &mut TcpStream) -> Result<StreamMetrics, ProxyProtoco
     let start = std::time::Instant::now();
 
     // Decode header
-    let header: RequestHeader = read_header(downstream).await?;
+    let header: RequestHeader = read_header_async(downstream).await?;
     trace!(?header, "Decoded header");
 
     // Prevent connections to localhost
@@ -69,7 +69,7 @@ async fn proxy(downstream: &mut TcpStream) -> Result<StreamMetrics, ProxyProtoco
 
     // Write Ok response
     let resp = ResponseHeader { result: Ok(()) };
-    write_header(downstream, &resp).await?;
+    write_header_async(downstream, &resp).await?;
     trace!(?resp, "Wrote response");
 
     // Copy data
@@ -120,7 +120,7 @@ async fn teardown(stream: &mut TcpStream, res: Result<StreamMetrics, ProxyProtoc
                 },
                 ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
             };
-            let _ = write_header(stream, &resp).await;
+            let _ = write_header_async(stream, &resp).await;
 
             // Drain read stream before closing
             // - why: Prevent RST packets from being sent
@@ -139,7 +139,7 @@ async fn teardown(stream: &mut TcpStream, res: Result<StreamMetrics, ProxyProtoc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use models::{write_header, RequestHeader};
+    use models::{write_header_async, RequestHeader};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -186,10 +186,10 @@ mod tests {
             let header = RequestHeader {
                 upstream: origin_addr,
             };
-            write_header(&mut stream, &header).await.unwrap();
+            write_header_async(&mut stream, &header).await.unwrap();
 
             // Read response
-            let resp: ResponseHeader = read_header(&mut stream).await.unwrap();
+            let resp: ResponseHeader = read_header_async(&mut stream).await.unwrap();
             assert!(resp.result.is_ok());
         }
 

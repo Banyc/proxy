@@ -1,5 +1,9 @@
-use std::{io, net::SocketAddr};
+use std::{
+    io::{self, BufRead, Write},
+    net::SocketAddr,
+};
 
+use duplicate::duplicate_item;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -43,16 +47,22 @@ pub enum ResponseErrorKind {
     Loopback,
 }
 
+#[duplicate_item(
+    name                async   stream_bounds       add_await(code) ;
+    [read_header]       []      [BufRead]           [code]          ;
+    [read_header_async] [async] [AsyncRead + Unpin] [code.await]    ;
+)]
 #[instrument(skip_all)]
-pub async fn read_header<S, H>(stream: &mut S) -> Result<H, ProxyProtocolError>
+pub async fn name<S, H>(stream: &mut S) -> Result<H, ProxyProtocolError>
 where
-    S: AsyncRead + Unpin,
+    S: stream_bounds,
     H: for<'de> Deserialize<'de> + std::fmt::Debug,
 {
     // Decode header length
     let len = {
         let mut buf = [0; 4];
-        stream.read_exact(&mut buf).await?;
+        let res = stream.read_exact(&mut buf);
+        add_await([res])?;
         u32::from_be_bytes(buf) as usize
     };
     trace!(len, "Read header length");
@@ -60,7 +70,8 @@ where
     // Decode header
     let header = {
         let mut buf = [0; MAX_HEADER_LEN];
-        stream.read_exact(&mut buf[..len]).await?;
+        let res = stream.read_exact(&mut buf[..len]);
+        add_await([res])?;
         bincode::deserialize(&buf[..len])?
     };
     trace!(?header, "Read header");
@@ -68,10 +79,15 @@ where
     Ok(header)
 }
 
+#[duplicate_item(
+    name                 async   stream_bounds        add_await(code) ;
+    [write_header]       []      [Write]              [code]          ;
+    [write_header_async] [async] [AsyncWrite + Unpin] [code.await]    ;
+)]
 #[instrument(skip_all)]
-pub async fn write_header<S, H>(stream: &mut S, header: &H) -> Result<(), ProxyProtocolError>
+pub async fn name<S, H>(stream: &mut S, header: &H) -> Result<(), ProxyProtocolError>
 where
-    S: AsyncWrite + Unpin,
+    S: stream_bounds,
     H: Serialize + std::fmt::Debug,
 {
     let mut buf = [0; MAX_HEADER_LEN];
@@ -88,10 +104,10 @@ where
 
     // Write header length
     let len = buf.len() as u32;
-    stream.write_all(&len.to_be_bytes()).await?;
+    add_await([stream.write_all(&len.to_be_bytes())])?;
 
     // Write header
-    stream.write_all(buf).await?;
+    add_await([stream.write_all(buf)])?;
 
     Ok(())
 }
@@ -111,14 +127,16 @@ mod tests {
         let original_header = RequestHeader {
             upstream: "1.1.1.1:8080".parse().unwrap(),
         };
-        write_header(&mut stream, &original_header).await.unwrap();
+        write_header_async(&mut stream, &original_header)
+            .await
+            .unwrap();
         let len = stream.position();
         let buf = &buf[..len as usize];
         trace!(?original_header, ?len, "Encoded header");
 
         // Decode header
         let mut stream = io::Cursor::new(&buf[..]);
-        let decoded_header = read_header(&mut stream).await.unwrap();
+        let decoded_header = read_header_async(&mut stream).await.unwrap();
         assert_eq!(original_header, decoded_header);
     }
 
@@ -134,14 +152,16 @@ mod tests {
                 kind: ResponseErrorKind::Io,
             }),
         };
-        write_header(&mut stream, &original_header).await.unwrap();
+        write_header_async(&mut stream, &original_header)
+            .await
+            .unwrap();
         let len = stream.position();
         let buf = &buf[..len as usize];
         trace!(?original_header, ?len, "Encoded header");
 
         // Decode header
         let mut stream = io::Cursor::new(&buf[..]);
-        let decoded_header = read_header(&mut stream).await.unwrap();
+        let decoded_header = read_header_async(&mut stream).await.unwrap();
         assert_eq!(original_header, decoded_header);
     }
 }
