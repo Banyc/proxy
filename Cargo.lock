@@ -331,6 +331,8 @@ dependencies = [
  "models",
  "server",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
