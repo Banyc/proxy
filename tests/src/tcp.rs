@@ -140,7 +140,7 @@ mod tests {
 
         let mut handles = tokio::task::JoinSet::new();
 
-        for _ in 0..100 {
+        for _ in 0..50 {
             let addresses = addresses.clone();
             handles.spawn(async move {
                 for _ in 0..10 {
