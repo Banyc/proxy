@@ -4,7 +4,10 @@ use models::{
     read_header, write_header, ProxyProtocolError, RequestHeader, ResponseError, ResponseErrorKind,
     ResponseHeader,
 };
-use tokio::net::{TcpListener, TcpStream};
+use tokio::{
+    io::AsyncReadExt,
+    net::{TcpListener, TcpStream},
+};
 use tracing::{error, info, instrument, trace};
 
 pub struct TcpProxy {
@@ -118,6 +121,17 @@ async fn teardown(stream: &mut TcpStream, res: Result<StreamMetrics, ProxyProtoc
                 ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
             };
             let _ = write_header(stream, &resp).await;
+
+            // Drain read stream before closing
+            // - why: Prevent RST packets from being sent
+            let mut buf = [0; 1024];
+            loop {
+                match stream.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(_) => continue,
+                    Err(_) => break,
+                }
+            }
         }
     }
 }
