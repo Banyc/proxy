@@ -20,6 +20,28 @@ mod tests {
         proxy_addr
     }
 
+    async fn spawn_greet(addr: &str, req: &[u8], resp: &[u8], accepts: usize) -> SocketAddr {
+        let listener = TcpListener::bind(addr).await.unwrap();
+        let greet_addr = listener.local_addr().unwrap();
+        let req = req.to_vec();
+        let resp = resp.to_vec();
+        tokio::spawn(async move {
+            for _ in 0..accepts {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let req = req.to_vec();
+                let resp = resp.to_vec();
+                tokio::spawn(async move {
+                    let mut buf = [0; 1024];
+                    let mut msg_buf = &mut buf[..req.len()];
+                    stream.read_exact(&mut msg_buf).await.unwrap();
+                    assert_eq!(msg_buf, req);
+                    stream.write_all(&resp).await.unwrap();
+                });
+            }
+        });
+        greet_addr
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_proxies() {
         // Start proxy servers
@@ -32,19 +54,7 @@ mod tests {
         let resp_msg = b"goodbye world";
 
         // Start greet server
-        let greet_addr = {
-            let listener = TcpListener::bind("[::]:0").await.unwrap();
-            let greet_addr = listener.local_addr().unwrap();
-            tokio::spawn(async move {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut buf = [0; 1024];
-                let mut msg_buf = &mut buf[..req_msg.len()];
-                stream.read_exact(&mut msg_buf).await.unwrap();
-                assert_eq!(msg_buf, req_msg);
-                stream.write_all(resp_msg).await.unwrap();
-            });
-            greet_addr
-        };
+        let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
         let mut stream =
@@ -67,34 +77,19 @@ mod tests {
         // Start proxy servers
         let proxy_1_addr = spawn_proxy("0.0.0.0:0").await;
         let proxy_2_addr = spawn_proxy("0.0.0.0:0").await;
-        // let proxy_3_addr = spawn_proxy("0.0.0.0:0").await;
 
         // Message to send
         let req_msg = b"hello world";
         let resp_msg = b"goodbye world";
 
+        let clients = 2;
+
         // Start greet server
-        let greet_addr = {
-            let listener = TcpListener::bind("[::]:0").await.unwrap();
-            let greet_addr = listener.local_addr().unwrap();
-            tokio::spawn(async move {
-                loop {
-                    let (mut stream, _) = listener.accept().await.unwrap();
-                    tokio::spawn(async move {
-                        let mut buf = [0; 1024];
-                        let mut msg_buf = &mut buf[..req_msg.len()];
-                        stream.read_exact(&mut msg_buf).await.unwrap();
-                        assert_eq!(msg_buf, req_msg);
-                        stream.write_all(resp_msg).await.unwrap();
-                    });
-                }
-            });
-            greet_addr
-        };
+        let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, clients).await;
 
         let mut handles = tokio::task::JoinSet::new();
 
-        for _ in 0..2 {
+        for _ in 0..clients {
             handles.spawn(async move {
                 // Connect to proxy server
                 let mut stream = TcpProxyStream::establish(&vec![
@@ -138,23 +133,7 @@ mod tests {
         let resp_msg = b"goodbye world";
 
         // Start greet server
-        let greet_addr = {
-            let listener = TcpListener::bind("[::]:0").await.unwrap();
-            let greet_addr = listener.local_addr().unwrap();
-            tokio::spawn(async move {
-                loop {
-                    let (mut stream, _) = listener.accept().await.unwrap();
-                    tokio::spawn(async move {
-                        let mut buf = [0; 1024];
-                        let mut msg_buf = &mut buf[..req_msg.len()];
-                        stream.read_exact(&mut msg_buf).await.unwrap();
-                        assert_eq!(msg_buf, req_msg);
-                        stream.write_all(resp_msg).await.unwrap();
-                    });
-                }
-            });
-            greet_addr
-        };
+        let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, usize::MAX).await;
         addresses.push(greet_addr);
 
         let mut handles = tokio::task::JoinSet::new();
@@ -197,19 +176,7 @@ mod tests {
         let resp_msg = b"goodbye world";
 
         // Start greet server
-        let greet_addr = {
-            let listener = TcpListener::bind("[::]:0").await.unwrap();
-            let greet_addr = listener.local_addr().unwrap();
-            tokio::spawn(async move {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut buf = [0; 1024];
-                let mut msg_buf = &mut buf[..req_msg.len()];
-                stream.read_exact(&mut msg_buf).await.unwrap();
-                assert_eq!(msg_buf, req_msg);
-                stream.write_all(resp_msg).await.unwrap();
-            });
-            greet_addr
-        };
+        let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
         let err =
@@ -237,19 +204,7 @@ mod tests {
         let resp_msg = b"goodbye world";
 
         // Start greet server
-        let greet_addr = {
-            let listener = TcpListener::bind("[::]:0").await.unwrap();
-            let greet_addr = listener.local_addr().unwrap();
-            tokio::spawn(async move {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut buf = [0; 1024];
-                let mut msg_buf = &mut buf[..req_msg.len()];
-                stream.read_exact(&mut msg_buf).await.unwrap();
-                assert_eq!(msg_buf, req_msg);
-                stream.write_all(resp_msg).await.unwrap();
-            });
-            greet_addr
-        };
+        let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
         let mut stream = TcpProxyStream::establish(&vec![greet_addr]).await.unwrap();
