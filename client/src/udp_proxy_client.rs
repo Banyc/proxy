@@ -86,7 +86,7 @@ impl UdpProxySocket {
                 err.source = *address;
                 return Err(ProxyProtocolError::Response(err));
             }
-            trace!("Response was successful");
+            trace!(?address, "Response was successful");
         }
         trace!("All responses were successful");
 

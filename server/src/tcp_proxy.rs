@@ -92,7 +92,7 @@ async fn proxy(downstream: &mut TcpStream) -> Result<StreamMetrics, ProxyProtoco
 #[instrument(skip_all)]
 async fn teardown(stream: &mut TcpStream, res: Result<StreamMetrics, ProxyProtocolError>) {
     match res {
-        Ok(x) => info!(?x, "Connection closed normally"),
+        Ok(metrics) => info!(?metrics, "Connection closed normally"),
         Err(e) => {
             error!(?e, "Connection closed with error");
 

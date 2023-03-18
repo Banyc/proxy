@@ -38,7 +38,7 @@ impl UdpProxy {
         Self { listener }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip(self))]
     pub async fn serve(self) -> io::Result<()> {
         let flows: FlowMap = HashMap::new();
         let flows = Arc::new(RwLock::new(flows));
@@ -73,7 +73,7 @@ impl UdpProxy {
     }
 }
 
-#[instrument(skip_all)]
+#[instrument(skip(downstream_writer, flows, buf))]
 async fn steer(
     downstream_writer: Arc<UdpSocket>,
     flows: Arc<RwLock<FlowMap>>,
@@ -109,10 +109,7 @@ async fn steer(
 
             tokio::spawn(async move {
                 let res = proxy(rx, flow, Arc::clone(&downstream_writer)).await;
-                if let Err(e) = res {
-                    error!(?e, "Failed to proxy");
-                    teardown(&downstream_writer, downstream_addr, Err(e.into())).await;
-                }
+                teardown(&downstream_writer, downstream_addr, res).await;
 
                 // Remove flow
                 flows.write().unwrap().remove(&flow);
@@ -132,12 +129,25 @@ async fn steer(
 const TIMEOUT: Duration = Duration::from_secs(10);
 const LIVE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
-#[instrument(skip_all)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct FlowMetrics {
+    flow: Flow,
+    start: std::time::Instant,
+    end: std::time::Instant,
+    bytes_uplink: usize,
+    bytes_downlink: usize,
+    packets_uplink: usize,
+    packets_downlink: usize,
+}
+
+#[instrument(skip(rx, downstream_writer))]
 async fn proxy(
     mut rx: mpsc::Receiver<Packet>,
     flow: Flow,
     downstream_writer: Arc<UdpSocket>,
-) -> Result<(), ProxyProtocolError> {
+) -> Result<FlowMetrics, ProxyProtocolError> {
+    let start = std::time::Instant::now();
+
     // Connect to upstream
     let any_ip = match flow.upstream.0.ip() {
         IpAddr::V4(_) => IpAddr::V4("0.0.0.0".parse().unwrap()),
@@ -151,12 +161,21 @@ async fn proxy(
     let mut tick = tokio::time::interval(LIVE_CHECK_INTERVAL);
     let mut last_packet = std::time::Instant::now();
 
+    let mut bytes_uplink = 0;
+    let mut bytes_downlink = 0;
+    let mut packets_uplink = 0;
+    let mut packets_downlink = 0;
+
     // Forward packets
     let mut downlink_buf = [0; 1024];
     loop {
         tokio::select! {
             Some(packet) = rx.recv() => {
+                // Send packet to upstream
                 upstream.send(&packet.0).await?;
+                bytes_uplink += &packet.0.len();
+                packets_uplink += 1;
+
                 last_packet = std::time::Instant::now();
             }
             res = upstream.recv(&mut downlink_buf) => {
@@ -173,30 +192,45 @@ async fn proxy(
                 // Write payload
                 writer.write(pkt)?;
 
-                // Send packet
+                // Send packet to downstream
                 let pkt = writer.into_inner();
                 downstream_writer.send_to(&pkt, flow.downstream.0).await?;
+                bytes_downlink += &pkt.len();
+                packets_downlink += 1;
+
                 last_packet = std::time::Instant::now();
             }
             _ = tick.tick() => {
                 if last_packet.elapsed() > TIMEOUT {
-                    info!("Flow timed out");
-                    return Ok(());
+                    info!(?flow, "Flow timed out");
+                    break;
                 }
             }
         }
     }
+
+    let end = std::time::Instant::now();
+    Ok(FlowMetrics {
+        flow,
+        start,
+        end,
+        bytes_uplink,
+        bytes_downlink,
+        packets_uplink,
+        packets_downlink,
+    })
 }
 
-#[instrument(skip_all)]
+#[instrument(skip(downstream_writer, res))]
 async fn teardown(
     downstream_writer: &UdpSocket,
     downstream_addr: DownstreamAddr,
-    res: Result<(), ProxyProtocolError>,
+    res: Result<FlowMetrics, ProxyProtocolError>,
 ) {
     match res {
-        Ok(_) => {
+        Ok(metrics) => {
             // No response
+            info!(?metrics, "Connection closed normally");
         }
         Err(e) => {
             error!(?e, "Connection closed with error");
