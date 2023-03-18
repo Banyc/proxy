@@ -9,6 +9,8 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{instrument, trace};
 
+pub mod addr;
+
 #[derive(Debug, Error)]
 pub enum ProxyProtocolError {
     #[error("io error")]

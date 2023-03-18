@@ -1,10 +1,12 @@
 use std::{
     io::{self, Write},
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     ops::Deref,
 };
 
-use models::{read_header, write_header, ProxyProtocolError, RequestHeader, ResponseHeader};
+use models::{
+    addr::any_addr, read_header, write_header, ProxyProtocolError, RequestHeader, ResponseHeader,
+};
 use tokio::net::UdpSocket;
 use tracing::{error, instrument, trace};
 
@@ -21,11 +23,7 @@ impl UdpProxySocket {
         addresses: Vec<SocketAddr>,
     ) -> Result<UdpProxySocket, ProxyProtocolError> {
         // Connect to upstream
-        let any_ip = match addresses[0].ip() {
-            IpAddr::V4(_) => IpAddr::V4("0.0.0.0".parse().unwrap()),
-            IpAddr::V6(_) => IpAddr::V6("::".parse().unwrap()),
-        };
-        let any_addr = SocketAddr::new(any_ip, 0);
+        let any_addr = any_addr(&addresses[0].ip());
         let upstream = UdpSocket::bind(any_addr)
             .await
             .inspect_err(|e| error!(?e, "Failed to bind to any address for UDP proxy"))?;

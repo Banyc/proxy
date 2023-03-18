@@ -1,14 +1,14 @@
 use std::{
     collections::HashMap,
     io::{self, Write},
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     sync::{Arc, RwLock},
     time::Duration,
 };
 
 use models::{
-    read_header, write_header, ProxyProtocolError, RequestHeader, ResponseError, ResponseErrorKind,
-    ResponseHeader,
+    addr::any_addr, read_header, write_header, ProxyProtocolError, RequestHeader, ResponseError,
+    ResponseErrorKind, ResponseHeader,
 };
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{error, info, instrument, trace};
@@ -169,11 +169,7 @@ async fn proxy(
     let start = std::time::Instant::now();
 
     // Connect to upstream
-    let any_ip = match flow.upstream.0.ip() {
-        IpAddr::V4(_) => IpAddr::V4("0.0.0.0".parse().unwrap()),
-        IpAddr::V6(_) => IpAddr::V6("::".parse().unwrap()),
-    };
-    let any_addr = SocketAddr::new(any_ip, 0);
+    let any_addr = any_addr(&flow.upstream.0.ip());
     let upstream = UdpSocket::bind(any_addr).await?;
     upstream.connect(flow.upstream.0).await?;
 
