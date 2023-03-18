@@ -4,10 +4,14 @@ use get_config::toml::get_config;
 use serde::Deserialize;
 use server::{tcp_proxy::TcpProxy, udp_proxy::UdpProxy};
 use tokio::net::{TcpListener, UdpSocket};
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 pub async fn main() {
-    tracing_subscriber::fmt().with_line_number(true).init();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_line_number(true)
+        .try_init();
     let config: Config = get_config().unwrap();
     let mut join_set = tokio::task::JoinSet::new();
     join_set.spawn(async move {
