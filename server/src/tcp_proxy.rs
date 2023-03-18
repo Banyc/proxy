@@ -135,7 +135,13 @@ async fn respond_with_error(stream: &mut TcpStream, error: ProxyProtocolError) {
         },
         ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
     };
-    let _ = write_header_async(stream, &resp).await;
+    match write_header_async(stream, &resp).await {
+        Ok(()) => (),
+        Err(e) => {
+            trace!(?e, "Failed to write response to downstream after error");
+            return;
+        }
+    }
 
     // Drain read stream before closing
     // - why: Prevent RST packets from being sent
