@@ -209,11 +209,10 @@ async fn proxy(
         }
     }
 
-    let end = std::time::Instant::now();
     Ok(FlowMetrics {
         flow,
         start,
-        end,
+        end: last_packet,
         bytes_uplink,
         bytes_downlink,
         packets_uplink,
