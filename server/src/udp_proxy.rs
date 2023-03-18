@@ -170,7 +170,15 @@ async fn proxy(
     let mut downlink_buf = [0; 1024];
     loop {
         tokio::select! {
-            Some(packet) = rx.recv() => {
+            res = rx.recv() => {
+                let packet = match res {
+                    Some(packet) => packet,
+                    None => {
+                        // Channel closed
+                        break;
+                    }
+                };
+
                 // Send packet to upstream
                 upstream.send(&packet.0).await?;
                 bytes_uplink += &packet.0.len();
