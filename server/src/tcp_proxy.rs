@@ -4,10 +4,7 @@ use models::{
     read_header_async, write_header_async, ProxyProtocolError, RequestHeader, ResponseError,
     ResponseErrorKind, ResponseHeader,
 };
-use tokio::{
-    io::AsyncReadExt,
-    net::{TcpListener, TcpStream},
-};
+use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info, instrument, trace};
 
 pub struct TcpProxy {
@@ -151,18 +148,6 @@ async fn respond_with_error(
     write_header_async(stream, &resp)
         .await
         .inspect_err(|e| error!(?e, "Failed to write response to downstream after error"))?;
-
-    // Drain read stream before closing
-    // - why: Prevent RST packets from being sent
-    let mut buf = [0; 1024];
-    loop {
-        trace!("Draining read stream before closing");
-        match stream.read(&mut buf).await {
-            Ok(0) => break,
-            Ok(_) => continue,
-            Err(_) => break,
-        }
-    }
 
     Ok(())
 }
