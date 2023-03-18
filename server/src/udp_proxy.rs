@@ -58,17 +58,7 @@ impl UdpProxy {
                 downstream_addr,
             )
             .await;
-
-            // Respond in best effort
-            match res {
-                Ok(_) => {
-                    // No response
-                }
-                Err(e) => {
-                    error!(?e, "Failed to steer");
-                    teardown(&downstream_listener, downstream_addr, Err(e)).await;
-                }
-            }
+            handle_steer_result(&downstream_listener, downstream_addr, res).await;
         }
     }
 }
@@ -109,7 +99,7 @@ async fn steer(
 
             tokio::spawn(async move {
                 let res = proxy(rx, flow, Arc::clone(&downstream_writer)).await;
-                teardown(&downstream_writer, downstream_addr, res).await;
+                handle_proxy_result(&downstream_writer, downstream_addr, res).await;
 
                 // Remove flow
                 flows.write().unwrap().remove(&flow);
@@ -124,6 +114,22 @@ async fn steer(
     let _ = flow_tx.send(packet).await;
 
     Ok(())
+}
+
+async fn handle_steer_result(
+    downstream_listener: &Arc<UdpSocket>,
+    downstream_addr: DownstreamAddr,
+    res: Result<(), ProxyProtocolError>,
+) {
+    match res {
+        Ok(()) => {
+            // No response
+        }
+        Err(err) => {
+            error!(?err, "Failed to steer");
+            respond_with_error(&downstream_listener, downstream_addr, err).await;
+        }
+    }
 }
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -229,7 +235,7 @@ async fn proxy(
 }
 
 #[instrument(skip(downstream_writer, res))]
-async fn teardown(
+async fn handle_proxy_result(
     downstream_writer: &UdpSocket,
     downstream_addr: DownstreamAddr,
     res: Result<FlowMetrics, ProxyProtocolError>,
@@ -241,40 +247,48 @@ async fn teardown(
         }
         Err(e) => {
             error!(?e, "Connection closed with error");
-
-            let local_addr = match downstream_writer.local_addr() {
-                Ok(addr) => addr,
-                Err(e) => {
-                    trace!(?e, "Failed to get local address");
-                    return;
-                }
-            };
-
-            // Respond with error
-            let resp = match e {
-                ProxyProtocolError::Io(_) => ResponseHeader {
-                    result: Err(ResponseError {
-                        source: local_addr,
-                        kind: ResponseErrorKind::Io,
-                    }),
-                },
-                ProxyProtocolError::Bincode(_) => ResponseHeader {
-                    result: Err(ResponseError {
-                        source: local_addr,
-                        kind: ResponseErrorKind::Codec,
-                    }),
-                },
-                ProxyProtocolError::Loopback => ResponseHeader {
-                    result: Err(ResponseError {
-                        source: local_addr,
-                        kind: ResponseErrorKind::Loopback,
-                    }),
-                },
-                ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
-            };
-            let mut buf = Vec::new();
-            write_header(&mut buf, &resp).unwrap();
-            let _ = downstream_writer.send_to(&buf, downstream_addr.0).await;
+            respond_with_error(downstream_writer, downstream_addr, e).await;
         }
     }
+}
+
+#[instrument(skip(downstream_writer))]
+async fn respond_with_error(
+    downstream_writer: &UdpSocket,
+    downstream_addr: DownstreamAddr,
+    error: ProxyProtocolError,
+) {
+    let local_addr = match downstream_writer.local_addr() {
+        Ok(addr) => addr,
+        Err(e) => {
+            trace!(?e, "Failed to get local address");
+            return;
+        }
+    };
+
+    // Respond with error
+    let resp = match error {
+        ProxyProtocolError::Io(_) => ResponseHeader {
+            result: Err(ResponseError {
+                source: local_addr,
+                kind: ResponseErrorKind::Io,
+            }),
+        },
+        ProxyProtocolError::Bincode(_) => ResponseHeader {
+            result: Err(ResponseError {
+                source: local_addr,
+                kind: ResponseErrorKind::Codec,
+            }),
+        },
+        ProxyProtocolError::Loopback => ResponseHeader {
+            result: Err(ResponseError {
+                source: local_addr,
+                kind: ResponseErrorKind::Loopback,
+            }),
+        },
+        ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
+    };
+    let mut buf = Vec::new();
+    write_header(&mut buf, &resp).unwrap();
+    let _ = downstream_writer.send_to(&buf, downstream_addr.0).await;
 }

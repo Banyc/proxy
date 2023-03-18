@@ -29,7 +29,7 @@ impl TcpProxy {
             tokio::spawn(async move {
                 let mut stream = stream;
                 let res = proxy(&mut stream).await;
-                teardown(&mut stream, res).await;
+                handle_proxy_result(&mut stream, res).await;
             });
         }
     }
@@ -89,49 +89,62 @@ async fn proxy(downstream: &mut TcpStream) -> Result<StreamMetrics, ProxyProtoco
     Ok(metrics)
 }
 
-#[instrument(skip_all)]
-async fn teardown(stream: &mut TcpStream, res: Result<StreamMetrics, ProxyProtocolError>) {
+#[instrument(skip(stream, res))]
+async fn handle_proxy_result(
+    stream: &mut TcpStream,
+    res: Result<StreamMetrics, ProxyProtocolError>,
+) {
     match res {
         Ok(metrics) => info!(?metrics, "Connection closed normally"),
         Err(e) => {
             error!(?e, "Connection closed with error");
+            respond_with_error(stream, e).await;
+        }
+    }
+}
 
-            let local_addr = stream.local_addr().unwrap();
+#[instrument(skip(stream))]
+async fn respond_with_error(stream: &mut TcpStream, error: ProxyProtocolError) {
+    let local_addr = match stream.local_addr() {
+        Ok(addr) => addr,
+        Err(e) => {
+            trace!(?e, "Failed to get local address");
+            return;
+        }
+    };
 
-            // Respond with error
-            let resp = match e {
-                ProxyProtocolError::Io(_) => ResponseHeader {
-                    result: Err(ResponseError {
-                        source: local_addr,
-                        kind: ResponseErrorKind::Io,
-                    }),
-                },
-                ProxyProtocolError::Bincode(_) => ResponseHeader {
-                    result: Err(ResponseError {
-                        source: local_addr,
-                        kind: ResponseErrorKind::Codec,
-                    }),
-                },
-                ProxyProtocolError::Loopback => ResponseHeader {
-                    result: Err(ResponseError {
-                        source: local_addr,
-                        kind: ResponseErrorKind::Loopback,
-                    }),
-                },
-                ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
-            };
-            let _ = write_header_async(stream, &resp).await;
+    // Respond with error
+    let resp = match error {
+        ProxyProtocolError::Io(_) => ResponseHeader {
+            result: Err(ResponseError {
+                source: local_addr,
+                kind: ResponseErrorKind::Io,
+            }),
+        },
+        ProxyProtocolError::Bincode(_) => ResponseHeader {
+            result: Err(ResponseError {
+                source: local_addr,
+                kind: ResponseErrorKind::Codec,
+            }),
+        },
+        ProxyProtocolError::Loopback => ResponseHeader {
+            result: Err(ResponseError {
+                source: local_addr,
+                kind: ResponseErrorKind::Loopback,
+            }),
+        },
+        ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
+    };
+    let _ = write_header_async(stream, &resp).await;
 
-            // Drain read stream before closing
-            // - why: Prevent RST packets from being sent
-            let mut buf = [0; 1024];
-            loop {
-                match stream.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(_) => continue,
-                    Err(_) => break,
-                }
-            }
+    // Drain read stream before closing
+    // - why: Prevent RST packets from being sent
+    let mut buf = [0; 1024];
+    loop {
+        match stream.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(_) => continue,
+            Err(_) => break,
         }
     }
 }
