@@ -190,7 +190,7 @@ async fn proxy(
                 write_header(&mut writer, &header)?;
 
                 // Write payload
-                writer.write(pkt)?;
+                writer.write_all(pkt)?;
 
                 // Send packet to downstream
                 let pkt = writer.into_inner();

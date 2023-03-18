@@ -57,10 +57,10 @@ impl UdpProxySocket {
         let mut writer = io::Cursor::new(&mut new_buf);
 
         // Write header
-        writer.write(&self.header)?;
+        writer.write_all(&self.header)?;
 
         // Write payload
-        writer.write(buf)?;
+        writer.write_all(buf)?;
 
         // Send data
         self.upstream.send(&new_buf).await?;
