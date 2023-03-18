@@ -111,8 +111,6 @@ mod tests {
 
                 // Read response
                 read_response(&mut stream, resp_msg).await.unwrap();
-
-                stream.close_gracefully().await.unwrap();
             });
         }
 
@@ -152,8 +150,6 @@ mod tests {
 
                     // Read response
                     read_response(&mut stream, resp_msg).await.unwrap();
-
-                    stream.close_gracefully().await.unwrap();
                 }
             });
         }

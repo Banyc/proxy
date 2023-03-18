@@ -6,10 +6,7 @@ use std::{
 use models::{
     read_header_async, write_header_async, ProxyProtocolError, RequestHeader, ResponseHeader,
 };
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::net::TcpStream;
 use tracing::{error, instrument, trace};
 
 impl TcpProxyStream {
@@ -71,22 +68,5 @@ impl DerefMut for TcpProxyStream {
 impl TcpProxyStream {
     pub fn into_inner(self) -> TcpStream {
         self.0
-    }
-
-    pub async fn close_gracefully(mut self) -> Result<(), ProxyProtocolError> {
-        // Shutdown write half
-        self.0.shutdown().await.inspect_err(|e| {
-            error!(?e, "Failed to shutdown write half of stream before closing")
-        })?;
-        // Read until EOF
-        let mut buf = [0; 1024];
-        while self
-            .0
-            .read(&mut buf)
-            .await
-            .inspect_err(|e| error!(?e, "Failed to read from stream before closing"))?
-            > 0
-        {}
-        Ok(())
     }
 }
