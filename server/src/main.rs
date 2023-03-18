@@ -7,7 +7,7 @@ use tokio::net::{TcpListener, UdpSocket};
 
 #[tokio::main]
 pub async fn main() {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt().with_line_number(true).init();
     let config: Config = get_config().unwrap();
     let mut join_set = tokio::task::JoinSet::new();
     join_set.spawn(async move {

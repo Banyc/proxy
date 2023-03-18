@@ -44,11 +44,17 @@ impl UdpProxy {
         let flows = Arc::new(RwLock::new(flows));
         let downstream_listener = Arc::new(self.listener);
 
-        let addr = downstream_listener.local_addr()?;
+        let addr = downstream_listener
+            .local_addr()
+            .inspect_err(|e| error!(?e, "Failed to get local address"))?;
         info!(?addr, "Listening");
         let mut buf = [0; 1024];
         loop {
-            let (n, downstream_addr) = downstream_listener.recv_from(&mut buf).await?;
+            trace!("Waiting for packet");
+            let (n, downstream_addr) = downstream_listener
+                .recv_from(&mut buf)
+                .await
+                .inspect_err(|e| error!(?e, "Failed to receive packet from downstream"))?;
             let downstream_addr = DownstreamAddr(downstream_addr);
 
             let res = steer(
@@ -72,13 +78,14 @@ async fn steer(
 ) -> Result<(), ProxyProtocolError> {
     // Decode header
     let mut reader = io::Cursor::new(buf);
-    let header: RequestHeader = read_header(&mut reader)?;
+    let header: RequestHeader = read_header(&mut reader)
+        .inspect_err(|e| error!(?e, "Failed to decode header from downstream"))?;
     let header_len = reader.position() as usize;
     let payload = &buf[header_len..];
 
     // Prevent connections to localhost
     if header.upstream.ip().is_loopback() {
-        error!(?header, "Loopback");
+        error!(?header, "Loopback address is not allowed");
         return Err(ProxyProtocolError::Loopback);
     }
 
@@ -92,8 +99,12 @@ async fn steer(
         flows.get(&flow).cloned()
     };
     let flow_tx = match flow_tx {
-        Some(flow_tx) => flow_tx,
+        Some(flow_tx) => {
+            trace!(?flow, "Flow already exists");
+            flow_tx
+        }
         None => {
+            trace!(?flow, "Creating flow");
             let (tx, rx) = mpsc::channel(1);
             flows.write().unwrap().insert(flow, tx.clone());
 
@@ -123,11 +134,14 @@ async fn handle_steer_result(
 ) {
     match res {
         Ok(()) => {
+            trace!(?downstream_addr, "Steered");
             // No response
         }
         Err(err) => {
             error!(?err, "Failed to steer");
-            respond_with_error(&downstream_listener, downstream_addr, err).await;
+            let _ = respond_with_error(downstream_listener, downstream_addr, err)
+                .await
+                .inspect_err(|e| error!(?e, "Failed to respond with error to downstream"));
         }
     }
 }
@@ -175,8 +189,10 @@ async fn proxy(
     // Forward packets
     let mut downlink_buf = [0; 1024];
     loop {
+        trace!("Waiting for packet");
         tokio::select! {
             res = rx.recv() => {
+                trace!("Received packet from downstream");
                 let packet = match res {
                     Some(packet) => packet,
                     None => {
@@ -193,6 +209,7 @@ async fn proxy(
                 last_packet = std::time::Instant::now();
             }
             res = upstream.recv(&mut downlink_buf) => {
+                trace!("Received packet from upstream");
                 let n = res?;
                 let pkt = &downlink_buf[..n];
 
@@ -215,6 +232,7 @@ async fn proxy(
                 last_packet = std::time::Instant::now();
             }
             _ = tick.tick() => {
+                trace!("Checking if flow is still alive");
                 if last_packet.elapsed() > TIMEOUT {
                     info!(?flow, "Flow timed out");
                     break;
@@ -242,12 +260,14 @@ async fn handle_proxy_result(
 ) {
     match res {
         Ok(metrics) => {
-            // No response
             info!(?metrics, "Connection closed normally");
+            // No response
         }
         Err(e) => {
             error!(?e, "Connection closed with error");
-            respond_with_error(downstream_writer, downstream_addr, e).await;
+            let _ = respond_with_error(downstream_writer, downstream_addr, e)
+                .await
+                .inspect_err(|e| error!(?e, "Failed to respond with error"));
         }
     }
 }
@@ -257,14 +277,10 @@ async fn respond_with_error(
     downstream_writer: &UdpSocket,
     downstream_addr: DownstreamAddr,
     error: ProxyProtocolError,
-) {
-    let local_addr = match downstream_writer.local_addr() {
-        Ok(addr) => addr,
-        Err(e) => {
-            trace!(?e, "Failed to get local address");
-            return;
-        }
-    };
+) -> Result<(), ProxyProtocolError> {
+    let local_addr = downstream_writer
+        .local_addr()
+        .inspect_err(|e| error!(?e, "Failed to get local address"))?;
 
     // Respond with error
     let resp = match error {
@@ -290,5 +306,10 @@ async fn respond_with_error(
     };
     let mut buf = Vec::new();
     write_header(&mut buf, &resp).unwrap();
-    let _ = downstream_writer.send_to(&buf, downstream_addr.0).await;
+    downstream_writer
+        .send_to(&buf, downstream_addr.0)
+        .await
+        .inspect_err(|e| error!(?e, "Failed to send response to downstream"))?;
+
+    Ok(())
 }

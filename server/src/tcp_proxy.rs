@@ -21,11 +21,18 @@ impl TcpProxy {
 
     #[instrument(skip_all)]
     pub async fn serve(self) -> io::Result<()> {
-        let addr = self.listener.local_addr()?;
+        let addr = self
+            .listener
+            .local_addr()
+            .inspect_err(|e| error!(?e, "Failed to get local address"))?;
         info!(?addr, "Listening");
         loop {
-            let (stream, _) = self.listener.accept().await?;
-            trace!(peer_addr = ?stream.peer_addr(), "Accepted connection");
+            trace!("Waiting for connection");
+            let (stream, _) = self
+                .listener
+                .accept()
+                .await
+                .inspect_err(|e| error!(?e, "Failed to accept connection"))?;
             tokio::spawn(async move {
                 let mut stream = stream;
                 let res = proxy(&mut stream).await;
@@ -47,35 +54,40 @@ struct StreamMetrics {
 
 #[instrument(skip_all)]
 async fn proxy(downstream: &mut TcpStream) -> Result<StreamMetrics, ProxyProtocolError> {
-    let downstream_addr = downstream.peer_addr()?;
-    trace!(?downstream_addr, "Connected to downstream");
+    let downstream_addr = downstream
+        .peer_addr()
+        .inspect_err(|e| error!(?e, "Failed to get downstream address"))?;
     let start = std::time::Instant::now();
 
     // Decode header
-    let header: RequestHeader = read_header_async(downstream).await?;
-    trace!(?header, "Decoded header");
+    let header: RequestHeader = read_header_async(downstream)
+        .await
+        .inspect_err(|e| error!(?e, "Failed to read header from downstream"))?;
 
     // Prevent connections to localhost
     if header.upstream.ip().is_loopback() {
+        error!(?header.upstream, "Refusing to connect to loopback address");
         return Err(ProxyProtocolError::Loopback);
     }
-    trace!(?header.upstream, "Validated upstream address");
 
     // Connect to upstream
-    let mut upstream = TcpStream::connect(header.upstream).await?;
-    trace!(?header.upstream, "Connected to upstream");
-    let upstream_addr = upstream.peer_addr()?;
-    trace!(?upstream_addr, "Connected to upstream");
+    let mut upstream = TcpStream::connect(header.upstream)
+        .await
+        .inspect_err(|e| error!(?e, ?header.upstream, "Failed to connect to upstream"))?;
+    let upstream_addr = upstream
+        .peer_addr()
+        .inspect_err(|e| error!(?e, ?header.upstream, "Failed to get upstream address"))?;
 
     // Write Ok response
     let resp = ResponseHeader { result: Ok(()) };
-    write_header_async(downstream, &resp).await?;
-    trace!(?resp, "Wrote response");
+    write_header_async(downstream, &resp)
+        .await
+        .inspect_err(|e| error!(?e, ?header.upstream, "Failed to write response to downstream"))?;
 
     // Copy data
-    let (bytes_uplink, bytes_downlink) =
-        tokio::io::copy_bidirectional(downstream, &mut upstream).await?;
-    trace!(bytes_uplink, bytes_downlink, "Copied data");
+    let (bytes_uplink, bytes_downlink) = tokio::io::copy_bidirectional(downstream, &mut upstream)
+        .await
+        .inspect_err(|e| error!(?e, ?header.upstream, "Failed to copy data between streams"))?;
 
     let end = std::time::Instant::now();
     let metrics = StreamMetrics {
@@ -98,20 +110,21 @@ async fn handle_proxy_result(
         Ok(metrics) => info!(?metrics, "Connection closed normally"),
         Err(e) => {
             error!(?e, "Connection closed with error");
-            respond_with_error(stream, e).await;
+            let _ = respond_with_error(stream, e).await.inspect_err(|e| {
+                error!(?e, "Failed to respond with error to downstream after error")
+            });
         }
     }
 }
 
 #[instrument(skip(stream))]
-async fn respond_with_error(stream: &mut TcpStream, error: ProxyProtocolError) {
-    let local_addr = match stream.local_addr() {
-        Ok(addr) => addr,
-        Err(e) => {
-            trace!(?e, "Failed to get local address");
-            return;
-        }
-    };
+async fn respond_with_error(
+    stream: &mut TcpStream,
+    error: ProxyProtocolError,
+) -> Result<(), ProxyProtocolError> {
+    let local_addr = stream
+        .local_addr()
+        .inspect_err(|e| error!(?e, "Failed to get local address"))?;
 
     // Respond with error
     let resp = match error {
@@ -135,24 +148,23 @@ async fn respond_with_error(stream: &mut TcpStream, error: ProxyProtocolError) {
         },
         ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
     };
-    match write_header_async(stream, &resp).await {
-        Ok(()) => (),
-        Err(e) => {
-            trace!(?e, "Failed to write response to downstream after error");
-            return;
-        }
-    }
+    write_header_async(stream, &resp)
+        .await
+        .inspect_err(|e| error!(?e, "Failed to write response to downstream after error"))?;
 
     // Drain read stream before closing
     // - why: Prevent RST packets from being sent
     let mut buf = [0; 1024];
     loop {
+        trace!("Draining read stream before closing");
         match stream.read(&mut buf).await {
             Ok(0) => break,
             Ok(_) => continue,
             Err(_) => break,
         }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
