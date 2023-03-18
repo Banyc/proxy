@@ -72,6 +72,12 @@ where
     // Decode header
     let header = {
         let mut buf = [0; MAX_HEADER_LEN];
+        if len > MAX_HEADER_LEN {
+            return Err(ProxyProtocolError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Header too long",
+            )));
+        }
         let res = stream.read_exact(&mut buf[..len]);
         add_await([res])?;
         bincode::deserialize(&buf[..len])?
