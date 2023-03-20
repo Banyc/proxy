@@ -10,6 +10,9 @@ use models::{
 use tokio::net::TcpStream;
 use tracing::{error, instrument, trace};
 
+#[derive(Debug)]
+pub struct TcpProxyStream(TcpStream);
+
 impl TcpProxyStream {
     #[instrument(skip_all)]
     pub async fn establish(
@@ -57,9 +60,6 @@ impl TcpProxyStream {
         Ok(TcpProxyStream(stream))
     }
 }
-
-#[derive(Debug)]
-pub struct TcpProxyStream(TcpStream);
 
 impl Deref for TcpProxyStream {
     type Target = TcpStream;
