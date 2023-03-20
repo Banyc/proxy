@@ -221,7 +221,7 @@ async fn proxy(
                 let header = ResponseHeader {
                     result: Ok(()),
                 };
-                write_header(&mut writer, &header, &crypto)?;
+                write_header(&mut writer, &header, crypto)?;
 
                 // Write payload
                 writer.write_all(pkt)?;

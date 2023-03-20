@@ -49,7 +49,7 @@ pub enum ResponseErrorKind {
     Loopback,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Deserialize, Serialize)]
 pub struct XorCrypto {
     key: Vec<u8>,
 }
@@ -66,12 +66,6 @@ impl XorCrypto {
         for (i, b) in buf.iter_mut().enumerate() {
             *b ^= self.key[i % self.key.len()];
         }
-    }
-}
-
-impl Default for XorCrypto {
-    fn default() -> Self {
-        Self { key: Vec::new() }
     }
 }
 
@@ -105,10 +99,10 @@ where
                 "Header too long",
             )));
         }
-        let mut hdr = &mut buf[..len];
-        let res = stream.read_exact(&mut hdr);
+        let hdr = &mut buf[..len];
+        let res = stream.read_exact(hdr);
         add_await([res])?;
-        crypto.xor(&mut hdr);
+        crypto.xor(hdr);
         bincode::deserialize(hdr)?
     };
     trace!(?header, "Read header");

@@ -35,7 +35,7 @@ impl TcpProxyStream {
         // Write headers to stream
         for (header, crypto) in pairs {
             trace!(?header, "Writing header to stream");
-            write_header_async(&mut stream, &header, &crypto)
+            write_header_async(&mut stream, &header, crypto)
                 .await
                 .inspect_err(|e| error!(?e, "Failed to write header to stream"))?;
         }
