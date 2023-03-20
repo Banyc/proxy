@@ -10,6 +10,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{instrument, trace};
 
 pub mod addr;
+pub mod udp;
 
 #[derive(Debug, Error)]
 pub enum ProxyProtocolError {
