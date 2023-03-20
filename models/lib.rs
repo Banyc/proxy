@@ -49,13 +49,39 @@ pub enum ResponseErrorKind {
     Loopback,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub struct XorCrypto {
+    key: Vec<u8>,
+}
+
+impl XorCrypto {
+    pub fn new(key: Vec<u8>) -> Self {
+        Self { key }
+    }
+
+    pub fn xor(&self, buf: &mut [u8]) {
+        if self.key.is_empty() {
+            return;
+        }
+        for (i, b) in buf.iter_mut().enumerate() {
+            *b ^= self.key[i % self.key.len()];
+        }
+    }
+}
+
+impl Default for XorCrypto {
+    fn default() -> Self {
+        Self { key: Vec::new() }
+    }
+}
+
 #[duplicate_item(
     name                async   stream_bounds       add_await(code) ;
     [read_header]       []      [BufRead]           [code]          ;
     [read_header_async] [async] [AsyncRead + Unpin] [code.await]    ;
 )]
 #[instrument(skip_all)]
-pub async fn name<S, H>(stream: &mut S) -> Result<H, ProxyProtocolError>
+pub async fn name<S, H>(stream: &mut S, crypto: &XorCrypto) -> Result<H, ProxyProtocolError>
 where
     S: stream_bounds,
     H: for<'de> Deserialize<'de> + std::fmt::Debug,
@@ -65,6 +91,7 @@ where
         let mut buf = [0; 4];
         let res = stream.read_exact(&mut buf);
         add_await([res])?;
+        crypto.xor(&mut buf);
         u32::from_be_bytes(buf) as usize
     };
     trace!(len, "Read header length");
@@ -78,9 +105,11 @@ where
                 "Header too long",
             )));
         }
-        let res = stream.read_exact(&mut buf[..len]);
+        let mut hdr = &mut buf[..len];
+        let res = stream.read_exact(&mut hdr);
         add_await([res])?;
-        bincode::deserialize(&buf[..len])?
+        crypto.xor(&mut hdr);
+        bincode::deserialize(hdr)?
     };
     trace!(?header, "Read header");
 
@@ -93,7 +122,11 @@ where
     [write_header_async] [async] [AsyncWrite + Unpin] [code.await]    ;
 )]
 #[instrument(skip_all)]
-pub async fn name<S, H>(stream: &mut S, header: &H) -> Result<(), ProxyProtocolError>
+pub async fn name<S, H>(
+    stream: &mut S,
+    header: &H,
+    crypto: &XorCrypto,
+) -> Result<(), ProxyProtocolError>
 where
     S: stream_bounds,
     H: Serialize + std::fmt::Debug,
@@ -102,40 +135,85 @@ where
     let mut writer = io::Cursor::new(&mut buf[..]);
 
     // Encode header
-    let buf = {
+    let hdr = {
         bincode::serialize_into(&mut writer, header)?;
         let len = writer.position();
-        let buf = &buf[..len as usize];
+        let hdr = &mut buf[..len as usize];
+        crypto.xor(hdr);
         trace!(?header, ?len, "Encoded header");
-        buf
+        hdr
     };
 
     // Write header length
-    let len = buf.len() as u32;
-    add_await([stream.write_all(&len.to_be_bytes())])?;
+    let len = hdr.len() as u32;
+    let mut len = len.to_be_bytes();
+    crypto.xor(&mut len);
+    add_await([stream.write_all(&len)])?;
 
     // Write header
-    add_await([stream.write_all(buf)])?;
+    add_await([stream.write_all(hdr)])?;
 
     Ok(())
 }
 
 pub const MAX_HEADER_LEN: usize = 1024;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub struct ProxyConfig {
+    pub address: SocketAddr,
+    pub crypto: XorCrypto,
+}
+
+pub fn convert_proxy_configs_to_header_crypto_pairs<'config>(
+    nodes: &'config [ProxyConfig],
+    destination: &SocketAddr,
+) -> Vec<(RequestHeader, &'config XorCrypto)> {
+    let mut pairs = Vec::new();
+    for i in 0..nodes.len() - 1 {
+        let node = &nodes[i];
+        let next_node = &nodes[i + 1];
+        pairs.push((
+            RequestHeader {
+                upstream: next_node.address,
+            },
+            &node.crypto,
+        ));
+    }
+    pairs.push((
+        RequestHeader {
+            upstream: *destination,
+        },
+        &nodes.last().unwrap().crypto,
+    ));
+    pairs
+}
+
 #[cfg(test)]
 mod tests {
+    use rand::Rng;
+
     use super::*;
+
+    fn create_random_crypto() -> XorCrypto {
+        let mut rng = rand::thread_rng();
+        let mut key = Vec::new();
+        for _ in 0..MAX_HEADER_LEN {
+            key.push(rng.gen());
+        }
+        XorCrypto::new(key)
+    }
 
     #[tokio::test]
     async fn test_request_header() {
         let mut buf = [0; 4 + MAX_HEADER_LEN];
         let mut stream = io::Cursor::new(&mut buf[..]);
+        let crypto = create_random_crypto();
 
         // Encode header
         let original_header = RequestHeader {
             upstream: "1.1.1.1:8080".parse().unwrap(),
         };
-        write_header_async(&mut stream, &original_header)
+        write_header_async(&mut stream, &original_header, &crypto)
             .await
             .unwrap();
         let len = stream.position();
@@ -144,7 +222,7 @@ mod tests {
 
         // Decode header
         let mut stream = io::Cursor::new(&buf[..]);
-        let decoded_header = read_header_async(&mut stream).await.unwrap();
+        let decoded_header = read_header_async(&mut stream, &crypto).await.unwrap();
         assert_eq!(original_header, decoded_header);
     }
 
@@ -152,6 +230,7 @@ mod tests {
     async fn test_response_header() {
         let mut buf = [0; 4 + MAX_HEADER_LEN];
         let mut stream = io::Cursor::new(&mut buf[..]);
+        let crypto = create_random_crypto();
 
         // Encode header
         let original_header = ResponseHeader {
@@ -160,7 +239,7 @@ mod tests {
                 kind: ResponseErrorKind::Io,
             }),
         };
-        write_header_async(&mut stream, &original_header)
+        write_header_async(&mut stream, &original_header, &crypto)
             .await
             .unwrap();
         let len = stream.position();
@@ -169,7 +248,7 @@ mod tests {
 
         // Decode header
         let mut stream = io::Cursor::new(&buf[..]);
-        let decoded_header = read_header_async(&mut stream).await.unwrap();
+        let decoded_header = read_header_async(&mut stream, &crypto).await.unwrap();
         assert_eq!(original_header, decoded_header);
     }
 }

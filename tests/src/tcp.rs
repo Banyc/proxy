@@ -3,21 +3,27 @@ mod tests {
     use std::{io, net::SocketAddr};
 
     use client::tcp_proxy_client::TcpProxyStream;
-    use models::{ProxyProtocolError, ResponseErrorKind};
+    use models::{ProxyConfig, ProxyProtocolError, ResponseErrorKind};
     use server::tcp_proxy::TcpProxy;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
 
-    async fn spawn_proxy(addr: &str) -> SocketAddr {
+    use crate::create_random_crypto;
+
+    async fn spawn_proxy(addr: &str) -> ProxyConfig {
         let listener = TcpListener::bind(addr).await.unwrap();
+        let crypto = create_random_crypto();
         let proxy_addr = listener.local_addr().unwrap();
-        let proxy = TcpProxy::new(listener);
+        let proxy = TcpProxy::new(listener, crypto.clone());
         tokio::spawn(async move {
             proxy.serve().await.unwrap();
         });
-        proxy_addr
+        ProxyConfig {
+            address: proxy_addr,
+            crypto,
+        }
     }
 
     async fn spawn_greet(addr: &str, req: &[u8], resp: &[u8], accepts: usize) -> SocketAddr {
@@ -53,9 +59,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_proxies() {
         // Start proxy servers
-        let proxy_1_addr = spawn_proxy("0.0.0.0:0").await;
-        let proxy_2_addr = spawn_proxy("0.0.0.0:0").await;
-        let proxy_3_addr = spawn_proxy("0.0.0.0:0").await;
+        let proxy_1_config = spawn_proxy("0.0.0.0:0").await;
+        let proxy_2_config = spawn_proxy("0.0.0.0:0").await;
+        let proxy_3_config = spawn_proxy("0.0.0.0:0").await;
 
         // Message to send
         let req_msg = b"hello world";
@@ -65,10 +71,12 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut stream =
-            TcpProxyStream::establish(&vec![proxy_1_addr, proxy_2_addr, proxy_3_addr, greet_addr])
-                .await
-                .unwrap();
+        let mut stream = TcpProxyStream::establish(
+            &vec![proxy_1_config, proxy_2_config, proxy_3_config],
+            &greet_addr,
+        )
+        .await
+        .unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();
@@ -80,8 +88,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_clients() {
         // Start proxy servers
-        let proxy_1_addr = spawn_proxy("0.0.0.0:0").await;
-        let proxy_2_addr = spawn_proxy("0.0.0.0:0").await;
+        let proxy_1_config = spawn_proxy("0.0.0.0:0").await;
+        let proxy_2_config = spawn_proxy("0.0.0.0:0").await;
+        let proxy_configs = vec![proxy_1_config, proxy_2_config];
 
         // Message to send
         let req_msg = b"hello world";
@@ -95,16 +104,12 @@ mod tests {
         let mut handles = tokio::task::JoinSet::new();
 
         for _ in 0..clients {
+            let proxy_configs = proxy_configs.clone();
             handles.spawn(async move {
                 // Connect to proxy server
-                let mut stream = TcpProxyStream::establish(&vec![
-                    proxy_1_addr,
-                    proxy_2_addr,
-                    // proxy_3_addr,
-                    greet_addr,
-                ])
-                .await
-                .unwrap();
+                let mut stream = TcpProxyStream::establish(&proxy_configs, &greet_addr)
+                    .await
+                    .unwrap();
 
                 // Send message
                 stream.write_all(req_msg).await.unwrap();
@@ -122,10 +127,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn stress_test() {
         // Start proxy servers
-        let mut addresses = Vec::new();
+        let mut proxy_configs = Vec::new();
         for _ in 0..10 {
-            let proxy_addr = spawn_proxy("0.0.0.0:0").await;
-            addresses.push(proxy_addr);
+            let proxy_config = spawn_proxy("0.0.0.0:0").await;
+            proxy_configs.push(proxy_config);
         }
 
         // Message to send
@@ -134,16 +139,17 @@ mod tests {
 
         // Start greet server
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, usize::MAX).await;
-        addresses.push(greet_addr);
 
         let mut handles = tokio::task::JoinSet::new();
 
         for _ in 0..50 {
-            let addresses = addresses.clone();
+            let proxy_configs = proxy_configs.clone();
             handles.spawn(async move {
                 for _ in 0..10 {
                     // Connect to proxy server
-                    let mut stream = TcpProxyStream::establish(&addresses).await.unwrap();
+                    let mut stream = TcpProxyStream::establish(&proxy_configs, &greet_addr)
+                        .await
+                        .unwrap();
 
                     // Send message
                     stream.write_all(req_msg).await.unwrap();
@@ -162,9 +168,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_bad_proxy() {
         // Start proxy servers
-        let proxy_1_addr = spawn_proxy("localhost:0").await;
-        let proxy_2_addr = spawn_proxy("localhost:0").await;
-        let proxy_3_addr = spawn_proxy("localhost:0").await;
+        let proxy_1_config = spawn_proxy("localhost:0").await;
+        let proxy_2_config = spawn_proxy("localhost:0").await;
+        let proxy_3_config = spawn_proxy("localhost:0").await;
 
         // Message to send
         let req_msg = b"hello world";
@@ -174,17 +180,19 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let err =
-            TcpProxyStream::establish(&vec![proxy_1_addr, proxy_2_addr, proxy_3_addr, greet_addr])
-                .await
-                .unwrap_err();
+        let err = TcpProxyStream::establish(
+            &vec![proxy_1_config.clone(), proxy_2_config, proxy_3_config],
+            &greet_addr,
+        )
+        .await
+        .unwrap_err();
         match err {
             ProxyProtocolError::Response(err) => {
                 match err.kind {
                     ResponseErrorKind::Loopback => {}
                     _ => panic!("Unexpected error: {:?}", err),
                 }
-                assert_eq!(err.source, proxy_1_addr);
+                assert_eq!(err.source, proxy_1_config.address);
             }
             _ => panic!("Unexpected error: {:?}", err),
         }
@@ -202,7 +210,9 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut stream = TcpProxyStream::establish(&vec![greet_addr]).await.unwrap();
+        let mut stream = TcpProxyStream::establish(&vec![], &greet_addr)
+            .await
+            .unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();

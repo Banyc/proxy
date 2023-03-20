@@ -4,40 +4,50 @@ use std::{
 };
 
 use models::{
-    read_header_async, write_header_async, ProxyProtocolError, RequestHeader, ResponseHeader,
+    convert_proxy_configs_to_header_crypto_pairs, read_header_async, write_header_async,
+    ProxyConfig, ProxyProtocolError, ResponseHeader,
 };
 use tokio::net::TcpStream;
 use tracing::{error, instrument, trace};
 
 impl TcpProxyStream {
     #[instrument(skip_all)]
-    pub async fn establish(addresses: &[SocketAddr]) -> Result<TcpProxyStream, ProxyProtocolError> {
-        let mut stream = TcpStream::connect(addresses[0])
+    pub async fn establish(
+        proxy_configs: &[ProxyConfig],
+        destination: &SocketAddr,
+    ) -> Result<TcpProxyStream, ProxyProtocolError> {
+        // If there are no proxy configs, just connect to the destination
+        if proxy_configs.is_empty() {
+            let stream = TcpStream::connect(destination)
+                .await
+                .inspect_err(|e| error!(?e, "Failed to connect to upstream address"))?;
+            return Ok(TcpProxyStream(stream));
+        }
+
+        // Connect to the first upstream
+        let mut stream = TcpStream::connect(proxy_configs[0].address)
             .await
             .inspect_err(|e| error!(?e, "Failed to connect to upstream address"))?;
 
         // Convert addresses to headers
-        let headers = addresses[1..]
-            .iter()
-            .map(|addr| RequestHeader { upstream: *addr })
-            .collect::<Vec<_>>();
+        let pairs = convert_proxy_configs_to_header_crypto_pairs(proxy_configs, destination);
 
         // Write headers to stream
-        for header in headers {
+        for (header, crypto) in pairs {
             trace!(?header, "Writing header to stream");
-            write_header_async(&mut stream, &header)
+            write_header_async(&mut stream, &header, &crypto)
                 .await
                 .inspect_err(|e| error!(?e, "Failed to write header to stream"))?;
         }
 
         // Read response
-        for address in addresses[..addresses.len() - 1].iter() {
-            trace!(?address, "Reading response from upstream address");
-            let resp: ResponseHeader = read_header_async(&mut stream)
+        for node in proxy_configs {
+            trace!(?node.address, "Reading response from upstream address");
+            let resp: ResponseHeader = read_header_async(&mut stream, &node.crypto)
                 .await
                 .inspect_err(|e| error!(?e, "Failed to read response from upstream address"))?;
             if let Err(mut err) = resp.result {
-                err.source = *address;
+                err.source = node.address;
                 error!(?err, "Response was not successful");
                 return Err(ProxyProtocolError::Response(err));
             }

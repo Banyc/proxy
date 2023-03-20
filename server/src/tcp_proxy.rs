@@ -1,19 +1,20 @@
-use std::{io, net::SocketAddr};
+use std::{io, net::SocketAddr, sync::Arc};
 
 use models::{
     read_header_async, write_header_async, ProxyProtocolError, RequestHeader, ResponseError,
-    ResponseErrorKind, ResponseHeader,
+    ResponseErrorKind, ResponseHeader, XorCrypto,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info, instrument, trace};
 
 pub struct TcpProxy {
     listener: TcpListener,
+    crypto: XorCrypto,
 }
 
 impl TcpProxy {
-    pub fn new(listener: TcpListener) -> Self {
-        Self { listener }
+    pub fn new(listener: TcpListener, crypto: XorCrypto) -> Self {
+        Self { listener, crypto }
     }
 
     #[instrument(skip_all)]
@@ -22,6 +23,7 @@ impl TcpProxy {
             .listener
             .local_addr()
             .inspect_err(|e| error!(?e, "Failed to get local address"))?;
+        let crypto = Arc::new(self.crypto);
         info!(?addr, "Listening");
         loop {
             trace!("Waiting for connection");
@@ -30,10 +32,11 @@ impl TcpProxy {
                 .accept()
                 .await
                 .inspect_err(|e| error!(?e, "Failed to accept connection"))?;
+            let crypto = Arc::clone(&crypto);
             tokio::spawn(async move {
                 let mut stream = stream;
-                let res = proxy(&mut stream).await;
-                handle_proxy_result(&mut stream, res).await;
+                let res = proxy(&mut stream, &crypto).await;
+                handle_proxy_result(&mut stream, res, &crypto).await;
             });
         }
     }
@@ -50,14 +53,17 @@ struct StreamMetrics {
 }
 
 #[instrument(skip_all)]
-async fn proxy(downstream: &mut TcpStream) -> Result<StreamMetrics, ProxyProtocolError> {
+async fn proxy(
+    downstream: &mut TcpStream,
+    crypto: &XorCrypto,
+) -> Result<StreamMetrics, ProxyProtocolError> {
     let downstream_addr = downstream
         .peer_addr()
         .inspect_err(|e| error!(?e, "Failed to get downstream address"))?;
     let start = std::time::Instant::now();
 
     // Decode header
-    let header: RequestHeader = read_header_async(downstream)
+    let header: RequestHeader = read_header_async(downstream, crypto)
         .await
         .inspect_err(|e| error!(?e, "Failed to read header from downstream"))?;
 
@@ -77,7 +83,7 @@ async fn proxy(downstream: &mut TcpStream) -> Result<StreamMetrics, ProxyProtoco
 
     // Write Ok response
     let resp = ResponseHeader { result: Ok(()) };
-    write_header_async(downstream, &resp)
+    write_header_async(downstream, &resp, crypto)
         .await
         .inspect_err(|e| error!(?e, ?header.upstream, "Failed to write response to downstream"))?;
 
@@ -98,26 +104,30 @@ async fn proxy(downstream: &mut TcpStream) -> Result<StreamMetrics, ProxyProtoco
     Ok(metrics)
 }
 
-#[instrument(skip(stream, res))]
+#[instrument(skip(stream, res, crypto))]
 async fn handle_proxy_result(
     stream: &mut TcpStream,
     res: Result<StreamMetrics, ProxyProtocolError>,
+    crypto: &XorCrypto,
 ) {
     match res {
         Ok(metrics) => info!(?metrics, "Connection closed normally"),
         Err(e) => {
             error!(?e, "Connection closed with error");
-            let _ = respond_with_error(stream, e).await.inspect_err(|e| {
-                error!(?e, "Failed to respond with error to downstream after error")
-            });
+            let _ = respond_with_error(stream, e, crypto)
+                .await
+                .inspect_err(|e| {
+                    error!(?e, "Failed to respond with error to downstream after error")
+                });
         }
     }
 }
 
-#[instrument(skip(stream))]
+#[instrument(skip(stream, crypto))]
 async fn respond_with_error(
     stream: &mut TcpStream,
     error: ProxyProtocolError,
+    crypto: &XorCrypto,
 ) -> Result<(), ProxyProtocolError> {
     let local_addr = stream
         .local_addr()
@@ -145,7 +155,7 @@ async fn respond_with_error(
         },
         ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
     };
-    write_header_async(stream, &resp)
+    write_header_async(stream, &resp, crypto)
         .await
         .inspect_err(|e| error!(?e, "Failed to write response to downstream after error"))?;
 
@@ -163,11 +173,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_proxy() {
+        let crypto = XorCrypto::default();
+
         // Start proxy server
         let proxy_addr = {
             let listener = TcpListener::bind("localhost:0").await.unwrap();
             let proxy_addr = listener.local_addr().unwrap();
-            let proxy = TcpProxy::new(listener);
+            let proxy = TcpProxy::new(listener, crypto.clone());
             tokio::spawn(async move {
                 proxy.serve().await.unwrap();
             });
@@ -202,10 +214,12 @@ mod tests {
             let header = RequestHeader {
                 upstream: origin_addr,
             };
-            write_header_async(&mut stream, &header).await.unwrap();
+            write_header_async(&mut stream, &header, &crypto)
+                .await
+                .unwrap();
 
             // Read response
-            let resp: ResponseHeader = read_header_async(&mut stream).await.unwrap();
+            let resp: ResponseHeader = read_header_async(&mut stream, &crypto).await.unwrap();
             assert!(resp.result.is_ok());
         }
 

@@ -8,7 +8,7 @@ use std::{
 
 use models::{
     addr::any_addr, read_header, write_header, ProxyProtocolError, RequestHeader, ResponseError,
-    ResponseErrorKind, ResponseHeader,
+    ResponseErrorKind, ResponseHeader, XorCrypto,
 };
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{error, info, instrument, trace};
@@ -31,11 +31,12 @@ struct Packet(Vec<u8>);
 
 pub struct UdpProxy {
     listener: UdpSocket,
+    crypto: XorCrypto,
 }
 
 impl UdpProxy {
-    pub fn new(listener: UdpSocket) -> Self {
-        Self { listener }
+    pub fn new(listener: UdpSocket, crypto: XorCrypto) -> Self {
+        Self { listener, crypto }
     }
 
     #[instrument(skip(self))]
@@ -49,6 +50,7 @@ impl UdpProxy {
             .inspect_err(|e| error!(?e, "Failed to get local address"))?;
         info!(?addr, "Listening");
         let mut buf = [0; 1024];
+        let crypto = Arc::new(self.crypto);
         loop {
             trace!("Waiting for packet");
             let (n, downstream_addr) = downstream_listener
@@ -62,23 +64,25 @@ impl UdpProxy {
                 Arc::clone(&flows),
                 &buf[..n],
                 downstream_addr,
+                Arc::clone(&crypto),
             )
             .await;
-            handle_steer_result(&downstream_listener, downstream_addr, res).await;
+            handle_steer_result(&downstream_listener, downstream_addr, res, &crypto).await;
         }
     }
 }
 
-#[instrument(skip(downstream_writer, flows, buf))]
+#[instrument(skip(downstream_writer, flows, buf, crypto))]
 async fn steer(
     downstream_writer: Arc<UdpSocket>,
     flows: Arc<RwLock<FlowMap>>,
     buf: &[u8],
     downstream_addr: DownstreamAddr,
+    crypto: Arc<XorCrypto>,
 ) -> Result<(), ProxyProtocolError> {
     // Decode header
     let mut reader = io::Cursor::new(buf);
-    let header: RequestHeader = read_header(&mut reader)
+    let header: RequestHeader = read_header(&mut reader, &crypto)
         .inspect_err(|e| error!(?e, "Failed to decode header from downstream"))?;
     let header_len = reader.position() as usize;
     let payload = &buf[header_len..];
@@ -108,9 +112,10 @@ async fn steer(
             let (tx, rx) = mpsc::channel(1);
             flows.write().unwrap().insert(flow, tx.clone());
 
+            let crypto = Arc::clone(&crypto);
             tokio::spawn(async move {
-                let res = proxy(rx, flow, Arc::clone(&downstream_writer)).await;
-                handle_proxy_result(&downstream_writer, downstream_addr, res).await;
+                let res = proxy(rx, flow, Arc::clone(&downstream_writer), &crypto).await;
+                handle_proxy_result(&downstream_writer, downstream_addr, res, &crypto).await;
 
                 // Remove flow
                 flows.write().unwrap().remove(&flow);
@@ -131,6 +136,7 @@ async fn handle_steer_result(
     downstream_listener: &Arc<UdpSocket>,
     downstream_addr: DownstreamAddr,
     res: Result<(), ProxyProtocolError>,
+    crypto: &XorCrypto,
 ) {
     match res {
         Ok(()) => {
@@ -139,7 +145,7 @@ async fn handle_steer_result(
         }
         Err(err) => {
             error!(?err, "Failed to steer");
-            let _ = respond_with_error(downstream_listener, downstream_addr, err)
+            let _ = respond_with_error(downstream_listener, downstream_addr, err, crypto)
                 .await
                 .inspect_err(|e| error!(?e, "Failed to respond with error to downstream"));
         }
@@ -160,11 +166,12 @@ struct FlowMetrics {
     packets_downlink: usize,
 }
 
-#[instrument(skip(rx, downstream_writer))]
+#[instrument(skip(rx, downstream_writer, crypto))]
 async fn proxy(
     mut rx: mpsc::Receiver<Packet>,
     flow: Flow,
     downstream_writer: Arc<UdpSocket>,
+    crypto: &XorCrypto,
 ) -> Result<FlowMetrics, ProxyProtocolError> {
     let start = std::time::Instant::now();
 
@@ -214,7 +221,7 @@ async fn proxy(
                 let header = ResponseHeader {
                     result: Ok(()),
                 };
-                write_header(&mut writer, &header)?;
+                write_header(&mut writer, &header, &crypto)?;
 
                 // Write payload
                 writer.write_all(pkt)?;
@@ -248,11 +255,12 @@ async fn proxy(
     })
 }
 
-#[instrument(skip(downstream_writer, res))]
+#[instrument(skip(downstream_writer, res, crypto))]
 async fn handle_proxy_result(
     downstream_writer: &UdpSocket,
     downstream_addr: DownstreamAddr,
     res: Result<FlowMetrics, ProxyProtocolError>,
+    crypto: &XorCrypto,
 ) {
     match res {
         Ok(metrics) => {
@@ -261,18 +269,19 @@ async fn handle_proxy_result(
         }
         Err(e) => {
             error!(?e, "Connection closed with error");
-            let _ = respond_with_error(downstream_writer, downstream_addr, e)
+            let _ = respond_with_error(downstream_writer, downstream_addr, e, crypto)
                 .await
                 .inspect_err(|e| error!(?e, "Failed to respond with error"));
         }
     }
 }
 
-#[instrument(skip(downstream_writer))]
+#[instrument(skip(downstream_writer, crypto))]
 async fn respond_with_error(
     downstream_writer: &UdpSocket,
     downstream_addr: DownstreamAddr,
     error: ProxyProtocolError,
+    crypto: &XorCrypto,
 ) -> Result<(), ProxyProtocolError> {
     let local_addr = downstream_writer
         .local_addr()
@@ -301,7 +310,7 @@ async fn respond_with_error(
         ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
     };
     let mut buf = Vec::new();
-    write_header(&mut buf, &resp).unwrap();
+    write_header(&mut buf, &resp, crypto).unwrap();
     downstream_writer
         .send_to(&buf, downstream_addr.0)
         .await
