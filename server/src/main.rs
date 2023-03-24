@@ -4,7 +4,6 @@ use common::header::XorCrypto;
 use get_config::toml::get_config;
 use serde::Deserialize;
 use server::{tcp_proxy::TcpProxy, udp_proxy::UdpProxy};
-use tokio::net::UdpSocket;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -24,10 +23,10 @@ pub async fn main() {
         }
     });
     join_set.spawn(async move {
-        let udp_listener = UdpSocket::bind(config.listen_addr).await.unwrap();
         let crypto = XorCrypto::new(config.xor_key);
-        let udp_proxy = UdpProxy::new(udp_listener, crypto);
-        udp_proxy.serve().await.unwrap();
+        let udp_proxy = UdpProxy::new(crypto);
+        let server = udp_proxy.build(config.listen_addr).await.unwrap();
+        server.serve().await.unwrap();
     });
     join_set.join_next().await.unwrap().unwrap();
 }
