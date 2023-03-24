@@ -14,3 +14,4 @@ tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 common = { path = "../common" }
 get_config = "0.1.0"
+async-trait = "0.1.67"

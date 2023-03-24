@@ -16,12 +16,12 @@ mod tests {
     use crate::create_random_crypto;
 
     async fn spawn_proxy(addr: &str) -> ProxyConfig {
-        let listener = TcpListener::bind(addr).await.unwrap();
         let crypto = create_random_crypto();
-        let proxy_addr = listener.local_addr().unwrap();
-        let proxy = TcpProxy::new(listener, crypto.clone());
+        let proxy = TcpProxy::new(crypto.clone());
+        let server = proxy.build(addr).await.unwrap();
+        let proxy_addr = server.listener().local_addr().unwrap();
         tokio::spawn(async move {
-            proxy.serve().await.unwrap();
+            server.serve().await.unwrap();
         });
         ProxyConfig {
             address: proxy_addr,

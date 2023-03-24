@@ -1,44 +1,38 @@
-use std::{io, net::SocketAddr, sync::Arc};
+use std::{io, net::SocketAddr};
 
+use async_trait::async_trait;
 use common::{
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
     header::{read_header_async, write_header_async, RequestHeader, ResponseHeader, XorCrypto},
+    tcp::{TcpServer, TcpServerHook},
 };
-use tokio::net::{TcpListener, TcpStream};
-use tracing::{error, info, instrument, trace};
+use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tracing::{error, info, instrument};
 
 pub struct TcpProxy {
-    listener: TcpListener,
     crypto: XorCrypto,
 }
 
 impl TcpProxy {
-    pub fn new(listener: TcpListener, crypto: XorCrypto) -> Self {
-        Self { listener, crypto }
+    pub fn new(crypto: XorCrypto) -> Self {
+        Self { crypto }
     }
 
-    #[instrument(skip_all)]
-    pub async fn serve(self) -> io::Result<()> {
-        let addr = self
-            .listener
-            .local_addr()
-            .inspect_err(|e| error!(?e, "Failed to get local address"))?;
-        let crypto = Arc::new(self.crypto);
-        info!(?addr, "Listening");
-        loop {
-            trace!("Waiting for connection");
-            let (stream, _) = self
-                .listener
-                .accept()
-                .await
-                .inspect_err(|e| error!(?e, "Failed to accept connection"))?;
-            let crypto = Arc::clone(&crypto);
-            tokio::spawn(async move {
-                let mut stream = stream;
-                let res = proxy(&mut stream, &crypto).await;
-                handle_proxy_result(&mut stream, res, &crypto).await;
-            });
-        }
+    pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<TcpServer<TcpProxy>> {
+        let listener = TcpListener::bind(listen_addr)
+            .await
+            .inspect_err(|e| error!(?e, "Failed to bind to listen address"))?;
+        let server = TcpServer::new(listener, self);
+        Ok(server)
+    }
+}
+
+#[async_trait]
+impl TcpServerHook for TcpProxy {
+    #[instrument(skip(self, stream))]
+    async fn handle_stream(&self, stream: &mut TcpStream) {
+        let res = proxy(stream, &self.crypto).await;
+        handle_proxy_result(stream, res, &self.crypto).await;
     }
 }
 
@@ -176,11 +170,11 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let listener = TcpListener::bind("localhost:0").await.unwrap();
-            let proxy_addr = listener.local_addr().unwrap();
-            let proxy = TcpProxy::new(listener, crypto.clone());
+            let proxy = TcpProxy::new(crypto.clone());
+            let server = proxy.build("localhost:0").await.unwrap();
+            let proxy_addr = server.listener().local_addr().unwrap();
             tokio::spawn(async move {
-                proxy.serve().await.unwrap();
+                server.serve().await.unwrap();
             });
             proxy_addr
         };

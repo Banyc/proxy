@@ -13,3 +13,4 @@ serde = { version = "1.0.158", features = ["derive"] }
 tokio = { version = "1.26.0", features = ["full"] }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.16"
+async-trait = "0.1.67"

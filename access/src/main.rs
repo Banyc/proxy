@@ -13,7 +13,6 @@ async fn main() {
     join_set.spawn({
         async move {
             let tcp_access = TcpProxyAccess::new(
-                config.listen_addr,
                 config
                     .proxy_configs
                     .into_iter()
@@ -21,7 +20,8 @@ async fn main() {
                     .collect(),
                 config.destination,
             );
-            tcp_access.serve().await.unwrap();
+            let server = tcp_access.build(config.listen_addr).await.unwrap();
+            server.serve().await.unwrap();
         }
     });
     join_set.join_next().await.unwrap().unwrap();
