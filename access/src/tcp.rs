@@ -23,14 +23,19 @@ impl TcpProxyAccess {
         }
     }
 
-    pub async fn build(
-        self,
-        listen_addr: impl ToSocketAddrs,
-    ) -> io::Result<TcpServer<TcpProxyAccess>> {
+    pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<TcpServer<Self>> {
         let tcp_listener = tokio::net::TcpListener::bind(listen_addr)
             .await
             .inspect_err(|e| error!(?e, "Failed to bind to listen address"))?;
         Ok(TcpServer::new(tcp_listener, self))
+    }
+
+    async fn proxy(&self, downstream: &mut TcpStream) -> Result<(), ProxyProtocolError> {
+        let upstream = TcpProxyStream::establish(&self.proxy_configs, &self.destination).await?;
+        let mut upstream = upstream.into_inner();
+        tokio::io::copy_bidirectional(downstream, &mut upstream).await?;
+
+        Ok(())
     }
 }
 
@@ -38,21 +43,9 @@ impl TcpProxyAccess {
 impl TcpServerHook for TcpProxyAccess {
     #[instrument(skip(self, stream))]
     async fn handle_stream(&self, stream: &mut TcpStream) {
-        let res = proxy(stream, &self.proxy_configs, &self.destination).await;
+        let res = self.proxy(stream).await;
         if let Err(e) = res {
             error!(?e, "Failed to proxy");
         }
     }
-}
-
-async fn proxy(
-    downstream: &mut TcpStream,
-    proxy_configs: &[ProxyConfig],
-    destination: &SocketAddr,
-) -> Result<(), ProxyProtocolError> {
-    let upstream = TcpProxyStream::establish(proxy_configs, destination).await?;
-    let mut upstream = upstream.into_inner();
-    tokio::io::copy_bidirectional(downstream, &mut upstream).await?;
-
-    Ok(())
 }
