@@ -3,9 +3,12 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use models::{
-    convert_proxy_configs_to_header_crypto_pairs, read_header_async, write_header_async,
-    ProxyConfig, ProxyProtocolError, ResponseHeader,
+use common::{
+    error::ProxyProtocolError,
+    header::{
+        convert_proxy_configs_to_header_crypto_pairs, read_header_async, write_header_async,
+        ProxyConfig, ResponseHeader,
+    },
 };
 use tokio::net::TcpStream;
 use tracing::{error, instrument, trace};

@@ -1,8 +1,8 @@
 use std::{io, net::SocketAddr, sync::Arc};
 
 use client::tcp_proxy_client::TcpProxyStream;
-use models::{ProxyConfig, ProxyProtocolError};
 
+use common::{error::ProxyProtocolError, header::ProxyConfig};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info, instrument, trace};
 

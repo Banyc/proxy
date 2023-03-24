@@ -1,4 +1,4 @@
-use models::{XorCrypto, MAX_HEADER_LEN};
+use common::header::{XorCrypto, MAX_HEADER_LEN};
 use rand::Rng;
 
 pub mod tcp;

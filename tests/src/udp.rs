@@ -3,7 +3,10 @@ mod tests {
     use std::net::SocketAddr;
 
     use client::udp_proxy_client::UdpProxySocket;
-    use models::{ProxyConfig, ProxyProtocolError, ResponseErrorKind};
+    use common::{
+        error::{ProxyProtocolError, ResponseErrorKind},
+        header::ProxyConfig,
+    };
     use server::udp_proxy::UdpProxy;
     use tokio::net::UdpSocket;
 

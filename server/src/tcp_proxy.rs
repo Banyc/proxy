@@ -1,8 +1,8 @@
 use std::{io, net::SocketAddr, sync::Arc};
 
-use models::{
-    read_header_async, write_header_async, ProxyProtocolError, RequestHeader, ResponseError,
-    ResponseErrorKind, ResponseHeader, XorCrypto,
+use common::{
+    error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
+    header::{read_header_async, write_header_async, RequestHeader, ResponseHeader, XorCrypto},
 };
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info, instrument, trace};
@@ -165,7 +165,6 @@ async fn respond_with_error(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use models::{write_header_async, RequestHeader};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -197,8 +196,8 @@ mod tests {
             tokio::spawn(async move {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut buf = [0; 1024];
-                let mut msg_buf = &mut buf[..req_msg.len()];
-                stream.read_exact(&mut msg_buf).await.unwrap();
+                let msg_buf = &mut buf[..req_msg.len()];
+                stream.read_exact(msg_buf).await.unwrap();
                 assert_eq!(msg_buf, req_msg);
                 stream.write_all(resp_msg).await.unwrap();
             });
@@ -229,8 +228,8 @@ mod tests {
         // Read response
         {
             let mut buf = [0; 1024];
-            let mut msg_buf = &mut buf[..resp_msg.len()];
-            stream.read_exact(&mut msg_buf).await.unwrap();
+            let msg_buf = &mut buf[..resp_msg.len()];
+            stream.read_exact(msg_buf).await.unwrap();
             assert_eq!(msg_buf, resp_msg);
         }
     }

@@ -9,7 +9,7 @@ edition = "2021"
 client = { path = "../client" }
 server = { path = "../server" }
 tokio = { version = "1.26.0", features = ["full"] }
-models = { path = "../models" }
+common = { path = "../common" }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.16"
 rand = "0.8.5"

@@ -4,9 +4,11 @@ use std::{
     ops::Deref,
 };
 
-use models::{
-    addr::any_addr, convert_proxy_configs_to_header_crypto_pairs, read_header, write_header,
-    ProxyConfig, ProxyProtocolError, ResponseHeader,
+use common::{
+    addr::any_addr,
+    error::ProxyProtocolError,
+    header::{convert_proxy_configs_to_header_crypto_pairs, ProxyConfig, ResponseHeader},
+    header::{read_header, write_header},
 };
 use tokio::net::UdpSocket;
 use tracing::{error, instrument, trace};

@@ -3,7 +3,10 @@ mod tests {
     use std::{io, net::SocketAddr};
 
     use client::tcp_proxy_client::TcpProxyStream;
-    use models::{ProxyConfig, ProxyProtocolError, ResponseErrorKind};
+    use common::{
+        error::{ProxyProtocolError, ResponseErrorKind},
+        header::ProxyConfig,
+    };
     use server::tcp_proxy::TcpProxy;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -38,8 +41,8 @@ mod tests {
                 let resp = resp.to_vec();
                 tokio::spawn(async move {
                     let mut buf = [0; 1024];
-                    let mut msg_buf = &mut buf[..req.len()];
-                    stream.read_exact(&mut msg_buf).await.unwrap();
+                    let msg_buf = &mut buf[..req.len()];
+                    stream.read_exact(msg_buf).await.unwrap();
                     assert_eq!(msg_buf, req);
                     stream.write_all(&resp).await.unwrap();
                 });
@@ -50,8 +53,8 @@ mod tests {
 
     async fn read_response(stream: &mut TcpProxyStream, resp_msg: &[u8]) -> io::Result<()> {
         let mut buf = [0; 1024];
-        let mut msg_buf = &mut buf[..resp_msg.len()];
-        stream.read_exact(&mut msg_buf).await.unwrap();
+        let msg_buf = &mut buf[..resp_msg.len()];
+        stream.read_exact(msg_buf).await.unwrap();
         assert_eq!(msg_buf, resp_msg);
         Ok(())
     }
@@ -72,7 +75,7 @@ mod tests {
 
         // Connect to proxy server
         let mut stream = TcpProxyStream::establish(
-            &vec![proxy_1_config, proxy_2_config, proxy_3_config],
+            &[proxy_1_config, proxy_2_config, proxy_3_config],
             &greet_addr,
         )
         .await
@@ -181,7 +184,7 @@ mod tests {
 
         // Connect to proxy server
         let err = TcpProxyStream::establish(
-            &vec![proxy_1_config.clone(), proxy_2_config, proxy_3_config],
+            &[proxy_1_config.clone(), proxy_2_config, proxy_3_config],
             &greet_addr,
         )
         .await
@@ -210,9 +213,7 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut stream = TcpProxyStream::establish(&vec![], &greet_addr)
-            .await
-            .unwrap();
+        let mut stream = TcpProxyStream::establish(&[], &greet_addr).await.unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();

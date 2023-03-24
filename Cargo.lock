@@ -7,8 +7,8 @@ name = "access"
 version = "0.1.0"
 dependencies = [
  "client",
+ "common",
  "get_config",
- "models",
  "serde",
  "tokio",
  "tracing",
@@ -52,10 +52,23 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 name = "client"
 version = "0.1.0"
 dependencies = [
- "models",
+ "common",
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "common"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "duplicate",
+ "rand",
+ "serde",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -177,19 +190,6 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys",
-]
-
-[[package]]
-name = "models"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "duplicate",
- "rand",
- "serde",
- "thiserror",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -404,8 +404,8 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "common",
  "get_config",
- "models",
  "serde",
  "thiserror",
  "tokio",
@@ -474,7 +474,7 @@ name = "tests"
 version = "0.1.0"
 dependencies = [
  "client",
- "models",
+ "common",
  "rand",
  "server",
  "tokio",

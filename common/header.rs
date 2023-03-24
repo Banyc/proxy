@@ -5,24 +5,10 @@ use std::{
 
 use duplicate::duplicate_item;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{instrument, trace};
 
-pub mod addr;
-pub mod udp;
-
-#[derive(Debug, Error)]
-pub enum ProxyProtocolError {
-    #[error("io error")]
-    Io(#[from] io::Error),
-    #[error("bincode error")]
-    Bincode(#[from] bincode::Error),
-    #[error("loopback error")]
-    Loopback,
-    #[error("response error")]
-    Response(ResponseError),
-}
+use crate::error::{ProxyProtocolError, ResponseError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct RequestHeader {
@@ -32,22 +18,6 @@ pub struct RequestHeader {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct ResponseHeader {
     pub result: Result<(), ResponseError>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct ResponseError {
-    pub source: SocketAddr,
-    pub kind: ResponseErrorKind,
-}
-
-#[derive(Debug, Error, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub enum ResponseErrorKind {
-    #[error("io error")]
-    Io,
-    #[error("bincode error")]
-    Codec,
-    #[error("loopback error")]
-    Loopback,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Deserialize, Serialize)]
@@ -187,6 +157,8 @@ pub fn convert_proxy_configs_to_header_crypto_pairs<'config>(
 mod tests {
     use rand::Rng;
 
+    use crate::error::ResponseErrorKind;
+
     use super::*;
 
     fn create_random_crypto() -> XorCrypto {
@@ -216,7 +188,7 @@ mod tests {
         trace!(?original_header, ?len, "Encoded header");
 
         // Decode header
-        let mut stream = io::Cursor::new(&buf[..]);
+        let mut stream = io::Cursor::new(buf);
         let decoded_header = read_header_async(&mut stream, &crypto).await.unwrap();
         assert_eq!(original_header, decoded_header);
     }
@@ -242,7 +214,7 @@ mod tests {
         trace!(?original_header, ?len, "Encoded header");
 
         // Decode header
-        let mut stream = io::Cursor::new(&buf[..]);
+        let mut stream = io::Cursor::new(buf);
         let decoded_header = read_header_async(&mut stream, &crypto).await.unwrap();
         assert_eq!(original_header, decoded_header);
     }

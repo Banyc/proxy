@@ -6,9 +6,11 @@ use std::{
     time::Duration,
 };
 
-use models::{
-    addr::any_addr, read_header, udp::UdpDownstreamWriter, write_header, ProxyProtocolError,
-    RequestHeader, ResponseError, ResponseErrorKind, ResponseHeader, XorCrypto,
+use common::{
+    addr::any_addr,
+    error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
+    header::{read_header, write_header, RequestHeader, ResponseHeader, XorCrypto},
+    udp::UdpDownstreamWriter,
 };
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{error, info, instrument, trace};

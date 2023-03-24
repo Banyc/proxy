@@ -12,5 +12,5 @@ thiserror = "1.0.39"
 tokio = { version = "1.26.0", features = ["full"] }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-models = { path = "../models" }
+common = { path = "../common" }
 get_config = "0.1.0"

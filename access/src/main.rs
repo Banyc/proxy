@@ -1,8 +1,8 @@
 use std::net::SocketAddr;
 
 use access::tcp::TcpProxyAccess;
+use common::header::{ProxyConfig, XorCrypto};
 use get_config::toml::get_config;
-use models::{ProxyConfig, XorCrypto};
 use serde::{Deserialize, Serialize};
 
 #[tokio::main]

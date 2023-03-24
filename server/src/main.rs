@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
+use common::header::XorCrypto;
 use get_config::toml::get_config;
-use models::XorCrypto;
 use serde::Deserialize;
 use server::{tcp_proxy::TcpProxy, udp_proxy::UdpProxy};
 use tokio::net::{TcpListener, UdpSocket};
