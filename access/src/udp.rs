@@ -80,7 +80,7 @@ impl UdpProxyAccess {
 
                     // Send packet to downstream
                     let pkt = writer.into_inner();
-                    downstream_writer.send_to(&pkt, flow.downstream.0).await?;
+                    downstream_writer.send(&pkt).await?;
 
                     last_packet = std::time::Instant::now();
                 }

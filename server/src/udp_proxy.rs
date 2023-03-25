@@ -125,7 +125,7 @@ impl UdpProxy {
 
                     // Send packet to downstream
                     let pkt = writer.into_inner();
-                    downstream_writer.send_to(&pkt, flow.downstream.0).await?;
+                    downstream_writer.send(&pkt).await?;
                     bytes_downlink += &pkt.len();
                     packets_downlink += 1;
 
