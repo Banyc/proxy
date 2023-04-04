@@ -1,5 +1,5 @@
 use std::{
-    io::{self, BufRead, Write},
+    io::{self, Read, Write},
     net::SocketAddr,
 };
 
@@ -42,7 +42,7 @@ impl XorCrypto {
 
 #[duplicate_item(
     name                async   stream_bounds       add_await(code) ;
-    [read_header]       []      [BufRead]           [code]          ;
+    [read_header]       []      [Read]              [code]          ;
     [read_header_async] [async] [AsyncRead + Unpin] [code.await]    ;
 )]
 #[instrument(skip_all)]
