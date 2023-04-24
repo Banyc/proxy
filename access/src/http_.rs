@@ -97,21 +97,29 @@ impl HttpProxyAccess {
             let addr = format!("{}:{}", host, port);
 
             // Establish ProxyProtocol
-            let upstream = TcpProxyStream::establish(&self.proxy_configs, &addr.into()).await?;
+            let upstream = TcpProxyStream::establish(&self.proxy_configs, &addr.into())
+                .await
+                .inspect_err(|e| {
+                    error!(?e, "Failed to establish proxy protocol");
+                })?;
             let upstream = upstream.into_inner();
 
             let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
                 .preserve_header_case(true)
                 .title_case_headers(true)
                 .handshake(upstream)
-                .await?;
+                .await
+                .inspect_err(|e| error!(?e, "Failed to establish HTTP/1 handshake to upstream"))?;
             tokio::task::spawn(async move {
                 if let Err(err) = conn.await {
                     warn!(?err, "Connection failed");
                 }
             });
 
-            let resp = sender.send_request(req).await?;
+            let resp = sender
+                .send_request(req)
+                .await
+                .inspect_err(|e| error!(?e, "Failed to send HTTP/1 request to upstream"))?;
             Ok(resp.map(|b| b.boxed()))
         }
     }
@@ -154,12 +162,20 @@ impl HttpTunnel {
         addr: String,
     ) -> Result<(), ProxyProtocolError> {
         // Establish ProxyProtocol
-        let upstream = TcpProxyStream::establish(&self.proxy_configs, &addr.into()).await?;
+        let upstream = TcpProxyStream::establish(&self.proxy_configs, &addr.into())
+            .await
+            .inspect_err(|e| {
+                error!(?e, "Failed to establish proxy protocol");
+            })?;
         let mut upstream = upstream.into_inner();
 
         // Proxying data
         let (from_client, from_server) =
-            tokio::io::copy_bidirectional(&mut upgraded, &mut upstream).await?;
+            tokio::io::copy_bidirectional(&mut upgraded, &mut upstream)
+                .await
+                .inspect_err(|e| {
+                    error!(?e, "Failed to copy data");
+                })?;
 
         // Print message when done
         trace!(
