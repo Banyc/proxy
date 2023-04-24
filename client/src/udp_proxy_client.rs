@@ -29,13 +29,23 @@ impl UdpProxySocket {
     ) -> Result<UdpProxySocket, ProxyProtocolError> {
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
-            let destination = destination.to_socket_addr().await?;
-            let any_addr = any_addr(&destination.ip());
+            let addr = destination.to_socket_addr().await.inspect_err(|e| {
+                error!(
+                    ?e,
+                    ?destination,
+                    "Failed to resolve destination address for UDP proxy"
+                )
+            })?;
+            let any_addr = any_addr(&addr.ip());
             let upstream = UdpSocket::bind(any_addr)
                 .await
                 .inspect_err(|e| error!(?e, "Failed to bind to any address for UDP proxy"))?;
-            upstream.connect(destination).await.inspect_err(|e| {
-                error!(?e, "Failed to connect to upstream address for UDP proxy")
+            upstream.connect(addr).await.inspect_err(|e| {
+                error!(
+                    ?e,
+                    ?destination,
+                    "Failed to connect to upstream address for UDP proxy"
+                )
             })?;
             return Ok(UdpProxySocket {
                 upstream,
@@ -45,15 +55,25 @@ impl UdpProxySocket {
         }
 
         // Connect to upstream
-        let address = proxy_configs[0].address.to_socket_addr().await?;
-        let any_addr = any_addr(&address.ip());
+        let proxy_addr = &proxy_configs[0].address;
+        let addr = proxy_addr.to_socket_addr().await.inspect_err(|e| {
+            error!(
+                ?e,
+                ?proxy_addr,
+                "Failed to resolve proxy address for UDP proxy"
+            )
+        })?;
+        let any_addr = any_addr(&addr.ip());
         let upstream = UdpSocket::bind(any_addr)
             .await
             .inspect_err(|e| error!(?e, "Failed to bind to any address for UDP proxy"))?;
-        upstream
-            .connect(address)
-            .await
-            .inspect_err(|e| error!(?e, "Failed to connect to upstream address for UDP proxy"))?;
+        upstream.connect(addr).await.inspect_err(|e| {
+            error!(
+                ?e,
+                ?proxy_addr,
+                "Failed to connect to upstream address for UDP proxy"
+            )
+        })?;
 
         // Convert addresses to headers
         let pairs = convert_proxy_configs_to_header_crypto_pairs(&proxy_configs, destination);
@@ -91,10 +111,14 @@ impl UdpProxySocket {
             .inspect_err(|e| error!(?e, "Failed to write payload to buffer for UDP proxy"))?;
 
         // Send data
-        self.upstream
-            .send(&new_buf)
-            .await
-            .inspect_err(|e| error!(?e, "Failed to send data to upstream address for UDP proxy"))?;
+        self.upstream.send(&new_buf).await.inspect_err(|e| {
+            let peer_addr = self.upstream.peer_addr().ok();
+            error!(
+                ?e,
+                ?peer_addr,
+                "Failed to send data to upstream for UDP proxy"
+            )
+        })?;
 
         Ok(buf.len())
     }
@@ -105,9 +129,11 @@ impl UdpProxySocket {
 
         // Read data
         let n = self.upstream.recv(&mut new_buf).await.inspect_err(|e| {
+            let peer_addr = self.upstream.peer_addr().ok();
             error!(
                 ?e,
-                "Failed to receive data from upstream address for UDP proxy"
+                ?peer_addr,
+                "Failed to receive data from upstream for UDP proxy"
             )
         })?;
         let mut new_buf = &mut new_buf[..n];
@@ -118,10 +144,7 @@ impl UdpProxySocket {
         for node in self.proxy_configs.iter() {
             trace!(?node.address, "Reading response");
             let resp: ResponseHeader = read_header(&mut reader, &node.crypto).inspect_err(|e| {
-                error!(
-                    ?e,
-                    "Failed to read response from upstream address for UDP proxy"
-                )
+                error!(?e, "Failed to read response from upstream for UDP proxy")
             })?;
             if let Err(mut err) = resp.result {
                 err.source = node.address.clone();

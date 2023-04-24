@@ -3,7 +3,10 @@ use std::{io, net::SocketAddr};
 use async_trait::async_trait;
 use common::{
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
-    header::{read_header_async, write_header_async, RequestHeader, ResponseHeader, XorCrypto},
+    header::{
+        read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader,
+        XorCrypto,
+    },
     tcp::{TcpServer, TcpServerHook},
 };
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -36,10 +39,19 @@ impl TcpProxy {
         // Decode header
         let header: RequestHeader = read_header_async(downstream, &self.crypto)
             .await
-            .inspect_err(|e| error!(?e, "Failed to read header from downstream"))?;
+            .inspect_err(|e| {
+                error!(
+                    ?e,
+                    ?downstream_addr,
+                    "Failed to read header from downstream"
+                )
+            })?;
 
         // Prevent connections to localhost
-        let upstream = header.upstream.to_socket_addr().await?;
+        let upstream =
+            header.upstream.to_socket_addr().await.inspect_err(
+                |e| error!(?e, ?header.upstream, "Failed to resolve upstream address"),
+            )?;
         if upstream.ip().is_loopback() {
             error!(?header.upstream, "Refusing to connect to loopback address");
             return Err(ProxyProtocolError::Loopback);
@@ -49,7 +61,7 @@ impl TcpProxy {
         let mut upstream = TcpStream::connect(upstream)
             .await
             .inspect_err(|e| error!(?e, ?header.upstream, "Failed to connect to upstream"))?;
-        let upstream_addr = upstream
+        let resolved_upstream_addr = upstream
             .peer_addr()
             .inspect_err(|e| error!(?e, ?header.upstream, "Failed to get upstream address"))?;
 
@@ -75,7 +87,8 @@ impl TcpProxy {
             end,
             bytes_uplink,
             bytes_downlink,
-            upstream_addr,
+            upstream_addr: header.upstream,
+            resolved_upstream_addr,
             downstream_addr,
         };
         Ok(metrics)
@@ -92,7 +105,12 @@ impl TcpProxy {
             Err(e) => {
                 error!(?e, "Connection closed with error");
                 let _ = self.respond_with_error(stream, e).await.inspect_err(|e| {
-                    error!(?e, "Failed to respond with error to downstream after error")
+                    let peer_addr = stream.peer_addr().ok();
+                    error!(
+                        ?e,
+                        ?peer_addr,
+                        "Failed to respond with error to downstream after error"
+                    )
                 });
             }
         }
@@ -132,7 +150,14 @@ impl TcpProxy {
         };
         write_header_async(stream, &resp, &self.crypto)
             .await
-            .inspect_err(|e| error!(?e, "Failed to write response to downstream after error"))?;
+            .inspect_err(|e| {
+                let peer_addr = stream.peer_addr().ok();
+                error!(
+                    ?e,
+                    ?peer_addr,
+                    "Failed to write response to downstream after error"
+                )
+            })?;
 
         Ok(())
     }
@@ -147,13 +172,14 @@ impl TcpServerHook for TcpProxy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct StreamMetrics {
     start: std::time::Instant,
     end: std::time::Instant,
     bytes_uplink: u64,
     bytes_downlink: u64,
-    upstream_addr: SocketAddr,
+    upstream_addr: InternetAddr,
+    resolved_upstream_addr: SocketAddr,
     downstream_addr: SocketAddr,
 }
 

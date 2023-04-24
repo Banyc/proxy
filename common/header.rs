@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     io::{self, Read, Write},
     net::SocketAddr,
 };
@@ -22,6 +23,15 @@ pub struct RequestHeader {
 pub enum InternetAddr {
     SocketAddr(SocketAddr),
     String(String),
+}
+
+impl Display for InternetAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SocketAddr(addr) => write!(f, "{}", addr),
+            Self::String(string) => write!(f, "{}", string),
+        }
+    }
 }
 
 impl From<SocketAddr> for InternetAddr {

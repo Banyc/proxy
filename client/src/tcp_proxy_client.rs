@@ -14,23 +14,31 @@ use tracing::{error, instrument, trace};
 pub struct TcpProxyStream(TcpStream);
 
 impl TcpProxyStream {
-    #[instrument(skip_all)]
+    #[instrument(skip(proxy_configs))]
     pub async fn establish(
         proxy_configs: &[ProxyConfig],
         destination: &InternetAddr,
     ) -> Result<TcpProxyStream, ProxyProtocolError> {
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
-            let stream = TcpStream::connect(destination.to_socket_addr().await?)
-                .await
-                .inspect_err(|e| error!(?e, "Failed to connect to upstream address"))?;
+            let addr = destination.to_socket_addr().await.inspect_err(|e| {
+                error!(?e, ?destination, "Failed to resolve destination address")
+            })?;
+            let stream = TcpStream::connect(addr).await.inspect_err(|e| {
+                error!(?e, ?destination, "Failed to connect to upstream address")
+            })?;
             return Ok(TcpProxyStream(stream));
         }
 
-        // Connect to the first upstream
-        let mut stream = TcpStream::connect(proxy_configs[0].address.to_socket_addr().await?)
+        // Connect to the first proxy
+        let proxy_addr = &proxy_configs[0].address;
+        let addr = proxy_addr
+            .to_socket_addr()
             .await
-            .inspect_err(|e| error!(?e, "Failed to connect to upstream address"))?;
+            .inspect_err(|e| error!(?e, ?proxy_addr, "Failed to resolve proxy address"))?;
+        let mut stream = TcpStream::connect(addr)
+            .await
+            .inspect_err(|e| error!(?e, ?proxy_addr, "Failed to connect to upstream address"))?;
 
         // Convert addresses to headers
         let pairs = convert_proxy_configs_to_header_crypto_pairs(proxy_configs, destination);
@@ -40,7 +48,7 @@ impl TcpProxyStream {
             trace!(?header, "Writing header to stream");
             write_header_async(&mut stream, &header, crypto)
                 .await
-                .inspect_err(|e| error!(?e, "Failed to write header to stream"))?;
+                .inspect_err(|e| error!(?e, ?proxy_addr, "Failed to write header to stream"))?;
         }
 
         // Read response
@@ -48,10 +56,16 @@ impl TcpProxyStream {
             trace!(?node.address, "Reading response from upstream address");
             let resp: ResponseHeader = read_header_async(&mut stream, &node.crypto)
                 .await
-                .inspect_err(|e| error!(?e, "Failed to read response from upstream address"))?;
+                .inspect_err(|e| {
+                    error!(
+                        ?e,
+                        ?proxy_addr,
+                        "Failed to read response from upstream address"
+                    )
+                })?;
             if let Err(mut err) = resp.result {
                 err.source = node.address.clone();
-                error!(?err, "Response was not successful");
+                error!(?err, ?proxy_addr, "Response was not successful");
                 return Err(ProxyProtocolError::Response(err));
             }
         }

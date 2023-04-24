@@ -43,7 +43,10 @@ impl UdpProxy {
         let payload = &buf[header_len..];
 
         // Prevent connections to localhost
-        let upstream = header.upstream.to_socket_addr().await?;
+        let upstream =
+            header.upstream.to_socket_addr().await.inspect_err(
+                |e| error!(?e, ?header.upstream, "Failed to resolve upstream address"),
+            )?;
         if upstream.ip().is_loopback() {
             error!(?header, "Loopback address is not allowed");
             return Err(ProxyProtocolError::Loopback);
@@ -57,11 +60,12 @@ impl UdpProxy {
         downstream_writer: &UdpDownstreamWriter,
         error: ProxyProtocolError,
     ) {
-        error!(?error, "Failed to steer");
+        let peer_addr = downstream_writer.remote_addr();
+        error!(?error, ?peer_addr, "Failed to steer");
         let _ = self
             .respond_with_error(downstream_writer, error)
             .await
-            .inspect_err(|e| error!(?e, "Failed to respond with error to downstream"));
+            .inspect_err(|e| error!(?e, ?peer_addr, "Failed to respond with error to downstream"));
     }
 
     #[instrument(skip(self, rx, downstream_writer))]
@@ -165,11 +169,12 @@ impl UdpProxy {
                 // No response
             }
             Err(e) => {
-                error!(?e, "Connection closed with error");
+                let peer_addr = downstream_writer.remote_addr();
+                error!(?e, ?peer_addr, "Connection closed with error");
                 let _ = self
                     .respond_with_error(downstream_writer, e)
                     .await
-                    .inspect_err(|e| error!(?e, "Failed to respond with error"));
+                    .inspect_err(|e| error!(?e, ?peer_addr, "Failed to respond with error"));
             }
         }
     }
@@ -208,10 +213,10 @@ impl UdpProxy {
         };
         let mut buf = Vec::new();
         write_header(&mut buf, &resp, &self.crypto).unwrap();
-        downstream_writer
-            .send(&buf)
-            .await
-            .inspect_err(|e| error!(?e, "Failed to send response to downstream"))?;
+        downstream_writer.send(&buf).await.inspect_err(|e| {
+            let peer_addr = downstream_writer.remote_addr();
+            error!(?e, ?peer_addr, "Failed to send response to downstream")
+        })?;
 
         Ok(())
     }
