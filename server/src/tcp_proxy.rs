@@ -39,7 +39,7 @@ impl TcpProxy {
             .inspect_err(|e| error!(?e, "Failed to read header from downstream"))?;
 
         // Prevent connections to localhost
-        let upstream = header.upstream.to_socket_addr()?;
+        let upstream = header.upstream.to_socket_addr().await?;
         if upstream.ip().is_loopback() {
             error!(?header.upstream, "Refusing to connect to loopback address");
             return Err(ProxyProtocolError::Loopback);

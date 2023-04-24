@@ -1,11 +1,14 @@
 use std::{
     io::{self, Read, Write},
-    net::{SocketAddr, ToSocketAddrs},
+    net::SocketAddr,
 };
 
 use duplicate::duplicate_item;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::lookup_host,
+};
 use tracing::{instrument, trace};
 
 use crate::error::{ProxyProtocolError, ResponseError};
@@ -37,11 +40,11 @@ impl From<String> for InternetAddr {
 }
 
 impl InternetAddr {
-    pub fn to_socket_addr(&self) -> io::Result<SocketAddr> {
+    pub async fn to_socket_addr(&self) -> io::Result<SocketAddr> {
         match self {
             Self::SocketAddr(addr) => Ok(*addr),
-            Self::String(url) => url
-                .to_socket_addrs()?
+            Self::String(host) => lookup_host(host)
+                .await?
                 .next()
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No address")),
         }

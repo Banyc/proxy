@@ -21,14 +21,14 @@ impl TcpProxyStream {
     ) -> Result<TcpProxyStream, ProxyProtocolError> {
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
-            let stream = TcpStream::connect(destination.to_socket_addr()?)
+            let stream = TcpStream::connect(destination.to_socket_addr().await?)
                 .await
                 .inspect_err(|e| error!(?e, "Failed to connect to upstream address"))?;
             return Ok(TcpProxyStream(stream));
         }
 
         // Connect to the first upstream
-        let mut stream = TcpStream::connect(proxy_configs[0].address.to_socket_addr()?)
+        let mut stream = TcpStream::connect(proxy_configs[0].address.to_socket_addr().await?)
             .await
             .inspect_err(|e| error!(?e, "Failed to connect to upstream address"))?;
 

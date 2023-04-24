@@ -29,7 +29,7 @@ impl UdpProxySocket {
     ) -> Result<UdpProxySocket, ProxyProtocolError> {
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
-            let destination = destination.to_socket_addr()?;
+            let destination = destination.to_socket_addr().await?;
             let any_addr = any_addr(&destination.ip());
             let upstream = UdpSocket::bind(any_addr)
                 .await
@@ -45,7 +45,7 @@ impl UdpProxySocket {
         }
 
         // Connect to upstream
-        let address = proxy_configs[0].address.to_socket_addr()?;
+        let address = proxy_configs[0].address.to_socket_addr().await?;
         let any_addr = any_addr(&address.ip());
         let upstream = UdpSocket::bind(any_addr)
             .await
