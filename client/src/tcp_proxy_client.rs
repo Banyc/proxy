@@ -1,13 +1,10 @@
-use std::{
-    net::SocketAddr,
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
 use common::{
     error::ProxyProtocolError,
     header::{
         convert_proxy_configs_to_header_crypto_pairs, read_header_async, write_header_async,
-        ProxyConfig, ResponseHeader,
+        InternetAddr, ProxyConfig, ResponseHeader,
     },
 };
 use tokio::net::TcpStream;
@@ -20,18 +17,18 @@ impl TcpProxyStream {
     #[instrument(skip_all)]
     pub async fn establish(
         proxy_configs: &[ProxyConfig],
-        destination: &SocketAddr,
+        destination: &InternetAddr,
     ) -> Result<TcpProxyStream, ProxyProtocolError> {
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
-            let stream = TcpStream::connect(destination)
+            let stream = TcpStream::connect(destination.to_socket_addr()?)
                 .await
                 .inspect_err(|e| error!(?e, "Failed to connect to upstream address"))?;
             return Ok(TcpProxyStream(stream));
         }
 
         // Connect to the first upstream
-        let mut stream = TcpStream::connect(proxy_configs[0].address)
+        let mut stream = TcpStream::connect(proxy_configs[0].address.to_socket_addr()?)
             .await
             .inspect_err(|e| error!(?e, "Failed to connect to upstream address"))?;
 
@@ -53,7 +50,7 @@ impl TcpProxyStream {
                 .await
                 .inspect_err(|e| error!(?e, "Failed to read response from upstream address"))?;
             if let Err(mut err) = resp.result {
-                err.source = node.address;
+                err.source = node.address.clone();
                 error!(?err, "Response was not successful");
                 return Err(ProxyProtocolError::Response(err));
             }

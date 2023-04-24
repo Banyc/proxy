@@ -14,3 +14,7 @@ tokio = { version = "1.26.0", features = ["full"] }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.16"
 async-trait = "0.1.67"
+hyper = { version = "1.0.0-rc.3", features = ["full"] }
+bytes = "1.4.0"
+http-body-util = "0.1.0-rc.2"
+thiserror = "1.0.40"

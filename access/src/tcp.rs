@@ -1,10 +1,10 @@
-use std::{io, net::SocketAddr};
+use std::io;
 
 use async_trait::async_trait;
 use client::tcp_proxy_client::TcpProxyStream;
 use common::{
     error::ProxyProtocolError,
-    header::ProxyConfig,
+    header::{InternetAddr, ProxyConfig},
     tcp::{TcpServer, TcpServerHook},
 };
 use tokio::net::{TcpStream, ToSocketAddrs};
@@ -12,11 +12,11 @@ use tracing::{error, instrument};
 
 pub struct TcpProxyAccess {
     proxy_configs: Vec<ProxyConfig>,
-    destination: SocketAddr,
+    destination: InternetAddr,
 }
 
 impl TcpProxyAccess {
-    pub fn new(proxy_configs: Vec<ProxyConfig>, destination: SocketAddr) -> Self {
+    pub fn new(proxy_configs: Vec<ProxyConfig>, destination: InternetAddr) -> Self {
         Self {
             proxy_configs,
             destination,
@@ -42,8 +42,8 @@ impl TcpProxyAccess {
 #[async_trait]
 impl TcpServerHook for TcpProxyAccess {
     #[instrument(skip(self, stream))]
-    async fn handle_stream(&self, stream: &mut TcpStream) {
-        let res = self.proxy(stream).await;
+    async fn handle_stream(&self, mut stream: TcpStream) {
+        let res = self.proxy(&mut stream).await;
         if let Err(e) = res {
             error!(?e, "Failed to proxy");
         }

@@ -1,6 +1,6 @@
 use std::{
     io::{self, Write},
-    net::{Ipv4Addr, SocketAddr},
+    net::Ipv4Addr,
     time::Duration,
 };
 
@@ -9,7 +9,7 @@ use client::udp_proxy_client::UdpProxySocket;
 use common::{
     addr::any_addr,
     error::ProxyProtocolError,
-    header::ProxyConfig,
+    header::{InternetAddr, ProxyConfig},
     udp::{Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr},
 };
 use tokio::{net::ToSocketAddrs, sync::mpsc};
@@ -17,11 +17,11 @@ use tracing::{error, info, trace};
 
 pub struct UdpProxyAccess {
     proxy_configs: Vec<ProxyConfig>,
-    destination: SocketAddr,
+    destination: InternetAddr,
 }
 
 impl UdpProxyAccess {
-    pub fn new(proxy_configs: Vec<ProxyConfig>, destination: SocketAddr) -> Self {
+    pub fn new(proxy_configs: Vec<ProxyConfig>, destination: InternetAddr) -> Self {
         Self {
             proxy_configs,
             destination,

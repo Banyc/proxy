@@ -21,7 +21,7 @@ mod tests {
             server.serve().await.unwrap();
         });
         ProxyConfig {
-            address: proxy_addr,
+            address: proxy_addr.into(),
             crypto,
         }
     }
@@ -71,7 +71,7 @@ mod tests {
         // Connect to proxy server
         let socket = UdpProxySocket::establish(
             vec![proxy_1_config, proxy_2_config, proxy_3_config],
-            &greet_addr,
+            &greet_addr.into(),
         )
         .await
         .unwrap();
@@ -105,7 +105,7 @@ mod tests {
             let proxy_configs = proxy_configs.clone();
             handles.spawn(async move {
                 // Connect to proxy server
-                let socket = UdpProxySocket::establish(proxy_configs, &greet_addr)
+                let socket = UdpProxySocket::establish(proxy_configs, &greet_addr.into())
                     .await
                     .unwrap();
 
@@ -145,9 +145,10 @@ mod tests {
             handles.spawn(async move {
                 for _ in 0..10 {
                     // Connect to proxy server
-                    let socket = UdpProxySocket::establish(proxy_configs.clone(), &greet_addr)
-                        .await
-                        .unwrap();
+                    let socket =
+                        UdpProxySocket::establish(proxy_configs.clone(), &greet_addr.into())
+                            .await
+                            .unwrap();
 
                     // Send message
                     socket.send(req_msg).await.unwrap();
@@ -180,7 +181,7 @@ mod tests {
         // Connect to proxy server
         let socket = UdpProxySocket::establish(
             vec![proxy_1_config.clone(), proxy_2_config, proxy_3_config],
-            &greet_addr,
+            &greet_addr.into(),
         )
         .await
         .unwrap();
@@ -215,7 +216,7 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let socket = UdpProxySocket::establish(vec![], &greet_addr)
+        let socket = UdpProxySocket::establish(vec![], &greet_addr.into())
             .await
             .unwrap();
 

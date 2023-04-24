@@ -47,8 +47,7 @@ where
             // Arc hook
             let hook = Arc::clone(&hook);
             tokio::spawn(async move {
-                let mut stream = stream;
-                hook.handle_stream(&mut stream).await;
+                hook.handle_stream(stream).await;
             });
         }
     }
@@ -56,5 +55,5 @@ where
 
 #[async_trait]
 pub trait TcpServerHook {
-    async fn handle_stream(&self, stream: &mut TcpStream);
+    async fn handle_stream(&self, stream: TcpStream);
 }

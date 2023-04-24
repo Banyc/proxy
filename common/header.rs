@@ -1,6 +1,6 @@
 use std::{
     io::{self, Read, Write},
-    net::SocketAddr,
+    net::{SocketAddr, ToSocketAddrs},
 };
 
 use duplicate::duplicate_item;
@@ -10,9 +10,42 @@ use tracing::{instrument, trace};
 
 use crate::error::{ProxyProtocolError, ResponseError};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct RequestHeader {
-    pub upstream: SocketAddr,
+    pub upstream: InternetAddr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub enum InternetAddr {
+    SocketAddr(SocketAddr),
+    String(String),
+}
+
+impl From<SocketAddr> for InternetAddr {
+    fn from(addr: SocketAddr) -> Self {
+        Self::SocketAddr(addr)
+    }
+}
+
+impl From<String> for InternetAddr {
+    fn from(string: String) -> Self {
+        match string.parse::<SocketAddr>() {
+            Ok(addr) => Self::SocketAddr(addr),
+            Err(_) => Self::String(string),
+        }
+    }
+}
+
+impl InternetAddr {
+    pub fn to_socket_addr(&self) -> io::Result<SocketAddr> {
+        match self {
+            Self::SocketAddr(addr) => Ok(*addr),
+            Self::String(url) => url
+                .to_socket_addrs()?
+                .next()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No address")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -125,13 +158,13 @@ pub const MAX_HEADER_LEN: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct ProxyConfig {
-    pub address: SocketAddr,
+    pub address: InternetAddr,
     pub crypto: XorCrypto,
 }
 
 pub fn convert_proxy_configs_to_header_crypto_pairs<'config>(
     nodes: &'config [ProxyConfig],
-    destination: &SocketAddr,
+    destination: &InternetAddr,
 ) -> Vec<(RequestHeader, &'config XorCrypto)> {
     let mut pairs = Vec::new();
     for i in 0..nodes.len() - 1 {
@@ -139,14 +172,14 @@ pub fn convert_proxy_configs_to_header_crypto_pairs<'config>(
         let next_node = &nodes[i + 1];
         pairs.push((
             RequestHeader {
-                upstream: next_node.address,
+                upstream: next_node.address.clone(),
             },
             &node.crypto,
         ));
     }
     pairs.push((
         RequestHeader {
-            upstream: *destination,
+            upstream: destination.clone(),
         },
         &nodes.last().unwrap().crypto,
     ));
@@ -178,7 +211,7 @@ mod tests {
 
         // Encode header
         let original_header = RequestHeader {
-            upstream: "1.1.1.1:8080".parse().unwrap(),
+            upstream: "1.1.1.1:8080".parse::<SocketAddr>().unwrap().into(),
         };
         write_header_async(&mut stream, &original_header, &crypto)
             .await
@@ -202,7 +235,7 @@ mod tests {
         // Encode header
         let original_header = ResponseHeader {
             result: Err(ResponseError {
-                source: "1.1.1.1:8080".parse().unwrap(),
+                source: "1.1.1.1:8080".parse::<SocketAddr>().unwrap().into(),
                 kind: ResponseErrorKind::Io,
             }),
         };

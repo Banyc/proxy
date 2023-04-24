@@ -43,12 +43,13 @@ impl UdpProxy {
         let payload = &buf[header_len..];
 
         // Prevent connections to localhost
-        if header.upstream.ip().is_loopback() {
+        let upstream = header.upstream.to_socket_addr()?;
+        if upstream.ip().is_loopback() {
             error!(?header, "Loopback address is not allowed");
             return Err(ProxyProtocolError::Loopback);
         }
 
-        Ok((UpstreamAddr(header.upstream), payload))
+        Ok((UpstreamAddr(upstream), payload))
     }
 
     async fn handle_steer_error(
@@ -187,19 +188,19 @@ impl UdpProxy {
         let resp = match error {
             ProxyProtocolError::Io(_) => ResponseHeader {
                 result: Err(ResponseError {
-                    source: local_addr,
+                    source: local_addr.into(),
                     kind: ResponseErrorKind::Io,
                 }),
             },
             ProxyProtocolError::Bincode(_) => ResponseHeader {
                 result: Err(ResponseError {
-                    source: local_addr,
+                    source: local_addr.into(),
                     kind: ResponseErrorKind::Codec,
                 }),
             },
             ProxyProtocolError::Loopback => ResponseHeader {
                 result: Err(ResponseError {
-                    source: local_addr,
+                    source: local_addr.into(),
                     kind: ResponseErrorKind::Loopback,
                 }),
             },

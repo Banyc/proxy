@@ -1,13 +1,14 @@
 use std::{
     io::{self, Write},
-    net::SocketAddr,
     ops::Deref,
 };
 
 use common::{
     addr::any_addr,
     error::ProxyProtocolError,
-    header::{convert_proxy_configs_to_header_crypto_pairs, ProxyConfig, ResponseHeader},
+    header::{
+        convert_proxy_configs_to_header_crypto_pairs, InternetAddr, ProxyConfig, ResponseHeader,
+    },
     header::{read_header, write_header},
 };
 use tokio::net::UdpSocket;
@@ -24,10 +25,11 @@ impl UdpProxySocket {
     #[instrument(skip_all)]
     pub async fn establish(
         proxy_configs: Vec<ProxyConfig>,
-        destination: &SocketAddr,
+        destination: &InternetAddr,
     ) -> Result<UdpProxySocket, ProxyProtocolError> {
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
+            let destination = destination.to_socket_addr()?;
             let any_addr = any_addr(&destination.ip());
             let upstream = UdpSocket::bind(any_addr)
                 .await
@@ -43,12 +45,13 @@ impl UdpProxySocket {
         }
 
         // Connect to upstream
-        let any_addr = any_addr(&proxy_configs[0].address.ip());
+        let address = proxy_configs[0].address.to_socket_addr()?;
+        let any_addr = any_addr(&address.ip());
         let upstream = UdpSocket::bind(any_addr)
             .await
             .inspect_err(|e| error!(?e, "Failed to bind to any address for UDP proxy"))?;
         upstream
-            .connect(proxy_configs[0].address)
+            .connect(address)
             .await
             .inspect_err(|e| error!(?e, "Failed to connect to upstream address for UDP proxy"))?;
 
@@ -121,7 +124,7 @@ impl UdpProxySocket {
                 )
             })?;
             if let Err(mut err) = resp.result {
-                err.source = node.address;
+                err.source = node.address.clone();
                 error!(?err, "Response was not successful");
                 return Err(ProxyProtocolError::Response(err));
             }

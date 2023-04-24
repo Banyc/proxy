@@ -39,13 +39,14 @@ impl TcpProxy {
             .inspect_err(|e| error!(?e, "Failed to read header from downstream"))?;
 
         // Prevent connections to localhost
-        if header.upstream.ip().is_loopback() {
+        let upstream = header.upstream.to_socket_addr()?;
+        if upstream.ip().is_loopback() {
             error!(?header.upstream, "Refusing to connect to loopback address");
             return Err(ProxyProtocolError::Loopback);
         }
 
         // Connect to upstream
-        let mut upstream = TcpStream::connect(header.upstream)
+        let mut upstream = TcpStream::connect(upstream)
             .await
             .inspect_err(|e| error!(?e, ?header.upstream, "Failed to connect to upstream"))?;
         let upstream_addr = upstream
@@ -111,19 +112,19 @@ impl TcpProxy {
         let resp = match error {
             ProxyProtocolError::Io(_) => ResponseHeader {
                 result: Err(ResponseError {
-                    source: local_addr,
+                    source: local_addr.into(),
                     kind: ResponseErrorKind::Io,
                 }),
             },
             ProxyProtocolError::Bincode(_) => ResponseHeader {
                 result: Err(ResponseError {
-                    source: local_addr,
+                    source: local_addr.into(),
                     kind: ResponseErrorKind::Codec,
                 }),
             },
             ProxyProtocolError::Loopback => ResponseHeader {
                 result: Err(ResponseError {
-                    source: local_addr,
+                    source: local_addr.into(),
                     kind: ResponseErrorKind::Loopback,
                 }),
             },
@@ -140,9 +141,9 @@ impl TcpProxy {
 #[async_trait]
 impl TcpServerHook for TcpProxy {
     #[instrument(skip(self, stream))]
-    async fn handle_stream(&self, stream: &mut TcpStream) {
-        let res = self.proxy(stream).await;
-        self.handle_proxy_result(stream, res).await;
+    async fn handle_stream(&self, mut stream: TcpStream) {
+        let res = self.proxy(&mut stream).await;
+        self.handle_proxy_result(&mut stream, res).await;
     }
 }
 
@@ -205,7 +206,7 @@ mod tests {
         {
             // Encode header
             let header = RequestHeader {
-                upstream: origin_addr,
+                upstream: origin_addr.into(),
             };
             write_header_async(&mut stream, &header, &crypto)
                 .await

@@ -24,7 +24,7 @@ mod tests {
             server.serve().await.unwrap();
         });
         ProxyConfig {
-            address: proxy_addr,
+            address: proxy_addr.into(),
             crypto,
         }
     }
@@ -76,7 +76,7 @@ mod tests {
         // Connect to proxy server
         let mut stream = TcpProxyStream::establish(
             &[proxy_1_config, proxy_2_config, proxy_3_config],
-            &greet_addr,
+            &greet_addr.into(),
         )
         .await
         .unwrap();
@@ -110,7 +110,7 @@ mod tests {
             let proxy_configs = proxy_configs.clone();
             handles.spawn(async move {
                 // Connect to proxy server
-                let mut stream = TcpProxyStream::establish(&proxy_configs, &greet_addr)
+                let mut stream = TcpProxyStream::establish(&proxy_configs, &greet_addr.into())
                     .await
                     .unwrap();
 
@@ -150,7 +150,7 @@ mod tests {
             handles.spawn(async move {
                 for _ in 0..10 {
                     // Connect to proxy server
-                    let mut stream = TcpProxyStream::establish(&proxy_configs, &greet_addr)
+                    let mut stream = TcpProxyStream::establish(&proxy_configs, &greet_addr.into())
                         .await
                         .unwrap();
 
@@ -185,7 +185,7 @@ mod tests {
         // Connect to proxy server
         let err = TcpProxyStream::establish(
             &[proxy_1_config.clone(), proxy_2_config, proxy_3_config],
-            &greet_addr,
+            &greet_addr.into(),
         )
         .await
         .unwrap_err();
@@ -213,7 +213,9 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut stream = TcpProxyStream::establish(&[], &greet_addr).await.unwrap();
+        let mut stream = TcpProxyStream::establish(&[], &greet_addr.into())
+            .await
+            .unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();

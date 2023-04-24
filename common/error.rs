@@ -1,7 +1,9 @@
-use std::{io, net::SocketAddr};
+use std::io;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use crate::header::InternetAddr;
 
 #[derive(Debug, Error)]
 pub enum ProxyProtocolError {
@@ -17,7 +19,7 @@ pub enum ProxyProtocolError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct ResponseError {
-    pub source: SocketAddr,
+    pub source: InternetAddr,
     pub kind: ResponseErrorKind,
 }
 
