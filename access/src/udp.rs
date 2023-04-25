@@ -105,7 +105,10 @@ impl UdpServerHook for UdpProxyAccess {
         buf: &'buf [u8],
         _downstream_writer: &UdpDownstreamWriter,
     ) -> Result<(UpstreamAddr, &'buf [u8]), ()> {
-        Ok((UpstreamAddr(any_addr(&Ipv4Addr::UNSPECIFIED.into())), buf))
+        Ok((
+            UpstreamAddr(any_addr(&Ipv4Addr::UNSPECIFIED.into()).into()),
+            buf,
+        ))
     }
 
     async fn handle_flow(

@@ -42,17 +42,7 @@ impl UdpProxy {
         let header_len = reader.position() as usize;
         let payload = &buf[header_len..];
 
-        // Prevent connections to localhost
-        let upstream =
-            header.upstream.to_socket_addr().await.inspect_err(
-                |e| error!(?e, ?header.upstream, "Failed to resolve upstream address"),
-            )?;
-        if upstream.ip().is_loopback() {
-            error!(?header, "Loopback address is not allowed");
-            return Err(ProxyProtocolError::Loopback);
-        }
-
-        Ok((UpstreamAddr(upstream), payload))
+        Ok((UpstreamAddr(header.upstream), payload))
     }
 
     async fn handle_steer_error(
@@ -77,10 +67,20 @@ impl UdpProxy {
     ) -> Result<FlowMetrics, ProxyProtocolError> {
         let start = std::time::Instant::now();
 
+        // Prevent connections to localhost
+        let resolved_upstream =
+            flow.upstream.0.to_socket_addr().await.inspect_err(
+                |e| error!(?e, ?flow.upstream, "Failed to resolve upstream address"),
+            )?;
+        if resolved_upstream.ip().is_loopback() {
+            error!(?flow.upstream, ?resolved_upstream, "Loopback address is not allowed");
+            return Err(ProxyProtocolError::Loopback);
+        }
+
         // Connect to upstream
-        let any_addr = any_addr(&flow.upstream.0.ip());
+        let any_addr = any_addr(&resolved_upstream.ip());
         let upstream = UdpSocket::bind(any_addr).await?;
-        upstream.connect(flow.upstream.0).await?;
+        upstream.connect(resolved_upstream).await?;
 
         // Periodic check if the flow is still alive
         let mut tick = tokio::time::interval(LIVE_CHECK_INTERVAL);
@@ -253,7 +253,7 @@ impl UdpServerHook for UdpProxy {
 const TIMEOUT: Duration = Duration::from_secs(10);
 const LIVE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct FlowMetrics {
     flow: Flow,
     start: std::time::Instant,

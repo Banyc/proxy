@@ -10,6 +10,8 @@ use async_trait::async_trait;
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{error, info, instrument, trace};
 
+use crate::header::InternetAddr;
+
 #[derive(Debug, Clone)]
 pub struct UdpDownstreamWriter {
     downstream_writer: Arc<UdpSocket>,
@@ -133,11 +135,11 @@ async fn steer<H>(
         None => {
             trace!(?flow, "Creating flow");
             let (tx, rx) = mpsc::channel(1);
-            flows.write().unwrap().insert(flow, tx.clone());
+            flows.write().unwrap().insert(flow.clone(), tx.clone());
 
             let hook = Arc::clone(&hook);
             tokio::spawn(async move {
-                hook.handle_flow(rx, flow, downstream_writer).await;
+                hook.handle_flow(rx, flow.clone(), downstream_writer).await;
 
                 // Remove flow
                 flows.write().unwrap().remove(&flow);
@@ -171,12 +173,12 @@ pub trait UdpServerHook {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DownstreamAddr(pub SocketAddr);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct UpstreamAddr(pub SocketAddr);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UpstreamAddr(pub InternetAddr);
 
 type FlowMap = HashMap<Flow, mpsc::Sender<Packet>>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Flow {
     pub upstream: UpstreamAddr,
     pub downstream: DownstreamAddr,
