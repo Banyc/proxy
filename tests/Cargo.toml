@@ -8,8 +8,8 @@ edition = "2021"
 [dependencies]
 client = { path = "../client" }
 server = { path = "../server" }
-tokio = { version = "1.26.0", features = ["full"] }
+tokio = { version = "1.27.0", features = ["full"] }
 common = { path = "../common" }
 tracing = "0.1.37"
-tracing-subscriber = "0.3.16"
+tracing-subscriber = "0.3.17"
 rand = "0.8.5"

@@ -7,11 +7,11 @@ edition = "2021"
 
 [dependencies]
 bincode = "1.3.3"
-serde = { version = "1.0.156", features = ["derive"] }
-thiserror = "1.0.39"
-tokio = { version = "1.26.0", features = ["full"] }
+serde = { version = "1.0.160", features = ["derive"] }
+thiserror = "1.0.40"
+tokio = { version = "1.27.0", features = ["full"] }
 tracing = "0.1.37"
-tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 common = { path = "../common" }
-get_config = "0.1.0"
-async-trait = "0.1.67"
+get_config = "0.1.1"
+async-trait = "0.1.68"
