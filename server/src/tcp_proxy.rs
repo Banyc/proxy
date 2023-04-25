@@ -1,6 +1,7 @@
-use std::{io, net::SocketAddr};
+use std::{fmt::Display, io, net::SocketAddr};
 
 use async_trait::async_trait;
+use bytesize::ByteSize;
 use common::{
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
     header::{
@@ -101,7 +102,7 @@ impl TcpProxy {
         res: Result<StreamMetrics, ProxyProtocolError>,
     ) {
         match res {
-            Ok(metrics) => info!(?metrics, "Connection closed normally"),
+            Ok(metrics) => info!(%metrics, "Connection closed normally"),
             Err(e) => {
                 error!(?e, "Connection closed with error");
                 let _ = self.respond_with_error(stream, e).await.inspect_err(|e| {
@@ -181,6 +182,27 @@ struct StreamMetrics {
     upstream_addr: InternetAddr,
     resolved_upstream_addr: SocketAddr,
     downstream_addr: SocketAddr,
+}
+
+impl Display for StreamMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let duration = self.end - self.start;
+        let duration = duration.as_secs_f64();
+        let uplink_speed = self.bytes_uplink as f64 / duration;
+        let downlink_speed = self.bytes_downlink as f64 / duration;
+        write!(
+            f,
+            "up: {{ {}, {}/s }}, down: {{ {}, {}/s }}, duration: {:.1} s, upstream: {{ {}, resolved: {} }}, downstream: {}",
+            ByteSize::b(self.bytes_uplink),
+            ByteSize::b(uplink_speed as u64),
+            ByteSize::b(self.bytes_downlink),
+            ByteSize::b(downlink_speed as u64),
+            duration,
+            self.upstream_addr,
+            self.resolved_upstream_addr,
+            self.downstream_addr
+        )
+    }
 }
 
 #[cfg(test)]
