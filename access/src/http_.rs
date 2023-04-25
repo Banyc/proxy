@@ -1,5 +1,3 @@
-#![deny(warnings)]
-
 use std::io;
 use std::sync::Arc;
 use std::time::Instant;
