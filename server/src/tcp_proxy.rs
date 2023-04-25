@@ -1,14 +1,10 @@
-use std::{fmt::Display, io, net::SocketAddr};
+use std::io;
 
 use async_trait::async_trait;
-use bytesize::ByteSize;
 use common::{
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
-    header::{
-        read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader,
-        XorCrypto,
-    },
-    tcp::{TcpServer, TcpServerHook},
+    header::{read_header_async, write_header_async, RequestHeader, ResponseHeader, XorCrypto},
+    tcp::{StreamMetrics, TcpServer, TcpServerHook},
 };
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tracing::{error, info, instrument};
@@ -170,38 +166,6 @@ impl TcpServerHook for TcpProxy {
     async fn handle_stream(&self, mut stream: TcpStream) {
         let res = self.proxy(&mut stream).await;
         self.handle_proxy_result(&mut stream, res).await;
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct StreamMetrics {
-    start: std::time::Instant,
-    end: std::time::Instant,
-    bytes_uplink: u64,
-    bytes_downlink: u64,
-    upstream_addr: InternetAddr,
-    resolved_upstream_addr: SocketAddr,
-    downstream_addr: SocketAddr,
-}
-
-impl Display for StreamMetrics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let duration = self.end - self.start;
-        let duration = duration.as_secs_f64();
-        let uplink_speed = self.bytes_uplink as f64 / duration;
-        let downlink_speed = self.bytes_downlink as f64 / duration;
-        write!(
-            f,
-            "up: {{ {}, {}/s }}, down: {{ {}, {}/s }}, duration: {:.1} s, upstream: {{ {}, resolved: {} }}, downstream: {}",
-            ByteSize::b(self.bytes_uplink),
-            ByteSize::b(uplink_speed as u64),
-            ByteSize::b(self.bytes_downlink),
-            ByteSize::b(downlink_speed as u64),
-            duration,
-            self.upstream_addr,
-            self.resolved_upstream_addr,
-            self.downstream_addr
-        )
     }
 }
 

@@ -2,13 +2,15 @@
 
 use std::io;
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use client::tcp_proxy_client::TcpProxyStream;
+use common::addr::any_addr;
 use common::error::ProxyProtocolError;
-use common::header::ProxyConfig;
-use common::tcp::{TcpServer, TcpServerHook};
+use common::header::{InternetAddr, ProxyConfig};
+use common::tcp::{StreamMetrics, TcpServer, TcpServerHook};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::service::service_fn;
@@ -17,7 +19,7 @@ use hyper::{http, Method, Request, Response};
 
 use thiserror::Error;
 use tokio::net::{TcpStream, ToSocketAddrs};
-use tracing::{error, instrument, trace, warn};
+use tracing::{error, info, instrument, trace, warn};
 
 pub struct HttpProxyAccess {
     proxy_configs: Arc<Vec<ProxyConfig>>,
@@ -74,7 +76,7 @@ impl HttpProxyAccess {
                 tokio::task::spawn(async move {
                     match hyper::upgrade::on(req).await {
                         Ok(upgraded) => {
-                            if let Err(e) = tunnel.tunnel(upgraded, addr).await {
+                            if let Err(e) = tunnel.tunnel(upgraded, addr.into()).await {
                                 error!(?e, "Tunnel error");
                             };
                         }
@@ -159,15 +161,20 @@ impl HttpTunnel {
     pub async fn tunnel(
         &self,
         mut upgraded: Upgraded,
-        addr: String,
+        addr: InternetAddr,
     ) -> Result<(), ProxyProtocolError> {
+        let start = Instant::now();
+
         // Establish ProxyProtocol
-        let upstream = TcpProxyStream::establish(&self.proxy_configs, &addr.into())
+        let upstream = TcpProxyStream::establish(&self.proxy_configs, &addr)
             .await
             .inspect_err(|e| {
                 error!(?e, "Failed to establish proxy protocol");
             })?;
         let mut upstream = upstream.into_inner();
+
+        let resolved_upstream_addr = upstream.peer_addr()?;
+        let downstream_addr = any_addr(&resolved_upstream_addr.ip());
 
         // Proxying data
         let (from_client, from_server) =
@@ -178,11 +185,17 @@ impl HttpTunnel {
                 })?;
 
         // Print message when done
-        trace!(
-            ?from_client,
-            ?from_server,
-            "Tunnel established, closing connection"
-        );
+        let end = Instant::now();
+        let metrics = StreamMetrics {
+            start,
+            end,
+            bytes_uplink: from_client,
+            bytes_downlink: from_server,
+            upstream_addr: addr,
+            resolved_upstream_addr,
+            downstream_addr,
+        };
+        info!(%metrics, "Tunnel closed normally");
 
         Ok(())
     }
