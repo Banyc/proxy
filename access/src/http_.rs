@@ -82,6 +82,7 @@ impl HttpProxyAccess {
                     }
                 });
 
+                // Return STATUS_OK
                 Ok(Response::new(empty()))
             } else {
                 let uri = req.uri().to_string();
@@ -92,7 +93,11 @@ impl HttpProxyAccess {
                 Ok(resp)
             }
         } else {
-            let host = req.uri().host().expect("uri has no host");
+            let host = req
+                .uri()
+                .host()
+                .ok_or(Error::HttpNoHost)
+                .inspect_err(|e| error!(?e, "No host in HTTP request"))?;
             let port = req.uri().port_u16().unwrap_or(80);
             let addr = format!("{}:{}", host, port);
 
@@ -104,6 +109,7 @@ impl HttpProxyAccess {
                 })?;
             let upstream = upstream.into_inner();
 
+            // Establish TLS connection
             let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
                 .preserve_header_case(true)
                 .title_case_headers(true)
@@ -116,6 +122,7 @@ impl HttpProxyAccess {
                 }
             });
 
+            // Send HTTP/1 request
             let resp = sender
                 .send_request(req)
                 .await
@@ -131,6 +138,8 @@ pub enum Error {
     ProxyProtocolError(#[from] ProxyProtocolError),
     #[error("Hyper error")]
     HyperError(#[from] hyper::Error),
+    #[error("Http error")]
+    HttpNoHost,
 }
 
 #[async_trait]
@@ -171,7 +180,9 @@ impl HttpTunnel {
             })?;
         let mut upstream = upstream.into_inner();
 
-        let resolved_upstream_addr = upstream.peer_addr()?;
+        let resolved_upstream_addr = upstream
+            .peer_addr()
+            .inspect_err(|e| error!(?e, "Failed to get upstream peer address"))?;
         let downstream_addr = any_addr(&resolved_upstream_addr.ip());
 
         // Proxying data
