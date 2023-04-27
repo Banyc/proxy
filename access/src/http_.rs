@@ -180,6 +180,11 @@ impl HttpTunnel {
             })?;
         let mut upstream = upstream.into_inner();
 
+        let resolved_upstream_addr = upstream
+            .peer_addr()
+            .inspect_err(|e| error!(?e, "Failed to get upstream peer address"))?;
+        let downstream_addr = any_addr(&resolved_upstream_addr.ip());
+
         // Proxying data
         let (from_client, from_server) =
             tokio::io::copy_bidirectional(&mut upgraded, &mut upstream)
@@ -190,10 +195,6 @@ impl HttpTunnel {
 
         // Print message when done
         let end = Instant::now();
-        let resolved_upstream_addr = upstream
-            .peer_addr()
-            .inspect_err(|e| error!(?e, "Failed to get upstream peer address"))?;
-        let downstream_addr = any_addr(&resolved_upstream_addr.ip());
         let metrics = StreamMetrics {
             start,
             end,
