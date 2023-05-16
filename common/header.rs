@@ -12,7 +12,10 @@ use tokio::{
 };
 use tracing::{instrument, trace};
 
-use crate::error::{ProxyProtocolError, ResponseError};
+use crate::{
+    crypto::{XorCrypto, XorCryptoCursor},
+    error::{ProxyProtocolError, ResponseError},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct RequestHeader {
@@ -66,33 +69,16 @@ pub struct ResponseHeader {
     pub result: Result<(), ResponseError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Deserialize, Serialize)]
-pub struct XorCrypto {
-    key: Vec<u8>,
-}
-
-impl XorCrypto {
-    pub fn new(key: Vec<u8>) -> Self {
-        Self { key }
-    }
-
-    pub fn xor(&self, buf: &mut [u8]) {
-        if self.key.is_empty() {
-            return;
-        }
-        for (i, b) in buf.iter_mut().enumerate() {
-            *b ^= self.key[i % self.key.len()];
-        }
-    }
-}
-
 #[duplicate_item(
     name                async   stream_bounds       add_await(code) ;
     [read_header]       []      [Read]              [code]          ;
     [read_header_async] [async] [AsyncRead + Unpin] [code.await]    ;
 )]
 #[instrument(skip_all)]
-pub async fn name<S, H>(stream: &mut S, crypto: &XorCrypto) -> Result<H, ProxyProtocolError>
+pub async fn name<'crypto, S, H>(
+    stream: &mut S,
+    crypto: &mut XorCryptoCursor<'crypto>,
+) -> Result<H, ProxyProtocolError>
 where
     S: stream_bounds,
     H: for<'de> Deserialize<'de> + std::fmt::Debug,
@@ -133,10 +119,10 @@ where
     [write_header_async] [async] [AsyncWrite + Unpin] [code.await]    ;
 )]
 #[instrument(skip_all)]
-pub async fn name<S, H>(
+pub async fn name<'crypto, S, H>(
     stream: &mut S,
     header: &H,
-    crypto: &XorCrypto,
+    crypto: &mut XorCryptoCursor<'crypto>,
 ) -> Result<(), ProxyProtocolError>
 where
     S: stream_bounds,
@@ -150,7 +136,6 @@ where
         bincode::serialize_into(&mut writer, header)?;
         let len = writer.position();
         let hdr = &mut buf[..len as usize];
-        crypto.xor(hdr);
         trace!(?header, ?len, "Encoded header");
         hdr
     };
@@ -162,6 +147,7 @@ where
     add_await([stream.write_all(&len)])?;
 
     // Write header
+    crypto.xor(hdr);
     add_await([stream.write_all(hdr)])?;
 
     Ok(())
@@ -226,7 +212,8 @@ mod tests {
         let original_header = RequestHeader {
             upstream: "1.1.1.1:8080".parse::<SocketAddr>().unwrap().into(),
         };
-        write_header_async(&mut stream, &original_header, &crypto)
+        let mut crypto_cursor = XorCryptoCursor::new(&crypto);
+        write_header_async(&mut stream, &original_header, &mut crypto_cursor)
             .await
             .unwrap();
         let len = stream.position();
@@ -235,7 +222,10 @@ mod tests {
 
         // Decode header
         let mut stream = io::Cursor::new(buf);
-        let decoded_header = read_header_async(&mut stream, &crypto).await.unwrap();
+        let mut crypto_cursor = XorCryptoCursor::new(&crypto);
+        let decoded_header = read_header_async(&mut stream, &mut crypto_cursor)
+            .await
+            .unwrap();
         assert_eq!(original_header, decoded_header);
     }
 
@@ -252,7 +242,8 @@ mod tests {
                 kind: ResponseErrorKind::Io,
             }),
         };
-        write_header_async(&mut stream, &original_header, &crypto)
+        let mut crypto_cursor = XorCryptoCursor::new(&crypto);
+        write_header_async(&mut stream, &original_header, &mut crypto_cursor)
             .await
             .unwrap();
         let len = stream.position();
@@ -261,7 +252,10 @@ mod tests {
 
         // Decode header
         let mut stream = io::Cursor::new(buf);
-        let decoded_header = read_header_async(&mut stream, &crypto).await.unwrap();
+        let mut crypto_cursor = XorCryptoCursor::new(&crypto);
+        let decoded_header = read_header_async(&mut stream, &mut crypto_cursor)
+            .await
+            .unwrap();
         assert_eq!(original_header, decoded_header);
     }
 }

@@ -2,8 +2,9 @@ use std::io;
 
 use async_trait::async_trait;
 use common::{
+    crypto::{XorCrypto, XorCryptoCursor},
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
-    header::{read_header_async, write_header_async, RequestHeader, ResponseHeader, XorCrypto},
+    header::{read_header_async, write_header_async, RequestHeader, ResponseHeader},
     tcp::{StreamMetrics, TcpServer, TcpServerHook},
 };
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -34,7 +35,8 @@ impl TcpProxy {
         let start = std::time::Instant::now();
 
         // Decode header
-        let header: RequestHeader = read_header_async(downstream, &self.crypto)
+        let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
+        let header: RequestHeader = read_header_async(downstream, &mut crypto_cursor)
             .await
             .inspect_err(|e| {
                 error!(
@@ -64,7 +66,8 @@ impl TcpProxy {
 
         // Write Ok response
         let resp = ResponseHeader { result: Ok(()) };
-        write_header_async(downstream, &resp, &self.crypto)
+        let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
+        write_header_async(downstream, &resp, &mut crypto_cursor)
             .await
             .inspect_err(
                 |e| error!(?e, ?header.upstream, "Failed to write response to downstream"),
@@ -145,7 +148,8 @@ impl TcpProxy {
             },
             ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
         };
-        write_header_async(stream, &resp, &self.crypto)
+        let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
+        write_header_async(stream, &resp, &mut crypto_cursor)
             .await
             .inspect_err(|e| {
                 let peer_addr = stream.peer_addr().ok();
@@ -220,12 +224,16 @@ mod tests {
             let header = RequestHeader {
                 upstream: origin_addr.into(),
             };
-            write_header_async(&mut stream, &header, &crypto)
+            let mut crypto_cursor = XorCryptoCursor::new(&crypto);
+            write_header_async(&mut stream, &header, &mut crypto_cursor)
                 .await
                 .unwrap();
 
             // Read response
-            let resp: ResponseHeader = read_header_async(&mut stream, &crypto).await.unwrap();
+            let mut crypto_cursor = XorCryptoCursor::new(&crypto);
+            let resp: ResponseHeader = read_header_async(&mut stream, &mut crypto_cursor)
+                .await
+                .unwrap();
             assert!(resp.result.is_ok());
         }
 

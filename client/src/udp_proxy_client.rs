@@ -5,6 +5,7 @@ use std::{
 
 use common::{
     addr::any_addr,
+    crypto::XorCryptoCursor,
     error::ProxyProtocolError,
     header::{
         convert_proxy_configs_to_header_crypto_pairs, InternetAddr, ProxyConfig, ResponseHeader,
@@ -83,7 +84,8 @@ impl UdpProxySocket {
         let mut writer = io::Cursor::new(&mut buf);
         for (header, crypto) in pairs {
             trace!(?header, "Writing header to buffer");
-            write_header(&mut writer, &header, crypto)
+            let mut crypto_cursor = XorCryptoCursor::new(crypto);
+            write_header(&mut writer, &header, &mut crypto_cursor)
                 .inspect_err(|e| error!(?e, "Failed to write header to buffer for UDP proxy"))?;
         }
 
@@ -143,9 +145,11 @@ impl UdpProxySocket {
         // Decode and check headers
         for node in self.proxy_configs.iter() {
             trace!(?node.address, "Reading response");
-            let resp: ResponseHeader = read_header(&mut reader, &node.crypto).inspect_err(|e| {
-                error!(?e, "Failed to read response from upstream for UDP proxy")
-            })?;
+            let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
+            let resp: ResponseHeader =
+                read_header(&mut reader, &mut crypto_cursor).inspect_err(|e| {
+                    error!(?e, "Failed to read response from upstream for UDP proxy")
+                })?;
             if let Err(mut err) = resp.result {
                 err.source = node.address.clone();
                 error!(?err, "Response was not successful");

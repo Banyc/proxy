@@ -6,8 +6,9 @@ use std::{
 use async_trait::async_trait;
 use common::{
     addr::any_addr,
+    crypto::{XorCrypto, XorCryptoCursor},
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
-    header::{read_header, write_header, RequestHeader, ResponseHeader, XorCrypto},
+    header::{read_header, write_header, RequestHeader, ResponseHeader},
     udp::{Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr},
 };
 use tokio::{
@@ -37,7 +38,8 @@ impl UdpProxy {
     ) -> Result<(UpstreamAddr, &'buf [u8]), ProxyProtocolError> {
         // Decode header
         let mut reader = io::Cursor::new(buf);
-        let header: RequestHeader = read_header(&mut reader, &self.crypto)
+        let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
+        let header: RequestHeader = read_header(&mut reader, &mut crypto_cursor)
             .inspect_err(|e| error!(?e, "Failed to decode header from downstream"))?;
         let header_len = reader.position() as usize;
         let payload = &buf[header_len..];
@@ -123,7 +125,8 @@ impl UdpProxy {
                     let header = ResponseHeader {
                         result: Ok(()),
                     };
-                    write_header(&mut writer, &header, &self.crypto)?;
+                    let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
+                    write_header(&mut writer, &header, &mut crypto_cursor)?;
 
                     // Write payload
                     writer.write_all(pkt)?;
@@ -212,7 +215,8 @@ impl UdpProxy {
             ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
         };
         let mut buf = Vec::new();
-        write_header(&mut buf, &resp, &self.crypto).unwrap();
+        let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
+        write_header(&mut buf, &resp, &mut crypto_cursor).unwrap();
         downstream_writer.send(&buf).await.inspect_err(|e| {
             let peer_addr = downstream_writer.remote_addr();
             error!(?e, ?peer_addr, "Failed to send response to downstream")

@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use common::header::XorCrypto;
+use common::crypto::XorCrypto;
 use get_config::toml::get_config;
 use serde::Deserialize;
 use server::{tcp_proxy::TcpProxy, udp_proxy::UdpProxy};

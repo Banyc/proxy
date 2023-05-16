@@ -1,6 +1,7 @@
 use std::ops::{Deref, DerefMut};
 
 use common::{
+    crypto::XorCryptoCursor,
     error::ProxyProtocolError,
     header::{
         convert_proxy_configs_to_header_crypto_pairs, read_header_async, write_header_async,
@@ -46,7 +47,8 @@ impl TcpProxyStream {
         // Write headers to stream
         for (header, crypto) in pairs {
             trace!(?header, "Writing header to stream");
-            write_header_async(&mut stream, &header, crypto)
+            let mut crypto_cursor = XorCryptoCursor::new(crypto);
+            write_header_async(&mut stream, &header, &mut crypto_cursor)
                 .await
                 .inspect_err(|e| error!(?e, ?proxy_addr, "Failed to write header to stream"))?;
         }
@@ -54,7 +56,8 @@ impl TcpProxyStream {
         // Read response
         for node in proxy_configs {
             trace!(?node.address, "Reading response from upstream address");
-            let resp: ResponseHeader = read_header_async(&mut stream, &node.crypto)
+            let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
+            let resp: ResponseHeader = read_header_async(&mut stream, &mut crypto_cursor)
                 .await
                 .inspect_err(|e| {
                     error!(
