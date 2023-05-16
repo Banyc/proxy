@@ -3,9 +3,10 @@ use std::io;
 use async_trait::async_trait;
 use client::tcp_proxy_client::TcpProxyStream;
 use common::{
+    crypto::{XorCrypto, XorCryptoCursor},
     error::ProxyProtocolError,
     header::{InternetAddr, ProxyConfig},
-    tcp::{TcpServer, TcpServerHook},
+    tcp::{TcpServer, TcpServerHook, TcpXorStream},
 };
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tracing::{error, instrument};
@@ -13,13 +14,19 @@ use tracing::{error, instrument};
 pub struct TcpProxyAccess {
     proxy_configs: Vec<ProxyConfig>,
     destination: InternetAddr,
+    payload_crypto: Option<XorCrypto>,
 }
 
 impl TcpProxyAccess {
-    pub fn new(proxy_configs: Vec<ProxyConfig>, destination: InternetAddr) -> Self {
+    pub fn new(
+        proxy_configs: Vec<ProxyConfig>,
+        destination: InternetAddr,
+        payload_crypto: Option<XorCrypto>,
+    ) -> Self {
         Self {
             proxy_configs,
             destination,
+            payload_crypto,
         }
     }
 
@@ -33,7 +40,19 @@ impl TcpProxyAccess {
     async fn proxy(&self, downstream: &mut TcpStream) -> Result<(), ProxyProtocolError> {
         let upstream = TcpProxyStream::establish(&self.proxy_configs, &self.destination).await?;
         let mut upstream = upstream.into_inner();
-        tokio::io::copy_bidirectional(downstream, &mut upstream).await?;
+
+        let res = match &self.payload_crypto {
+            Some(crypto) => {
+                // Establish encrypted stream
+                let read_crypto_cursor = XorCryptoCursor::new(crypto);
+                let write_crypto_cursor = XorCryptoCursor::new(crypto);
+                let mut xor_stream =
+                    TcpXorStream::new(upstream, read_crypto_cursor, write_crypto_cursor);
+                tokio::io::copy_bidirectional(downstream, &mut xor_stream).await
+            }
+            None => tokio::io::copy_bidirectional(downstream, &mut upstream).await,
+        };
+        res?;
 
         Ok(())
     }

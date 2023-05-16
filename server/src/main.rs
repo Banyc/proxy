@@ -15,15 +15,16 @@ pub async fn main() {
     let config: Config = get_config().unwrap();
     let mut join_set = tokio::task::JoinSet::new();
     join_set.spawn({
-        let crypto = XorCrypto::new(config.xor_key.clone());
+        let header_crypto = XorCrypto::new(config.header_xor_key.clone());
+        let payload_crypto = config.payload_xor_key.clone().map(XorCrypto::new);
         async move {
-            let tcp_proxy = TcpProxy::new(crypto);
+            let tcp_proxy = TcpProxy::new(header_crypto, payload_crypto);
             let server = tcp_proxy.build(config.listen_addr).await.unwrap();
             server.serve().await.unwrap();
         }
     });
     join_set.spawn(async move {
-        let crypto = XorCrypto::new(config.xor_key);
+        let crypto = XorCrypto::new(config.header_xor_key);
         let udp_proxy = UdpProxy::new(crypto);
         let server = udp_proxy.build(config.listen_addr).await.unwrap();
         server.serve().await.unwrap();
@@ -34,5 +35,6 @@ pub async fn main() {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 struct Config {
     listen_addr: SocketAddr,
-    xor_key: Vec<u8>,
+    header_xor_key: Vec<u8>,
+    payload_xor_key: Option<Vec<u8>>,
 }

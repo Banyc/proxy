@@ -5,18 +5,22 @@ use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
-    tcp::{StreamMetrics, TcpServer, TcpServerHook},
+    tcp::{StreamMetrics, TcpServer, TcpServerHook, TcpXorStream},
 };
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tracing::{error, info, instrument};
 
 pub struct TcpProxy {
-    crypto: XorCrypto,
+    header_crypto: XorCrypto,
+    payload_crypto: Option<XorCrypto>,
 }
 
 impl TcpProxy {
-    pub fn new(crypto: XorCrypto) -> Self {
-        Self { crypto }
+    pub fn new(crypto: XorCrypto, payload_crypto: Option<XorCrypto>) -> Self {
+        Self {
+            header_crypto: crypto,
+            payload_crypto,
+        }
     }
 
     pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<TcpServer<Self>> {
@@ -33,8 +37,8 @@ impl TcpProxy {
         downstream: &mut TcpStream,
     ) -> Result<(TcpStream, InternetAddr), ProxyProtocolError> {
         // Decode header
-        let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
-        let header: RequestHeader = read_header_async(downstream, &mut crypto_cursor)
+        let mut read_crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
+        let header: RequestHeader = read_header_async(downstream, &mut read_crypto_cursor)
             .await
             .inspect_err(|e| {
                 let downstream_addr = downstream.peer_addr().ok();
@@ -62,8 +66,8 @@ impl TcpProxy {
 
         // Write Ok response
         let resp = ResponseHeader { result: Ok(()) };
-        let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
-        write_header_async(downstream, &resp, &mut crypto_cursor)
+        let mut write_crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
+        write_header_async(downstream, &resp, &mut write_crypto_cursor)
             .await
             .inspect_err(
                 |e| error!(?e, ?header.upstream, "Failed to write response to downstream"),
@@ -95,10 +99,19 @@ impl TcpProxy {
             .inspect_err(|e| error!(?e, ?upstream, "Failed to get upstream address"))?;
 
         // Copy data
+        let res = match &self.payload_crypto {
+            Some(crypto) => {
+                // Establish encrypted stream
+                let read_crypto_cursor = XorCryptoCursor::new(crypto);
+                let write_crypto_cursor = XorCryptoCursor::new(crypto);
+                let mut xor_stream =
+                    TcpXorStream::new(downstream, write_crypto_cursor, read_crypto_cursor);
+                tokio::io::copy_bidirectional(&mut xor_stream, &mut upstream).await
+            }
+            None => tokio::io::copy_bidirectional(&mut downstream, &mut upstream).await,
+        };
         let (bytes_uplink, bytes_downlink) =
-            tokio::io::copy_bidirectional(&mut downstream, &mut upstream)
-                .await
-                .inspect_err(|e| error!(?e, ?upstream, "Failed to copy data between streams"))?;
+            res.inspect_err(|e| error!(?e, ?upstream, "Failed to copy data between streams"))?;
 
         let end = std::time::Instant::now();
         let metrics = StreamMetrics {
@@ -159,7 +172,7 @@ impl TcpProxy {
             },
             ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
         };
-        let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
+        let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
         write_header_async(stream, &resp, &mut crypto_cursor)
             .await
             .inspect_err(|e| {
@@ -199,7 +212,7 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy = TcpProxy::new(crypto.clone());
+            let proxy = TcpProxy::new(crypto.clone(), None);
             let server = proxy.build("localhost:0").await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
             tokio::spawn(async move {

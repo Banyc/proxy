@@ -22,6 +22,7 @@ async fn main() {
                     .map(|x| x.build())
                     .collect(),
                 config.destination.into(),
+                config.payload_xor_key.map(XorCrypto::new),
             );
             let server = access.build(config.listen_addr).await.unwrap();
             server.serve().await.unwrap();
@@ -49,6 +50,7 @@ async fn main() {
                     .into_iter()
                     .map(|x| x.build())
                     .collect(),
+                config.payload_xor_key.map(XorCrypto::new),
             );
             let server = access.build(config.listen_addr).await.unwrap();
             server.serve().await.unwrap();
@@ -69,12 +71,14 @@ pub struct TransportConfig {
     listen_addr: String,
     proxy_configs: Vec<ProxyConfigBuilder>,
     destination: String,
+    payload_xor_key: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpConfig {
     listen_addr: String,
     proxy_configs: Vec<ProxyConfigBuilder>,
+    payload_xor_key: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

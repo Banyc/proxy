@@ -77,7 +77,7 @@ pub struct ResponseHeader {
 #[instrument(skip_all)]
 pub async fn read_header<'crypto, S, H>(
     stream: &mut S,
-    crypto: &mut XorCryptoCursor<'crypto>,
+    crypto: &mut XorCryptoCursor,
 ) -> Result<H, ProxyProtocolError>
 where
     S: stream_bounds,
@@ -122,7 +122,7 @@ where
 pub async fn write_header<'crypto, S, H>(
     stream: &mut S,
     header: &H,
-    crypto: &mut XorCryptoCursor<'crypto>,
+    crypto: &mut XorCryptoCursor,
 ) -> Result<(), ProxyProtocolError>
 where
     S: stream_bounds,

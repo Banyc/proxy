@@ -6,27 +6,32 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use client::tcp_proxy_client::TcpProxyStream;
 use common::addr::any_addr;
+use common::crypto::{XorCrypto, XorCryptoCursor};
 use common::error::ProxyProtocolError;
 use common::header::{InternetAddr, ProxyConfig};
-use common::tcp::{StreamMetrics, TcpServer, TcpServerHook};
+use common::tcp::{StreamMetrics, TcpServer, TcpServerHook, TcpXorStream};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Empty, Full};
+use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{http, Method, Request, Response};
 
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tracing::{error, info, instrument, trace, warn};
 
 pub struct HttpProxyAccess {
     proxy_configs: Arc<Vec<ProxyConfig>>,
+    payload_crypto: Option<Arc<XorCrypto>>,
 }
 
 impl HttpProxyAccess {
-    pub fn new(proxy_configs: Vec<ProxyConfig>) -> Self {
+    pub fn new(proxy_configs: Vec<ProxyConfig>, payload_crypto: Option<XorCrypto>) -> Self {
         Self {
             proxy_configs: Arc::new(proxy_configs),
+            payload_crypto: payload_crypto.map(Arc::new),
         }
     }
 
@@ -70,7 +75,8 @@ impl HttpProxyAccess {
             // connection be upgraded, so we can't return a response inside
             // `on_upgrade` future.
             if let Some(addr) = host_addr(req.uri()) {
-                let tunnel = HttpTunnel::new(Arc::clone(&self.proxy_configs));
+                let tunnel =
+                    HttpTunnel::new(Arc::clone(&self.proxy_configs), self.payload_crypto.clone());
                 tokio::task::spawn(async move {
                     match hyper::upgrade::on(req).await {
                         Ok(upgraded) => {
@@ -109,26 +115,48 @@ impl HttpProxyAccess {
                 })?;
             let upstream = upstream.into_inner();
 
-            // Establish TLS connection
-            let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
-                .preserve_header_case(true)
-                .title_case_headers(true)
-                .handshake(upstream)
-                .await
-                .inspect_err(|e| error!(?e, "Failed to establish HTTP/1 handshake to upstream"))?;
-            tokio::task::spawn(async move {
-                if let Err(err) = conn.await {
-                    warn!(?err, "Connection failed");
-                }
-            });
+            match &self.payload_crypto {
+                Some(crypto) => {
+                    // Establish encrypted stream
+                    let read_crypto_cursor = XorCryptoCursor::new(crypto);
+                    let write_crypto_cursor = XorCryptoCursor::new(crypto);
+                    let xor_stream =
+                        TcpXorStream::new(upstream, write_crypto_cursor, read_crypto_cursor);
 
-            // Send HTTP/1 request
-            let resp = sender
-                .send_request(req)
-                .await
-                .inspect_err(|e| error!(?e, "Failed to send HTTP/1 request to upstream"))?;
-            Ok(resp.map(|b| b.boxed()))
+                    self.tls_http(xor_stream, req).await
+                }
+                None => self.tls_http(upstream, req).await,
+            }
         }
+    }
+
+    async fn tls_http<S>(
+        &self,
+        upstream: S,
+        req: Request<Incoming>,
+    ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error>
+    where
+        S: AsyncWrite + AsyncRead + Send + Unpin,
+    {
+        // Establish TLS connection
+        let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
+            .preserve_header_case(true)
+            .title_case_headers(true)
+            .handshake(upstream)
+            .await
+            .inspect_err(|e| error!(?e, "Failed to establish HTTP/1 handshake to upstream"))?;
+        tokio::task::spawn(async move {
+            if let Err(err) = conn.await {
+                warn!(?err, "Connection failed");
+            }
+        });
+
+        // Send HTTP/1 request
+        let resp = sender
+            .send_request(req)
+            .await
+            .inspect_err(|e| error!(?e, "Failed to send HTTP/1 request to upstream"))?;
+        Ok(resp.map(|b| b.boxed()))
     }
 }
 
@@ -155,11 +183,18 @@ impl TcpServerHook for HttpProxyAccess {
 
 struct HttpTunnel {
     proxy_configs: Arc<Vec<ProxyConfig>>,
+    payload_crypto: Option<Arc<XorCrypto>>,
 }
 
 impl HttpTunnel {
-    pub fn new(proxy_configs: Arc<Vec<ProxyConfig>>) -> Self {
-        Self { proxy_configs }
+    pub fn new(
+        proxy_configs: Arc<Vec<ProxyConfig>>,
+        payload_crypto: Option<Arc<XorCrypto>>,
+    ) -> Self {
+        Self {
+            proxy_configs,
+            payload_crypto,
+        }
     }
 
     // Create a TCP connection to host:port, build a tunnel between the connection and
@@ -186,12 +221,20 @@ impl HttpTunnel {
         let downstream_addr = any_addr(&resolved_upstream_addr.ip());
 
         // Proxying data
-        let (from_client, from_server) =
-            tokio::io::copy_bidirectional(&mut upgraded, &mut upstream)
-                .await
-                .inspect_err(|e| {
-                    error!(?e, "Failed to copy data");
-                })?;
+        let res = match &self.payload_crypto {
+            Some(crypto) => {
+                // Establish encrypted stream
+                let read_crypto_cursor = XorCryptoCursor::new(crypto);
+                let write_crypto_cursor = XorCryptoCursor::new(crypto);
+                let mut xor_stream =
+                    TcpXorStream::new(upstream, write_crypto_cursor, read_crypto_cursor);
+                tokio::io::copy_bidirectional(&mut upgraded, &mut xor_stream).await
+            }
+            None => tokio::io::copy_bidirectional(&mut upgraded, &mut upstream).await,
+        };
+        let (from_client, from_server) = res.inspect_err(|e| {
+            error!(?e, "Failed to copy data");
+        })?;
 
         // Print message when done
         let end = Instant::now();
