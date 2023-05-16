@@ -70,12 +70,12 @@ pub struct ResponseHeader {
 }
 
 #[duplicate_item(
-    name                async   stream_bounds       add_await(code) ;
+    read_header         async   stream_bounds       add_await(code) ;
     [read_header]       []      [Read]              [code]          ;
     [read_header_async] [async] [AsyncRead + Unpin] [code.await]    ;
 )]
 #[instrument(skip_all)]
-pub async fn name<'crypto, S, H>(
+pub async fn read_header<'crypto, S, H>(
     stream: &mut S,
     crypto: &mut XorCryptoCursor<'crypto>,
 ) -> Result<H, ProxyProtocolError>
@@ -114,12 +114,12 @@ where
 }
 
 #[duplicate_item(
-    name                 async   stream_bounds        add_await(code) ;
+    write_header         async   stream_bounds        add_await(code) ;
     [write_header]       []      [Write]              [code]          ;
     [write_header_async] [async] [AsyncWrite + Unpin] [code.await]    ;
 )]
 #[instrument(skip_all)]
-pub async fn name<'crypto, S, H>(
+pub async fn write_header<'crypto, S, H>(
     stream: &mut S,
     header: &H,
     crypto: &mut XorCryptoCursor<'crypto>,
