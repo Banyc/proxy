@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
-    header::{read_header_async, write_header_async, RequestHeader, ResponseHeader},
+    header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
     tcp::{StreamMetrics, TcpServer, TcpServerHook},
 };
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -28,17 +28,16 @@ impl TcpProxy {
     }
 
     #[instrument(skip(self, downstream))]
-    async fn proxy(&self, downstream: &mut TcpStream) -> Result<StreamMetrics, ProxyProtocolError> {
-        let downstream_addr = downstream
-            .peer_addr()
-            .inspect_err(|e| error!(?e, "Failed to get downstream address"))?;
-        let start = std::time::Instant::now();
-
+    async fn establish(
+        &self,
+        downstream: &mut TcpStream,
+    ) -> Result<(TcpStream, InternetAddr), ProxyProtocolError> {
         // Decode header
         let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
         let header: RequestHeader = read_header_async(downstream, &mut crypto_cursor)
             .await
             .inspect_err(|e| {
+                let downstream_addr = downstream.peer_addr().ok();
                 error!(
                     ?e,
                     ?downstream_addr,
@@ -57,12 +56,9 @@ impl TcpProxy {
         }
 
         // Connect to upstream
-        let mut upstream = TcpStream::connect(upstream)
+        let upstream = TcpStream::connect(upstream)
             .await
             .inspect_err(|e| error!(?e, ?header.upstream, "Failed to connect to upstream"))?;
-        let resolved_upstream_addr = upstream
-            .peer_addr()
-            .inspect_err(|e| error!(?e, ?header.upstream, "Failed to get upstream address"))?;
 
         // Write Ok response
         let resp = ResponseHeader { result: Ok(()) };
@@ -73,13 +69,36 @@ impl TcpProxy {
                 |e| error!(?e, ?header.upstream, "Failed to write response to downstream"),
             )?;
 
+        // Return upstream
+        Ok((upstream, header.upstream))
+    }
+
+    #[instrument(skip(self, downstream))]
+    async fn proxy(&self, mut downstream: TcpStream) -> io::Result<()> {
+        let start = std::time::Instant::now();
+
+        let downstream_addr = downstream
+            .peer_addr()
+            .inspect_err(|e| error!(?e, "Failed to get downstream address"))?;
+
+        // Establish proxy chain
+        let (mut upstream, upstream_addr) = match self.establish(&mut downstream).await {
+            Ok(upstream) => upstream,
+            Err(e) => {
+                self.handle_proxy_error(&mut downstream, e).await;
+                return Ok(());
+            }
+        };
+
+        let resolved_upstream_addr = upstream
+            .peer_addr()
+            .inspect_err(|e| error!(?e, ?upstream, "Failed to get upstream address"))?;
+
         // Copy data
         let (bytes_uplink, bytes_downlink) =
-            tokio::io::copy_bidirectional(downstream, &mut upstream)
+            tokio::io::copy_bidirectional(&mut downstream, &mut upstream)
                 .await
-                .inspect_err(
-                    |e| error!(?e, ?header.upstream, "Failed to copy data between streams"),
-                )?;
+                .inspect_err(|e| error!(?e, ?upstream, "Failed to copy data between streams"))?;
 
         let end = std::time::Instant::now();
         let metrics = StreamMetrics {
@@ -87,33 +106,25 @@ impl TcpProxy {
             end,
             bytes_uplink,
             bytes_downlink,
-            upstream_addr: header.upstream,
+            upstream_addr,
             resolved_upstream_addr,
             downstream_addr,
         };
-        Ok(metrics)
+        info!(%metrics, "Connection closed normally");
+        Ok(())
     }
 
-    #[instrument(skip(self, stream, res))]
-    async fn handle_proxy_result(
-        &self,
-        stream: &mut TcpStream,
-        res: Result<StreamMetrics, ProxyProtocolError>,
-    ) {
-        match res {
-            Ok(metrics) => info!(%metrics, "Connection closed normally"),
-            Err(e) => {
-                error!(?e, "Connection closed with error");
-                let _ = self.respond_with_error(stream, e).await.inspect_err(|e| {
-                    let peer_addr = stream.peer_addr().ok();
-                    error!(
-                        ?e,
-                        ?peer_addr,
-                        "Failed to respond with error to downstream after error"
-                    )
-                });
-            }
-        }
+    #[instrument(skip(self, stream, e))]
+    async fn handle_proxy_error(&self, stream: &mut TcpStream, e: ProxyProtocolError) {
+        error!(?e, "Connection closed with error");
+        let _ = self.respond_with_error(stream, e).await.inspect_err(|e| {
+            let peer_addr = stream.peer_addr().ok();
+            error!(
+                ?e,
+                ?peer_addr,
+                "Failed to respond with error to downstream after error"
+            )
+        });
     }
 
     #[instrument(skip(self, stream))]
@@ -167,9 +178,10 @@ impl TcpProxy {
 #[async_trait]
 impl TcpServerHook for TcpProxy {
     #[instrument(skip(self, stream))]
-    async fn handle_stream(&self, mut stream: TcpStream) {
-        let res = self.proxy(&mut stream).await;
-        self.handle_proxy_result(&mut stream, res).await;
+    async fn handle_stream(&self, stream: TcpStream) {
+        if let Err(e) = self.proxy(stream).await {
+            error!(?e, "Connection closed with error");
+        }
     }
 }
 
