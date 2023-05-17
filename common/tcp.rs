@@ -81,16 +81,21 @@ impl Display for StreamMetrics {
         let duration = duration.as_secs_f64();
         let uplink_speed = self.bytes_uplink as f64 / duration;
         let downlink_speed = self.bytes_downlink as f64 / duration;
+        let upstream_addr = self.upstream_addr.to_string();
+        let resolved_upstream_addr = self.resolved_upstream_addr.to_string();
+        let upstream_addrs = match upstream_addr == resolved_upstream_addr {
+            true => upstream_addr,
+            false => format!("{}, {}", upstream_addr, resolved_upstream_addr),
+        };
         write!(
             f,
-            "up: {{ {}, {}/s }}, down: {{ {}, {}/s }}, duration: {:.1} s, upstream: {{ {}, resolved: {} }}, downstream: {}",
+            "up: {{ {}, {}/s }}, down: {{ {}, {}/s }}, duration: {:.1} s, upstream: {{ {} }}, downstream: {}",
             ByteSize::b(self.bytes_uplink),
             ByteSize::b(uplink_speed as u64),
             ByteSize::b(self.bytes_downlink),
             ByteSize::b(downlink_speed as u64),
             duration,
-            self.upstream_addr,
-            self.resolved_upstream_addr,
+            upstream_addrs,
             self.downstream_addr
         )
     }
