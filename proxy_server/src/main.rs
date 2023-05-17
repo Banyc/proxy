@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use common::crypto::XorCrypto;
 use get_config::toml::get_config;
-use proxy_server::{tcp_proxy::TcpProxy, udp_proxy::UdpProxy};
+use proxy_server::{tcp_proxy_server::TcpProxyServer, udp_proxy_server::UdpProxyServer};
 use serde::Deserialize;
 use tracing_subscriber::EnvFilter;
 
@@ -18,14 +18,14 @@ pub async fn main() {
         let header_crypto = XorCrypto::new(config.header_xor_key.clone());
         let payload_crypto = config.payload_xor_key.clone().map(XorCrypto::new);
         async move {
-            let tcp_proxy = TcpProxy::new(header_crypto, payload_crypto);
+            let tcp_proxy = TcpProxyServer::new(header_crypto, payload_crypto);
             let server = tcp_proxy.build(config.listen_addr).await.unwrap();
             server.serve().await.unwrap();
         }
     });
     join_set.spawn(async move {
         let crypto = XorCrypto::new(config.header_xor_key);
-        let udp_proxy = UdpProxy::new(crypto);
+        let udp_proxy = UdpProxyServer::new(crypto);
         let server = udp_proxy.build(config.listen_addr).await.unwrap();
         server.serve().await.unwrap();
     });

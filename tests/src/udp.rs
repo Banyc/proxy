@@ -7,14 +7,14 @@ mod tests {
         header::ProxyConfig,
     };
     use proxy_client::udp_proxy_client::UdpProxySocket;
-    use proxy_server::udp_proxy::UdpProxy;
+    use proxy_server::udp_proxy_server::UdpProxyServer;
     use tokio::net::UdpSocket;
 
     use crate::create_random_crypto;
 
     async fn spawn_proxy(addr: &str) -> ProxyConfig {
         let crypto = create_random_crypto();
-        let proxy = UdpProxy::new(crypto.clone());
+        let proxy = UdpProxyServer::new(crypto.clone());
         let server = proxy.build(addr).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         tokio::spawn(async move {

@@ -10,12 +10,12 @@ use common::{
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tracing::{error, info, instrument};
 
-pub struct TcpProxy {
+pub struct TcpProxyServer {
     header_crypto: XorCrypto,
     payload_crypto: Option<XorCrypto>,
 }
 
-impl TcpProxy {
+impl TcpProxyServer {
     pub fn new(crypto: XorCrypto, payload_crypto: Option<XorCrypto>) -> Self {
         Self {
             header_crypto: crypto,
@@ -189,7 +189,7 @@ impl TcpProxy {
 }
 
 #[async_trait]
-impl TcpServerHook for TcpProxy {
+impl TcpServerHook for TcpProxyServer {
     #[instrument(skip(self, stream))]
     async fn handle_stream(&self, stream: TcpStream) {
         if let Err(e) = self.proxy(stream).await {
@@ -212,7 +212,7 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy = TcpProxy::new(crypto.clone(), None);
+            let proxy = TcpProxyServer::new(crypto.clone(), None);
             let server = proxy.build("localhost:0").await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
             tokio::spawn(async move {

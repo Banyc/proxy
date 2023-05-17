@@ -17,11 +17,11 @@ use tokio::{
 };
 use tracing::{error, info, instrument, trace};
 
-pub struct UdpProxy {
+pub struct UdpProxyServer {
     crypto: XorCrypto,
 }
 
-impl UdpProxy {
+impl UdpProxyServer {
     pub fn new(crypto: XorCrypto) -> Self {
         Self { crypto }
     }
@@ -227,7 +227,7 @@ impl UdpProxy {
 }
 
 #[async_trait]
-impl UdpServerHook for UdpProxy {
+impl UdpServerHook for UdpProxyServer {
     async fn parse_upstream_addr<'buf>(
         &self,
         buf: &'buf [u8],
