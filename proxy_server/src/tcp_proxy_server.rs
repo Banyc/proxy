@@ -10,25 +10,13 @@ use common::{
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tracing::{error, info, instrument};
 
-pub struct TcpProxyServer {
-    header_crypto: XorCrypto,
-    payload_crypto: Option<XorCrypto>,
+pub struct TcpProxyAcceptor {
+    crypto: XorCrypto,
 }
 
-impl TcpProxyServer {
-    pub fn new(crypto: XorCrypto, payload_crypto: Option<XorCrypto>) -> Self {
-        Self {
-            header_crypto: crypto,
-            payload_crypto,
-        }
-    }
-
-    pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<TcpServer<Self>> {
-        let listener = TcpListener::bind(listen_addr)
-            .await
-            .inspect_err(|e| error!(?e, "Failed to bind to listen address"))?;
-        let server = TcpServer::new(listener, self);
-        Ok(server)
+impl TcpProxyAcceptor {
+    pub fn new(crypto: XorCrypto) -> Self {
+        Self { crypto }
     }
 
     #[instrument(skip(self, downstream))]
@@ -37,7 +25,7 @@ impl TcpProxyServer {
         downstream: &mut TcpStream,
     ) -> Result<(TcpStream, InternetAddr), ProxyProtocolError> {
         // Decode header
-        let mut read_crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
+        let mut read_crypto_cursor = XorCryptoCursor::new(&self.crypto);
         let header: RequestHeader = read_header_async(downstream, &mut read_crypto_cursor)
             .await
             .inspect_err(|e| {
@@ -66,7 +54,7 @@ impl TcpProxyServer {
 
         // Write Ok response
         let resp = ResponseHeader { result: Ok(()) };
-        let mut write_crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
+        let mut write_crypto_cursor = XorCryptoCursor::new(&self.crypto);
         write_header_async(downstream, &resp, &mut write_crypto_cursor)
             .await
             .inspect_err(
@@ -75,6 +63,75 @@ impl TcpProxyServer {
 
         // Return upstream
         Ok((upstream, header.upstream))
+    }
+
+    #[instrument(skip(self, stream))]
+    async fn respond_with_error(
+        &self,
+        stream: &mut TcpStream,
+        error: ProxyProtocolError,
+    ) -> Result<(), ProxyProtocolError> {
+        let local_addr = stream
+            .local_addr()
+            .inspect_err(|e| error!(?e, "Failed to get local address"))?;
+
+        // Respond with error
+        let resp = match error {
+            ProxyProtocolError::Io(_) => ResponseHeader {
+                result: Err(ResponseError {
+                    source: local_addr.into(),
+                    kind: ResponseErrorKind::Io,
+                }),
+            },
+            ProxyProtocolError::Bincode(_) => ResponseHeader {
+                result: Err(ResponseError {
+                    source: local_addr.into(),
+                    kind: ResponseErrorKind::Codec,
+                }),
+            },
+            ProxyProtocolError::Loopback => ResponseHeader {
+                result: Err(ResponseError {
+                    source: local_addr.into(),
+                    kind: ResponseErrorKind::Loopback,
+                }),
+            },
+            ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
+        };
+        let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
+        write_header_async(stream, &resp, &mut crypto_cursor)
+            .await
+            .inspect_err(|e| {
+                let peer_addr = stream.peer_addr().ok();
+                error!(
+                    ?e,
+                    ?peer_addr,
+                    "Failed to write response to downstream after error"
+                )
+            })?;
+
+        Ok(())
+    }
+}
+
+pub struct TcpProxyServer {
+    acceptor: TcpProxyAcceptor,
+    payload_crypto: Option<XorCrypto>,
+}
+
+impl TcpProxyServer {
+    pub fn new(header_crypto: XorCrypto, payload_crypto: Option<XorCrypto>) -> Self {
+        Self {
+            acceptor: TcpProxyAcceptor::new(header_crypto),
+            payload_crypto,
+        }
+    }
+
+    pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<TcpServer<Self>> {
+        let listener = TcpListener::bind(listen_addr)
+            .await
+            .inspect_err(|e| error!(?e, "Failed to bind to listen address"))?;
+        let server = TcpServer::new(listener, self);
+        Ok(server)
     }
 
     #[instrument(skip(self, downstream))]
@@ -86,7 +143,7 @@ impl TcpProxyServer {
             .inspect_err(|e| error!(?e, "Failed to get downstream address"))?;
 
         // Establish proxy chain
-        let (mut upstream, upstream_addr) = match self.establish(&mut downstream).await {
+        let (mut upstream, upstream_addr) = match self.acceptor.establish(&mut downstream).await {
             Ok(upstream) => upstream,
             Err(e) => {
                 self.handle_proxy_error(&mut downstream, e).await;
@@ -130,61 +187,18 @@ impl TcpProxyServer {
     #[instrument(skip(self, stream, e))]
     async fn handle_proxy_error(&self, stream: &mut TcpStream, e: ProxyProtocolError) {
         error!(?e, "Connection closed with error");
-        let _ = self.respond_with_error(stream, e).await.inspect_err(|e| {
-            let peer_addr = stream.peer_addr().ok();
-            error!(
-                ?e,
-                ?peer_addr,
-                "Failed to respond with error to downstream after error"
-            )
-        });
-    }
-
-    #[instrument(skip(self, stream))]
-    async fn respond_with_error(
-        &self,
-        stream: &mut TcpStream,
-        error: ProxyProtocolError,
-    ) -> Result<(), ProxyProtocolError> {
-        let local_addr = stream
-            .local_addr()
-            .inspect_err(|e| error!(?e, "Failed to get local address"))?;
-
-        // Respond with error
-        let resp = match error {
-            ProxyProtocolError::Io(_) => ResponseHeader {
-                result: Err(ResponseError {
-                    source: local_addr.into(),
-                    kind: ResponseErrorKind::Io,
-                }),
-            },
-            ProxyProtocolError::Bincode(_) => ResponseHeader {
-                result: Err(ResponseError {
-                    source: local_addr.into(),
-                    kind: ResponseErrorKind::Codec,
-                }),
-            },
-            ProxyProtocolError::Loopback => ResponseHeader {
-                result: Err(ResponseError {
-                    source: local_addr.into(),
-                    kind: ResponseErrorKind::Loopback,
-                }),
-            },
-            ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
-        };
-        let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
-        write_header_async(stream, &resp, &mut crypto_cursor)
+        let _ = self
+            .acceptor
+            .respond_with_error(stream, e)
             .await
             .inspect_err(|e| {
                 let peer_addr = stream.peer_addr().ok();
                 error!(
                     ?e,
                     ?peer_addr,
-                    "Failed to write response to downstream after error"
+                    "Failed to respond with error to downstream after error"
                 )
-            })?;
-
-        Ok(())
+            });
     }
 }
 
