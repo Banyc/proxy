@@ -2,12 +2,12 @@
 mod tests {
     use std::{io, net::SocketAddr};
 
-    use client::tcp_proxy_client::TcpProxyStream;
     use common::{
         error::{ProxyProtocolError, ResponseErrorKind},
         header::ProxyConfig,
     };
-    use server::tcp_proxy::TcpProxy;
+    use proxy_client::tcp_proxy_client::TcpProxyStream;
+    use proxy_server::tcp_proxy::TcpProxy;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,

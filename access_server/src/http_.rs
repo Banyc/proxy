@@ -4,7 +4,6 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use client::tcp_proxy_client::TcpProxyStream;
 use common::addr::any_addr;
 use common::crypto::{XorCrypto, XorCryptoCursor};
 use common::error::ProxyProtocolError;
@@ -16,6 +15,7 @@ use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{http, Method, Request, Response};
+use proxy_client::tcp_proxy_client::TcpProxyStream;
 
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};

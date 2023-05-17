@@ -1,13 +1,13 @@
 use std::io;
 
 use async_trait::async_trait;
-use client::tcp_proxy_client::TcpProxyStream;
 use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::ProxyProtocolError,
     header::{InternetAddr, ProxyConfig},
     tcp::{TcpServer, TcpServerHook, TcpXorStream},
 };
+use proxy_client::tcp_proxy_client::TcpProxyStream;
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tracing::{error, instrument};
 

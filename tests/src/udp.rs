@@ -2,12 +2,12 @@
 mod tests {
     use std::net::SocketAddr;
 
-    use client::udp_proxy_client::UdpProxySocket;
     use common::{
         error::{ProxyProtocolError, ResponseErrorKind},
         header::ProxyConfig,
     };
-    use server::udp_proxy::UdpProxy;
+    use proxy_client::udp_proxy_client::UdpProxySocket;
+    use proxy_server::udp_proxy::UdpProxy;
     use tokio::net::UdpSocket;
 
     use crate::create_random_crypto;

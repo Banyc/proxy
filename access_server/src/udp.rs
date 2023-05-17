@@ -5,13 +5,13 @@ use std::{
 };
 
 use async_trait::async_trait;
-use client::udp_proxy_client::UdpProxySocket;
 use common::{
     addr::any_addr,
     error::ProxyProtocolError,
     header::{InternetAddr, ProxyConfig},
     udp::{Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr},
 };
+use proxy_client::udp_proxy_client::UdpProxySocket;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tracing::{error, info, trace};
 

@@ -1,4 +1,4 @@
-use access::{http_::HttpProxyAccess, tcp::TcpProxyAccess, udp::UdpProxyAccess};
+use access_server::{http_::HttpProxyAccess, tcp::TcpProxyAccess, udp::UdpProxyAccess};
 use common::{crypto::XorCrypto, header::ProxyConfig};
 use get_config::toml::get_config;
 use serde::{Deserialize, Serialize};

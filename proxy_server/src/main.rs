@@ -2,8 +2,8 @@ use std::net::SocketAddr;
 
 use common::crypto::XorCrypto;
 use get_config::toml::get_config;
+use proxy_server::{tcp_proxy::TcpProxy, udp_proxy::UdpProxy};
 use serde::Deserialize;
-use server::{tcp_proxy::TcpProxy, udp_proxy::UdpProxy};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]

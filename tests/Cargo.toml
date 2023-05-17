@@ -6,8 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-client = { path = "../client" }
-server = { path = "../server" }
+proxy_client = { path = "../proxy_client" }
+proxy_server = { path = "../proxy_server" }
 tokio = { version = "1.27.0", features = ["full"] }
 common = { path = "../common" }
 tracing = "0.1.37"
