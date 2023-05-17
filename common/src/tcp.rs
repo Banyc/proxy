@@ -218,4 +218,24 @@ mod tests {
         server.read_exact(&mut buf[..data.len()]).await.unwrap();
         assert_eq!(&buf[..data.len()], data);
     }
+
+    #[tokio::test]
+    async fn xor_stream_incompatible() {
+        let crypto = create_random_crypto(3);
+
+        let (client, mut server) = tokio::io::duplex(1024);
+        let mut client = {
+            let read = XorCryptoCursor::new(&crypto);
+            let write = XorCryptoCursor::new(&crypto);
+            TcpXorStream::new(client, write, read)
+        };
+
+        let data = b"Hello, world!";
+        let mut buf = [0u8; 1024];
+        println!("Writing data");
+        client.write_all(data).await.unwrap();
+        println!("Reading data");
+        server.read_exact(&mut buf[..data.len()]).await.unwrap();
+        assert_ne!(&buf[..data.len()], data);
+    }
 }
