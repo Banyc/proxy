@@ -2,12 +2,12 @@
 
 use std::io;
 
-use http_::HttpProxyAccessBuilder;
+use http_tunnel::HttpProxyAccessBuilder;
 use serde::{Deserialize, Serialize};
 use tcp::TcpProxyAccessBuilder;
 use udp::UdpProxyAccessBuilder;
 
-pub mod http_;
+pub mod http_tunnel;
 pub mod tcp;
 pub mod udp;
 
