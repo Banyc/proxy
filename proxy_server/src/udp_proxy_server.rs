@@ -11,19 +11,35 @@ use common::{
     header::{read_header, write_header, RequestHeader, ResponseHeader},
     udp::{Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr},
 };
+use serde::Deserialize;
 use tokio::{
     net::{ToSocketAddrs, UdpSocket},
     sync::mpsc,
 };
 use tracing::{error, info, instrument, trace};
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+pub struct UdpProxyServerBuilder {
+    pub listen_addr: String,
+    pub header_xor_key: Vec<u8>,
+}
+
+impl UdpProxyServerBuilder {
+    pub async fn build(self) -> io::Result<UdpServer<UdpProxyServer>> {
+        let header_crypto = XorCrypto::new(self.header_xor_key);
+        let tcp_proxy = UdpProxyServer::new(header_crypto);
+        let server = tcp_proxy.build(self.listen_addr).await?;
+        Ok(server)
+    }
+}
+
 pub struct UdpProxyServer {
-    crypto: XorCrypto,
+    header_crypto: XorCrypto,
 }
 
 impl UdpProxyServer {
-    pub fn new(crypto: XorCrypto) -> Self {
-        Self { crypto }
+    pub fn new(header_crypto: XorCrypto) -> Self {
+        Self { header_crypto }
     }
 
     pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<UdpServer<Self>> {
@@ -38,7 +54,7 @@ impl UdpProxyServer {
     ) -> Result<(UpstreamAddr, &'buf [u8]), ProxyProtocolError> {
         // Decode header
         let mut reader = io::Cursor::new(buf);
-        let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
+        let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
         let header: RequestHeader = read_header(&mut reader, &mut crypto_cursor)
             .inspect_err(|e| error!(?e, "Failed to decode header from downstream"))?;
         let header_len = reader.position() as usize;
@@ -125,7 +141,7 @@ impl UdpProxyServer {
                     let header = ResponseHeader {
                         result: Ok(()),
                     };
-                    let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
+                    let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
                     write_header(&mut writer, &header, &mut crypto_cursor)?;
 
                     // Write payload
@@ -215,7 +231,7 @@ impl UdpProxyServer {
             ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
         };
         let mut buf = Vec::new();
-        let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
+        let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
         write_header(&mut buf, &resp, &mut crypto_cursor).unwrap();
         downstream_writer.send(&buf).await.inspect_err(|e| {
             let peer_addr = downstream_writer.remote_addr();

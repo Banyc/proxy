@@ -8,12 +8,31 @@ use async_trait::async_trait;
 use common::{
     addr::any_addr,
     error::ProxyProtocolError,
-    header::{InternetAddr, ProxyConfig},
+    header::{InternetAddr, ProxyConfig, ProxyConfigBuilder},
     udp::{Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr},
 };
 use proxy_client::udp_proxy_client::UdpProxySocket;
+use serde::{Deserialize, Serialize};
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tracing::{error, info, trace};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UdpProxyAccessBuilder {
+    listen_addr: String,
+    proxy_configs: Vec<ProxyConfigBuilder>,
+    destination: String,
+}
+
+impl UdpProxyAccessBuilder {
+    pub async fn build(self) -> io::Result<UdpServer<UdpProxyAccess>> {
+        let access = UdpProxyAccess::new(
+            self.proxy_configs.into_iter().map(|x| x.build()).collect(),
+            self.destination.into(),
+        );
+        let server = access.build(self.listen_addr).await?;
+        Ok(server)
+    }
+}
 
 pub struct UdpProxyAccess {
     proxy_configs: Vec<ProxyConfig>,

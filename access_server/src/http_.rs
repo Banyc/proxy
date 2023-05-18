@@ -7,7 +7,7 @@ use bytes::Bytes;
 use common::addr::any_addr;
 use common::crypto::{XorCrypto, XorCryptoCursor};
 use common::error::ProxyProtocolError;
-use common::header::{InternetAddr, ProxyConfig};
+use common::header::{InternetAddr, ProxyConfig, ProxyConfigBuilder};
 use common::tcp::{StreamMetrics, TcpServer, TcpServerHook, TcpXorStream};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Empty, Full};
@@ -17,10 +17,29 @@ use hyper::upgrade::Upgraded;
 use hyper::{http, Method, Request, Response};
 use proxy_client::tcp_proxy_client::TcpProxyStream;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tracing::{error, info, instrument, trace, warn};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpProxyAccessBuilder {
+    listen_addr: String,
+    proxy_configs: Vec<ProxyConfigBuilder>,
+    payload_xor_key: Option<Vec<u8>>,
+}
+
+impl HttpProxyAccessBuilder {
+    pub async fn build(self) -> io::Result<TcpServer<HttpProxyAccess>> {
+        let access = HttpProxyAccess::new(
+            self.proxy_configs.into_iter().map(|x| x.build()).collect(),
+            self.payload_xor_key.map(XorCrypto::new),
+        );
+        let server = access.build(self.listen_addr).await?;
+        Ok(server)
+    }
+}
 
 pub struct HttpProxyAccess {
     proxy_configs: Arc<Vec<ProxyConfig>>,

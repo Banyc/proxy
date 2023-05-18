@@ -4,12 +4,33 @@ use async_trait::async_trait;
 use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::ProxyProtocolError,
-    header::{InternetAddr, ProxyConfig},
+    header::{InternetAddr, ProxyConfig, ProxyConfigBuilder},
     tcp::{TcpServer, TcpServerHook, TcpXorStream},
 };
 use proxy_client::tcp_proxy_client::TcpProxyStream;
+use serde::{Deserialize, Serialize};
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tracing::{error, instrument};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TcpProxyAccessBuilder {
+    listen_addr: String,
+    proxy_configs: Vec<ProxyConfigBuilder>,
+    destination: String,
+    payload_xor_key: Option<Vec<u8>>,
+}
+
+impl TcpProxyAccessBuilder {
+    pub async fn build(self) -> io::Result<TcpServer<TcpProxyAccess>> {
+        let access = TcpProxyAccess::new(
+            self.proxy_configs.into_iter().map(|x| x.build()).collect(),
+            self.destination.into(),
+            self.payload_xor_key.map(XorCrypto::new),
+        );
+        let server = access.build(self.listen_addr).await?;
+        Ok(server)
+    }
+}
 
 pub struct TcpProxyAccess {
     proxy_configs: Vec<ProxyConfig>,

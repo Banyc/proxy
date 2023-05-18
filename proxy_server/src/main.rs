@@ -1,8 +1,7 @@
-use std::net::SocketAddr;
-
-use common::crypto::XorCrypto;
 use get_config::toml::get_config;
-use proxy_server::{tcp_proxy_server::TcpProxyServer, udp_proxy_server::UdpProxyServer};
+use proxy_server::{
+    tcp_proxy_server::TcpProxyServerBuilder, udp_proxy_server::UdpProxyServerBuilder,
+};
 use serde::Deserialize;
 use tracing_subscriber::EnvFilter;
 
@@ -14,27 +13,23 @@ pub async fn main() {
         .try_init();
     let config: Config = get_config().unwrap();
     let mut join_set = tokio::task::JoinSet::new();
-    join_set.spawn({
-        let header_crypto = XorCrypto::new(config.header_xor_key.clone());
-        let payload_crypto = config.payload_xor_key.clone().map(XorCrypto::new);
-        async move {
-            let tcp_proxy = TcpProxyServer::new(header_crypto, payload_crypto);
-            let server = tcp_proxy.build(config.listen_addr).await.unwrap();
+    for tcp_server in config.tcp_servers {
+        join_set.spawn(async move {
+            let server = tcp_server.build().await.unwrap();
             server.serve().await.unwrap();
-        }
-    });
-    join_set.spawn(async move {
-        let crypto = XorCrypto::new(config.header_xor_key);
-        let udp_proxy = UdpProxyServer::new(crypto);
-        let server = udp_proxy.build(config.listen_addr).await.unwrap();
-        server.serve().await.unwrap();
-    });
+        });
+    }
+    for udp_server in config.udp_servers {
+        join_set.spawn(async move {
+            let server = udp_server.build().await.unwrap();
+            server.serve().await.unwrap();
+        });
+    }
     join_set.join_next().await.unwrap().unwrap();
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
-struct Config {
-    listen_addr: SocketAddr,
-    header_xor_key: Vec<u8>,
-    payload_xor_key: Option<Vec<u8>>,
+pub struct Config {
+    pub tcp_servers: Vec<TcpProxyServerBuilder>,
+    pub udp_servers: Vec<UdpProxyServerBuilder>,
 }

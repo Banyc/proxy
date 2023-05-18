@@ -155,6 +155,21 @@ where
 
 pub const MAX_HEADER_LEN: usize = 1024;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyConfigBuilder {
+    pub address: String,
+    pub xor_key: Vec<u8>,
+}
+
+impl ProxyConfigBuilder {
+    pub fn build(self) -> ProxyConfig {
+        ProxyConfig {
+            address: self.address.into(),
+            crypto: XorCrypto::new(self.xor_key),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct ProxyConfig {
     pub address: InternetAddr,
