@@ -1,2 +1,9 @@
 [workspace]
-members = ["proxy_client", "proxy_server", "common", "tests", "access_server"]
+members = [
+    "common",
+    "proxy_client",
+    "proxy_server",
+    "access_server",
+    "tests",
+    "bin",
+]
