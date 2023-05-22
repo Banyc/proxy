@@ -14,7 +14,7 @@ async fn main() {
     if let Some(proxy_server) = config.proxy_server {
         proxy_server.spawn(&mut join_set).await;
     }
-    join_set.join_next().await.unwrap().unwrap();
+    join_set.join_next().await.unwrap().unwrap().unwrap();
 }
 
 #[derive(Debug, Deserialize)]

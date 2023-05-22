@@ -11,5 +11,5 @@ pub async fn main() {
     let spawner: ProxyServerSpawner = get_config().unwrap();
     let mut join_set = tokio::task::JoinSet::new();
     spawner.spawn(&mut join_set).await;
-    join_set.join_next().await.unwrap().unwrap();
+    join_set.join_next().await.unwrap().unwrap().unwrap();
 }

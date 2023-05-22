@@ -1,5 +1,7 @@
 #![feature(result_option_inspect)]
 
+use std::io;
+
 use http_tunnel::HttpProxyAccessBuilder;
 use serde::{Deserialize, Serialize};
 use tcp::TcpProxyAccessBuilder;
@@ -17,28 +19,31 @@ pub struct AccessServerSpawner {
 }
 
 impl AccessServerSpawner {
-    pub async fn spawn(self, join_set: &mut tokio::task::JoinSet<()>) {
+    pub async fn spawn(self, join_set: &mut tokio::task::JoinSet<io::Result<()>>) {
         if let Some(tcp_servers) = self.tcp_servers {
             for tcp_server in tcp_servers {
                 join_set.spawn(async move {
-                    let server = tcp_server.build().await.unwrap();
-                    server.serve().await.unwrap();
+                    let server = tcp_server.build().await?;
+                    server.serve().await?;
+                    Ok(())
                 });
             }
         }
         if let Some(udp_servers) = self.udp_servers {
             for udp_server in udp_servers {
                 join_set.spawn(async move {
-                    let server = udp_server.build().await.unwrap();
-                    server.serve().await.unwrap();
+                    let server = udp_server.build().await?;
+                    server.serve().await?;
+                    Ok(())
                 });
             }
         }
         if let Some(http_servers) = self.http_servers {
             for http_server in http_servers {
                 join_set.spawn(async move {
-                    let server = http_server.build().await.unwrap();
-                    server.serve().await.unwrap();
+                    let server = http_server.build().await?;
+                    server.serve().await?;
+                    Ok(())
                 });
             }
         }
