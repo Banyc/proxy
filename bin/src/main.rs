@@ -9,10 +9,10 @@ async fn main() {
     let config: ServerConfig = get_config().unwrap();
     let mut join_set = tokio::task::JoinSet::new();
     if let Some(access_server) = config.access_server {
-        access_server.spawn(&mut join_set).await.unwrap();
+        access_server.spawn(&mut join_set).await;
     }
     if let Some(proxy_server) = config.proxy_server {
-        proxy_server.spawn(&mut join_set).await.unwrap();
+        proxy_server.spawn(&mut join_set).await;
     }
     join_set.join_next().await.unwrap().unwrap();
 }

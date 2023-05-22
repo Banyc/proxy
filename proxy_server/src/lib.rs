@@ -1,7 +1,5 @@
 #![feature(result_option_inspect)]
 
-use std::io;
-
 use serde::Deserialize;
 use tcp_proxy_server::TcpProxyServerBuilder;
 use udp_proxy_server::UdpProxyServerBuilder;
@@ -16,7 +14,7 @@ pub struct ProxyServerSpawner {
 }
 
 impl ProxyServerSpawner {
-    pub async fn spawn(self, join_set: &mut tokio::task::JoinSet<()>) -> io::Result<()> {
+    pub async fn spawn(self, join_set: &mut tokio::task::JoinSet<()>) {
         if let Some(tcp_servers) = self.tcp_servers {
             for tcp_server in tcp_servers {
                 join_set.spawn(async move {
@@ -33,6 +31,5 @@ impl ProxyServerSpawner {
                 });
             }
         }
-        Ok(())
     }
 }
