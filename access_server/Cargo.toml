@@ -9,8 +9,8 @@ edition = "2021"
 proxy_client = { path = "../proxy_client" }
 get_config = "0.1.1"
 common = { path = "../common" }
-serde = { version = "1.0.160", features = ["derive"] }
-tokio = { version = "1.27.0", features = ["full"] }
+serde = { version = "1.0.163", features = ["derive"] }
+tokio = { version = "1.28.1", features = ["full"] }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
 async-trait = "0.1.68"
