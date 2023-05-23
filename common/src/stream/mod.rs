@@ -2,10 +2,7 @@ use std::{fmt::Display, io, net::SocketAddr, pin::Pin};
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::TcpStream,
-};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{
     crypto::{XorCrypto, XorCryptoCursor},
@@ -14,25 +11,18 @@ use crate::{
 
 pub mod tcp;
 
-pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {
+pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
+
+pub trait IoAddr {
     fn peer_addr(&self) -> io::Result<SocketAddr>;
     fn local_addr(&self) -> io::Result<SocketAddr>;
-}
-
-impl IoStream for TcpStream {
-    fn peer_addr(&self) -> io::Result<SocketAddr> {
-        self.peer_addr()
-    }
-    fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.local_addr()
-    }
 }
 
 #[async_trait]
 pub trait StreamServerHook {
     async fn handle_stream<S>(&self, stream: S)
     where
-        S: IoStream;
+        S: IoStream + IoAddr;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -101,9 +91,10 @@ impl<S> XorStream<S> {
     }
 }
 
-impl<S> IoStream for XorStream<S>
+impl<S> IoStream for XorStream<S> where S: IoStream {}
+impl<S> IoAddr for XorStream<S>
 where
-    S: IoStream,
+    S: IoAddr,
 {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         self.async_stream.peer_addr()

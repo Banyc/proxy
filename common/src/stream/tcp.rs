@@ -1,9 +1,9 @@
-use std::{io, sync::Arc};
+use std::{io, net::SocketAddr, sync::Arc};
 
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info, instrument, trace};
 
-use super::StreamServerHook;
+use super::{IoAddr, IoStream, StreamServerHook};
 
 #[derive(Debug)]
 pub struct TcpServer<H> {
@@ -51,5 +51,15 @@ where
                 hook.handle_stream(stream).await;
             });
         }
+    }
+}
+
+impl IoStream for TcpStream {}
+impl IoAddr for TcpStream {
+    fn peer_addr(&self) -> io::Result<SocketAddr> {
+        self.peer_addr()
+    }
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.local_addr()
     }
 }

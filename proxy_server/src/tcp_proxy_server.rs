@@ -5,7 +5,7 @@ use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
-    stream::{tcp::TcpServer, IoStream, StreamMetrics, StreamServerHook, XorStream},
+    stream::{tcp::TcpServer, IoAddr, IoStream, StreamMetrics, StreamServerHook, XorStream},
 };
 use serde::Deserialize;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -26,7 +26,7 @@ impl TcpProxyAcceptor {
         downstream: &mut S,
     ) -> Result<(TcpStream, InternetAddr), ProxyProtocolError>
     where
-        S: IoStream,
+        S: IoStream + IoAddr,
     {
         // Decode header
         let mut read_crypto_cursor = XorCryptoCursor::new(&self.crypto);
@@ -76,7 +76,7 @@ impl TcpProxyAcceptor {
         error: ProxyProtocolError,
     ) -> Result<(), ProxyProtocolError>
     where
-        S: IoStream,
+        S: IoStream + IoAddr,
     {
         let local_addr = stream
             .local_addr()
@@ -161,7 +161,7 @@ impl TcpProxyServer {
     #[instrument(skip(self, downstream))]
     async fn proxy<S>(&self, mut downstream: S) -> io::Result<()>
     where
-        S: IoStream,
+        S: IoStream + IoAddr,
     {
         let start = std::time::Instant::now();
 
@@ -211,7 +211,7 @@ impl TcpProxyServer {
     #[instrument(skip(self, stream, e))]
     async fn handle_proxy_error<S>(&self, stream: &mut S, e: ProxyProtocolError)
     where
-        S: IoStream,
+        S: IoStream + IoAddr,
     {
         error!(?e, "Connection closed with error");
         let _ = self
@@ -234,7 +234,7 @@ impl StreamServerHook for TcpProxyServer {
     #[instrument(skip(self, stream))]
     async fn handle_stream<S>(&self, stream: S)
     where
-        S: IoStream,
+        S: IoStream + IoAddr,
     {
         if let Err(e) = self.proxy(stream).await {
             error!(?e, "Connection closed with error");
