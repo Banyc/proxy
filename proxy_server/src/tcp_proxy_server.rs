@@ -177,10 +177,7 @@ impl TcpProxyServer {
         let res = match &self.payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
-                let read_crypto_cursor = XorCryptoCursor::new(crypto);
-                let write_crypto_cursor = XorCryptoCursor::new(crypto);
-                let mut xor_stream =
-                    TcpXorStream::new(downstream, write_crypto_cursor, read_crypto_cursor);
+                let mut xor_stream = TcpXorStream::upgrade(downstream, crypto);
                 tokio::io::copy_bidirectional(&mut xor_stream, &mut upstream).await
             }
             None => tokio::io::copy_bidirectional(&mut downstream, &mut upstream).await,

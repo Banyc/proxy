@@ -5,7 +5,7 @@ use std::time::Instant;
 use async_trait::async_trait;
 use bytes::Bytes;
 use common::addr::any_addr;
-use common::crypto::{XorCrypto, XorCryptoCursor};
+use common::crypto::XorCrypto;
 use common::error::ProxyProtocolError;
 use common::header::{InternetAddr, ProxyConfig, ProxyConfigBuilder};
 use common::tcp::{StreamMetrics, TcpServer, TcpServerHook, TcpXorStream};
@@ -137,10 +137,7 @@ impl HttpProxyAccess {
             match &self.payload_crypto {
                 Some(crypto) => {
                     // Establish encrypted stream
-                    let read_crypto_cursor = XorCryptoCursor::new(crypto);
-                    let write_crypto_cursor = XorCryptoCursor::new(crypto);
-                    let xor_stream =
-                        TcpXorStream::new(upstream, write_crypto_cursor, read_crypto_cursor);
+                    let xor_stream = TcpXorStream::upgrade(upstream, crypto);
 
                     self.tls_http(xor_stream, req).await
                 }
@@ -243,10 +240,7 @@ impl HttpTunnel {
         let res = match &self.payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
-                let read_crypto_cursor = XorCryptoCursor::new(crypto);
-                let write_crypto_cursor = XorCryptoCursor::new(crypto);
-                let mut xor_stream =
-                    TcpXorStream::new(upstream, write_crypto_cursor, read_crypto_cursor);
+                let mut xor_stream = TcpXorStream::upgrade(upstream, crypto);
                 tokio::io::copy_bidirectional(&mut upgraded, &mut xor_stream).await
             }
             None => tokio::io::copy_bidirectional(&mut upgraded, &mut upstream).await,

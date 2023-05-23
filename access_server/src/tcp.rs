@@ -2,7 +2,7 @@ use std::io;
 
 use async_trait::async_trait;
 use common::{
-    crypto::{XorCrypto, XorCryptoCursor},
+    crypto::XorCrypto,
     error::ProxyProtocolError,
     header::{InternetAddr, ProxyConfig, ProxyConfigBuilder},
     tcp::{TcpServer, TcpServerHook, TcpXorStream},
@@ -65,10 +65,7 @@ impl TcpProxyAccess {
         let res = match &self.payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
-                let read_crypto_cursor = XorCryptoCursor::new(crypto);
-                let write_crypto_cursor = XorCryptoCursor::new(crypto);
-                let mut xor_stream =
-                    TcpXorStream::new(upstream, read_crypto_cursor, write_crypto_cursor);
+                let mut xor_stream = TcpXorStream::upgrade(upstream, crypto);
                 tokio::io::copy_bidirectional(downstream, &mut xor_stream).await
             }
             None => tokio::io::copy_bidirectional(downstream, &mut upstream).await,

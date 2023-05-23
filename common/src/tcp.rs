@@ -8,7 +8,10 @@ use tokio::{
 };
 use tracing::{error, info, instrument, trace};
 
-use crate::{crypto::XorCryptoCursor, header::InternetAddr};
+use crate::{
+    crypto::{XorCrypto, XorCryptoCursor},
+    header::InternetAddr,
+};
 
 #[derive(Debug)]
 pub struct TcpServer<H> {
@@ -121,6 +124,13 @@ impl<S> TcpXorStream<S> {
             buf: Some(Vec::new()),
         }
     }
+
+    pub fn upgrade(stream: S, crypto: &XorCrypto) -> Self {
+        // Establish encrypted stream
+        let read_crypto_cursor = XorCryptoCursor::new(crypto);
+        let write_crypto_cursor = XorCryptoCursor::new(crypto);
+        TcpXorStream::new(stream, write_crypto_cursor, read_crypto_cursor)
+    }
 }
 
 impl<S> AsyncWrite for TcpXorStream<S>
@@ -199,16 +209,8 @@ mod tests {
         let crypto = create_random_crypto(3);
 
         let (client, server) = tokio::io::duplex(1024);
-        let mut client = {
-            let read = XorCryptoCursor::new(&crypto);
-            let write = XorCryptoCursor::new(&crypto);
-            TcpXorStream::new(client, write, read)
-        };
-        let mut server = {
-            let read = XorCryptoCursor::new(&crypto);
-            let write = XorCryptoCursor::new(&crypto);
-            TcpXorStream::new(server, write, read)
-        };
+        let mut client = TcpXorStream::upgrade(client, &crypto);
+        let mut server = TcpXorStream::upgrade(server, &crypto);
 
         let data = b"Hello, world!";
         let mut buf = [0u8; 1024];
@@ -224,11 +226,7 @@ mod tests {
         let crypto = create_random_crypto(3);
 
         let (client, mut server) = tokio::io::duplex(1024);
-        let mut client = {
-            let read = XorCryptoCursor::new(&crypto);
-            let write = XorCryptoCursor::new(&crypto);
-            TcpXorStream::new(client, write, read)
-        };
+        let mut client = TcpXorStream::upgrade(client, &crypto);
 
         let data = b"Hello, world!";
         let mut buf = [0u8; 1024];
