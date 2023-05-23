@@ -5,11 +5,11 @@ use common::{
     crypto::XorCrypto,
     error::ProxyProtocolError,
     header::{InternetAddr, ProxyConfig, ProxyConfigBuilder},
-    tcp::{TcpServer, TcpServerHook, TcpXorStream},
+    stream::{tcp::TcpServer, IoStream, StreamServerHook, XorStream},
 };
 use proxy_client::tcp_proxy_client::TcpProxyStream;
 use serde::{Deserialize, Serialize};
-use tokio::net::{TcpStream, ToSocketAddrs};
+use tokio::net::ToSocketAddrs;
 use tracing::{error, instrument};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,14 +58,17 @@ impl TcpProxyAccess {
         Ok(TcpServer::new(tcp_listener, self))
     }
 
-    async fn proxy(&self, downstream: &mut TcpStream) -> Result<(), ProxyProtocolError> {
+    async fn proxy<S>(&self, downstream: &mut S) -> Result<(), ProxyProtocolError>
+    where
+        S: IoStream,
+    {
         let upstream = TcpProxyStream::establish(&self.proxy_configs, &self.destination).await?;
         let mut upstream = upstream.into_inner();
 
         let res = match &self.payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
-                let mut xor_stream = TcpXorStream::upgrade(upstream, crypto);
+                let mut xor_stream = XorStream::upgrade(upstream, crypto);
                 tokio::io::copy_bidirectional(downstream, &mut xor_stream).await
             }
             None => tokio::io::copy_bidirectional(downstream, &mut upstream).await,
@@ -77,9 +80,12 @@ impl TcpProxyAccess {
 }
 
 #[async_trait]
-impl TcpServerHook for TcpProxyAccess {
+impl StreamServerHook for TcpProxyAccess {
     #[instrument(skip(self, stream))]
-    async fn handle_stream(&self, mut stream: TcpStream) {
+    async fn handle_stream<S>(&self, mut stream: S)
+    where
+        S: IoStream,
+    {
         let res = self.proxy(&mut stream).await;
         if let Err(e) = res {
             error!(?e, "Failed to proxy");

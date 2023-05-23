@@ -1,70 +1,38 @@
-use std::{fmt::Display, io, net::SocketAddr, pin::Pin, sync::Arc};
+use std::{fmt::Display, io, net::SocketAddr, pin::Pin};
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    net::{TcpListener, TcpStream},
+    net::TcpStream,
 };
-use tracing::{error, info, instrument, trace};
 
 use crate::{
     crypto::{XorCrypto, XorCryptoCursor},
     header::InternetAddr,
 };
 
-#[derive(Debug)]
-pub struct TcpServer<H> {
-    listener: TcpListener,
-    hook: H,
+pub mod tcp;
+
+pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {
+    fn peer_addr(&self) -> io::Result<SocketAddr>;
+    fn local_addr(&self) -> io::Result<SocketAddr>;
 }
 
-impl<H> TcpServer<H> {
-    pub fn new(listener: TcpListener, hook: H) -> Self {
-        Self { listener, hook }
+impl IoStream for TcpStream {
+    fn peer_addr(&self) -> io::Result<SocketAddr> {
+        self.peer_addr()
     }
-
-    pub fn listener(&self) -> &TcpListener {
-        &self.listener
-    }
-
-    pub fn listener_mut(&mut self) -> &mut TcpListener {
-        &mut self.listener
-    }
-}
-
-impl<H> TcpServer<H>
-where
-    H: TcpServerHook + Send + Sync + 'static,
-{
-    #[instrument(skip(self))]
-    pub async fn serve(self) -> io::Result<()> {
-        let addr = self
-            .listener
-            .local_addr()
-            .inspect_err(|e| error!(?e, "Failed to get local address"))?;
-        info!(?addr, "Listening");
-        // Arc hook
-        let hook = Arc::new(self.hook);
-        loop {
-            trace!("Waiting for connection");
-            let (stream, _) = self
-                .listener
-                .accept()
-                .await
-                .inspect_err(|e| error!(?e, "Failed to accept connection"))?;
-            // Arc hook
-            let hook = Arc::clone(&hook);
-            tokio::spawn(async move {
-                hook.handle_stream(stream).await;
-            });
-        }
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.local_addr()
     }
 }
 
 #[async_trait]
-pub trait TcpServerHook {
-    async fn handle_stream(&self, stream: TcpStream);
+pub trait StreamServerHook {
+    async fn handle_stream<S>(&self, stream: S)
+    where
+        S: IoStream;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -104,14 +72,14 @@ impl Display for StreamMetrics {
     }
 }
 
-pub struct TcpXorStream<S> {
+pub struct XorStream<S> {
     write_crypto: XorCryptoCursor,
     read_crypto: XorCryptoCursor,
     async_stream: S,
     buf: Option<Vec<u8>>,
 }
 
-impl<S> TcpXorStream<S> {
+impl<S> XorStream<S> {
     pub fn new(
         async_stream: S,
         write_crypto: XorCryptoCursor,
@@ -129,11 +97,23 @@ impl<S> TcpXorStream<S> {
         // Establish encrypted stream
         let read_crypto_cursor = XorCryptoCursor::new(crypto);
         let write_crypto_cursor = XorCryptoCursor::new(crypto);
-        TcpXorStream::new(stream, write_crypto_cursor, read_crypto_cursor)
+        XorStream::new(stream, write_crypto_cursor, read_crypto_cursor)
     }
 }
 
-impl<S> AsyncWrite for TcpXorStream<S>
+impl<S> IoStream for XorStream<S>
+where
+    S: IoStream,
+{
+    fn peer_addr(&self) -> io::Result<SocketAddr> {
+        self.async_stream.peer_addr()
+    }
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.async_stream.local_addr()
+    }
+}
+
+impl<S> AsyncWrite for XorStream<S>
 where
     S: AsyncWrite + Unpin,
 {
@@ -181,7 +161,7 @@ where
     }
 }
 
-impl<S> AsyncRead for TcpXorStream<S>
+impl<S> AsyncRead for XorStream<S>
 where
     S: AsyncRead + Unpin,
 {
@@ -209,8 +189,8 @@ mod tests {
         let crypto = create_random_crypto(3);
 
         let (client, server) = tokio::io::duplex(1024);
-        let mut client = TcpXorStream::upgrade(client, &crypto);
-        let mut server = TcpXorStream::upgrade(server, &crypto);
+        let mut client = XorStream::upgrade(client, &crypto);
+        let mut server = XorStream::upgrade(server, &crypto);
 
         let data = b"Hello, world!";
         let mut buf = [0u8; 1024];
@@ -226,7 +206,7 @@ mod tests {
         let crypto = create_random_crypto(3);
 
         let (client, mut server) = tokio::io::duplex(1024);
-        let mut client = TcpXorStream::upgrade(client, &crypto);
+        let mut client = XorStream::upgrade(client, &crypto);
 
         let data = b"Hello, world!";
         let mut buf = [0u8; 1024];

@@ -5,7 +5,7 @@ use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
-    tcp::{StreamMetrics, TcpServer, TcpServerHook, TcpXorStream},
+    stream::{tcp::TcpServer, IoStream, StreamMetrics, StreamServerHook, XorStream},
 };
 use serde::Deserialize;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -21,10 +21,13 @@ impl TcpProxyAcceptor {
     }
 
     #[instrument(skip(self, downstream))]
-    async fn establish(
+    async fn establish<S>(
         &self,
-        downstream: &mut TcpStream,
-    ) -> Result<(TcpStream, InternetAddr), ProxyProtocolError> {
+        downstream: &mut S,
+    ) -> Result<(TcpStream, InternetAddr), ProxyProtocolError>
+    where
+        S: IoStream,
+    {
         // Decode header
         let mut read_crypto_cursor = XorCryptoCursor::new(&self.crypto);
         let header: RequestHeader = read_header_async(downstream, &mut read_crypto_cursor)
@@ -67,11 +70,14 @@ impl TcpProxyAcceptor {
     }
 
     #[instrument(skip(self, stream))]
-    async fn respond_with_error(
+    async fn respond_with_error<S>(
         &self,
-        stream: &mut TcpStream,
+        stream: &mut S,
         error: ProxyProtocolError,
-    ) -> Result<(), ProxyProtocolError> {
+    ) -> Result<(), ProxyProtocolError>
+    where
+        S: IoStream,
+    {
         let local_addr = stream
             .local_addr()
             .inspect_err(|e| error!(?e, "Failed to get local address"))?;
@@ -153,7 +159,10 @@ impl TcpProxyServer {
     }
 
     #[instrument(skip(self, downstream))]
-    async fn proxy(&self, mut downstream: TcpStream) -> io::Result<()> {
+    async fn proxy<S>(&self, mut downstream: S) -> io::Result<()>
+    where
+        S: IoStream,
+    {
         let start = std::time::Instant::now();
 
         let downstream_addr = downstream
@@ -177,7 +186,7 @@ impl TcpProxyServer {
         let res = match &self.payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
-                let mut xor_stream = TcpXorStream::upgrade(downstream, crypto);
+                let mut xor_stream = XorStream::upgrade(downstream, crypto);
                 tokio::io::copy_bidirectional(&mut xor_stream, &mut upstream).await
             }
             None => tokio::io::copy_bidirectional(&mut downstream, &mut upstream).await,
@@ -200,7 +209,10 @@ impl TcpProxyServer {
     }
 
     #[instrument(skip(self, stream, e))]
-    async fn handle_proxy_error(&self, stream: &mut TcpStream, e: ProxyProtocolError) {
+    async fn handle_proxy_error<S>(&self, stream: &mut S, e: ProxyProtocolError)
+    where
+        S: IoStream,
+    {
         error!(?e, "Connection closed with error");
         let _ = self
             .acceptor
@@ -218,9 +230,12 @@ impl TcpProxyServer {
 }
 
 #[async_trait]
-impl TcpServerHook for TcpProxyServer {
+impl StreamServerHook for TcpProxyServer {
     #[instrument(skip(self, stream))]
-    async fn handle_stream(&self, stream: TcpStream) {
+    async fn handle_stream<S>(&self, stream: S)
+    where
+        S: IoStream,
+    {
         if let Err(e) = self.proxy(stream).await {
             error!(?e, "Connection closed with error");
         }

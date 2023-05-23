@@ -4,5 +4,5 @@ pub mod addr;
 pub mod crypto;
 pub mod error;
 pub mod header;
-pub mod tcp;
+pub mod stream;
 pub mod udp;

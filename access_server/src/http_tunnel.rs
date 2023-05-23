@@ -8,7 +8,8 @@ use common::addr::any_addr;
 use common::crypto::XorCrypto;
 use common::error::ProxyProtocolError;
 use common::header::{InternetAddr, ProxyConfig, ProxyConfigBuilder};
-use common::tcp::{StreamMetrics, TcpServer, TcpServerHook, TcpXorStream};
+use common::stream::tcp::TcpServer;
+use common::stream::{IoStream, StreamMetrics, StreamServerHook, XorStream};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::body::Incoming;
@@ -20,7 +21,7 @@ use proxy_client::tcp_proxy_client::TcpProxyStream;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::{TcpStream, ToSocketAddrs};
+use tokio::net::ToSocketAddrs;
 use tracing::{error, info, instrument, trace, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,7 +63,10 @@ impl HttpProxyAccess {
         Ok(TcpServer::new(tcp_listener, self))
     }
 
-    async fn proxy(&self, downstream: TcpStream) -> Result<(), Error> {
+    async fn proxy<S>(&self, downstream: S) -> Result<(), Error>
+    where
+        S: IoStream,
+    {
         hyper::server::conn::http1::Builder::new()
             .preserve_header_case(true)
             .title_case_headers(true)
@@ -137,7 +141,7 @@ impl HttpProxyAccess {
             match &self.payload_crypto {
                 Some(crypto) => {
                     // Establish encrypted stream
-                    let xor_stream = TcpXorStream::upgrade(upstream, crypto);
+                    let xor_stream = XorStream::upgrade(upstream, crypto);
 
                     self.tls_http(xor_stream, req).await
                 }
@@ -187,9 +191,12 @@ pub enum Error {
 }
 
 #[async_trait]
-impl TcpServerHook for HttpProxyAccess {
+impl StreamServerHook for HttpProxyAccess {
     #[instrument(skip(self, stream))]
-    async fn handle_stream(&self, stream: TcpStream) {
+    async fn handle_stream<S>(&self, stream: S)
+    where
+        S: IoStream,
+    {
         let res = self.proxy(stream).await;
         if let Err(e) = res {
             error!(?e, "Failed to proxy");
@@ -240,7 +247,7 @@ impl HttpTunnel {
         let res = match &self.payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
-                let mut xor_stream = TcpXorStream::upgrade(upstream, crypto);
+                let mut xor_stream = XorStream::upgrade(upstream, crypto);
                 tokio::io::copy_bidirectional(&mut upgraded, &mut xor_stream).await
             }
             None => tokio::io::copy_bidirectional(&mut upgraded, &mut upstream).await,
