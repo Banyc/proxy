@@ -7,7 +7,7 @@ use common::{
         convert_proxy_configs_to_header_crypto_pairs, read_header_async, write_header_async,
         InternetAddr, ProxyConfig, ResponseHeader,
     },
-    quic::QuicPersistentConnections,
+    persistent_connections::PersistentConnections,
     stream::CreatedStream,
 };
 use tokio::net::TcpStream;
@@ -21,7 +21,7 @@ impl TcpProxyStream {
     pub async fn establish(
         proxy_configs: &[ProxyConfig],
         destination: &InternetAddr,
-        quic: &QuicPersistentConnections,
+        quic: &PersistentConnections,
     ) -> Result<(CreatedStream, SocketAddr), ProxyProtocolError> {
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
@@ -71,11 +71,11 @@ impl TcpProxyStream {
 
 async fn connect(
     addr: &InternetAddr,
-    quic: &QuicPersistentConnections,
+    quic: &PersistentConnections,
 ) -> io::Result<(CreatedStream, SocketAddr)> {
     let quic = quic.open_stream(addr).await;
     let ret = match quic {
-        Some((send, recv, sock_addr)) => (CreatedStream::Quic { recv, send }, sock_addr),
+        Some((stream, sock_addr)) => (stream, sock_addr),
         None => {
             let sock_addr = addr
                 .to_socket_addr()

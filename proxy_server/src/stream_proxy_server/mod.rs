@@ -5,7 +5,7 @@ use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
-    quic::QuicPersistentConnections,
+    persistent_connections::PersistentConnections,
     stream::{
         tcp::TcpServer, CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook, XorStream,
     },
@@ -17,11 +17,11 @@ pub mod tcp_proxy_server;
 
 pub struct StreamProxyAcceptor {
     crypto: XorCrypto,
-    quic: QuicPersistentConnections,
+    quic: PersistentConnections,
 }
 
 impl StreamProxyAcceptor {
-    pub fn new(crypto: XorCrypto, quic: QuicPersistentConnections) -> Self {
+    pub fn new(crypto: XorCrypto, quic: PersistentConnections) -> Self {
         Self { crypto, quic }
     }
 
@@ -49,7 +49,7 @@ impl StreamProxyAcceptor {
         // Connect to upstream
         let quic = self.quic.open_stream(&header.upstream).await;
         let (upstream, sock_addr) = match quic {
-            Some((send, recv, sock_addr)) => (CreatedStream::Quic { send, recv }, sock_addr),
+            Some((stream, sock_addr)) => (stream, sock_addr),
             None => {
                 // Prevent connections to localhost
                 let upstream_sock_addr = header.upstream.to_socket_addr().await.inspect_err(
@@ -140,7 +140,7 @@ impl StreamProxyServer {
     pub fn new(
         header_crypto: XorCrypto,
         payload_crypto: Option<XorCrypto>,
-        quic: QuicPersistentConnections,
+        quic: PersistentConnections,
     ) -> Self {
         Self {
             acceptor: StreamProxyAcceptor::new(header_crypto, quic),
@@ -251,11 +251,7 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy = StreamProxyServer::new(
-                crypto.clone(),
-                None,
-                QuicPersistentConnections::new(Default::default()),
-            );
+            let proxy = StreamProxyServer::new(crypto.clone(), None, PersistentConnections::new());
             let server = proxy.build("localhost:0").await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
             tokio::spawn(async move {

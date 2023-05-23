@@ -8,7 +8,7 @@ use common::addr::any_addr;
 use common::crypto::XorCrypto;
 use common::error::ProxyProtocolError;
 use common::header::{InternetAddr, ProxyConfig, ProxyConfigBuilder};
-use common::quic::QuicPersistentConnections;
+use common::persistent_connections::PersistentConnections;
 use common::stream::tcp::TcpServer;
 use common::stream::{IoStream, StreamMetrics, StreamServerHook, XorStream};
 use http_body_util::combinators::BoxBody;
@@ -135,7 +135,7 @@ impl HttpProxyAccess {
             let (upstream, _) = TcpProxyStream::establish(
                 &self.proxy_configs,
                 &addr.into(),
-                &QuicPersistentConnections::new(Default::default()),
+                &PersistentConnections::new(),
             )
             .await
             .inspect_err(|e| {
@@ -235,15 +235,12 @@ impl HttpTunnel {
         let start = Instant::now();
 
         // Establish ProxyProtocol
-        let (mut upstream, upstream_sock_addr) = TcpProxyStream::establish(
-            &self.proxy_configs,
-            &addr,
-            &QuicPersistentConnections::new(Default::default()),
-        )
-        .await
-        .inspect_err(|e| {
-            error!(?e, "Failed to establish proxy protocol");
-        })?;
+        let (mut upstream, upstream_sock_addr) =
+            TcpProxyStream::establish(&self.proxy_configs, &addr, &PersistentConnections::new())
+                .await
+                .inspect_err(|e| {
+                    error!(?e, "Failed to establish proxy protocol");
+                })?;
 
         let downstream_addr = any_addr(&upstream_sock_addr.ip());
 
