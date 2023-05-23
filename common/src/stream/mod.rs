@@ -32,7 +32,7 @@ pub struct StreamMetrics {
     pub bytes_uplink: u64,
     pub bytes_downlink: u64,
     pub upstream_addr: InternetAddr,
-    pub resolved_upstream_addr: SocketAddr,
+    pub upstream_sock_addr: SocketAddr,
     pub downstream_addr: SocketAddr,
 }
 
@@ -43,10 +43,10 @@ impl Display for StreamMetrics {
         let uplink_speed = self.bytes_uplink as f64 / duration;
         let downlink_speed = self.bytes_downlink as f64 / duration;
         let upstream_addr = self.upstream_addr.to_string();
-        let resolved_upstream_addr = self.resolved_upstream_addr.to_string();
-        let upstream_addrs = match upstream_addr == resolved_upstream_addr {
+        let upstream_sock_addr = self.upstream_sock_addr.to_string();
+        let upstream_addrs = match upstream_addr == upstream_sock_addr {
             true => upstream_addr,
-            false => format!("{}, {}", upstream_addr, resolved_upstream_addr),
+            false => format!("{}, {}", upstream_addr, upstream_sock_addr),
         };
         write!(
             f,

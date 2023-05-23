@@ -238,10 +238,10 @@ impl HttpTunnel {
             })?;
         let mut upstream = upstream.into_inner();
 
-        let resolved_upstream_addr = upstream
+        let upstream_sock_addr = upstream
             .peer_addr()
             .inspect_err(|e| error!(?e, "Failed to get upstream peer address"))?;
-        let downstream_addr = any_addr(&resolved_upstream_addr.ip());
+        let downstream_addr = any_addr(&upstream_sock_addr.ip());
 
         // Proxying data
         let res = match &self.payload_crypto {
@@ -264,7 +264,7 @@ impl HttpTunnel {
             bytes_uplink: from_client,
             bytes_downlink: from_server,
             upstream_addr: addr,
-            resolved_upstream_addr,
+            upstream_sock_addr,
             downstream_addr,
         };
         info!(%metrics, "Tunnel closed normally");

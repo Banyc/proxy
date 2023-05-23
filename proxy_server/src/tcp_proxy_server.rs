@@ -264,7 +264,7 @@ impl TcpProxyServer {
             bytes_uplink,
             bytes_downlink,
             upstream_addr,
-            resolved_upstream_addr: upstream_sock_addr,
+            upstream_sock_addr,
             downstream_addr,
         };
         info!(%metrics, "Connection closed normally");
