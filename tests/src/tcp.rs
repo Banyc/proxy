@@ -5,6 +5,7 @@ mod tests {
     use common::{
         error::{ProxyProtocolError, ResponseErrorKind},
         header::ProxyConfig,
+        quic::QuicPersistentConnections,
     };
     use proxy_client::tcp_proxy_client::TcpProxyStream;
     use proxy_server::stream_proxy_server::StreamProxyServer;
@@ -17,7 +18,11 @@ mod tests {
 
     async fn spawn_proxy(addr: &str) -> ProxyConfig {
         let crypto = create_random_crypto();
-        let proxy = StreamProxyServer::new(crypto.clone(), None);
+        let proxy = StreamProxyServer::new(
+            crypto.clone(),
+            None,
+            QuicPersistentConnections::new(Default::default()),
+        );
         let server = proxy.build(addr).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         tokio::spawn(async move {

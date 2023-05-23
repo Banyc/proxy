@@ -1,13 +1,14 @@
-use std::{collections::HashMap, io, net::SocketAddr, ops::DerefMut, pin::Pin};
+use std::{io, net::SocketAddr, ops::DerefMut, pin::Pin};
 
 use async_trait::async_trait;
 use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
+    quic::QuicPersistentConnections,
     stream::{tcp::TcpServer, IoAddr, IoStream, StreamMetrics, StreamServerHook, XorStream},
 };
-use quinn::{Connection, RecvStream, SendStream};
+use quinn::{RecvStream, SendStream};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream, ToSocketAddrs},
@@ -18,11 +19,11 @@ pub mod tcp_proxy_server;
 
 pub struct StreamProxyAcceptor {
     crypto: XorCrypto,
-    quic: HashMap<InternetAddr, (Connection, SocketAddr)>,
+    quic: QuicPersistentConnections,
 }
 
 impl StreamProxyAcceptor {
-    pub fn new(crypto: XorCrypto, quic: HashMap<InternetAddr, (Connection, SocketAddr)>) -> Self {
+    pub fn new(crypto: XorCrypto, quic: QuicPersistentConnections) -> Self {
         Self { crypto, quic }
     }
 
@@ -48,12 +49,9 @@ impl StreamProxyAcceptor {
             })?;
 
         // Connect to upstream
-        let quic = self.quic.get(&header.upstream);
+        let quic = self.quic.open_stream(&header.upstream).await;
         let (upstream, sock_addr) = match quic {
-            Some((conn, sock_addr)) => {
-                let (send, recv) = conn.open_bi().await.unwrap();
-                (AcceptedStream::Quic { send, recv }, *sock_addr)
-            }
+            Some((send, recv, sock_addr)) => (AcceptedStream::Quic { send, recv }, sock_addr),
             None => {
                 // Prevent connections to localhost
                 let upstream_sock_addr = header.upstream.to_socket_addr().await.inspect_err(
@@ -193,9 +191,13 @@ pub struct StreamProxyServer {
 }
 
 impl StreamProxyServer {
-    pub fn new(header_crypto: XorCrypto, payload_crypto: Option<XorCrypto>) -> Self {
+    pub fn new(
+        header_crypto: XorCrypto,
+        payload_crypto: Option<XorCrypto>,
+        quic: QuicPersistentConnections,
+    ) -> Self {
         Self {
-            acceptor: StreamProxyAcceptor::new(header_crypto, HashMap::new()),
+            acceptor: StreamProxyAcceptor::new(header_crypto, quic),
             payload_crypto,
         }
     }
@@ -303,7 +305,11 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy = StreamProxyServer::new(crypto.clone(), None);
+            let proxy = StreamProxyServer::new(
+                crypto.clone(),
+                None,
+                QuicPersistentConnections::new(Default::default()),
+            );
             let server = proxy.build("localhost:0").await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
             tokio::spawn(async move {
