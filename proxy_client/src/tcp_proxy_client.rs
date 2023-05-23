@@ -7,6 +7,7 @@ use common::{
         convert_proxy_configs_to_header_crypto_pairs, read_header_async, write_header_async,
         InternetAddr, ProxyConfig, ResponseHeader,
     },
+    heartbeat,
     persistent_connections::PersistentConnections,
     stream::CreatedStream,
 };
@@ -37,7 +38,16 @@ impl TcpProxyStream {
 
         // Write headers to stream
         for (header, crypto) in pairs {
-            trace!(?header, "Writing header to stream");
+            trace!(?header, "Writing headers to stream");
+            heartbeat::send_upgrade(&mut stream)
+                .await
+                .inspect_err(|e| {
+                    error!(
+                        ?e,
+                        ?proxy_addr,
+                        "Failed to write heartbeat upgrade to stream"
+                    )
+                })?;
             let mut crypto_cursor = XorCryptoCursor::new(crypto);
             write_header_async(&mut stream, &header, &mut crypto_cursor)
                 .await

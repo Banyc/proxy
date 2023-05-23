@@ -5,6 +5,7 @@ use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
+    heartbeat,
     persistent_connections::PersistentConnections,
     stream::{
         tcp::TcpServer, CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook, XorStream,
@@ -33,6 +34,16 @@ impl StreamProxyAcceptor {
     where
         S: IoStream + IoAddr,
     {
+        // Wait for heartbeat upgrade
+        heartbeat::wait_upgrade(downstream).await.inspect_err(|e| {
+            let downstream_addr = downstream.peer_addr().ok();
+            error!(
+                ?e,
+                ?downstream_addr,
+                "Failed to read heartbeat header from downstream"
+            )
+        })?;
+
         // Decode header
         let mut read_crypto_cursor = XorCryptoCursor::new(&self.crypto);
         let header: RequestHeader = read_header_async(downstream, &mut read_crypto_cursor)
@@ -284,6 +295,7 @@ mod tests {
 
         // Establish connection to origin server
         {
+            heartbeat::send_upgrade(&mut stream).await.unwrap();
             // Encode header
             let header = RequestHeader {
                 upstream: origin_addr.into(),
