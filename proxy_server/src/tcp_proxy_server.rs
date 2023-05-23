@@ -1,4 +1,4 @@
-use std::io;
+use std::{collections::HashMap, io, net::SocketAddr, ops::DerefMut, pin::Pin};
 
 use async_trait::async_trait;
 use common::{
@@ -7,24 +7,29 @@ use common::{
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
     stream::{tcp::TcpServer, IoAddr, IoStream, StreamMetrics, StreamServerHook, XorStream},
 };
+use quinn::{Connection, RecvStream, SendStream};
 use serde::Deserialize;
-use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::{TcpListener, TcpStream, ToSocketAddrs},
+};
 use tracing::{error, info, instrument};
 
 pub struct TcpProxyAcceptor {
     crypto: XorCrypto,
+    quic: HashMap<InternetAddr, (Connection, SocketAddr)>,
 }
 
 impl TcpProxyAcceptor {
-    pub fn new(crypto: XorCrypto) -> Self {
-        Self { crypto }
+    pub fn new(crypto: XorCrypto, quic: HashMap<InternetAddr, (Connection, SocketAddr)>) -> Self {
+        Self { crypto, quic }
     }
 
     #[instrument(skip(self, downstream))]
     async fn establish<S>(
         &self,
         downstream: &mut S,
-    ) -> Result<(TcpStream, InternetAddr), ProxyProtocolError>
+    ) -> Result<(AcceptedStream, InternetAddr, SocketAddr), ProxyProtocolError>
     where
         S: IoStream + IoAddr,
     {
@@ -41,20 +46,29 @@ impl TcpProxyAcceptor {
                 )
             })?;
 
-        // Prevent connections to localhost
-        let upstream =
-            header.upstream.to_socket_addr().await.inspect_err(
-                |e| error!(?e, ?header.upstream, "Failed to resolve upstream address"),
-            )?;
-        if upstream.ip().is_loopback() {
-            error!(?header.upstream, "Refusing to connect to loopback address");
-            return Err(ProxyProtocolError::Loopback);
-        }
-
         // Connect to upstream
-        let upstream = TcpStream::connect(upstream)
-            .await
-            .inspect_err(|e| error!(?e, ?header.upstream, "Failed to connect to upstream"))?;
+        let quic = self.quic.get(&header.upstream);
+        let (upstream, sock_addr) = match quic {
+            Some((conn, sock_addr)) => {
+                let (send, recv) = conn.open_bi().await.unwrap();
+                (AcceptedStream::Quic { send, recv }, *sock_addr)
+            }
+            None => {
+                // Prevent connections to localhost
+                let upstream_sock_addr = header.upstream.to_socket_addr().await.inspect_err(
+                    |e| error!(?e, ?header.upstream, "Failed to resolve upstream address"),
+                )?;
+                if upstream_sock_addr.ip().is_loopback() {
+                    error!(?header.upstream, "Refusing to connect to loopback address");
+                    return Err(ProxyProtocolError::Loopback);
+                }
+
+                let tcp_stream = TcpStream::connect(upstream_sock_addr).await.inspect_err(
+                    |e| error!(?e, ?header.upstream, "Failed to connect to upstream"),
+                )?;
+                (AcceptedStream::Tcp(tcp_stream), upstream_sock_addr)
+            }
+        };
 
         // Write Ok response
         let resp = ResponseHeader { result: Ok(()) };
@@ -66,7 +80,7 @@ impl TcpProxyAcceptor {
             )?;
 
         // Return upstream
-        Ok((upstream, header.upstream))
+        Ok((upstream, header.upstream, sock_addr))
     }
 
     #[instrument(skip(self, stream))]
@@ -120,6 +134,58 @@ impl TcpProxyAcceptor {
     }
 }
 
+#[derive(Debug)]
+pub enum AcceptedStream {
+    Quic { recv: RecvStream, send: SendStream },
+    Tcp(TcpStream),
+}
+
+impl AsyncWrite for AcceptedStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, io::Error>> {
+        match self.deref_mut() {
+            AcceptedStream::Quic { send, .. } => Pin::new(send).poll_write(cx, buf),
+            AcceptedStream::Tcp(x) => Pin::new(x).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), io::Error>> {
+        match self.deref_mut() {
+            AcceptedStream::Quic { send, .. } => Pin::new(send).poll_flush(cx),
+            AcceptedStream::Tcp(x) => Pin::new(x).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), io::Error>> {
+        match self.deref_mut() {
+            AcceptedStream::Quic { send, .. } => Pin::new(send).poll_shutdown(cx),
+            AcceptedStream::Tcp(x) => Pin::new(x).poll_shutdown(cx),
+        }
+    }
+}
+
+impl AsyncRead for AcceptedStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        match self.deref_mut() {
+            AcceptedStream::Quic { recv, .. } => Pin::new(recv).poll_read(cx, buf),
+            AcceptedStream::Tcp(x) => Pin::new(x).poll_read(cx, buf),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct TcpProxyServerBuilder {
     pub listen_addr: String,
@@ -145,7 +211,7 @@ pub struct TcpProxyServer {
 impl TcpProxyServer {
     pub fn new(header_crypto: XorCrypto, payload_crypto: Option<XorCrypto>) -> Self {
         Self {
-            acceptor: TcpProxyAcceptor::new(header_crypto),
+            acceptor: TcpProxyAcceptor::new(header_crypto, HashMap::new()),
             payload_crypto,
         }
     }
@@ -170,17 +236,14 @@ impl TcpProxyServer {
             .inspect_err(|e| error!(?e, "Failed to get downstream address"))?;
 
         // Establish proxy chain
-        let (mut upstream, upstream_addr) = match self.acceptor.establish(&mut downstream).await {
-            Ok(upstream) => upstream,
-            Err(e) => {
-                self.handle_proxy_error(&mut downstream, e).await;
-                return Ok(());
-            }
-        };
-
-        let resolved_upstream_addr = upstream
-            .peer_addr()
-            .inspect_err(|e| error!(?e, ?upstream, "Failed to get upstream address"))?;
+        let (mut upstream, upstream_addr, upstream_sock_addr) =
+            match self.acceptor.establish(&mut downstream).await {
+                Ok(upstream) => upstream,
+                Err(e) => {
+                    self.handle_proxy_error(&mut downstream, e).await;
+                    return Ok(());
+                }
+            };
 
         // Copy data
         let res = match &self.payload_crypto {
@@ -201,7 +264,7 @@ impl TcpProxyServer {
             bytes_uplink,
             bytes_downlink,
             upstream_addr,
-            resolved_upstream_addr,
+            resolved_upstream_addr: upstream_sock_addr,
             downstream_addr,
         };
         info!(%metrics, "Connection closed normally");

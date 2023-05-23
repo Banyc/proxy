@@ -15,3 +15,4 @@ tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 common = { path = "../common" }
 get_config = "0.1.1"
 async-trait = "0.1.68"
+quinn = "0.10.1"
