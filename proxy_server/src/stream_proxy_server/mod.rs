@@ -8,19 +8,20 @@ use common::{
     stream::{tcp::TcpServer, IoAddr, IoStream, StreamMetrics, StreamServerHook, XorStream},
 };
 use quinn::{Connection, RecvStream, SendStream};
-use serde::Deserialize;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream, ToSocketAddrs},
 };
 use tracing::{error, info, instrument};
 
-pub struct TcpProxyAcceptor {
+pub mod tcp_proxy_server;
+
+pub struct StreamProxyAcceptor {
     crypto: XorCrypto,
     quic: HashMap<InternetAddr, (Connection, SocketAddr)>,
 }
 
-impl TcpProxyAcceptor {
+impl StreamProxyAcceptor {
     pub fn new(crypto: XorCrypto, quic: HashMap<InternetAddr, (Connection, SocketAddr)>) -> Self {
         Self { crypto, quic }
     }
@@ -186,32 +187,15 @@ impl AsyncRead for AcceptedStream {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
-pub struct TcpProxyServerBuilder {
-    pub listen_addr: String,
-    pub header_xor_key: Vec<u8>,
-    pub payload_xor_key: Option<Vec<u8>>,
-}
-
-impl TcpProxyServerBuilder {
-    pub async fn build(self) -> io::Result<TcpServer<TcpProxyServer>> {
-        let header_crypto = XorCrypto::new(self.header_xor_key);
-        let payload_crypto = self.payload_xor_key.map(XorCrypto::new);
-        let tcp_proxy = TcpProxyServer::new(header_crypto, payload_crypto);
-        let server = tcp_proxy.build(self.listen_addr).await?;
-        Ok(server)
-    }
-}
-
-pub struct TcpProxyServer {
-    acceptor: TcpProxyAcceptor,
+pub struct StreamProxyServer {
+    acceptor: StreamProxyAcceptor,
     payload_crypto: Option<XorCrypto>,
 }
 
-impl TcpProxyServer {
+impl StreamProxyServer {
     pub fn new(header_crypto: XorCrypto, payload_crypto: Option<XorCrypto>) -> Self {
         Self {
-            acceptor: TcpProxyAcceptor::new(header_crypto, HashMap::new()),
+            acceptor: StreamProxyAcceptor::new(header_crypto, HashMap::new()),
             payload_crypto,
         }
     }
@@ -293,7 +277,7 @@ impl TcpProxyServer {
 }
 
 #[async_trait]
-impl StreamServerHook for TcpProxyServer {
+impl StreamServerHook for StreamProxyServer {
     #[instrument(skip(self, stream))]
     async fn handle_stream<S>(&self, stream: S)
     where
@@ -319,7 +303,7 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy = TcpProxyServer::new(crypto.clone(), None);
+            let proxy = StreamProxyServer::new(crypto.clone(), None);
             let server = proxy.build("localhost:0").await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
             tokio::spawn(async move {

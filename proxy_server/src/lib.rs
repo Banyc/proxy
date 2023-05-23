@@ -3,10 +3,10 @@
 use std::io;
 
 use serde::Deserialize;
-use tcp_proxy_server::TcpProxyServerBuilder;
+use stream_proxy_server::tcp_proxy_server::TcpProxyServerBuilder;
 use udp_proxy_server::UdpProxyServerBuilder;
 
-pub mod tcp_proxy_server;
+pub mod stream_proxy_server;
 pub mod udp_proxy_server;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
