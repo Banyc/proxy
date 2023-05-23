@@ -9,6 +9,7 @@ use crate::{
     header::InternetAddr,
 };
 
+pub mod quic;
 pub mod tcp;
 
 pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
