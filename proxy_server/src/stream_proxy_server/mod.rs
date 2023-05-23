@@ -1,4 +1,4 @@
-use std::{io, net::SocketAddr, ops::DerefMut, pin::Pin};
+use std::{io, net::SocketAddr};
 
 use async_trait::async_trait;
 use common::{
@@ -6,13 +6,11 @@ use common::{
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
     quic::QuicPersistentConnections,
-    stream::{tcp::TcpServer, IoAddr, IoStream, StreamMetrics, StreamServerHook, XorStream},
+    stream::{
+        tcp::TcpServer, CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook, XorStream,
+    },
 };
-use quinn::{RecvStream, SendStream};
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::{TcpListener, TcpStream, ToSocketAddrs},
-};
+use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tracing::{error, info, instrument};
 
 pub mod tcp_proxy_server;
@@ -31,7 +29,7 @@ impl StreamProxyAcceptor {
     async fn establish<S>(
         &self,
         downstream: &mut S,
-    ) -> Result<(AcceptedStream, InternetAddr, SocketAddr), ProxyProtocolError>
+    ) -> Result<(CreatedStream, InternetAddr, SocketAddr), ProxyProtocolError>
     where
         S: IoStream + IoAddr,
     {
@@ -51,7 +49,7 @@ impl StreamProxyAcceptor {
         // Connect to upstream
         let quic = self.quic.open_stream(&header.upstream).await;
         let (upstream, sock_addr) = match quic {
-            Some((send, recv, sock_addr)) => (AcceptedStream::Quic { send, recv }, sock_addr),
+            Some((send, recv, sock_addr)) => (CreatedStream::Quic { send, recv }, sock_addr),
             None => {
                 // Prevent connections to localhost
                 let upstream_sock_addr = header.upstream.to_socket_addr().await.inspect_err(
@@ -65,7 +63,7 @@ impl StreamProxyAcceptor {
                 let tcp_stream = TcpStream::connect(upstream_sock_addr).await.inspect_err(
                     |e| error!(?e, ?header.upstream, "Failed to connect to upstream"),
                 )?;
-                (AcceptedStream::Tcp(tcp_stream), upstream_sock_addr)
+                (CreatedStream::Tcp(tcp_stream), upstream_sock_addr)
             }
         };
 
@@ -130,58 +128,6 @@ impl StreamProxyAcceptor {
             })?;
 
         Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub enum AcceptedStream {
-    Quic { recv: RecvStream, send: SendStream },
-    Tcp(TcpStream),
-}
-
-impl AsyncWrite for AcceptedStream {
-    fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<Result<usize, io::Error>> {
-        match self.deref_mut() {
-            AcceptedStream::Quic { send, .. } => Pin::new(send).poll_write(cx, buf),
-            AcceptedStream::Tcp(x) => Pin::new(x).poll_write(cx, buf),
-        }
-    }
-
-    fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
-        match self.deref_mut() {
-            AcceptedStream::Quic { send, .. } => Pin::new(send).poll_flush(cx),
-            AcceptedStream::Tcp(x) => Pin::new(x).poll_flush(cx),
-        }
-    }
-
-    fn poll_shutdown(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
-        match self.deref_mut() {
-            AcceptedStream::Quic { send, .. } => Pin::new(send).poll_shutdown(cx),
-            AcceptedStream::Tcp(x) => Pin::new(x).poll_shutdown(cx),
-        }
-    }
-}
-
-impl AsyncRead for AcceptedStream {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<io::Result<()>> {
-        match self.deref_mut() {
-            AcceptedStream::Quic { recv, .. } => Pin::new(recv).poll_read(cx, buf),
-            AcceptedStream::Tcp(x) => Pin::new(x).poll_read(cx, buf),
-        }
     }
 }
 

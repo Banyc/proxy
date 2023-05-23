@@ -4,6 +4,7 @@ use quinn::{Connection, RecvStream, SendStream};
 
 use crate::header::InternetAddr;
 
+#[derive(Debug, Clone)]
 pub struct QuicPersistentConnections {
     map: HashMap<InternetAddr, (Connection, SocketAddr)>,
 }

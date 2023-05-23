@@ -10,7 +10,7 @@ mod tests {
     use proxy_client::tcp_proxy_client::TcpProxyStream;
     use proxy_server::stream_proxy_server::StreamProxyServer;
     use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
+        io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
 
@@ -56,7 +56,10 @@ mod tests {
         greet_addr
     }
 
-    async fn read_response(stream: &mut TcpProxyStream, resp_msg: &[u8]) -> io::Result<()> {
+    async fn read_response<S>(stream: &mut S, resp_msg: &[u8]) -> io::Result<()>
+    where
+        S: AsyncRead + Unpin,
+    {
         let mut buf = [0; 1024];
         let msg_buf = &mut buf[..resp_msg.len()];
         stream.read_exact(msg_buf).await.unwrap();
@@ -79,9 +82,10 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut stream = TcpProxyStream::establish(
+        let (mut stream, _) = TcpProxyStream::establish(
             &[proxy_1_config, proxy_2_config, proxy_3_config],
             &greet_addr.into(),
+            &QuicPersistentConnections::new(Default::default()),
         )
         .await
         .unwrap();
@@ -115,9 +119,13 @@ mod tests {
             let proxy_configs = proxy_configs.clone();
             handles.spawn(async move {
                 // Connect to proxy server
-                let mut stream = TcpProxyStream::establish(&proxy_configs, &greet_addr.into())
-                    .await
-                    .unwrap();
+                let (mut stream, _) = TcpProxyStream::establish(
+                    &proxy_configs,
+                    &greet_addr.into(),
+                    &QuicPersistentConnections::new(Default::default()),
+                )
+                .await
+                .unwrap();
 
                 // Send message
                 stream.write_all(req_msg).await.unwrap();
@@ -155,9 +163,13 @@ mod tests {
             handles.spawn(async move {
                 for _ in 0..10 {
                     // Connect to proxy server
-                    let mut stream = TcpProxyStream::establish(&proxy_configs, &greet_addr.into())
-                        .await
-                        .unwrap();
+                    let (mut stream, _) = TcpProxyStream::establish(
+                        &proxy_configs,
+                        &greet_addr.into(),
+                        &QuicPersistentConnections::new(Default::default()),
+                    )
+                    .await
+                    .unwrap();
 
                     // Send message
                     stream.write_all(req_msg).await.unwrap();
@@ -191,6 +203,7 @@ mod tests {
         let err = TcpProxyStream::establish(
             &[proxy_1_config.clone(), proxy_2_config, proxy_3_config],
             &greet_addr.into(),
+            &QuicPersistentConnections::new(Default::default()),
         )
         .await
         .unwrap_err();
@@ -218,9 +231,13 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut stream = TcpProxyStream::establish(&[], &greet_addr.into())
-            .await
-            .unwrap();
+        let (mut stream, _) = TcpProxyStream::establish(
+            &[],
+            &greet_addr.into(),
+            &QuicPersistentConnections::new(Default::default()),
+        )
+        .await
+        .unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();

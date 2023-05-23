@@ -1,4 +1,4 @@
-use std::ops::{Deref, DerefMut};
+use std::{io, net::SocketAddr};
 
 use common::{
     crypto::XorCryptoCursor,
@@ -7,39 +7,30 @@ use common::{
         convert_proxy_configs_to_header_crypto_pairs, read_header_async, write_header_async,
         InternetAddr, ProxyConfig, ResponseHeader,
     },
+    quic::QuicPersistentConnections,
+    stream::CreatedStream,
 };
 use tokio::net::TcpStream;
 use tracing::{error, instrument, trace};
 
 #[derive(Debug)]
-pub struct TcpProxyStream(TcpStream);
+pub struct TcpProxyStream;
 
 impl TcpProxyStream {
     #[instrument(skip(proxy_configs))]
     pub async fn establish(
         proxy_configs: &[ProxyConfig],
         destination: &InternetAddr,
-    ) -> Result<TcpProxyStream, ProxyProtocolError> {
+        quic: &QuicPersistentConnections,
+    ) -> Result<(CreatedStream, SocketAddr), ProxyProtocolError> {
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
-            let addr = destination.to_socket_addr().await.inspect_err(|e| {
-                error!(?e, ?destination, "Failed to resolve destination address")
-            })?;
-            let stream = TcpStream::connect(addr).await.inspect_err(|e| {
-                error!(?e, ?destination, "Failed to connect to upstream address")
-            })?;
-            return Ok(TcpProxyStream(stream));
+            return Ok(connect(destination, quic).await?);
         }
 
         // Connect to the first proxy
         let proxy_addr = &proxy_configs[0].address;
-        let addr = proxy_addr
-            .to_socket_addr()
-            .await
-            .inspect_err(|e| error!(?e, ?proxy_addr, "Failed to resolve proxy address"))?;
-        let mut stream = TcpStream::connect(addr)
-            .await
-            .inspect_err(|e| error!(?e, ?proxy_addr, "Failed to connect to upstream address"))?;
+        let (mut stream, sock_addr) = connect(proxy_addr, quic).await?;
 
         // Convert addresses to headers
         let pairs = convert_proxy_configs_to_header_crypto_pairs(proxy_configs, destination);
@@ -74,26 +65,27 @@ impl TcpProxyStream {
         }
 
         // Return stream
-        Ok(TcpProxyStream(stream))
+        Ok((stream, sock_addr))
     }
 }
 
-impl Deref for TcpProxyStream {
-    type Target = TcpStream;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for TcpProxyStream {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl TcpProxyStream {
-    pub fn into_inner(self) -> TcpStream {
-        self.0
-    }
+async fn connect(
+    addr: &InternetAddr,
+    quic: &QuicPersistentConnections,
+) -> io::Result<(CreatedStream, SocketAddr)> {
+    let quic = quic.open_stream(addr).await;
+    let ret = match quic {
+        Some((send, recv, sock_addr)) => (CreatedStream::Quic { recv, send }, sock_addr),
+        None => {
+            let sock_addr = addr
+                .to_socket_addr()
+                .await
+                .inspect_err(|e| error!(?e, ?addr, "Failed to resolve proxy address"))?;
+            let stream = TcpStream::connect(sock_addr)
+                .await
+                .inspect_err(|e| error!(?e, ?addr, "Failed to connect to upstream address"))?;
+            (CreatedStream::Tcp(stream), sock_addr)
+        }
+    };
+    Ok(ret)
 }

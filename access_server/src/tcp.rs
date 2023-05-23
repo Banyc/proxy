@@ -5,6 +5,7 @@ use common::{
     crypto::XorCrypto,
     error::ProxyProtocolError,
     header::{InternetAddr, ProxyConfig, ProxyConfigBuilder},
+    quic::QuicPersistentConnections,
     stream::{tcp::TcpServer, IoStream, StreamServerHook, XorStream},
 };
 use proxy_client::tcp_proxy_client::TcpProxyStream;
@@ -62,8 +63,12 @@ impl TcpProxyAccess {
     where
         S: IoStream,
     {
-        let upstream = TcpProxyStream::establish(&self.proxy_configs, &self.destination).await?;
-        let mut upstream = upstream.into_inner();
+        let (mut upstream, _) = TcpProxyStream::establish(
+            &self.proxy_configs,
+            &self.destination,
+            &QuicPersistentConnections::new(Default::default()),
+        )
+        .await?;
 
         let res = match &self.payload_crypto {
             Some(crypto) => {
