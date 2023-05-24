@@ -7,11 +7,12 @@ use common::{
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
     heartbeat,
     stream::{
-        tcp::TcpServer, CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook, XorStream,
+        tcp::{connect, TcpServer},
+        CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook, XorStream,
     },
     tcp_pool::TcpPool,
 };
-use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tokio::net::{TcpListener, ToSocketAddrs};
 use tracing::{error, info, instrument};
 
 pub mod tcp_proxy_server;
@@ -58,25 +59,7 @@ impl StreamProxyAcceptor {
             })?;
 
         // Connect to upstream
-        let quic = self.tcp_pool.open_stream(&header.upstream).await;
-        let (upstream, sock_addr) = match quic {
-            Some((stream, sock_addr)) => (stream, sock_addr),
-            None => {
-                // Prevent connections to localhost
-                let upstream_sock_addr = header.upstream.to_socket_addr().await.inspect_err(
-                    |e| error!(?e, ?header.upstream, "Failed to resolve upstream address"),
-                )?;
-                if upstream_sock_addr.ip().is_loopback() {
-                    error!(?header.upstream, "Refusing to connect to loopback address");
-                    return Err(ProxyProtocolError::Loopback);
-                }
-
-                let tcp_stream = TcpStream::connect(upstream_sock_addr).await.inspect_err(
-                    |e| error!(?e, ?header.upstream, "Failed to connect to upstream"),
-                )?;
-                (CreatedStream::Tcp(tcp_stream), upstream_sock_addr)
-            }
-        };
+        let (upstream, sock_addr) = connect(&header.upstream, &self.tcp_pool, false).await?;
 
         // Write Ok response
         let resp = ResponseHeader { result: Ok(()) };
@@ -253,7 +236,7 @@ mod tests {
     use super::*;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
+        net::{TcpListener, TcpStream},
     };
 
     #[tokio::test]

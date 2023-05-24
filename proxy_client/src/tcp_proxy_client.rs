@@ -1,4 +1,4 @@
-use std::{io, net::SocketAddr};
+use std::net::SocketAddr;
 
 use common::{
     crypto::XorCryptoCursor,
@@ -8,10 +8,9 @@ use common::{
         InternetAddr, ProxyConfig, ResponseHeader,
     },
     heartbeat,
-    stream::CreatedStream,
+    stream::{tcp::connect, CreatedStream},
     tcp_pool::TcpPool,
 };
-use tokio::net::TcpStream;
 use tracing::{error, instrument, trace};
 
 #[derive(Debug)]
@@ -26,12 +25,12 @@ impl TcpProxyStream {
     ) -> Result<(CreatedStream, SocketAddr), ProxyProtocolError> {
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
-            return Ok(connect(destination, tcp_pool).await?);
+            return connect(destination, tcp_pool, true).await;
         }
 
         // Connect to the first proxy
         let proxy_addr = &proxy_configs[0].address;
-        let (mut stream, sock_addr) = connect(proxy_addr, tcp_pool).await?;
+        let (mut stream, sock_addr) = connect(proxy_addr, tcp_pool, true).await?;
 
         // Convert addresses to headers
         let pairs = convert_proxy_configs_to_header_crypto_pairs(proxy_configs, destination);
@@ -77,22 +76,4 @@ impl TcpProxyStream {
         // Return stream
         Ok((stream, sock_addr))
     }
-}
-
-async fn connect(addr: &InternetAddr, quic: &TcpPool) -> io::Result<(CreatedStream, SocketAddr)> {
-    let quic = quic.open_stream(addr).await;
-    let ret = match quic {
-        Some((stream, sock_addr)) => (stream, sock_addr),
-        None => {
-            let sock_addr = addr
-                .to_socket_addr()
-                .await
-                .inspect_err(|e| error!(?e, ?addr, "Failed to resolve proxy address"))?;
-            let stream = TcpStream::connect(sock_addr)
-                .await
-                .inspect_err(|e| error!(?e, ?addr, "Failed to connect to upstream address"))?;
-            (CreatedStream::Tcp(stream), sock_addr)
-        }
-    };
-    Ok(ret)
 }

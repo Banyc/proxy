@@ -3,7 +3,9 @@ use std::{io, net::SocketAddr, sync::Arc};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info, instrument, trace};
 
-use super::{IoAddr, IoStream, StreamServerHook};
+use crate::{error::ProxyProtocolError, header::InternetAddr, tcp_pool::TcpPool};
+
+use super::{CreatedStream, IoAddr, IoStream, StreamServerHook};
 
 #[derive(Debug)]
 pub struct TcpServer<H> {
@@ -62,4 +64,31 @@ impl IoAddr for TcpStream {
     fn local_addr(&self) -> io::Result<SocketAddr> {
         self.local_addr()
     }
+}
+
+pub async fn connect(
+    addr: &InternetAddr,
+    tcp_pool: &TcpPool,
+    allow_loopback: bool,
+) -> Result<(CreatedStream, SocketAddr), ProxyProtocolError> {
+    let stream = tcp_pool.open_stream(addr).await;
+    let ret = match stream {
+        Some((stream, sock_addr)) => (stream, sock_addr),
+        None => {
+            let sock_addr = addr
+                .to_socket_addr()
+                .await
+                .inspect_err(|e| error!(?e, ?addr, "Failed to resolve address"))?;
+            if !allow_loopback && sock_addr.ip().is_loopback() {
+                // Prevent connections to localhost
+                error!(?addr, "Refusing to connect to loopback address");
+                return Err(ProxyProtocolError::Loopback);
+            }
+            let stream = TcpStream::connect(sock_addr)
+                .await
+                .inspect_err(|e| error!(?e, ?addr, "Failed to connect to address"))?;
+            (CreatedStream::Tcp(stream), sock_addr)
+        }
+    };
+    Ok(ret)
 }
