@@ -6,10 +6,10 @@ use common::{
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
     heartbeat,
-    persistent_connections::PersistentConnections,
     stream::{
         tcp::TcpServer, CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook, XorStream,
     },
+    tcp_pool::TcpPool,
 };
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tracing::{error, info, instrument};
@@ -18,11 +18,11 @@ pub mod tcp_proxy_server;
 
 pub struct StreamProxyAcceptor {
     crypto: XorCrypto,
-    quic: PersistentConnections,
+    quic: TcpPool,
 }
 
 impl StreamProxyAcceptor {
-    pub fn new(crypto: XorCrypto, quic: PersistentConnections) -> Self {
+    pub fn new(crypto: XorCrypto, quic: TcpPool) -> Self {
         Self { crypto, quic }
     }
 
@@ -148,11 +148,7 @@ pub struct StreamProxyServer {
 }
 
 impl StreamProxyServer {
-    pub fn new(
-        header_crypto: XorCrypto,
-        payload_crypto: Option<XorCrypto>,
-        quic: PersistentConnections,
-    ) -> Self {
+    pub fn new(header_crypto: XorCrypto, payload_crypto: Option<XorCrypto>, quic: TcpPool) -> Self {
         Self {
             acceptor: StreamProxyAcceptor::new(header_crypto, quic),
             payload_crypto,
@@ -262,7 +258,7 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy = StreamProxyServer::new(crypto.clone(), None, PersistentConnections::new());
+            let proxy = StreamProxyServer::new(crypto.clone(), None, TcpPool::new());
             let server = proxy.build("localhost:0").await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
             tokio::spawn(async move {

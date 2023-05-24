@@ -8,8 +8,8 @@ use common::{
         InternetAddr, ProxyConfig, ResponseHeader,
     },
     heartbeat,
-    persistent_connections::PersistentConnections,
     stream::CreatedStream,
+    tcp_pool::TcpPool,
 };
 use tokio::net::TcpStream;
 use tracing::{error, instrument, trace};
@@ -22,7 +22,7 @@ impl TcpProxyStream {
     pub async fn establish(
         proxy_configs: &[ProxyConfig],
         destination: &InternetAddr,
-        quic: &PersistentConnections,
+        quic: &TcpPool,
     ) -> Result<(CreatedStream, SocketAddr), ProxyProtocolError> {
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
@@ -79,10 +79,7 @@ impl TcpProxyStream {
     }
 }
 
-async fn connect(
-    addr: &InternetAddr,
-    quic: &PersistentConnections,
-) -> io::Result<(CreatedStream, SocketAddr)> {
+async fn connect(addr: &InternetAddr, quic: &TcpPool) -> io::Result<(CreatedStream, SocketAddr)> {
     let quic = quic.open_stream(addr).await;
     let ret = match quic {
         Some((stream, sock_addr)) => (stream, sock_addr),
