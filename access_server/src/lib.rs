@@ -49,3 +49,10 @@ impl AccessServerSpawner {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamType {
+    Tcp,
+    Kcp,
+}
