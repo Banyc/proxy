@@ -18,7 +18,7 @@ use tracing::{error, instrument, trace};
 pub struct TcpProxyStream;
 
 impl TcpProxyStream {
-    #[instrument(skip(proxy_configs))]
+    #[instrument(skip(proxy_configs, tcp_pool))]
     pub async fn establish(
         proxy_configs: &[ProxyConfig],
         destination: &InternetAddr,
