@@ -164,6 +164,11 @@ impl Pool {
         }
     }
 
+    pub fn set_connector(&self, connector: StreamConnector) {
+        let mut connector_ = self.connector.write().unwrap();
+        *connector_ = Arc::new(connector);
+    }
+
     pub fn add_many_queues<I>(&self, addrs: I)
     where
         I: Iterator<Item = InternetAddr>,

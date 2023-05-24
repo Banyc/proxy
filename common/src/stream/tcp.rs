@@ -65,7 +65,7 @@ impl IoAddr for TcpStream {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct TcpConnector;
 
 #[async_trait]

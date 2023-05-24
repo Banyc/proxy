@@ -3,7 +3,7 @@
 use std::io;
 
 use serde::Deserialize;
-use stream_proxy_server::tcp_proxy_server::TcpProxyServerBuilder;
+use stream_proxy_server::{kcp::KcpProxyServerBuilder, tcp_proxy_server::TcpProxyServerBuilder};
 use udp_proxy_server::UdpProxyServerBuilder;
 
 pub mod stream_proxy_server;
@@ -13,6 +13,7 @@ pub mod udp_proxy_server;
 pub struct ProxyServerSpawner {
     pub tcp_servers: Option<Vec<TcpProxyServerBuilder>>,
     pub udp_servers: Option<Vec<UdpProxyServerBuilder>>,
+    pub kcp_servers: Option<Vec<KcpProxyServerBuilder>>,
 }
 
 impl ProxyServerSpawner {
@@ -30,6 +31,15 @@ impl ProxyServerSpawner {
             for udp_server in udp_servers {
                 join_set.spawn(async move {
                     let server = udp_server.build().await?;
+                    server.serve().await?;
+                    Ok(())
+                });
+            }
+        }
+        if let Some(kcp_servers) = self.kcp_servers {
+            for kcp_server in kcp_servers {
+                join_set.spawn(async move {
+                    let server = kcp_server.build().await?;
                     server.serve().await?;
                     Ok(())
                 });

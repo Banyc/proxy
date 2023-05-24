@@ -14,6 +14,7 @@ use common::{
 use serde::Deserialize;
 use tracing::{error, info, instrument};
 
+pub mod kcp;
 pub mod tcp_proxy_server;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
