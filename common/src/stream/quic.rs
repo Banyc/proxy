@@ -50,6 +50,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct QuicIoStream {
     send: SendStream,
     recv: RecvStream,

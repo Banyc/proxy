@@ -2,7 +2,6 @@ use std::{fmt::Display, io, net::SocketAddr, ops::DerefMut, pin::Pin};
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
-use quinn::{RecvStream, SendStream};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
@@ -12,6 +11,8 @@ use crate::{
     crypto::{XorCrypto, XorCryptoCursor},
     header::InternetAddr,
 };
+
+use self::quic::QuicIoStream;
 
 pub mod quic;
 pub mod tcp;
@@ -175,8 +176,25 @@ where
 
 #[derive(Debug)]
 pub enum CreatedStream {
-    Quic { recv: RecvStream, send: SendStream },
+    Quic(QuicIoStream),
     Tcp(TcpStream),
+}
+
+impl IoStream for CreatedStream {}
+impl IoAddr for CreatedStream {
+    fn peer_addr(&self) -> io::Result<SocketAddr> {
+        match self {
+            CreatedStream::Quic(x) => x.peer_addr(),
+            CreatedStream::Tcp(x) => x.peer_addr(),
+        }
+    }
+
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        match self {
+            CreatedStream::Quic(x) => x.local_addr(),
+            CreatedStream::Tcp(x) => x.local_addr(),
+        }
+    }
 }
 
 impl AsyncWrite for CreatedStream {
@@ -186,7 +204,7 @@ impl AsyncWrite for CreatedStream {
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, io::Error>> {
         match self.deref_mut() {
-            CreatedStream::Quic { send, .. } => Pin::new(send).poll_write(cx, buf),
+            CreatedStream::Quic(x) => Pin::new(x).poll_write(cx, buf),
             CreatedStream::Tcp(x) => Pin::new(x).poll_write(cx, buf),
         }
     }
@@ -196,7 +214,7 @@ impl AsyncWrite for CreatedStream {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), io::Error>> {
         match self.deref_mut() {
-            CreatedStream::Quic { send, .. } => Pin::new(send).poll_flush(cx),
+            CreatedStream::Quic(x) => Pin::new(x).poll_flush(cx),
             CreatedStream::Tcp(x) => Pin::new(x).poll_flush(cx),
         }
     }
@@ -206,7 +224,7 @@ impl AsyncWrite for CreatedStream {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), io::Error>> {
         match self.deref_mut() {
-            CreatedStream::Quic { send, .. } => Pin::new(send).poll_shutdown(cx),
+            CreatedStream::Quic(x) => Pin::new(x).poll_shutdown(cx),
             CreatedStream::Tcp(x) => Pin::new(x).poll_shutdown(cx),
         }
     }
@@ -219,7 +237,7 @@ impl AsyncRead for CreatedStream {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<io::Result<()>> {
         match self.deref_mut() {
-            CreatedStream::Quic { recv, .. } => Pin::new(recv).poll_read(cx, buf),
+            CreatedStream::Quic(x) => Pin::new(x).poll_read(cx, buf),
             CreatedStream::Tcp(x) => Pin::new(x).poll_read(cx, buf),
         }
     }
