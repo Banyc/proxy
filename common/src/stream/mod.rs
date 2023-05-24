@@ -10,7 +10,7 @@ use tracing::error;
 
 use crate::{error::ProxyProtocolError, header::InternetAddr};
 
-use self::{pool::Pool, quic::QuicIoStream, tcp::ConnectTcp};
+use self::{pool::Pool, quic::QuicIoStream, tcp::TcpConnector};
 
 pub mod pool;
 pub mod quic;
@@ -31,7 +31,7 @@ pub trait ConnectStream {
 
 #[derive(Debug)]
 pub enum StreamConnector {
-    Tcp(ConnectTcp),
+    Tcp(TcpConnector),
 }
 
 #[async_trait]

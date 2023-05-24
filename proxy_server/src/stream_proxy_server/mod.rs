@@ -9,7 +9,7 @@ use common::{
     stream::{
         connect,
         pool::Pool,
-        tcp::{ConnectTcp, TcpServer},
+        tcp::{TcpConnector, TcpServer},
         xor::XorStream,
         CreatedStream, IoAddr, IoStream, StreamConnector, StreamMetrics, StreamServerHook,
     },
@@ -30,7 +30,7 @@ impl StreamProxyAcceptor {
         Self {
             crypto,
             tcp_pool,
-            connector: StreamConnector::Tcp(ConnectTcp),
+            connector: StreamConnector::Tcp(TcpConnector),
         }
     }
 

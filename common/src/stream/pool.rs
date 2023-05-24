@@ -13,7 +13,7 @@ use crate::{
     error::ProxyProtocolError, header::InternetAddr, heartbeat::send_noop, stream::CreatedStream,
 };
 
-use super::{tcp::ConnectTcp, ConnectStream, IoAddr, StreamConnector};
+use super::{tcp::TcpConnector, ConnectStream, IoAddr, StreamConnector};
 
 const QUEUE_LEN: usize = 16;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
@@ -160,7 +160,7 @@ impl Pool {
     pub fn new() -> Self {
         Self {
             pool: Default::default(),
-            connector: Arc::new(RwLock::new(Arc::new(StreamConnector::Tcp(ConnectTcp)))),
+            connector: Arc::new(RwLock::new(Arc::new(StreamConnector::Tcp(TcpConnector)))),
         }
     }
 

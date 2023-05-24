@@ -66,10 +66,10 @@ impl IoAddr for TcpStream {
 }
 
 #[derive(Debug)]
-pub struct ConnectTcp;
+pub struct TcpConnector;
 
 #[async_trait]
-impl ConnectStream for ConnectTcp {
+impl ConnectStream for TcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
         let stream = TcpStream::connect(addr)
             .await

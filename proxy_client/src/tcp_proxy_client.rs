@@ -8,7 +8,7 @@ use common::{
         InternetAddr, ProxyConfig, ResponseHeader,
     },
     heartbeat,
-    stream::{connect, pool::Pool, tcp::ConnectTcp, CreatedStream, StreamConnector},
+    stream::{connect, pool::Pool, tcp::TcpConnector, CreatedStream, StreamConnector},
 };
 use tracing::{error, instrument, trace};
 
@@ -22,7 +22,7 @@ impl TcpProxyStream {
         destination: &InternetAddr,
         tcp_pool: &Pool,
     ) -> Result<(CreatedStream, SocketAddr), ProxyProtocolError> {
-        let connector = StreamConnector::Tcp(ConnectTcp);
+        let connector = StreamConnector::Tcp(TcpConnector);
 
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
