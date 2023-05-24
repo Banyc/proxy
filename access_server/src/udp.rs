@@ -11,7 +11,7 @@ use common::{
     header::{InternetAddr, ProxyConfig, ProxyConfigBuilder},
     udp::{Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr},
 };
-use proxy_client::udp_proxy_client::UdpProxySocket;
+use proxy_client::udp::UdpProxySocket;
 use serde::{Deserialize, Serialize};
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tracing::{error, info, trace};

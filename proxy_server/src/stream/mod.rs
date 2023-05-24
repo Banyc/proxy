@@ -15,7 +15,7 @@ use serde::Deserialize;
 use tracing::{error, info, instrument};
 
 pub mod kcp;
-pub mod tcp_proxy_server;
+pub mod tcp;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct StreamProxyServerBuilder {

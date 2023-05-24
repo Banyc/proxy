@@ -3,11 +3,11 @@
 use std::io;
 
 use serde::Deserialize;
-use stream_proxy_server::{kcp::KcpProxyServerBuilder, tcp_proxy_server::TcpProxyServerBuilder};
-use udp_proxy_server::UdpProxyServerBuilder;
+use stream::{kcp::KcpProxyServerBuilder, tcp::TcpProxyServerBuilder};
+use udp::UdpProxyServerBuilder;
 
-pub mod stream_proxy_server;
-pub mod udp_proxy_server;
+pub mod stream;
+pub mod udp;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct ProxyServerSpawner {

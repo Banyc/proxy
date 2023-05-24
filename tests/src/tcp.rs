@@ -8,9 +8,7 @@ mod tests {
         stream::{pool::Pool, StreamConnector},
     };
     use proxy_client::stream::tcp::tcp_establish;
-    use proxy_server::stream_proxy_server::{
-        tcp_proxy_server::build_tcp_proxy_server, StreamProxyServer,
-    };
+    use proxy_server::stream::{tcp::build_tcp_proxy_server, StreamProxyServer};
     use tokio::{
         io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
         net::TcpListener,

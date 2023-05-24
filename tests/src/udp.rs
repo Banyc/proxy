@@ -6,8 +6,8 @@ mod tests {
         error::{ProxyProtocolError, ResponseErrorKind},
         header::ProxyConfig,
     };
-    use proxy_client::udp_proxy_client::UdpProxySocket;
-    use proxy_server::udp_proxy_server::UdpProxyServer;
+    use proxy_client::udp::UdpProxySocket;
+    use proxy_server::udp::UdpProxyServer;
     use tokio::net::UdpSocket;
 
     use crate::create_random_crypto;
