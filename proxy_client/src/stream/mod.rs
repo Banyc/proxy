@@ -12,6 +12,7 @@ use common::{
 };
 use tracing::{error, instrument, trace};
 
+pub mod kcp;
 pub mod tcp;
 
 #[instrument(skip(proxy_configs, tcp_pool))]
