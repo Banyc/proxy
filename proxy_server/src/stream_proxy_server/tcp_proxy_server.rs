@@ -1,6 +1,6 @@
 use std::io;
 
-use common::stream::tcp::TcpServer;
+use common::stream::{pool::Pool, tcp::TcpServer, StreamConnector};
 use serde::Deserialize;
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tracing::error;
@@ -16,7 +16,10 @@ pub struct TcpProxyServerBuilder {
 
 impl TcpProxyServerBuilder {
     pub async fn build(self) -> io::Result<TcpServer<StreamProxyServer>> {
-        let stream_proxy = self.inner.build().await?;
+        let stream_proxy = self
+            .inner
+            .build(Pool::new(), StreamConnector::new())
+            .await?;
         build_tcp_proxy_server(self.listen_addr, stream_proxy).await
     }
 }
@@ -39,7 +42,7 @@ mod tests {
         crypto::{XorCrypto, XorCryptoCursor},
         header::{read_header_async, write_header_async, RequestHeader, ResponseHeader},
         heartbeat,
-        stream::pool::Pool,
+        stream::{pool::Pool, StreamConnector},
     };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -52,7 +55,8 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy = StreamProxyServer::new(crypto.clone(), None, Pool::new());
+            let proxy =
+                StreamProxyServer::new(crypto.clone(), None, Pool::new(), StreamConnector::new());
 
             let server = build_tcp_proxy_server("localhost:0", proxy).await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();

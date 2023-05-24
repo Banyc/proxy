@@ -7,8 +7,8 @@ use common::{
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
     heartbeat,
     stream::{
-        connect_with_pool, pool::Pool, tcp::TcpConnector, xor::XorStream, CreatedStream, IoAddr,
-        IoStream, StreamConnector, StreamMetrics, StreamServerHook,
+        connect_with_pool, pool::Pool, xor::XorStream, CreatedStream, IoAddr, IoStream,
+        StreamConnector, StreamMetrics, StreamServerHook,
     },
 };
 use serde::Deserialize;
@@ -24,14 +24,18 @@ pub struct StreamProxyServerBuilder {
 }
 
 impl StreamProxyServerBuilder {
-    pub async fn build(self) -> io::Result<StreamProxyServer> {
+    pub async fn build(
+        self,
+        stream_pool: Pool,
+        connector: StreamConnector,
+    ) -> io::Result<StreamProxyServer> {
         let header_crypto = XorCrypto::new(self.header_xor_key);
         let payload_crypto = self.payload_xor_key.map(XorCrypto::new);
-        let stream_pool = Pool::new();
         if let Some(addrs) = self.stream_pool {
             stream_pool.add_many_queues(addrs.into_iter().map(|v| v.into()));
         }
-        let stream_proxy = StreamProxyServer::new(header_crypto, payload_crypto, stream_pool);
+        let stream_proxy =
+            StreamProxyServer::new(header_crypto, payload_crypto, stream_pool, connector);
         Ok(stream_proxy)
     }
 }
@@ -46,9 +50,10 @@ impl StreamProxyServer {
         header_crypto: XorCrypto,
         payload_crypto: Option<XorCrypto>,
         stream_pool: Pool,
+        connector: StreamConnector,
     ) -> Self {
         Self {
-            acceptor: StreamProxyAcceptor::new(header_crypto, stream_pool),
+            acceptor: StreamProxyAcceptor::new(header_crypto, stream_pool, connector),
             payload_crypto,
         }
     }
@@ -141,11 +146,11 @@ pub struct StreamProxyAcceptor {
 }
 
 impl StreamProxyAcceptor {
-    pub fn new(crypto: XorCrypto, stream_pool: Pool) -> Self {
+    pub fn new(crypto: XorCrypto, stream_pool: Pool, connector: StreamConnector) -> Self {
         Self {
             crypto,
             stream_pool,
-            connector: StreamConnector::Tcp(TcpConnector),
+            connector,
         }
     }
 

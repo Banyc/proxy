@@ -35,6 +35,18 @@ pub enum StreamConnector {
     Tcp(TcpConnector),
 }
 
+impl StreamConnector {
+    pub fn new() -> Self {
+        Self::Tcp(TcpConnector)
+    }
+}
+
+impl Default for StreamConnector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl ConnectStream for StreamConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
