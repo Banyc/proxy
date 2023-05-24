@@ -8,8 +8,8 @@ use common::addr::any_addr;
 use common::crypto::XorCrypto;
 use common::error::ProxyProtocolError;
 use common::header::{InternetAddr, ProxyConfig, ProxyConfigBuilder};
+use common::stream::pool::Pool;
 use common::stream::tcp::TcpServer;
-use common::stream::tcp_pool::TcpPool;
 use common::stream::{IoStream, StreamMetrics, StreamServerHook, XorStream};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Empty, Full};
@@ -35,7 +35,7 @@ pub struct HttpProxyAccessBuilder {
 
 impl HttpProxyAccessBuilder {
     pub async fn build(self) -> io::Result<TcpServer<HttpProxyAccess>> {
-        let tcp_pool = TcpPool::new();
+        let tcp_pool = Pool::new();
         if let Some(addrs) = self.tcp_pool {
             tcp_pool.add_many_queues(addrs.into_iter().map(|v| v.into()));
         }
@@ -52,14 +52,14 @@ impl HttpProxyAccessBuilder {
 pub struct HttpProxyAccess {
     proxy_configs: Arc<Vec<ProxyConfig>>,
     payload_crypto: Option<Arc<XorCrypto>>,
-    tcp_pool: TcpPool,
+    tcp_pool: Pool,
 }
 
 impl HttpProxyAccess {
     pub fn new(
         proxy_configs: Vec<ProxyConfig>,
         payload_crypto: Option<XorCrypto>,
-        tcp_pool: TcpPool,
+        tcp_pool: Pool,
     ) -> Self {
         Self {
             proxy_configs: Arc::new(proxy_configs),
@@ -223,14 +223,14 @@ impl StreamServerHook for HttpProxyAccess {
 struct HttpTunnel {
     proxy_configs: Arc<Vec<ProxyConfig>>,
     payload_crypto: Option<Arc<XorCrypto>>,
-    tcp_pool: TcpPool,
+    tcp_pool: Pool,
 }
 
 impl HttpTunnel {
     pub fn new(
         proxy_configs: Arc<Vec<ProxyConfig>>,
         payload_crypto: Option<Arc<XorCrypto>>,
-        tcp_pool: TcpPool,
+        tcp_pool: Pool,
     ) -> Self {
         Self {
             proxy_configs,

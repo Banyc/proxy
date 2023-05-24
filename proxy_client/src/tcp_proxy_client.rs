@@ -8,7 +8,7 @@ use common::{
         InternetAddr, ProxyConfig, ResponseHeader,
     },
     heartbeat,
-    stream::{tcp::connect, tcp_pool::TcpPool, CreatedStream},
+    stream::{pool::Pool, tcp::connect, CreatedStream},
 };
 use tracing::{error, instrument, trace};
 
@@ -20,7 +20,7 @@ impl TcpProxyStream {
     pub async fn establish(
         proxy_configs: &[ProxyConfig],
         destination: &InternetAddr,
-        tcp_pool: &TcpPool,
+        tcp_pool: &Pool,
     ) -> Result<(CreatedStream, SocketAddr), ProxyProtocolError> {
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {

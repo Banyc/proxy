@@ -7,8 +7,8 @@ use common::{
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
     heartbeat,
     stream::{
+        pool::Pool,
         tcp::{connect, TcpServer},
-        tcp_pool::TcpPool,
         CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook, XorStream,
     },
 };
@@ -19,11 +19,11 @@ pub mod tcp_proxy_server;
 
 pub struct StreamProxyAcceptor {
     crypto: XorCrypto,
-    tcp_pool: TcpPool,
+    tcp_pool: Pool,
 }
 
 impl StreamProxyAcceptor {
-    pub fn new(crypto: XorCrypto, tcp_pool: TcpPool) -> Self {
+    pub fn new(crypto: XorCrypto, tcp_pool: Pool) -> Self {
         Self { crypto, tcp_pool }
     }
 
@@ -134,7 +134,7 @@ impl StreamProxyServer {
     pub fn new(
         header_crypto: XorCrypto,
         payload_crypto: Option<XorCrypto>,
-        tcp_pool: TcpPool,
+        tcp_pool: Pool,
     ) -> Self {
         Self {
             acceptor: StreamProxyAcceptor::new(header_crypto, tcp_pool),
@@ -245,7 +245,7 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy = StreamProxyServer::new(crypto.clone(), None, TcpPool::new());
+            let proxy = StreamProxyServer::new(crypto.clone(), None, Pool::new());
             let server = proxy.build("localhost:0").await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
             tokio::spawn(async move {

@@ -2,7 +2,7 @@ use std::io;
 
 use common::{
     crypto::XorCrypto,
-    stream::{tcp::TcpServer, tcp_pool::TcpPool},
+    stream::{pool::Pool, tcp::TcpServer},
 };
 use serde::Deserialize;
 
@@ -20,7 +20,7 @@ impl TcpProxyServerBuilder {
     pub async fn build(self) -> io::Result<TcpServer<StreamProxyServer>> {
         let header_crypto = XorCrypto::new(self.header_xor_key);
         let payload_crypto = self.payload_xor_key.map(XorCrypto::new);
-        let tcp_pool = TcpPool::new();
+        let tcp_pool = Pool::new();
         if let Some(addrs) = self.tcp_pool {
             tcp_pool.add_many_queues(addrs.into_iter().map(|v| v.into()));
         }

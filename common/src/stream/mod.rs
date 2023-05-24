@@ -12,17 +12,41 @@ use crate::{
     header::InternetAddr,
 };
 
-use self::quic::QuicIoStream;
+use self::{quic::QuicIoStream, tcp::ConnectTcp};
 
+pub mod pool;
 pub mod quic;
 pub mod tcp;
-pub mod tcp_pool;
 
 pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
 
 pub trait IoAddr {
     fn peer_addr(&self) -> io::Result<SocketAddr>;
     fn local_addr(&self) -> io::Result<SocketAddr>;
+}
+
+#[async_trait]
+pub trait ConnectStream {
+    type Stream: IoStream + IoAddr;
+
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Self::Stream>;
+}
+
+#[derive(Debug)]
+pub enum StreamConnector {
+    Tcp(ConnectTcp),
+}
+
+#[async_trait]
+impl ConnectStream for StreamConnector {
+    type Stream = CreatedStream;
+
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Self::Stream> {
+        let stream = match self {
+            StreamConnector::Tcp(x) => CreatedStream::Tcp(x.connect(addr).await?),
+        };
+        Ok(stream)
+    }
 }
 
 #[async_trait]

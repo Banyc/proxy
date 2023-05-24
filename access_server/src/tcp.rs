@@ -5,7 +5,7 @@ use common::{
     crypto::XorCrypto,
     error::ProxyProtocolError,
     header::{InternetAddr, ProxyConfig, ProxyConfigBuilder},
-    stream::{tcp::TcpServer, tcp_pool::TcpPool, IoStream, StreamServerHook, XorStream},
+    stream::{pool::Pool, tcp::TcpServer, IoStream, StreamServerHook, XorStream},
 };
 use proxy_client::tcp_proxy_client::TcpProxyStream;
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ pub struct TcpProxyAccessBuilder {
 
 impl TcpProxyAccessBuilder {
     pub async fn build(self) -> io::Result<TcpServer<TcpProxyAccess>> {
-        let tcp_pool = TcpPool::new();
+        let tcp_pool = Pool::new();
         if let Some(addrs) = self.tcp_pool {
             tcp_pool.add_many_queues(addrs.into_iter().map(|v| v.into()));
         }
@@ -42,7 +42,7 @@ pub struct TcpProxyAccess {
     proxy_configs: Vec<ProxyConfig>,
     destination: InternetAddr,
     payload_crypto: Option<XorCrypto>,
-    tcp_pool: TcpPool,
+    tcp_pool: Pool,
 }
 
 impl TcpProxyAccess {
@@ -50,7 +50,7 @@ impl TcpProxyAccess {
         proxy_configs: Vec<ProxyConfig>,
         destination: InternetAddr,
         payload_crypto: Option<XorCrypto>,
-        tcp_pool: TcpPool,
+        tcp_pool: Pool,
     ) -> Self {
         Self {
             proxy_configs,
