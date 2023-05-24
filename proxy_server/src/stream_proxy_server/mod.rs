@@ -9,7 +9,8 @@ use common::{
     stream::{
         pool::Pool,
         tcp::{connect, TcpServer},
-        CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook, XorStream,
+        xor::XorStream,
+        CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };
 use tokio::net::{TcpListener, ToSocketAddrs};
