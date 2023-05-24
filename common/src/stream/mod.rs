@@ -10,8 +10,9 @@ use tracing::error;
 
 use crate::{error::ProxyProtocolError, header::InternetAddr};
 
-use self::{pool::Pool, quic::QuicIoStream, tcp::TcpConnector};
+use self::{kcp::AddressedKcpStream, pool::Pool, quic::QuicIoStream, tcp::TcpConnector};
 
+pub mod kcp;
 pub mod pool;
 pub mod quic;
 pub mod tcp;
@@ -120,6 +121,7 @@ impl Display for StreamMetrics {
 pub enum CreatedStream {
     Quic(QuicIoStream),
     Tcp(TcpStream),
+    Kcp(AddressedKcpStream),
 }
 
 impl IoStream for CreatedStream {}
@@ -128,6 +130,7 @@ impl IoAddr for CreatedStream {
         match self {
             CreatedStream::Quic(x) => x.peer_addr(),
             CreatedStream::Tcp(x) => x.peer_addr(),
+            CreatedStream::Kcp(x) => x.peer_addr(),
         }
     }
 
@@ -135,6 +138,7 @@ impl IoAddr for CreatedStream {
         match self {
             CreatedStream::Quic(x) => x.local_addr(),
             CreatedStream::Tcp(x) => x.local_addr(),
+            CreatedStream::Kcp(x) => x.local_addr(),
         }
     }
 }
@@ -148,6 +152,7 @@ impl AsyncWrite for CreatedStream {
         match self.deref_mut() {
             CreatedStream::Quic(x) => Pin::new(x).poll_write(cx, buf),
             CreatedStream::Tcp(x) => Pin::new(x).poll_write(cx, buf),
+            CreatedStream::Kcp(x) => Pin::new(x).poll_write(cx, buf),
         }
     }
 
@@ -158,6 +163,7 @@ impl AsyncWrite for CreatedStream {
         match self.deref_mut() {
             CreatedStream::Quic(x) => Pin::new(x).poll_flush(cx),
             CreatedStream::Tcp(x) => Pin::new(x).poll_flush(cx),
+            CreatedStream::Kcp(x) => Pin::new(x).poll_flush(cx),
         }
     }
 
@@ -168,6 +174,7 @@ impl AsyncWrite for CreatedStream {
         match self.deref_mut() {
             CreatedStream::Quic(x) => Pin::new(x).poll_shutdown(cx),
             CreatedStream::Tcp(x) => Pin::new(x).poll_shutdown(cx),
+            CreatedStream::Kcp(x) => Pin::new(x).poll_shutdown(cx),
         }
     }
 }
@@ -181,6 +188,7 @@ impl AsyncRead for CreatedStream {
         match self.deref_mut() {
             CreatedStream::Quic(x) => Pin::new(x).poll_read(cx, buf),
             CreatedStream::Tcp(x) => Pin::new(x).poll_read(cx, buf),
+            CreatedStream::Kcp(x) => Pin::new(x).poll_read(cx, buf),
         }
     }
 }
