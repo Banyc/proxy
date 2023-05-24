@@ -5,7 +5,7 @@ mod tests {
     use common::{
         error::{ProxyProtocolError, ResponseErrorKind},
         header::ProxyConfig,
-        tcp_pool::TcpPool,
+        stream::tcp_pool::TcpPool,
     };
     use proxy_client::tcp_proxy_client::TcpProxyStream;
     use proxy_server::stream_proxy_server::StreamProxyServer;

@@ -6,5 +6,4 @@ pub mod error;
 pub mod header;
 pub mod heartbeat;
 pub mod stream;
-pub mod tcp_pool;
 pub mod udp;

@@ -1,6 +1,9 @@
 use std::io;
 
-use common::{crypto::XorCrypto, stream::tcp::TcpServer, tcp_pool::TcpPool};
+use common::{
+    crypto::XorCrypto,
+    stream::{tcp::TcpServer, tcp_pool::TcpPool},
+};
 use serde::Deserialize;
 
 use super::StreamProxyServer;

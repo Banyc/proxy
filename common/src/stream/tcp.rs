@@ -3,9 +3,9 @@ use std::{io, net::SocketAddr, sync::Arc};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info, instrument, trace};
 
-use crate::{error::ProxyProtocolError, header::InternetAddr, tcp_pool::TcpPool};
+use crate::{error::ProxyProtocolError, header::InternetAddr};
 
-use super::{CreatedStream, IoAddr, IoStream, StreamServerHook};
+use super::{tcp_pool::TcpPool, CreatedStream, IoAddr, IoStream, StreamServerHook};
 
 #[derive(Debug)]
 pub struct TcpServer<H> {

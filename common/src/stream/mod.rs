@@ -15,6 +15,7 @@ use crate::{
 
 pub mod quic;
 pub mod tcp;
+pub mod tcp_pool;
 
 pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
 

@@ -8,8 +8,7 @@ use common::{
         InternetAddr, ProxyConfig, ResponseHeader,
     },
     heartbeat,
-    stream::{tcp::connect, CreatedStream},
-    tcp_pool::TcpPool,
+    stream::{tcp::connect, tcp_pool::TcpPool, CreatedStream},
 };
 use tracing::{error, instrument, trace};
 

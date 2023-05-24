@@ -5,8 +5,7 @@ use common::{
     crypto::XorCrypto,
     error::ProxyProtocolError,
     header::{InternetAddr, ProxyConfig, ProxyConfigBuilder},
-    stream::{tcp::TcpServer, IoStream, StreamServerHook, XorStream},
-    tcp_pool::TcpPool,
+    stream::{tcp::TcpServer, tcp_pool::TcpPool, IoStream, StreamServerHook, XorStream},
 };
 use proxy_client::tcp_proxy_client::TcpProxyStream;
 use serde::{Deserialize, Serialize};

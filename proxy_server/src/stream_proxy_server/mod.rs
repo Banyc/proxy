@@ -8,9 +8,9 @@ use common::{
     heartbeat,
     stream::{
         tcp::{connect, TcpServer},
+        tcp_pool::TcpPool,
         CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook, XorStream,
     },
-    tcp_pool::TcpPool,
 };
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tracing::{error, info, instrument};
