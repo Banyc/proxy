@@ -7,17 +7,34 @@ use common::{
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
     heartbeat,
     stream::{
-        connect_with_pool,
-        pool::Pool,
-        tcp::{TcpConnector, TcpServer},
-        xor::XorStream,
-        CreatedStream, IoAddr, IoStream, StreamConnector, StreamMetrics, StreamServerHook,
+        connect_with_pool, pool::Pool, tcp::TcpConnector, xor::XorStream, CreatedStream, IoAddr,
+        IoStream, StreamConnector, StreamMetrics, StreamServerHook,
     },
 };
-use tokio::net::{TcpListener, ToSocketAddrs};
+use serde::Deserialize;
 use tracing::{error, info, instrument};
 
 pub mod tcp_proxy_server;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+pub struct StreamProxyServerBuilder {
+    pub header_xor_key: Vec<u8>,
+    pub payload_xor_key: Option<Vec<u8>>,
+    pub stream_pool: Option<Vec<String>>,
+}
+
+impl StreamProxyServerBuilder {
+    pub async fn build(self) -> io::Result<StreamProxyServer> {
+        let header_crypto = XorCrypto::new(self.header_xor_key);
+        let payload_crypto = self.payload_xor_key.map(XorCrypto::new);
+        let stream_pool = Pool::new();
+        if let Some(addrs) = self.stream_pool {
+            stream_pool.add_many_queues(addrs.into_iter().map(|v| v.into()));
+        }
+        let stream_proxy = StreamProxyServer::new(header_crypto, payload_crypto, stream_pool);
+        Ok(stream_proxy)
+    }
+}
 
 pub struct StreamProxyAcceptor {
     crypto: XorCrypto,
@@ -150,14 +167,6 @@ impl StreamProxyServer {
         }
     }
 
-    pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<TcpServer<Self>> {
-        let listener = TcpListener::bind(listen_addr)
-            .await
-            .inspect_err(|e| error!(?e, "Failed to bind to listen address"))?;
-        let server = TcpServer::new(listener, self);
-        Ok(server)
-    }
-
     #[instrument(skip(self, downstream))]
     async fn proxy<S>(&self, mut downstream: S) -> io::Result<()>
     where
@@ -235,84 +244,6 @@ impl StreamServerHook for StreamProxyServer {
     {
         if let Err(e) = self.proxy(stream).await {
             error!(?e, "Connection closed with error");
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::{TcpListener, TcpStream},
-    };
-
-    #[tokio::test]
-    async fn test_proxy() {
-        let crypto = XorCrypto::default();
-
-        // Start proxy server
-        let proxy_addr = {
-            let proxy = StreamProxyServer::new(crypto.clone(), None, Pool::new());
-            let server = proxy.build("localhost:0").await.unwrap();
-            let proxy_addr = server.listener().local_addr().unwrap();
-            tokio::spawn(async move {
-                server.serve().await.unwrap();
-            });
-            proxy_addr
-        };
-
-        // Message to send
-        let req_msg = b"hello world";
-        let resp_msg = b"goodbye world";
-
-        // Start origin server
-        let origin_addr = {
-            let listener = TcpListener::bind("[::]:0").await.unwrap();
-            let origin_addr = listener.local_addr().unwrap();
-            tokio::spawn(async move {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut buf = [0; 1024];
-                let msg_buf = &mut buf[..req_msg.len()];
-                stream.read_exact(msg_buf).await.unwrap();
-                assert_eq!(msg_buf, req_msg);
-                stream.write_all(resp_msg).await.unwrap();
-            });
-            origin_addr
-        };
-
-        // Connect to proxy server
-        let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
-
-        // Establish connection to origin server
-        {
-            heartbeat::send_upgrade(&mut stream).await.unwrap();
-            // Encode header
-            let header = RequestHeader {
-                upstream: origin_addr.into(),
-            };
-            let mut crypto_cursor = XorCryptoCursor::new(&crypto);
-            write_header_async(&mut stream, &header, &mut crypto_cursor)
-                .await
-                .unwrap();
-
-            // Read response
-            let mut crypto_cursor = XorCryptoCursor::new(&crypto);
-            let resp: ResponseHeader = read_header_async(&mut stream, &mut crypto_cursor)
-                .await
-                .unwrap();
-            assert!(resp.result.is_ok());
-        }
-
-        // Write message
-        stream.write_all(req_msg).await.unwrap();
-
-        // Read response
-        {
-            let mut buf = [0; 1024];
-            let msg_buf = &mut buf[..resp_msg.len()];
-            stream.read_exact(msg_buf).await.unwrap();
-            assert_eq!(msg_buf, resp_msg);
         }
     }
 }

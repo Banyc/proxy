@@ -1,31 +1,118 @@
 use std::io;
 
-use common::{
-    crypto::XorCrypto,
-    stream::{pool::Pool, tcp::TcpServer},
-};
+use common::stream::tcp::TcpServer;
 use serde::Deserialize;
+use tokio::net::{TcpListener, ToSocketAddrs};
+use tracing::error;
 
-use super::StreamProxyServer;
+use super::{StreamProxyServer, StreamProxyServerBuilder};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct TcpProxyServerBuilder {
     pub listen_addr: String,
-    pub header_xor_key: Vec<u8>,
-    pub payload_xor_key: Option<Vec<u8>>,
-    pub tcp_pool: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub inner: StreamProxyServerBuilder,
 }
 
 impl TcpProxyServerBuilder {
     pub async fn build(self) -> io::Result<TcpServer<StreamProxyServer>> {
-        let header_crypto = XorCrypto::new(self.header_xor_key);
-        let payload_crypto = self.payload_xor_key.map(XorCrypto::new);
-        let tcp_pool = Pool::new();
-        if let Some(addrs) = self.tcp_pool {
-            tcp_pool.add_many_queues(addrs.into_iter().map(|v| v.into()));
+        let stream_proxy = self.inner.build().await?;
+        build_tcp_proxy_server(self.listen_addr, stream_proxy).await
+    }
+}
+
+pub async fn build_tcp_proxy_server(
+    listen_addr: impl ToSocketAddrs,
+    stream_proxy: StreamProxyServer,
+) -> io::Result<TcpServer<StreamProxyServer>> {
+    let listener = TcpListener::bind(listen_addr)
+        .await
+        .inspect_err(|e| error!(?e, "Failed to bind to listen address"))?;
+    let server = TcpServer::new(listener, stream_proxy);
+    Ok(server)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::{
+        crypto::{XorCrypto, XorCryptoCursor},
+        header::{read_header_async, write_header_async, RequestHeader, ResponseHeader},
+        heartbeat,
+        stream::pool::Pool,
+    };
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+    };
+
+    #[tokio::test]
+    async fn test_proxy() {
+        let crypto = XorCrypto::default();
+
+        // Start proxy server
+        let proxy_addr = {
+            let proxy = StreamProxyServer::new(crypto.clone(), None, Pool::new());
+
+            let server = build_tcp_proxy_server("localhost:0", proxy).await.unwrap();
+            let proxy_addr = server.listener().local_addr().unwrap();
+            tokio::spawn(async move {
+                server.serve().await.unwrap();
+            });
+            proxy_addr
+        };
+
+        // Message to send
+        let req_msg = b"hello world";
+        let resp_msg = b"goodbye world";
+
+        // Start origin server
+        let origin_addr = {
+            let listener = TcpListener::bind("[::]:0").await.unwrap();
+            let origin_addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0; 1024];
+                let msg_buf = &mut buf[..req_msg.len()];
+                stream.read_exact(msg_buf).await.unwrap();
+                assert_eq!(msg_buf, req_msg);
+                stream.write_all(resp_msg).await.unwrap();
+            });
+            origin_addr
+        };
+
+        // Connect to proxy server
+        let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
+
+        // Establish connection to origin server
+        {
+            heartbeat::send_upgrade(&mut stream).await.unwrap();
+            // Encode header
+            let header = RequestHeader {
+                upstream: origin_addr.into(),
+            };
+            let mut crypto_cursor = XorCryptoCursor::new(&crypto);
+            write_header_async(&mut stream, &header, &mut crypto_cursor)
+                .await
+                .unwrap();
+
+            // Read response
+            let mut crypto_cursor = XorCryptoCursor::new(&crypto);
+            let resp: ResponseHeader = read_header_async(&mut stream, &mut crypto_cursor)
+                .await
+                .unwrap();
+            assert!(resp.result.is_ok());
         }
-        let tcp_proxy = StreamProxyServer::new(header_crypto, payload_crypto, tcp_pool);
-        let server = tcp_proxy.build(self.listen_addr).await?;
-        Ok(server)
+
+        // Write message
+        stream.write_all(req_msg).await.unwrap();
+
+        // Read response
+        {
+            let mut buf = [0; 1024];
+            let msg_buf = &mut buf[..resp_msg.len()];
+            stream.read_exact(msg_buf).await.unwrap();
+            assert_eq!(msg_buf, resp_msg);
+        }
     }
 }
