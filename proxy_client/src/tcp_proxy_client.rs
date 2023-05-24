@@ -8,7 +8,7 @@ use common::{
         InternetAddr, ProxyConfig, ResponseHeader,
     },
     heartbeat,
-    stream::{connect, pool::Pool, tcp::TcpConnector, CreatedStream, StreamConnector},
+    stream::{connect_with_pool, pool::Pool, tcp::TcpConnector, CreatedStream, StreamConnector},
 };
 use tracing::{error, instrument, trace};
 
@@ -26,12 +26,13 @@ impl TcpProxyStream {
 
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
-            return connect(&connector, destination, tcp_pool, true).await;
+            return connect_with_pool(&connector, destination, tcp_pool, true).await;
         }
 
         // Connect to the first proxy
         let proxy_addr = &proxy_configs[0].address;
-        let (mut stream, sock_addr) = connect(&connector, proxy_addr, tcp_pool, true).await?;
+        let (mut stream, sock_addr) =
+            connect_with_pool(&connector, proxy_addr, tcp_pool, true).await?;
 
         // Convert addresses to headers
         let pairs = convert_proxy_configs_to_header_crypto_pairs(proxy_configs, destination);

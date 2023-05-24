@@ -43,16 +43,16 @@ impl ConnectStream for StreamConnector {
     }
 }
 
-pub async fn connect<C>(
+pub async fn connect_with_pool<C>(
     connector: &C,
     addr: &InternetAddr,
-    tcp_pool: &Pool,
+    stream_pool: &Pool,
     allow_loopback: bool,
 ) -> Result<(CreatedStream, SocketAddr), ProxyProtocolError>
 where
     C: ConnectStream,
 {
-    let stream = tcp_pool.open_stream(addr).await;
+    let stream = stream_pool.open_stream(addr).await;
     let ret = match stream {
         Some((stream, sock_addr)) => (stream, sock_addr),
         None => {

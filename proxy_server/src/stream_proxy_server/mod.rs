@@ -7,7 +7,7 @@ use common::{
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
     heartbeat,
     stream::{
-        connect,
+        connect_with_pool,
         pool::Pool,
         tcp::{TcpConnector, TcpServer},
         xor::XorStream,
@@ -67,7 +67,7 @@ impl StreamProxyAcceptor {
 
         // Connect to upstream
         let (upstream, sock_addr) =
-            connect(&self.connector, &header.upstream, &self.tcp_pool, false).await?;
+            connect_with_pool(&self.connector, &header.upstream, &self.tcp_pool, false).await?;
 
         // Write Ok response
         let resp = ResponseHeader { result: Ok(()) };
