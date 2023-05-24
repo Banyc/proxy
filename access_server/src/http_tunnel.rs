@@ -30,13 +30,19 @@ pub struct HttpProxyAccessBuilder {
     listen_addr: String,
     proxy_configs: Vec<ProxyConfigBuilder>,
     payload_xor_key: Option<Vec<u8>>,
+    tcp_pool: Option<Vec<String>>,
 }
 
 impl HttpProxyAccessBuilder {
     pub async fn build(self) -> io::Result<TcpServer<HttpProxyAccess>> {
+        let tcp_pool = TcpPool::new();
+        if let Some(addrs) = self.tcp_pool {
+            tcp_pool.add_many_queues(addrs.into_iter().map(|v| v.into()));
+        }
         let access = HttpProxyAccess::new(
             self.proxy_configs.into_iter().map(|x| x.build()).collect(),
             self.payload_xor_key.map(XorCrypto::new),
+            tcp_pool,
         );
         let server = access.build(self.listen_addr).await?;
         Ok(server)
@@ -46,13 +52,19 @@ impl HttpProxyAccessBuilder {
 pub struct HttpProxyAccess {
     proxy_configs: Arc<Vec<ProxyConfig>>,
     payload_crypto: Option<Arc<XorCrypto>>,
+    tcp_pool: TcpPool,
 }
 
 impl HttpProxyAccess {
-    pub fn new(proxy_configs: Vec<ProxyConfig>, payload_crypto: Option<XorCrypto>) -> Self {
+    pub fn new(
+        proxy_configs: Vec<ProxyConfig>,
+        payload_crypto: Option<XorCrypto>,
+        tcp_pool: TcpPool,
+    ) -> Self {
         Self {
             proxy_configs: Arc::new(proxy_configs),
             payload_crypto: payload_crypto.map(Arc::new),
+            tcp_pool,
         }
     }
 
@@ -99,8 +111,11 @@ impl HttpProxyAccess {
             // connection be upgraded, so we can't return a response inside
             // `on_upgrade` future.
             if let Some(addr) = host_addr(req.uri()) {
-                let tunnel =
-                    HttpTunnel::new(Arc::clone(&self.proxy_configs), self.payload_crypto.clone());
+                let tunnel = HttpTunnel::new(
+                    Arc::clone(&self.proxy_configs),
+                    self.payload_crypto.clone(),
+                    self.tcp_pool.clone(),
+                );
                 tokio::task::spawn(async move {
                     match hyper::upgrade::on(req).await {
                         Ok(upgraded) => {
@@ -133,7 +148,7 @@ impl HttpProxyAccess {
 
             // Establish ProxyProtocol
             let (upstream, _) =
-                TcpProxyStream::establish(&self.proxy_configs, &addr.into(), &TcpPool::new())
+                TcpProxyStream::establish(&self.proxy_configs, &addr.into(), &self.tcp_pool)
                     .await
                     .inspect_err(|e| {
                         error!(?e, "Failed to establish proxy protocol");
@@ -208,16 +223,19 @@ impl StreamServerHook for HttpProxyAccess {
 struct HttpTunnel {
     proxy_configs: Arc<Vec<ProxyConfig>>,
     payload_crypto: Option<Arc<XorCrypto>>,
+    tcp_pool: TcpPool,
 }
 
 impl HttpTunnel {
     pub fn new(
         proxy_configs: Arc<Vec<ProxyConfig>>,
         payload_crypto: Option<Arc<XorCrypto>>,
+        tcp_pool: TcpPool,
     ) -> Self {
         Self {
             proxy_configs,
             payload_crypto,
+            tcp_pool,
         }
     }
 
@@ -233,7 +251,7 @@ impl HttpTunnel {
 
         // Establish ProxyProtocol
         let (mut upstream, upstream_sock_addr) =
-            TcpProxyStream::establish(&self.proxy_configs, &addr, &TcpPool::new())
+            TcpProxyStream::establish(&self.proxy_configs, &addr, &self.tcp_pool)
                 .await
                 .inspect_err(|e| {
                     error!(?e, "Failed to establish proxy protocol");

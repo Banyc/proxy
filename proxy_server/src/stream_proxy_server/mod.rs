@@ -18,12 +18,12 @@ pub mod tcp_proxy_server;
 
 pub struct StreamProxyAcceptor {
     crypto: XorCrypto,
-    quic: TcpPool,
+    tcp_pool: TcpPool,
 }
 
 impl StreamProxyAcceptor {
-    pub fn new(crypto: XorCrypto, quic: TcpPool) -> Self {
-        Self { crypto, quic }
+    pub fn new(crypto: XorCrypto, tcp_pool: TcpPool) -> Self {
+        Self { crypto, tcp_pool }
     }
 
     #[instrument(skip(self, downstream))]
@@ -58,7 +58,7 @@ impl StreamProxyAcceptor {
             })?;
 
         // Connect to upstream
-        let quic = self.quic.open_stream(&header.upstream).await;
+        let quic = self.tcp_pool.open_stream(&header.upstream).await;
         let (upstream, sock_addr) = match quic {
             Some((stream, sock_addr)) => (stream, sock_addr),
             None => {
@@ -148,9 +148,13 @@ pub struct StreamProxyServer {
 }
 
 impl StreamProxyServer {
-    pub fn new(header_crypto: XorCrypto, payload_crypto: Option<XorCrypto>, quic: TcpPool) -> Self {
+    pub fn new(
+        header_crypto: XorCrypto,
+        payload_crypto: Option<XorCrypto>,
+        tcp_pool: TcpPool,
+    ) -> Self {
         Self {
-            acceptor: StreamProxyAcceptor::new(header_crypto, quic),
+            acceptor: StreamProxyAcceptor::new(header_crypto, tcp_pool),
             payload_crypto,
         }
     }

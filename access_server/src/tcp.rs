@@ -19,14 +19,20 @@ pub struct TcpProxyAccessBuilder {
     proxy_configs: Vec<ProxyConfigBuilder>,
     destination: String,
     payload_xor_key: Option<Vec<u8>>,
+    tcp_pool: Option<Vec<String>>,
 }
 
 impl TcpProxyAccessBuilder {
     pub async fn build(self) -> io::Result<TcpServer<TcpProxyAccess>> {
+        let tcp_pool = TcpPool::new();
+        if let Some(addrs) = self.tcp_pool {
+            tcp_pool.add_many_queues(addrs.into_iter().map(|v| v.into()));
+        }
         let access = TcpProxyAccess::new(
             self.proxy_configs.into_iter().map(|x| x.build()).collect(),
             self.destination.into(),
             self.payload_xor_key.map(XorCrypto::new),
+            tcp_pool,
         );
         let server = access.build(self.listen_addr).await?;
         Ok(server)
@@ -37,6 +43,7 @@ pub struct TcpProxyAccess {
     proxy_configs: Vec<ProxyConfig>,
     destination: InternetAddr,
     payload_crypto: Option<XorCrypto>,
+    tcp_pool: TcpPool,
 }
 
 impl TcpProxyAccess {
@@ -44,11 +51,13 @@ impl TcpProxyAccess {
         proxy_configs: Vec<ProxyConfig>,
         destination: InternetAddr,
         payload_crypto: Option<XorCrypto>,
+        tcp_pool: TcpPool,
     ) -> Self {
         Self {
             proxy_configs,
             destination,
             payload_crypto,
+            tcp_pool,
         }
     }
 
@@ -64,7 +73,7 @@ impl TcpProxyAccess {
         S: IoStream,
     {
         let (mut upstream, _) =
-            TcpProxyStream::establish(&self.proxy_configs, &self.destination, &TcpPool::new())
+            TcpProxyStream::establish(&self.proxy_configs, &self.destination, &self.tcp_pool)
                 .await?;
 
         let res = match &self.payload_crypto {

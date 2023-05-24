@@ -145,6 +145,15 @@ impl TcpPool {
         }
     }
 
+    pub fn add_many_queues<I>(&self, addrs: I)
+    where
+        I: Iterator<Item = InternetAddr>,
+    {
+        for addr in addrs {
+            self.add_queue(addr);
+        }
+    }
+
     pub fn add_queue(&self, addr: InternetAddr) {
         let queue = SocketQueue::new();
         for _ in 0..QUEUE_LEN {

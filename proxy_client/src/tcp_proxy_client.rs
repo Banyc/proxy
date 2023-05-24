@@ -22,16 +22,16 @@ impl TcpProxyStream {
     pub async fn establish(
         proxy_configs: &[ProxyConfig],
         destination: &InternetAddr,
-        quic: &TcpPool,
+        tcp_pool: &TcpPool,
     ) -> Result<(CreatedStream, SocketAddr), ProxyProtocolError> {
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
-            return Ok(connect(destination, quic).await?);
+            return Ok(connect(destination, tcp_pool).await?);
         }
 
         // Connect to the first proxy
         let proxy_addr = &proxy_configs[0].address;
-        let (mut stream, sock_addr) = connect(proxy_addr, quic).await?;
+        let (mut stream, sock_addr) = connect(proxy_addr, tcp_pool).await?;
 
         // Convert addresses to headers
         let pairs = convert_proxy_configs_to_header_crypto_pairs(proxy_configs, destination);
