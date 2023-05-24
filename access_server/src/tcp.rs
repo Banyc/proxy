@@ -7,7 +7,7 @@ use common::{
     header::{InternetAddr, ProxyConfig, ProxyConfigBuilder},
     stream::{pool::Pool, tcp::TcpServer, xor::XorStream, IoStream, StreamServerHook},
 };
-use proxy_client::tcp_proxy_client::TcpProxyStream;
+use proxy_client::stream::tcp::tcp_establish;
 use serde::{Deserialize, Serialize};
 use tokio::net::ToSocketAddrs;
 use tracing::{error, instrument};
@@ -72,8 +72,7 @@ impl TcpProxyAccess {
         S: IoStream,
     {
         let (mut upstream, _) =
-            TcpProxyStream::establish(&self.proxy_configs, &self.destination, &self.tcp_pool)
-                .await?;
+            tcp_establish(&self.proxy_configs, &self.destination, &self.tcp_pool).await?;
 
         let res = match &self.payload_crypto {
             Some(crypto) => {

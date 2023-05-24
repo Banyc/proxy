@@ -18,8 +18,8 @@ use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{http, Method, Request, Response};
-use proxy_client::tcp_proxy_client::TcpProxyStream;
 
+use proxy_client::stream::tcp::tcp_establish;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -148,12 +148,11 @@ impl HttpProxyAccess {
             let addr = format!("{}:{}", host, port);
 
             // Establish ProxyProtocol
-            let (upstream, _) =
-                TcpProxyStream::establish(&self.proxy_configs, &addr.into(), &self.tcp_pool)
-                    .await
-                    .inspect_err(|e| {
-                        error!(?e, "Failed to establish proxy protocol");
-                    })?;
+            let (upstream, _) = tcp_establish(&self.proxy_configs, &addr.into(), &self.tcp_pool)
+                .await
+                .inspect_err(|e| {
+                    error!(?e, "Failed to establish proxy protocol");
+                })?;
 
             match &self.payload_crypto {
                 Some(crypto) => {
@@ -252,7 +251,7 @@ impl HttpTunnel {
 
         // Establish ProxyProtocol
         let (mut upstream, upstream_sock_addr) =
-            TcpProxyStream::establish(&self.proxy_configs, &addr, &self.tcp_pool)
+            tcp_establish(&self.proxy_configs, &addr, &self.tcp_pool)
                 .await
                 .inspect_err(|e| {
                     error!(?e, "Failed to establish proxy protocol");

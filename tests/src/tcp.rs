@@ -7,7 +7,7 @@ mod tests {
         header::ProxyConfig,
         stream::{pool::Pool, StreamConnector},
     };
-    use proxy_client::tcp_proxy_client::TcpProxyStream;
+    use proxy_client::stream::tcp::tcp_establish;
     use proxy_server::stream_proxy_server::{
         tcp_proxy_server::build_tcp_proxy_server, StreamProxyServer,
     };
@@ -81,7 +81,7 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let (mut stream, _) = TcpProxyStream::establish(
+        let (mut stream, _) = tcp_establish(
             &[proxy_1_config, proxy_2_config, proxy_3_config],
             &greet_addr.into(),
             &Pool::new(),
@@ -119,7 +119,7 @@ mod tests {
             handles.spawn(async move {
                 // Connect to proxy server
                 let (mut stream, _) =
-                    TcpProxyStream::establish(&proxy_configs, &greet_addr.into(), &Pool::new())
+                    tcp_establish(&proxy_configs, &greet_addr.into(), &Pool::new())
                         .await
                         .unwrap();
 
@@ -160,7 +160,7 @@ mod tests {
                 for _ in 0..10 {
                     // Connect to proxy server
                     let (mut stream, _) =
-                        TcpProxyStream::establish(&proxy_configs, &greet_addr.into(), &Pool::new())
+                        tcp_establish(&proxy_configs, &greet_addr.into(), &Pool::new())
                             .await
                             .unwrap();
 
@@ -193,7 +193,7 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let err = TcpProxyStream::establish(
+        let err = tcp_establish(
             &[proxy_1_config.clone(), proxy_2_config, proxy_3_config],
             &greet_addr.into(),
             &Pool::new(),
@@ -224,7 +224,7 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let (mut stream, _) = TcpProxyStream::establish(&[], &greet_addr.into(), &Pool::new())
+        let (mut stream, _) = tcp_establish(&[], &greet_addr.into(), &Pool::new())
             .await
             .unwrap();
 
