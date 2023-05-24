@@ -145,13 +145,12 @@ impl TcpPool {
         }
     }
 
-    pub fn add_queue(&self, addr: InternetAddr) -> io::Result<()> {
+    pub fn add_queue(&self, addr: InternetAddr) {
         let queue = SocketQueue::new();
         for _ in 0..QUEUE_LEN {
             queue.spawn_insert(addr.clone(), HEARTBEAT_INTERVAL);
         }
         self.pool.write().unwrap().insert(addr, queue);
-        Ok(())
     }
 
     pub async fn open_stream(&self, addr: &InternetAddr) -> Option<(CreatedStream, SocketAddr)> {
@@ -181,5 +180,60 @@ impl TcpPool {
 impl Default for TcpPool {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::{io::AsyncReadExt, net::TcpListener, task::JoinSet};
+
+    use super::*;
+
+    async fn spawn_listener() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut buf = [0; 1024];
+                    loop {
+                        if let Err(_e) = stream.read_exact(&mut buf).await {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn take_none() {
+        let pool = TcpPool::new();
+        let addr = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
+        pool.add_queue(addr.into());
+        let mut join_set = JoinSet::new();
+        for _ in 0..100 {
+            let pool = pool.clone();
+            join_set.spawn(async move {
+                let res = pool.open_stream(&addr.into()).await;
+                assert!(res.is_none());
+            });
+        }
+    }
+
+    #[tokio::test]
+    async fn take_some() {
+        let pool = TcpPool::new();
+        let addr = spawn_listener().await;
+        pool.add_queue(addr.into());
+        for _ in 0..10 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            for _ in 0..QUEUE_LEN {
+                let res = pool.open_stream(&addr.into()).await;
+                assert!(res.is_some());
+            }
+        }
     }
 }
