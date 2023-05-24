@@ -7,10 +7,11 @@ use common::{
     header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
     heartbeat,
     stream::{
+        connect,
         pool::Pool,
-        tcp::{connect, TcpServer},
+        tcp::{ConnectTcp, TcpServer},
         xor::XorStream,
-        CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook,
+        CreatedStream, IoAddr, IoStream, StreamConnector, StreamMetrics, StreamServerHook,
     },
 };
 use tokio::net::{TcpListener, ToSocketAddrs};
@@ -21,11 +22,16 @@ pub mod tcp_proxy_server;
 pub struct StreamProxyAcceptor {
     crypto: XorCrypto,
     tcp_pool: Pool,
+    connector: StreamConnector,
 }
 
 impl StreamProxyAcceptor {
     pub fn new(crypto: XorCrypto, tcp_pool: Pool) -> Self {
-        Self { crypto, tcp_pool }
+        Self {
+            crypto,
+            tcp_pool,
+            connector: StreamConnector::Tcp(ConnectTcp),
+        }
     }
 
     #[instrument(skip(self, downstream))]
@@ -60,7 +66,8 @@ impl StreamProxyAcceptor {
             })?;
 
         // Connect to upstream
-        let (upstream, sock_addr) = connect(&header.upstream, &self.tcp_pool, false).await?;
+        let (upstream, sock_addr) =
+            connect(&self.connector, &header.upstream, &self.tcp_pool, false).await?;
 
         // Write Ok response
         let resp = ResponseHeader { result: Ok(()) };

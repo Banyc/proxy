@@ -6,10 +6,11 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
+use tracing::error;
 
-use crate::header::InternetAddr;
+use crate::{error::ProxyProtocolError, header::InternetAddr};
 
-use self::{quic::QuicIoStream, tcp::ConnectTcp};
+use self::{pool::Pool, quic::QuicIoStream, tcp::ConnectTcp};
 
 pub mod pool;
 pub mod quic;
@@ -25,9 +26,7 @@ pub trait IoAddr {
 
 #[async_trait]
 pub trait ConnectStream {
-    type Stream: IoStream + IoAddr;
-
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Self::Stream>;
+    async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream>;
 }
 
 #[derive(Debug)]
@@ -37,14 +36,40 @@ pub enum StreamConnector {
 
 #[async_trait]
 impl ConnectStream for StreamConnector {
-    type Stream = CreatedStream;
-
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Self::Stream> {
-        let stream = match self {
-            StreamConnector::Tcp(x) => CreatedStream::Tcp(x.connect(addr).await?),
-        };
-        Ok(stream)
+    async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
+        match self {
+            StreamConnector::Tcp(x) => x.connect(addr).await,
+        }
     }
+}
+
+pub async fn connect<C>(
+    connector: &C,
+    addr: &InternetAddr,
+    tcp_pool: &Pool,
+    allow_loopback: bool,
+) -> Result<(CreatedStream, SocketAddr), ProxyProtocolError>
+where
+    C: ConnectStream,
+{
+    let stream = tcp_pool.open_stream(addr).await;
+    let ret = match stream {
+        Some((stream, sock_addr)) => (stream, sock_addr),
+        None => {
+            let sock_addr = addr
+                .to_socket_addr()
+                .await
+                .inspect_err(|e| error!(?e, ?addr, "Failed to resolve address"))?;
+            if !allow_loopback && sock_addr.ip().is_loopback() {
+                // Prevent connections to localhost
+                error!(?addr, "Refusing to connect to loopback address");
+                return Err(ProxyProtocolError::Loopback);
+            }
+            let stream = connector.connect(sock_addr).await?;
+            (stream, sock_addr)
+        }
+    };
+    Ok(ret)
 }
 
 #[async_trait]
