@@ -8,8 +8,8 @@ use common::{
     addr::any_addr,
     crypto::{XorCrypto, XorCryptoCursor},
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
-    header::{read_header, write_header, RequestHeader, ResponseHeader},
-    udp::{Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr},
+    header::{read_header, write_header, ResponseHeader},
+    udp::{self, Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr},
 };
 use serde::Deserialize;
 use tokio::{
@@ -55,12 +55,12 @@ impl UdpProxyServer {
         // Decode header
         let mut reader = io::Cursor::new(buf);
         let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
-        let header: RequestHeader = read_header(&mut reader, &mut crypto_cursor)
+        let header: udp::header::RequestHeader = read_header(&mut reader, &mut crypto_cursor)
             .inspect_err(|e| error!(?e, "Failed to decode header from downstream"))?;
         let header_len = reader.position() as usize;
         let payload = &buf[header_len..];
 
-        Ok((UpstreamAddr(header.upstream), payload))
+        Ok((UpstreamAddr(header.address), payload))
     }
 
     async fn handle_steer_error(

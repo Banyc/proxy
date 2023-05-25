@@ -11,12 +11,14 @@ use tracing::error;
 use crate::{error::ProxyProtocolError, header::InternetAddr};
 
 use self::{
+    header::StreamType,
     kcp::{AddressedKcpStream, KcpConnector},
     pool::Pool,
     quic::QuicIoStream,
     tcp::TcpConnector,
 };
 
+pub mod header;
 pub mod kcp;
 pub mod pool;
 pub mod quic;
@@ -59,6 +61,15 @@ impl ConnectStream for StreamConnector {
         match self {
             StreamConnector::Tcp(x) => x.connect(addr).await,
             StreamConnector::Kcp(x) => x.connect(addr).await,
+        }
+    }
+}
+
+impl From<StreamType> for StreamConnector {
+    fn from(value: StreamType) -> Self {
+        match value {
+            StreamType::Tcp => StreamConnector::Tcp(TcpConnector),
+            StreamType::Kcp => StreamConnector::Kcp(KcpConnector),
         }
     }
 }

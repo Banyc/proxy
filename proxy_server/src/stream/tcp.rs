@@ -40,9 +40,9 @@ mod tests {
     use super::*;
     use common::{
         crypto::{XorCrypto, XorCryptoCursor},
-        header::{read_header_async, write_header_async, RequestHeader, ResponseHeader},
+        header::{read_header_async, write_header_async, ResponseHeader},
         heartbeat,
-        stream::{pool::Pool, StreamConnector},
+        stream::{self, header::StreamType, pool::Pool, StreamConnector},
     };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -92,8 +92,9 @@ mod tests {
         {
             heartbeat::send_upgrade(&mut stream).await.unwrap();
             // Encode header
-            let header = RequestHeader {
-                upstream: origin_addr.into(),
+            let header = stream::header::RequestHeader {
+                address: origin_addr.into(),
+                stream_type: StreamType::Tcp,
             };
             let mut crypto_cursor = XorCryptoCursor::new(&crypto);
             write_header_async(&mut stream, &header, &mut crypto_cursor)

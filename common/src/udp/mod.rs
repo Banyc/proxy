@@ -12,6 +12,8 @@ use tracing::{error, info, instrument, trace};
 
 use crate::header::InternetAddr;
 
+pub mod header;
+
 #[derive(Debug, Clone)]
 pub struct UdpDownstreamWriter {
     downstream_writer: Arc<UdpSocket>,

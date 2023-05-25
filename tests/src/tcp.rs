@@ -1,13 +1,13 @@
 #[cfg(test)]
 mod tests {
-    use std::{io, net::SocketAddr};
+    use std::io;
 
     use common::{
         error::{ProxyProtocolError, ResponseErrorKind},
         header::ProxyConfig,
-        stream::{pool::Pool, StreamConnector},
+        stream::{self, header::StreamType, pool::Pool, StreamConnector},
     };
-    use proxy_client::stream::tcp::tcp_establish;
+    use proxy_client::stream::establish;
     use proxy_server::stream::{tcp::build_tcp_proxy_server, StreamProxyServer};
     use tokio::{
         io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -16,7 +16,7 @@ mod tests {
 
     use crate::create_random_crypto;
 
-    async fn spawn_proxy(addr: &str) -> ProxyConfig {
+    async fn spawn_proxy(addr: &str) -> ProxyConfig<stream::header::RequestHeader> {
         let crypto = create_random_crypto();
         let proxy =
             StreamProxyServer::new(crypto.clone(), None, Pool::new(), StreamConnector::new());
@@ -26,12 +26,20 @@ mod tests {
             server.serve().await.unwrap();
         });
         ProxyConfig {
-            address: proxy_addr.into(),
+            header: stream::header::RequestHeader {
+                address: proxy_addr.into(),
+                stream_type: StreamType::Tcp,
+            },
             crypto,
         }
     }
 
-    async fn spawn_greet(addr: &str, req: &[u8], resp: &[u8], accepts: usize) -> SocketAddr {
+    async fn spawn_greet(
+        addr: &str,
+        req: &[u8],
+        resp: &[u8],
+        accepts: usize,
+    ) -> stream::header::RequestHeader {
         let listener = TcpListener::bind(addr).await.unwrap();
         let greet_addr = listener.local_addr().unwrap();
         let req = req.to_vec();
@@ -50,7 +58,10 @@ mod tests {
                 });
             }
         });
-        greet_addr
+        stream::header::RequestHeader {
+            address: greet_addr.into(),
+            stream_type: StreamType::Tcp,
+        }
     }
 
     async fn read_response<S>(stream: &mut S, resp_msg: &[u8]) -> io::Result<()>
@@ -79,9 +90,9 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let (mut stream, _) = tcp_establish(
+        let (mut stream, _) = establish(
             &[proxy_1_config, proxy_2_config, proxy_3_config],
-            &greet_addr.into(),
+            greet_addr,
             &Pool::new(),
         )
         .await
@@ -114,12 +125,12 @@ mod tests {
 
         for _ in 0..clients {
             let proxy_configs = proxy_configs.clone();
+            let greet_addr = greet_addr.clone();
             handles.spawn(async move {
                 // Connect to proxy server
-                let (mut stream, _) =
-                    tcp_establish(&proxy_configs, &greet_addr.into(), &Pool::new())
-                        .await
-                        .unwrap();
+                let (mut stream, _) = establish(&proxy_configs, greet_addr, &Pool::new())
+                    .await
+                    .unwrap();
 
                 // Send message
                 stream.write_all(req_msg).await.unwrap();
@@ -154,13 +165,14 @@ mod tests {
 
         for _ in 0..50 {
             let proxy_configs = proxy_configs.clone();
+            let greet_addr = greet_addr.clone();
             handles.spawn(async move {
                 for _ in 0..10 {
+                    let greet_addr = greet_addr.clone();
                     // Connect to proxy server
-                    let (mut stream, _) =
-                        tcp_establish(&proxy_configs, &greet_addr.into(), &Pool::new())
-                            .await
-                            .unwrap();
+                    let (mut stream, _) = establish(&proxy_configs, greet_addr, &Pool::new())
+                        .await
+                        .unwrap();
 
                     // Send message
                     stream.write_all(req_msg).await.unwrap();
@@ -191,9 +203,9 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let err = tcp_establish(
+        let err = establish(
             &[proxy_1_config.clone(), proxy_2_config, proxy_3_config],
-            &greet_addr.into(),
+            greet_addr,
             &Pool::new(),
         )
         .await
@@ -204,7 +216,7 @@ mod tests {
                     ResponseErrorKind::Loopback => {}
                     _ => panic!("Unexpected error: {:?}", err),
                 }
-                assert_eq!(err.source, proxy_1_config.address);
+                assert_eq!(err.source, proxy_1_config.header.address);
             }
             _ => panic!("Unexpected error: {:?}", err),
         }
@@ -222,9 +234,7 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let (mut stream, _) = tcp_establish(&[], &greet_addr.into(), &Pool::new())
-            .await
-            .unwrap();
+        let (mut stream, _) = establish(&[], greet_addr, &Pool::new()).await.unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();

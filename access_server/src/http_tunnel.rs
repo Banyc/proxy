@@ -7,12 +7,12 @@ use bytes::Bytes;
 use common::addr::any_addr;
 use common::crypto::XorCrypto;
 use common::error::ProxyProtocolError;
-use common::header::{InternetAddr, ProxyConfig, ProxyConfigBuilder};
-use common::stream::kcp::KcpConnector;
+use common::header::InternetAddr;
+use common::stream::header::{ProxyConfigBuilder, StreamProxyConfig, StreamType};
 use common::stream::pool::Pool;
 use common::stream::tcp::TcpServer;
 use common::stream::xor::XorStream;
-use common::stream::{IoStream, StreamConnector, StreamMetrics, StreamServerHook};
+use common::stream::{self, IoStream, StreamMetrics, StreamServerHook};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::body::Incoming;
@@ -20,15 +20,12 @@ use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{http, Method, Request, Response};
 
-use proxy_client::stream::kcp::kcp_establish;
-use proxy_client::stream::tcp::tcp_establish;
+use proxy_client::stream::establish;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::ToSocketAddrs;
 use tracing::{error, info, instrument, trace, warn};
-
-use crate::StreamType;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpProxyAccessBuilder {
@@ -36,17 +33,11 @@ pub struct HttpProxyAccessBuilder {
     proxy_configs: Vec<ProxyConfigBuilder>,
     payload_xor_key: Option<Vec<u8>>,
     stream_pool: Option<Vec<String>>,
-    stream_type: Option<StreamType>,
 }
 
 impl HttpProxyAccessBuilder {
     pub async fn build(self) -> io::Result<TcpServer<HttpProxyAccess>> {
-        let stream_type = self.stream_type.unwrap_or(StreamType::Tcp);
         let stream_pool = Pool::new();
-        match stream_type {
-            StreamType::Tcp => (),
-            StreamType::Kcp => stream_pool.set_connector(StreamConnector::Kcp(KcpConnector)),
-        }
         if let Some(addrs) = self.stream_pool {
             stream_pool.add_many_queues(addrs.into_iter().map(|v| v.into()));
         }
@@ -54,7 +45,6 @@ impl HttpProxyAccessBuilder {
             self.proxy_configs.into_iter().map(|x| x.build()).collect(),
             self.payload_xor_key.map(XorCrypto::new),
             stream_pool,
-            stream_type,
         );
         let server = access.build(self.listen_addr).await?;
         Ok(server)
@@ -62,24 +52,21 @@ impl HttpProxyAccessBuilder {
 }
 
 pub struct HttpProxyAccess {
-    proxy_configs: Arc<Vec<ProxyConfig>>,
+    proxy_configs: Arc<Vec<StreamProxyConfig>>,
     payload_crypto: Option<Arc<XorCrypto>>,
     stream_pool: Pool,
-    stream_type: StreamType,
 }
 
 impl HttpProxyAccess {
     pub fn new(
-        proxy_configs: Vec<ProxyConfig>,
+        proxy_configs: Vec<StreamProxyConfig>,
         payload_crypto: Option<XorCrypto>,
         stream_pool: Pool,
-        stream_type: StreamType,
     ) -> Self {
         Self {
             proxy_configs: Arc::new(proxy_configs),
             payload_crypto: payload_crypto.map(Arc::new),
             stream_pool,
-            stream_type,
         }
     }
 
@@ -130,7 +117,6 @@ impl HttpProxyAccess {
                     Arc::clone(&self.proxy_configs),
                     self.payload_crypto.clone(),
                     self.stream_pool.clone(),
-                    self.stream_type,
                 );
                 tokio::task::spawn(async move {
                     match hyper::upgrade::on(req).await {
@@ -163,14 +149,15 @@ impl HttpProxyAccess {
             let addr = format!("{}:{}", host, port);
 
             // Establish ProxyProtocol
-            let (upstream, _) = match self.stream_type {
-                StreamType::Tcp => {
-                    tcp_establish(&self.proxy_configs, &addr.into(), &self.stream_pool).await
-                }
-                StreamType::Kcp => {
-                    kcp_establish(&self.proxy_configs, &addr.into(), &self.stream_pool).await
-                }
-            }
+            let (upstream, _) = establish(
+                &self.proxy_configs,
+                stream::header::RequestHeader {
+                    address: addr.into(),
+                    stream_type: StreamType::Tcp,
+                },
+                &self.stream_pool,
+            )
+            .await
             .inspect_err(|e| {
                 error!(?e, "Failed to establish proxy protocol");
             })?;
@@ -242,24 +229,21 @@ impl StreamServerHook for HttpProxyAccess {
 }
 
 struct HttpTunnel {
-    proxy_configs: Arc<Vec<ProxyConfig>>,
+    proxy_configs: Arc<Vec<StreamProxyConfig>>,
     payload_crypto: Option<Arc<XorCrypto>>,
     stream_pool: Pool,
-    stream_type: StreamType,
 }
 
 impl HttpTunnel {
     pub fn new(
-        proxy_configs: Arc<Vec<ProxyConfig>>,
+        proxy_configs: Arc<Vec<StreamProxyConfig>>,
         payload_crypto: Option<Arc<XorCrypto>>,
         stream_pool: Pool,
-        stream_type: StreamType,
     ) -> Self {
         Self {
             proxy_configs,
             payload_crypto,
             stream_pool,
-            stream_type,
         }
     }
 
@@ -269,18 +253,21 @@ impl HttpTunnel {
     pub async fn tunnel(
         &self,
         mut upgraded: Upgraded,
-        addr: InternetAddr,
+        address: InternetAddr,
     ) -> Result<(), ProxyProtocolError> {
         let start = Instant::now();
 
         // Establish ProxyProtocol
-        let (mut upstream, upstream_sock_addr) = match self.stream_type {
-            StreamType::Tcp => tcp_establish(&self.proxy_configs, &addr, &self.stream_pool).await,
-            StreamType::Kcp => kcp_establish(&self.proxy_configs, &addr, &self.stream_pool).await,
-        }
-        .inspect_err(|e| {
-            error!(?e, "Failed to establish proxy protocol");
-        })?;
+        let destination = stream::header::RequestHeader {
+            address: address.clone(),
+            stream_type: StreamType::Tcp,
+        };
+        let (mut upstream, upstream_sock_addr) =
+            establish(&self.proxy_configs, destination, &self.stream_pool)
+                .await
+                .inspect_err(|e| {
+                    error!(?e, "Failed to establish proxy protocol");
+                })?;
 
         let downstream_addr = any_addr(&upstream_sock_addr.ip());
 
@@ -304,7 +291,7 @@ impl HttpTunnel {
             end,
             bytes_uplink: from_client,
             bytes_downlink: from_server,
-            upstream_addr: addr,
+            upstream_addr: address,
             upstream_sock_addr,
             downstream_addr,
         };

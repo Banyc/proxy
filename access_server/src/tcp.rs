@@ -4,10 +4,16 @@ use async_trait::async_trait;
 use common::{
     crypto::XorCrypto,
     error::ProxyProtocolError,
-    header::{InternetAddr, ProxyConfig, ProxyConfigBuilder},
-    stream::{pool::Pool, tcp::TcpServer, xor::XorStream, IoStream, StreamServerHook},
+    stream::{
+        self,
+        header::{ProxyConfigBuilder, StreamProxyConfig},
+        pool::Pool,
+        tcp::TcpServer,
+        xor::XorStream,
+        IoStream, StreamServerHook,
+    },
 };
-use proxy_client::stream::tcp::tcp_establish;
+use proxy_client::stream::establish;
 use serde::{Deserialize, Serialize};
 use tokio::net::ToSocketAddrs;
 use tracing::{error, instrument};
@@ -16,7 +22,7 @@ use tracing::{error, instrument};
 pub struct TcpProxyAccessBuilder {
     listen_addr: String,
     proxy_configs: Vec<ProxyConfigBuilder>,
-    destination: String,
+    destination: stream::header::RequestHeader,
     payload_xor_key: Option<Vec<u8>>,
     stream_pool: Option<Vec<String>>,
 }
@@ -29,7 +35,7 @@ impl TcpProxyAccessBuilder {
         }
         let access = TcpProxyAccess::new(
             self.proxy_configs.into_iter().map(|x| x.build()).collect(),
-            self.destination.into(),
+            self.destination,
             self.payload_xor_key.map(XorCrypto::new),
             stream_pool,
         );
@@ -39,16 +45,16 @@ impl TcpProxyAccessBuilder {
 }
 
 pub struct TcpProxyAccess {
-    proxy_configs: Vec<ProxyConfig>,
-    destination: InternetAddr,
+    proxy_configs: Vec<StreamProxyConfig>,
+    destination: stream::header::RequestHeader,
     payload_crypto: Option<XorCrypto>,
     stream_pool: Pool,
 }
 
 impl TcpProxyAccess {
     pub fn new(
-        proxy_configs: Vec<ProxyConfig>,
-        destination: InternetAddr,
+        proxy_configs: Vec<StreamProxyConfig>,
+        destination: stream::header::RequestHeader,
         payload_crypto: Option<XorCrypto>,
         stream_pool: Pool,
     ) -> Self {
@@ -71,8 +77,12 @@ impl TcpProxyAccess {
     where
         S: IoStream,
     {
-        let (mut upstream, _) =
-            tcp_establish(&self.proxy_configs, &self.destination, &self.stream_pool).await?;
+        let (mut upstream, _) = establish(
+            &self.proxy_configs,
+            self.destination.clone(),
+            &self.stream_pool,
+        )
+        .await?;
 
         let res = match &self.payload_crypto {
             Some(crypto) => {

@@ -18,11 +18,6 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct RequestHeader {
-    pub upstream: InternetAddr,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum InternetAddr {
     SocketAddr(SocketAddr),
     String(String),
@@ -62,6 +57,29 @@ impl InternetAddr {
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No address")),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub struct ProxyConfig<H> {
+    pub header: H,
+    pub crypto: XorCrypto,
+}
+
+pub fn convert_proxy_configs_to_header_crypto_pairs<H>(
+    nodes: &[ProxyConfig<H>],
+    destination: H,
+) -> Vec<(H, &XorCrypto)>
+where
+    H: Clone,
+{
+    let mut pairs = Vec::new();
+    for i in 0..nodes.len() - 1 {
+        let node = &nodes[i];
+        let next_node = &nodes[i + 1];
+        pairs.push((next_node.header.clone(), &node.crypto));
+    }
+    pairs.push((destination, &nodes.last().unwrap().crypto));
+    pairs
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -155,56 +173,11 @@ where
 
 pub const MAX_HEADER_LEN: usize = 1024;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProxyConfigBuilder {
-    pub address: String,
-    pub xor_key: Vec<u8>,
-}
-
-impl ProxyConfigBuilder {
-    pub fn build(self) -> ProxyConfig {
-        ProxyConfig {
-            address: self.address.into(),
-            crypto: XorCrypto::new(self.xor_key),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct ProxyConfig {
-    pub address: InternetAddr,
-    pub crypto: XorCrypto,
-}
-
-pub fn convert_proxy_configs_to_header_crypto_pairs<'config>(
-    nodes: &'config [ProxyConfig],
-    destination: &InternetAddr,
-) -> Vec<(RequestHeader, &'config XorCrypto)> {
-    let mut pairs = Vec::new();
-    for i in 0..nodes.len() - 1 {
-        let node = &nodes[i];
-        let next_node = &nodes[i + 1];
-        pairs.push((
-            RequestHeader {
-                upstream: next_node.address.clone(),
-            },
-            &node.crypto,
-        ));
-    }
-    pairs.push((
-        RequestHeader {
-            upstream: destination.clone(),
-        },
-        &nodes.last().unwrap().crypto,
-    ));
-    pairs
-}
-
 #[cfg(test)]
 mod tests {
     use rand::Rng;
 
-    use crate::error::ResponseErrorKind;
+    use crate::{crypto::XorCrypto, error::ResponseErrorKind};
 
     use super::*;
 
@@ -215,33 +188,6 @@ mod tests {
             key.push(rng.gen());
         }
         XorCrypto::new(key)
-    }
-
-    #[tokio::test]
-    async fn test_request_header() {
-        let mut buf = [0; 4 + MAX_HEADER_LEN];
-        let mut stream = io::Cursor::new(&mut buf[..]);
-        let crypto = create_random_crypto();
-
-        // Encode header
-        let original_header = RequestHeader {
-            upstream: "1.1.1.1:8080".parse::<SocketAddr>().unwrap().into(),
-        };
-        let mut crypto_cursor = XorCryptoCursor::new(&crypto);
-        write_header_async(&mut stream, &original_header, &mut crypto_cursor)
-            .await
-            .unwrap();
-        let len = stream.position();
-        let buf = &buf[..len as usize];
-        trace!(?original_header, ?len, "Encoded header");
-
-        // Decode header
-        let mut stream = io::Cursor::new(buf);
-        let mut crypto_cursor = XorCryptoCursor::new(&crypto);
-        let decoded_header = read_header_async(&mut stream, &mut crypto_cursor)
-            .await
-            .unwrap();
-        assert_eq!(original_header, decoded_header);
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 [[access_server.tcp_servers]]
 listen_addr = ""
-destination = ""
+destination = { address = "", stream_type = "tcp" }
 # payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 [[access_server.tcp_servers.proxy_configs]]
 address = ""
@@ -8,7 +8,7 @@ xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 
 [[access_server.udp_servers]]
 listen_addr = ""
-destination = ""
+destination = { address = "" }
 [[access_server.udp_servers.proxy_configs]]
 address = ""
 xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]

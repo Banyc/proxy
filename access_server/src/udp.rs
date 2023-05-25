@@ -8,8 +8,11 @@ use async_trait::async_trait;
 use common::{
     addr::any_addr,
     error::ProxyProtocolError,
-    header::{InternetAddr, ProxyConfig, ProxyConfigBuilder},
-    udp::{Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr},
+    udp::{
+        self,
+        header::{ProxyConfigBuilder, UdpProxyConfig},
+        Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
+    },
 };
 use proxy_client::udp::UdpProxySocket;
 use serde::{Deserialize, Serialize};
@@ -20,14 +23,14 @@ use tracing::{error, info, trace};
 pub struct UdpProxyAccessBuilder {
     listen_addr: String,
     proxy_configs: Vec<ProxyConfigBuilder>,
-    destination: String,
+    destination: udp::header::RequestHeader,
 }
 
 impl UdpProxyAccessBuilder {
     pub async fn build(self) -> io::Result<UdpServer<UdpProxyAccess>> {
         let access = UdpProxyAccess::new(
             self.proxy_configs.into_iter().map(|x| x.build()).collect(),
-            self.destination.into(),
+            self.destination,
         );
         let server = access.build(self.listen_addr).await?;
         Ok(server)
@@ -35,12 +38,15 @@ impl UdpProxyAccessBuilder {
 }
 
 pub struct UdpProxyAccess {
-    proxy_configs: Vec<ProxyConfig>,
-    destination: InternetAddr,
+    proxy_configs: Vec<UdpProxyConfig>,
+    destination: udp::header::RequestHeader,
 }
 
 impl UdpProxyAccess {
-    pub fn new(proxy_configs: Vec<ProxyConfig>, destination: InternetAddr) -> Self {
+    pub fn new(
+        proxy_configs: Vec<UdpProxyConfig>,
+        destination: udp::header::RequestHeader,
+    ) -> Self {
         Self {
             proxy_configs,
             destination,
@@ -62,7 +68,7 @@ impl UdpProxyAccess {
     ) -> Result<(), ProxyProtocolError> {
         // Connect to upstream
         let upstream =
-            UdpProxySocket::establish(self.proxy_configs.clone(), &self.destination).await?;
+            UdpProxySocket::establish(self.proxy_configs.clone(), self.destination.clone()).await?;
 
         // Periodic check if the flow is still alive
         let mut tick = tokio::time::interval(LIVE_CHECK_INTERVAL);

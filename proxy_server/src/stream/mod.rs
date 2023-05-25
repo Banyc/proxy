@@ -4,10 +4,10 @@ use async_trait::async_trait;
 use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
-    header::{read_header_async, write_header_async, InternetAddr, RequestHeader, ResponseHeader},
+    header::{read_header_async, write_header_async, InternetAddr, ResponseHeader},
     heartbeat,
     stream::{
-        connect_with_pool, pool::Pool, xor::XorStream, CreatedStream, IoAddr, IoStream,
+        self, connect_with_pool, pool::Pool, xor::XorStream, CreatedStream, IoAddr, IoStream,
         StreamConnector, StreamMetrics, StreamServerHook,
     },
 };
@@ -175,20 +175,21 @@ impl StreamProxyAcceptor {
 
         // Decode header
         let mut read_crypto_cursor = XorCryptoCursor::new(&self.crypto);
-        let header: RequestHeader = read_header_async(downstream, &mut read_crypto_cursor)
-            .await
-            .inspect_err(|e| {
-                let downstream_addr = downstream.peer_addr().ok();
-                error!(
-                    ?e,
-                    ?downstream_addr,
-                    "Failed to read header from downstream"
-                )
-            })?;
+        let header: stream::header::RequestHeader =
+            read_header_async(downstream, &mut read_crypto_cursor)
+                .await
+                .inspect_err(|e| {
+                    let downstream_addr = downstream.peer_addr().ok();
+                    error!(
+                        ?e,
+                        ?downstream_addr,
+                        "Failed to read header from downstream"
+                    )
+                })?;
 
         // Connect to upstream
         let (upstream, sock_addr) =
-            connect_with_pool(&self.connector, &header.upstream, &self.stream_pool, false).await?;
+            connect_with_pool(&self.connector, &header.address, &self.stream_pool, false).await?;
 
         // Write Ok response
         let resp = ResponseHeader { result: Ok(()) };
@@ -196,11 +197,11 @@ impl StreamProxyAcceptor {
         write_header_async(downstream, &resp, &mut write_crypto_cursor)
             .await
             .inspect_err(
-                |e| error!(?e, ?header.upstream, "Failed to write response to downstream"),
+                |e| error!(?e, ?header.address, "Failed to write response to downstream"),
             )?;
 
         // Return upstream
-        Ok((upstream, header.upstream, sock_addr))
+        Ok((upstream, header.address, sock_addr))
     }
 
     #[instrument(skip(self, stream))]
