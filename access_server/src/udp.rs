@@ -10,7 +10,7 @@ use common::{
     error::ProxyProtocolError,
     header::InternetAddr,
     udp::{
-        header::{ProxyConfigBuilder, UdpProxyConfig},
+        header::{UdpProxyConfig, UdpProxyConfigBuilder},
         Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
@@ -22,7 +22,7 @@ use tracing::{error, info, trace};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UdpProxyAccessBuilder {
     listen_addr: String,
-    proxy_configs: Vec<ProxyConfigBuilder>,
+    proxy_configs: Vec<UdpProxyConfigBuilder>,
     destination: InternetAddr,
 }
 

@@ -6,12 +6,12 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProxyConfigBuilder {
+pub struct UdpProxyConfigBuilder {
     pub address: String,
     pub xor_key: Vec<u8>,
 }
 
-impl ProxyConfigBuilder {
+impl UdpProxyConfigBuilder {
     pub fn build(self) -> UdpProxyConfig {
         ProxyConfig {
             address: self.address.into(),

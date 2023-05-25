@@ -8,7 +8,7 @@ use common::addr::any_addr;
 use common::crypto::XorCrypto;
 use common::error::ProxyProtocolError;
 use common::header::InternetAddr;
-use common::stream::header::{ProxyConfigBuilder, StreamProxyConfig, StreamType};
+use common::stream::header::{StreamProxyConfig, StreamProxyConfigBuilder, StreamType};
 use common::stream::pool::{Pool, PoolBuilder};
 use common::stream::tcp::TcpServer;
 use common::stream::xor::XorStream;
@@ -30,7 +30,7 @@ use tracing::{error, info, instrument, trace, warn};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpProxyAccessBuilder {
     listen_addr: String,
-    proxy_configs: Vec<ProxyConfigBuilder>,
+    proxy_configs: Vec<StreamProxyConfigBuilder>,
     payload_xor_key: Option<Vec<u8>>,
     stream_pool: PoolBuilder,
 }

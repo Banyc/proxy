@@ -5,7 +5,7 @@ use common::{
     crypto::XorCrypto,
     error::ProxyProtocolError,
     stream::{
-        header::{ProxyConfigBuilder, StreamProxyConfig},
+        header::{StreamProxyConfig, StreamProxyConfigBuilder},
         pool::{Pool, PoolBuilder},
         tcp::TcpServer,
         xor::XorStream,
@@ -20,7 +20,7 @@ use tracing::{error, instrument};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TcpProxyAccessBuilder {
     listen_addr: String,
-    proxy_configs: Vec<ProxyConfigBuilder>,
+    proxy_configs: Vec<StreamProxyConfigBuilder>,
     destination: StreamAddr,
     payload_xor_key: Option<Vec<u8>>,
     stream_pool: PoolBuilder,

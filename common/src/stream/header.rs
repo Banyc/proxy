@@ -15,13 +15,13 @@ pub enum StreamType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProxyConfigBuilder {
+pub struct StreamProxyConfigBuilder {
     pub address: String,
     pub stream_type: Option<StreamType>,
     pub xor_key: Vec<u8>,
 }
 
-impl ProxyConfigBuilder {
+impl StreamProxyConfigBuilder {
     pub fn build(self) -> StreamProxyConfig {
         ProxyConfig {
             address: StreamAddr {
