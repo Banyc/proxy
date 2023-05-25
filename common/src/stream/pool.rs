@@ -9,6 +9,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock as TokioRwLock;
+use tracing::error;
 
 use crate::{
     error::ProxyProtocolError, header::InternetAddr, heartbeat::send_noop, stream::CreatedStream,
@@ -58,9 +59,10 @@ impl SocketCell {
                         Some(x) => x,
                         None => break,
                     };
-                    match send_noop(stream).await {
+                    match send_noop(stream, HEARTBEAT_INTERVAL).await {
                         Ok(()) => (),
                         Err(e) => {
+                            error!(?e, "Stream pool failed to send noop heartbeat");
                             // Drop the stream
                             cell.take();
                             return Err(e);

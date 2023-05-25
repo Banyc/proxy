@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use common::{
     addr::any_addr,
     crypto::{XorCrypto, XorCryptoCursor},
-    error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
+    error::ProxyProtocolError,
     header::{read_header, write_header, ResponseHeader},
     udp::{
         header::UdpRequestHeader, Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook,
@@ -212,27 +212,7 @@ impl UdpProxyServer {
             .inspect_err(|e| error!(?e, "Failed to get local address"))?;
 
         // Respond with error
-        let resp = match error {
-            ProxyProtocolError::Io(_) => ResponseHeader {
-                result: Err(ResponseError {
-                    source: local_addr.into(),
-                    kind: ResponseErrorKind::Io,
-                }),
-            },
-            ProxyProtocolError::Bincode(_) => ResponseHeader {
-                result: Err(ResponseError {
-                    source: local_addr.into(),
-                    kind: ResponseErrorKind::Codec,
-                }),
-            },
-            ProxyProtocolError::Loopback => ResponseHeader {
-                result: Err(ResponseError {
-                    source: local_addr.into(),
-                    kind: ResponseErrorKind::Loopback,
-                }),
-            },
-            ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
-        };
+        let resp = error.into_response_header(local_addr.into());
         let mut buf = Vec::new();
         let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
         write_header(&mut buf, &resp, &mut crypto_cursor).unwrap();

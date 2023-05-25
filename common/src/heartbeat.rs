@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -13,14 +15,21 @@ pub enum HeartbeatRequest {
     Upgrade,
 }
 
-pub async fn send_noop<S>(stream: &mut S) -> Result<(), ProxyProtocolError>
+pub async fn send_noop<S>(stream: &mut S, timeout: Duration) -> Result<(), ProxyProtocolError>
 where
     S: AsyncWrite + Unpin,
 {
     let crypto = XorCrypto::new(vec![]);
     let mut crypto_cursor = XorCryptoCursor::new(&crypto);
     let req = HeartbeatRequest::Noop;
-    write_header_async(stream, &req, &mut crypto_cursor).await?;
+    tokio::select! {
+        res = write_header_async(stream, &req, &mut crypto_cursor) => {
+            res?;
+        }
+        () = tokio::time::sleep(timeout) => {
+            return Err(ProxyProtocolError::Timeout(timeout));
+        }
+    }
     Ok(())
 }
 

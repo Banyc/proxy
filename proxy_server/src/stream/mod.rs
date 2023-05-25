@@ -3,7 +3,7 @@ use std::{io, net::SocketAddr};
 use async_trait::async_trait;
 use common::{
     crypto::{XorCrypto, XorCryptoCursor},
-    error::{ProxyProtocolError, ResponseError, ResponseErrorKind},
+    error::ProxyProtocolError,
     header::{read_header_async, write_header_async, InternetAddr, ResponseHeader},
     heartbeat,
     stream::{
@@ -210,27 +210,7 @@ impl StreamProxyAcceptor {
             .inspect_err(|e| error!(?e, "Failed to get local address"))?;
 
         // Respond with error
-        let resp = match error {
-            ProxyProtocolError::Io(_) => ResponseHeader {
-                result: Err(ResponseError {
-                    source: local_addr.into(),
-                    kind: ResponseErrorKind::Io,
-                }),
-            },
-            ProxyProtocolError::Bincode(_) => ResponseHeader {
-                result: Err(ResponseError {
-                    source: local_addr.into(),
-                    kind: ResponseErrorKind::Codec,
-                }),
-            },
-            ProxyProtocolError::Loopback => ResponseHeader {
-                result: Err(ResponseError {
-                    source: local_addr.into(),
-                    kind: ResponseErrorKind::Loopback,
-                }),
-            },
-            ProxyProtocolError::Response(err) => ResponseHeader { result: Err(err) },
-        };
+        let resp = error.into_response_header(local_addr.into());
         let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
         write_header_async(stream, &resp, &mut crypto_cursor)
             .await
