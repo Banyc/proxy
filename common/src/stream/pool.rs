@@ -21,6 +21,7 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct PoolBuilder(Option<Vec<StreamAddrBuilder>>);
 
 impl PoolBuilder {
