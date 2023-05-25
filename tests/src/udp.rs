@@ -2,8 +2,8 @@
 mod tests {
     use common::{
         error::{ProxyProtocolError, ResponseErrorKind},
-        header::ProxyConfig,
-        udp,
+        header::{InternetAddr, ProxyConfig},
+        udp::header::UdpProxyConfig,
     };
     use proxy_client::udp::UdpProxySocket;
     use proxy_server::udp::UdpProxyServer;
@@ -11,7 +11,7 @@ mod tests {
 
     use crate::create_random_crypto;
 
-    async fn spawn_proxy(addr: &str) -> ProxyConfig<udp::header::RequestHeader> {
+    async fn spawn_proxy(addr: &str) -> UdpProxyConfig {
         let crypto = create_random_crypto();
         let proxy = UdpProxyServer::new(crypto.clone());
         let server = proxy.build(addr).await.unwrap();
@@ -20,19 +20,12 @@ mod tests {
             server.serve().await.unwrap();
         });
         ProxyConfig {
-            header: udp::header::RequestHeader {
-                address: proxy_addr.into(),
-            },
+            address: proxy_addr.into(),
             crypto,
         }
     }
 
-    async fn spawn_greet(
-        addr: &str,
-        req: &[u8],
-        resp: &[u8],
-        accepts: usize,
-    ) -> udp::header::RequestHeader {
+    async fn spawn_greet(addr: &str, req: &[u8], resp: &[u8], accepts: usize) -> InternetAddr {
         let listener = UdpSocket::bind(addr).await.unwrap();
         let greet_addr = listener.local_addr().unwrap();
         let req = req.to_vec();
@@ -46,9 +39,7 @@ mod tests {
                 listener.send_to(&resp, addr).await.unwrap();
             }
         });
-        udp::header::RequestHeader {
-            address: greet_addr.into(),
-        }
+        greet_addr.into()
     }
 
     async fn read_response(
@@ -208,7 +199,7 @@ mod tests {
                     ResponseErrorKind::Loopback => {}
                     _ => panic!("Unexpected error: {:?}", err),
                 }
-                assert_eq!(err.source, proxy_1_config.header.address);
+                assert_eq!(err.source, proxy_1_config.address);
             }
             _ => panic!("Unexpected error: {:?}", err),
         }

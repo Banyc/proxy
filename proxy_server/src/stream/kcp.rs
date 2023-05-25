@@ -1,10 +1,6 @@
 use std::io;
 
-use common::stream::{
-    kcp::{KcpConnector, KcpServer},
-    pool::Pool,
-    StreamConnector,
-};
+use common::stream::kcp::KcpServer;
 use serde::Deserialize;
 use tokio::net::ToSocketAddrs;
 use tokio_kcp::{KcpConfig, KcpListener};
@@ -21,11 +17,7 @@ pub struct KcpProxyServerBuilder {
 
 impl KcpProxyServerBuilder {
     pub async fn build(self) -> io::Result<KcpServer<StreamProxyServer>> {
-        let connector = StreamConnector::Kcp(KcpConnector);
-        let pool = Pool::new();
-        pool.set_connector(connector);
-        let connector = StreamConnector::Kcp(KcpConnector);
-        let stream_proxy = self.inner.build(pool, connector).await?;
+        let stream_proxy = self.inner.build().await?;
         build_kcp_proxy_server(self.listen_addr, stream_proxy).await
     }
 }

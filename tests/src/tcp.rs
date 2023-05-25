@@ -5,7 +5,11 @@ mod tests {
     use common::{
         error::{ProxyProtocolError, ResponseErrorKind},
         header::ProxyConfig,
-        stream::{self, header::StreamType, pool::Pool, StreamConnector},
+        stream::{
+            header::{StreamProxyConfig, StreamType},
+            pool::Pool,
+            StreamAddr,
+        },
     };
     use proxy_client::stream::establish;
     use proxy_server::stream::{tcp::build_tcp_proxy_server, StreamProxyServer};
@@ -16,17 +20,16 @@ mod tests {
 
     use crate::create_random_crypto;
 
-    async fn spawn_proxy(addr: &str) -> ProxyConfig<stream::header::RequestHeader> {
+    async fn spawn_proxy(addr: &str) -> StreamProxyConfig {
         let crypto = create_random_crypto();
-        let proxy =
-            StreamProxyServer::new(crypto.clone(), None, Pool::new(), StreamConnector::new());
+        let proxy = StreamProxyServer::new(crypto.clone(), None, Pool::new());
         let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         tokio::spawn(async move {
             server.serve().await.unwrap();
         });
         ProxyConfig {
-            header: stream::header::RequestHeader {
+            address: StreamAddr {
                 address: proxy_addr.into(),
                 stream_type: StreamType::Tcp,
             },
@@ -34,12 +37,7 @@ mod tests {
         }
     }
 
-    async fn spawn_greet(
-        addr: &str,
-        req: &[u8],
-        resp: &[u8],
-        accepts: usize,
-    ) -> stream::header::RequestHeader {
+    async fn spawn_greet(addr: &str, req: &[u8], resp: &[u8], accepts: usize) -> StreamAddr {
         let listener = TcpListener::bind(addr).await.unwrap();
         let greet_addr = listener.local_addr().unwrap();
         let req = req.to_vec();
@@ -58,7 +56,7 @@ mod tests {
                 });
             }
         });
-        stream::header::RequestHeader {
+        StreamAddr {
             address: greet_addr.into(),
             stream_type: StreamType::Tcp,
         }
@@ -216,7 +214,7 @@ mod tests {
                     ResponseErrorKind::Loopback => {}
                     _ => panic!("Unexpected error: {:?}", err),
                 }
-                assert_eq!(err.source, proxy_1_config.header.address);
+                assert_eq!(err.source, proxy_1_config.address.address);
             }
             _ => panic!("Unexpected error: {:?}", err),
         }

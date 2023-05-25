@@ -60,26 +60,31 @@ impl InternetAddr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct ProxyConfig<H> {
-    pub header: H,
+pub struct ProxyConfig<A> {
+    pub address: A,
     pub crypto: XorCrypto,
 }
 
-pub fn convert_proxy_configs_to_header_crypto_pairs<H>(
-    nodes: &[ProxyConfig<H>],
-    destination: H,
-) -> Vec<(H, &XorCrypto)>
+pub fn convert_proxy_configs_to_header_crypto_pairs<A>(
+    nodes: &[ProxyConfig<A>],
+    destination: A,
+) -> Vec<(A, &XorCrypto)>
 where
-    H: Clone,
+    A: Clone,
 {
     let mut pairs = Vec::new();
     for i in 0..nodes.len() - 1 {
         let node = &nodes[i];
         let next_node = &nodes[i + 1];
-        pairs.push((next_node.header.clone(), &node.crypto));
+        pairs.push((next_node.address.clone(), &node.crypto));
     }
     pairs.push((destination, &nodes.last().unwrap().crypto));
     pairs
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub struct RequestHeader<A> {
+    pub upstream: A,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]

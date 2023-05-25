@@ -2,15 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     crypto::XorCrypto,
-    header::{InternetAddr, ProxyConfig},
+    header::{ProxyConfig, RequestHeader},
 };
 
-/// A stream address
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct RequestHeader {
-    pub address: InternetAddr,
-    pub stream_type: StreamType,
-}
+use super::StreamAddr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,9 +22,9 @@ pub struct ProxyConfigBuilder {
 }
 
 impl ProxyConfigBuilder {
-    pub fn build(self) -> ProxyConfig<RequestHeader> {
+    pub fn build(self) -> StreamProxyConfig {
         ProxyConfig {
-            header: RequestHeader {
+            address: StreamAddr {
                 address: self.address.into(),
                 stream_type: self.stream_type.unwrap_or(StreamType::Tcp),
             },
@@ -38,4 +33,5 @@ impl ProxyConfigBuilder {
     }
 }
 
-pub type StreamProxyConfig = ProxyConfig<RequestHeader>;
+pub type StreamProxyConfig = ProxyConfig<StreamAddr>;
+pub type StreamRequestHeader = RequestHeader<StreamAddr>;

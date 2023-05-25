@@ -9,10 +9,10 @@ use common::crypto::XorCrypto;
 use common::error::ProxyProtocolError;
 use common::header::InternetAddr;
 use common::stream::header::{ProxyConfigBuilder, StreamProxyConfig, StreamType};
-use common::stream::pool::Pool;
+use common::stream::pool::{Pool, PoolBuilder};
 use common::stream::tcp::TcpServer;
 use common::stream::xor::XorStream;
-use common::stream::{self, IoStream, StreamMetrics, StreamServerHook};
+use common::stream::{IoStream, StreamAddr, StreamMetrics, StreamServerHook};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::body::Incoming;
@@ -32,15 +32,12 @@ pub struct HttpProxyAccessBuilder {
     listen_addr: String,
     proxy_configs: Vec<ProxyConfigBuilder>,
     payload_xor_key: Option<Vec<u8>>,
-    stream_pool: Option<Vec<String>>,
+    stream_pool: PoolBuilder,
 }
 
 impl HttpProxyAccessBuilder {
     pub async fn build(self) -> io::Result<TcpServer<HttpProxyAccess>> {
-        let stream_pool = Pool::new();
-        if let Some(addrs) = self.stream_pool {
-            stream_pool.add_many_queues(addrs.into_iter().map(|v| v.into()));
-        }
+        let stream_pool = self.stream_pool.build();
         let access = HttpProxyAccess::new(
             self.proxy_configs.into_iter().map(|x| x.build()).collect(),
             self.payload_xor_key.map(XorCrypto::new),
@@ -151,7 +148,7 @@ impl HttpProxyAccess {
             // Establish ProxyProtocol
             let (upstream, _) = establish(
                 &self.proxy_configs,
-                stream::header::RequestHeader {
+                StreamAddr {
                     address: addr.into(),
                     stream_type: StreamType::Tcp,
                 },
@@ -258,7 +255,7 @@ impl HttpTunnel {
         let start = Instant::now();
 
         // Establish ProxyProtocol
-        let destination = stream::header::RequestHeader {
+        let destination = StreamAddr {
             address: address.clone(),
             stream_type: StreamType::Tcp,
         };

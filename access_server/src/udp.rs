@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use common::{
     addr::any_addr,
     error::ProxyProtocolError,
+    header::InternetAddr,
     udp::{
-        self,
         header::{ProxyConfigBuilder, UdpProxyConfig},
         Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
@@ -23,7 +23,7 @@ use tracing::{error, info, trace};
 pub struct UdpProxyAccessBuilder {
     listen_addr: String,
     proxy_configs: Vec<ProxyConfigBuilder>,
-    destination: udp::header::RequestHeader,
+    destination: InternetAddr,
 }
 
 impl UdpProxyAccessBuilder {
@@ -39,14 +39,11 @@ impl UdpProxyAccessBuilder {
 
 pub struct UdpProxyAccess {
     proxy_configs: Vec<UdpProxyConfig>,
-    destination: udp::header::RequestHeader,
+    destination: InternetAddr,
 }
 
 impl UdpProxyAccess {
-    pub fn new(
-        proxy_configs: Vec<UdpProxyConfig>,
-        destination: udp::header::RequestHeader,
-    ) -> Self {
+    pub fn new(proxy_configs: Vec<UdpProxyConfig>, destination: InternetAddr) -> Self {
         Self {
             proxy_configs,
             destination,

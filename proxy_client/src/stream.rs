@@ -5,31 +5,29 @@ use common::{
     error::ProxyProtocolError,
     header::{
         convert_proxy_configs_to_header_crypto_pairs, read_header_async, write_header_async,
-        ProxyConfig, ResponseHeader,
+        ResponseHeader,
     },
     heartbeat,
-    stream::{self, connect_with_pool, pool::Pool, CreatedStream, StreamConnector},
+    stream::{connect_with_pool, header::StreamProxyConfig, pool::Pool, CreatedStream, StreamAddr},
 };
 use tracing::{error, instrument, trace};
 
 #[instrument(skip(proxy_configs, stream_pool))]
 pub async fn establish(
-    proxy_configs: &[ProxyConfig<stream::header::RequestHeader>],
-    destination: stream::header::RequestHeader,
+    proxy_configs: &[StreamProxyConfig],
+    destination: StreamAddr,
     stream_pool: &Pool,
 ) -> Result<(CreatedStream, SocketAddr), ProxyProtocolError> {
     // If there are no proxy configs, just connect to the destination
     if proxy_configs.is_empty() {
-        let connector: StreamConnector = destination.stream_type.into();
-        return connect_with_pool(&connector, &destination.address, stream_pool, true).await;
+        return connect_with_pool(&destination, stream_pool, true).await;
     }
 
     // Connect to the first proxy
     let ((mut stream, sock_addr), proxy_addr) = {
-        let proxy_addr = &proxy_configs[0].header.address;
-        let connector: StreamConnector = proxy_configs[0].header.stream_type.into();
+        let proxy_addr = &proxy_configs[0].address;
         (
-            connect_with_pool(&connector, proxy_addr, stream_pool, true).await?,
+            connect_with_pool(proxy_addr, stream_pool, true).await?,
             proxy_addr,
         )
     };
@@ -57,7 +55,7 @@ pub async fn establish(
 
     // Read response
     for node in proxy_configs {
-        trace!(?node.header.address, "Reading response from upstream address");
+        trace!(?node.address.address, "Reading response from upstream address");
         let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
         let resp: ResponseHeader = read_header_async(&mut stream, &mut crypto_cursor)
             .await
@@ -69,7 +67,7 @@ pub async fn establish(
                 )
             })?;
         if let Err(mut err) = resp.result {
-            err.source = node.header.address.clone();
+            err.source = node.address.address.clone();
             error!(?err, ?proxy_addr, "Response was not successful");
             return Err(ProxyProtocolError::Response(err));
         }

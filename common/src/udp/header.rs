@@ -2,13 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     crypto::XorCrypto,
-    header::{InternetAddr, ProxyConfig},
+    header::{InternetAddr, ProxyConfig, RequestHeader},
 };
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct RequestHeader {
-    pub address: InternetAddr,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfigBuilder {
@@ -17,17 +12,16 @@ pub struct ProxyConfigBuilder {
 }
 
 impl ProxyConfigBuilder {
-    pub fn build(self) -> ProxyConfig<RequestHeader> {
+    pub fn build(self) -> UdpProxyConfig {
         ProxyConfig {
-            header: RequestHeader {
-                address: self.address.into(),
-            },
+            address: self.address.into(),
             crypto: XorCrypto::new(self.xor_key),
         }
     }
 }
 
-pub type UdpProxyConfig = ProxyConfig<RequestHeader>;
+pub type UdpProxyConfig = ProxyConfig<InternetAddr>;
+pub type UdpRequestHeader = RequestHeader<InternetAddr>;
 
 #[cfg(test)]
 mod tests {
@@ -49,8 +43,8 @@ mod tests {
         let crypto = create_random_crypto(MAX_HEADER_LEN);
 
         // Encode header
-        let original_header = RequestHeader {
-            address: "1.1.1.1:8080".parse::<SocketAddr>().unwrap().into(),
+        let original_header: UdpRequestHeader = RequestHeader {
+            upstream: "1.1.1.1:8080".parse::<SocketAddr>().unwrap().into(),
         };
         let mut crypto_cursor = XorCryptoCursor::new(&crypto);
         write_header_async(&mut stream, &original_header, &mut crypto_cursor)

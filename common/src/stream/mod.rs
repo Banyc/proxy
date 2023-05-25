@@ -2,6 +2,7 @@ use std::{fmt::Display, io, net::SocketAddr, ops::DerefMut, pin::Pin};
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
+use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
@@ -24,6 +25,28 @@ pub mod pool;
 pub mod quic;
 pub mod tcp;
 pub mod xor;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub struct StreamAddrBuilder {
+    pub address: String,
+    pub stream_type: StreamType,
+}
+
+impl StreamAddrBuilder {
+    pub fn build(self) -> StreamAddr {
+        StreamAddr {
+            address: self.address.into(),
+            stream_type: self.stream_type,
+        }
+    }
+}
+
+/// A stream address
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub struct StreamAddr {
+    pub address: InternetAddr,
+    pub stream_type: StreamType,
+}
 
 pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
 
@@ -74,20 +97,18 @@ impl From<StreamType> for StreamConnector {
     }
 }
 
-pub async fn connect_with_pool<C>(
-    connector: &C,
-    addr: &InternetAddr,
+pub async fn connect_with_pool(
+    addr: &StreamAddr,
     stream_pool: &Pool,
     allow_loopback: bool,
-) -> Result<(CreatedStream, SocketAddr), ProxyProtocolError>
-where
-    C: ConnectStream,
-{
+) -> Result<(CreatedStream, SocketAddr), ProxyProtocolError> {
     let stream = stream_pool.open_stream(addr).await;
     let ret = match stream {
         Some((stream, sock_addr)) => (stream, sock_addr),
         None => {
+            let connector: StreamConnector = addr.stream_type.into();
             let sock_addr = addr
+                .address
                 .to_socket_addr()
                 .await
                 .inspect_err(|e| error!(?e, ?addr, "Failed to resolve address"))?;

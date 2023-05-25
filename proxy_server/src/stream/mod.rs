@@ -7,8 +7,11 @@ use common::{
     header::{read_header_async, write_header_async, InternetAddr, ResponseHeader},
     heartbeat,
     stream::{
-        self, connect_with_pool, pool::Pool, xor::XorStream, CreatedStream, IoAddr, IoStream,
-        StreamConnector, StreamMetrics, StreamServerHook,
+        connect_with_pool,
+        header::StreamRequestHeader,
+        pool::{Pool, PoolBuilder},
+        xor::XorStream,
+        CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };
 use serde::Deserialize;
@@ -21,22 +24,15 @@ pub mod tcp;
 pub struct StreamProxyServerBuilder {
     pub header_xor_key: Vec<u8>,
     pub payload_xor_key: Option<Vec<u8>>,
-    pub stream_pool: Option<Vec<String>>,
+    pub stream_pool: PoolBuilder,
 }
 
 impl StreamProxyServerBuilder {
-    pub async fn build(
-        self,
-        stream_pool: Pool,
-        connector: StreamConnector,
-    ) -> io::Result<StreamProxyServer> {
+    pub async fn build(self) -> io::Result<StreamProxyServer> {
         let header_crypto = XorCrypto::new(self.header_xor_key);
         let payload_crypto = self.payload_xor_key.map(XorCrypto::new);
-        if let Some(addrs) = self.stream_pool {
-            stream_pool.add_many_queues(addrs.into_iter().map(|v| v.into()));
-        }
-        let stream_proxy =
-            StreamProxyServer::new(header_crypto, payload_crypto, stream_pool, connector);
+        let stream_pool = self.stream_pool.build();
+        let stream_proxy = StreamProxyServer::new(header_crypto, payload_crypto, stream_pool);
         Ok(stream_proxy)
     }
 }
@@ -51,10 +47,9 @@ impl StreamProxyServer {
         header_crypto: XorCrypto,
         payload_crypto: Option<XorCrypto>,
         stream_pool: Pool,
-        connector: StreamConnector,
     ) -> Self {
         Self {
-            acceptor: StreamProxyAcceptor::new(header_crypto, stream_pool, connector),
+            acceptor: StreamProxyAcceptor::new(header_crypto, stream_pool),
             payload_crypto,
         }
     }
@@ -143,15 +138,13 @@ impl StreamServerHook for StreamProxyServer {
 pub struct StreamProxyAcceptor {
     crypto: XorCrypto,
     stream_pool: Pool,
-    connector: StreamConnector,
 }
 
 impl StreamProxyAcceptor {
-    pub fn new(crypto: XorCrypto, stream_pool: Pool, connector: StreamConnector) -> Self {
+    pub fn new(crypto: XorCrypto, stream_pool: Pool) -> Self {
         Self {
             crypto,
             stream_pool,
-            connector,
         }
     }
 
@@ -175,21 +168,20 @@ impl StreamProxyAcceptor {
 
         // Decode header
         let mut read_crypto_cursor = XorCryptoCursor::new(&self.crypto);
-        let header: stream::header::RequestHeader =
-            read_header_async(downstream, &mut read_crypto_cursor)
-                .await
-                .inspect_err(|e| {
-                    let downstream_addr = downstream.peer_addr().ok();
-                    error!(
-                        ?e,
-                        ?downstream_addr,
-                        "Failed to read header from downstream"
-                    )
-                })?;
+        let header: StreamRequestHeader = read_header_async(downstream, &mut read_crypto_cursor)
+            .await
+            .inspect_err(|e| {
+                let downstream_addr = downstream.peer_addr().ok();
+                error!(
+                    ?e,
+                    ?downstream_addr,
+                    "Failed to read header from downstream"
+                )
+            })?;
 
         // Connect to upstream
         let (upstream, sock_addr) =
-            connect_with_pool(&self.connector, &header.address, &self.stream_pool, false).await?;
+            connect_with_pool(&header.upstream, &self.stream_pool, false).await?;
 
         // Write Ok response
         let resp = ResponseHeader { result: Ok(()) };
@@ -197,11 +189,11 @@ impl StreamProxyAcceptor {
         write_header_async(downstream, &resp, &mut write_crypto_cursor)
             .await
             .inspect_err(
-                |e| error!(?e, ?header.address, "Failed to write response to downstream"),
+                |e| error!(?e, ?header.upstream, "Failed to write response to downstream"),
             )?;
 
         // Return upstream
-        Ok((upstream, header.address, sock_addr))
+        Ok((upstream, header.upstream.address, sock_addr))
     }
 
     #[instrument(skip(self, stream))]

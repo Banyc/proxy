@@ -1,6 +1,6 @@
 use std::io;
 
-use common::stream::{pool::Pool, tcp::TcpServer, StreamConnector};
+use common::stream::tcp::TcpServer;
 use serde::Deserialize;
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tracing::error;
@@ -16,10 +16,7 @@ pub struct TcpProxyServerBuilder {
 
 impl TcpProxyServerBuilder {
     pub async fn build(self) -> io::Result<TcpServer<StreamProxyServer>> {
-        let stream_proxy = self
-            .inner
-            .build(Pool::new(), StreamConnector::new())
-            .await?;
+        let stream_proxy = self.inner.build().await?;
         build_tcp_proxy_server(self.listen_addr, stream_proxy).await
     }
 }
@@ -42,7 +39,11 @@ mod tests {
         crypto::{XorCrypto, XorCryptoCursor},
         header::{read_header_async, write_header_async, ResponseHeader},
         heartbeat,
-        stream::{self, header::StreamType, pool::Pool, StreamConnector},
+        stream::{
+            header::{StreamRequestHeader, StreamType},
+            pool::Pool,
+            StreamAddr,
+        },
     };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -55,8 +56,7 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy =
-                StreamProxyServer::new(crypto.clone(), None, Pool::new(), StreamConnector::new());
+            let proxy = StreamProxyServer::new(crypto.clone(), None, Pool::new());
 
             let server = build_tcp_proxy_server("localhost:0", proxy).await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
@@ -92,9 +92,11 @@ mod tests {
         {
             heartbeat::send_upgrade(&mut stream).await.unwrap();
             // Encode header
-            let header = stream::header::RequestHeader {
-                address: origin_addr.into(),
-                stream_type: StreamType::Tcp,
+            let header = StreamRequestHeader {
+                upstream: StreamAddr {
+                    address: origin_addr.into(),
+                    stream_type: StreamType::Tcp,
+                },
             };
             let mut crypto_cursor = XorCryptoCursor::new(&crypto);
             write_header_async(&mut stream, &header, &mut crypto_cursor)

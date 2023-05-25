@@ -2,7 +2,7 @@
 listen_addr = ""
 header_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 # payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-# stream_pool = [""]
+# stream_pool = [{ address = "", stream_typ = "" }]
 
 [[udp_servers]]
 listen_addr = ""
@@ -12,4 +12,4 @@ header_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 listen_addr = ""
 header_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 # payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-# stream_pool = [""]
+# stream_pool = [{ address = "", stream_typ = "" }]

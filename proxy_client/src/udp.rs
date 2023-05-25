@@ -7,9 +7,9 @@ use common::{
     addr::any_addr,
     crypto::XorCryptoCursor,
     error::ProxyProtocolError,
-    header::{convert_proxy_configs_to_header_crypto_pairs, ProxyConfig, ResponseHeader},
+    header::{convert_proxy_configs_to_header_crypto_pairs, InternetAddr, ResponseHeader},
     header::{read_header, write_header},
-    udp,
+    udp::header::UdpProxyConfig,
 };
 use tokio::net::UdpSocket;
 use tracing::{error, instrument, trace};
@@ -18,28 +18,24 @@ use tracing::{error, instrument, trace};
 pub struct UdpProxySocket {
     upstream: UdpSocket,
     headers_bytes: Vec<u8>,
-    proxy_configs: Vec<ProxyConfig<udp::header::RequestHeader>>,
+    proxy_configs: Vec<UdpProxyConfig>,
 }
 
 impl UdpProxySocket {
     #[instrument(skip_all)]
     pub async fn establish(
-        proxy_configs: Vec<ProxyConfig<udp::header::RequestHeader>>,
-        destination: udp::header::RequestHeader,
+        proxy_configs: Vec<UdpProxyConfig>,
+        destination: InternetAddr,
     ) -> Result<UdpProxySocket, ProxyProtocolError> {
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
-            let addr = destination
-                .address
-                .to_socket_addr()
-                .await
-                .inspect_err(|e| {
-                    error!(
-                        ?e,
-                        ?destination,
-                        "Failed to resolve destination address for UDP proxy"
-                    )
-                })?;
+            let addr = destination.to_socket_addr().await.inspect_err(|e| {
+                error!(
+                    ?e,
+                    ?destination,
+                    "Failed to resolve destination address for UDP proxy"
+                )
+            })?;
             let any_addr = any_addr(&addr.ip());
             let upstream = UdpSocket::bind(any_addr)
                 .await
@@ -59,7 +55,7 @@ impl UdpProxySocket {
         }
 
         // Connect to upstream
-        let proxy_addr = &proxy_configs[0].header.address;
+        let proxy_addr = &proxy_configs[0].address;
         let addr = proxy_addr.to_socket_addr().await.inspect_err(|e| {
             error!(
                 ?e,
@@ -147,14 +143,14 @@ impl UdpProxySocket {
 
         // Decode and check headers
         for node in self.proxy_configs.iter() {
-            trace!(?node.header.address, "Reading response");
+            trace!(?node.address, "Reading response");
             let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
             let resp: ResponseHeader =
                 read_header(&mut reader, &mut crypto_cursor).inspect_err(|e| {
                     error!(?e, "Failed to read response from upstream for UDP proxy")
                 })?;
             if let Err(mut err) = resp.result {
-                err.source = node.header.address.clone();
+                err.source = node.address.clone();
                 error!(?err, "Response was not successful");
                 return Err(ProxyProtocolError::Response(err));
             }
