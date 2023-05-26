@@ -3,10 +3,7 @@ use std::net::SocketAddr;
 use common::{
     crypto::XorCryptoCursor,
     error::ProxyProtocolError,
-    header::{
-        convert_proxy_configs_to_header_crypto_pairs, read_header_async, write_header_async,
-        ResponseHeader,
-    },
+    header::{convert_proxy_configs_to_header_crypto_pairs, write_header_async},
     heartbeat,
     stream::{connect_with_pool, header::StreamProxyConfig, pool::Pool, CreatedStream, StreamAddr},
 };
@@ -53,25 +50,25 @@ pub async fn establish(
             .inspect_err(|e| error!(?e, ?proxy_addr, "Failed to write header to stream"))?;
     }
 
-    // Read response
-    for node in proxy_configs {
-        trace!(?node.address.address, "Reading response from upstream address");
-        let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
-        let resp: ResponseHeader = read_header_async(&mut stream, &mut crypto_cursor)
-            .await
-            .inspect_err(|e| {
-                error!(
-                    ?e,
-                    ?proxy_addr,
-                    "Failed to read response from upstream address"
-                )
-            })?;
-        if let Err(mut err) = resp.result {
-            err.source = node.address.address.clone();
-            error!(?err, ?proxy_addr, "Response was not successful");
-            return Err(ProxyProtocolError::Response(err));
-        }
-    }
+    // // Read response
+    // for node in proxy_configs {
+    //     trace!(?node.address.address, "Reading response from upstream address");
+    //     let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
+    //     let resp: ResponseHeader = read_header_async(&mut stream, &mut crypto_cursor)
+    //         .await
+    //         .inspect_err(|e| {
+    //             error!(
+    //                 ?e,
+    //                 ?proxy_addr,
+    //                 "Failed to read response from upstream address"
+    //             )
+    //         })?;
+    //     if let Err(mut err) = resp.result {
+    //         err.source = node.address.address.clone();
+    //         error!(?err, ?proxy_addr, "Response was not successful");
+    //         return Err(ProxyProtocolError::Response(err));
+    //     }
+    // }
 
     // Return stream
     Ok((stream, sock_addr))

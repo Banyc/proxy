@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::ProxyProtocolError,
-    header::{read_header_async, write_header_async, InternetAddr, ResponseHeader},
+    header::{read_header_async, write_header_async, InternetAddr},
     heartbeat,
     stream::{
         connect_with_pool,
@@ -54,10 +54,10 @@ impl StreamProxyServer {
         }
     }
 
-    #[instrument(skip(self, downstream))]
+    #[instrument(skip(self))]
     async fn proxy<S>(&self, mut downstream: S) -> io::Result<()>
     where
-        S: IoStream + IoAddr,
+        S: IoStream + IoAddr + std::fmt::Debug,
     {
         let start = std::time::Instant::now();
 
@@ -101,33 +101,33 @@ impl StreamProxyServer {
         Ok(())
     }
 
-    #[instrument(skip(self, stream, e))]
+    #[instrument(skip(self, e))]
     async fn handle_proxy_error<S>(&self, stream: &mut S, e: ProxyProtocolError)
     where
-        S: IoStream + IoAddr,
+        S: IoStream + IoAddr + std::fmt::Debug,
     {
         error!(?e, "Connection closed with error");
-        let _ = self
-            .acceptor
-            .respond_with_error(stream, e)
-            .await
-            .inspect_err(|e| {
-                let peer_addr = stream.peer_addr().ok();
-                error!(
-                    ?e,
-                    ?peer_addr,
-                    "Failed to respond with error to downstream after error"
-                )
-            });
+        // let _ = self
+        //     .acceptor
+        //     .respond_with_error(stream, e)
+        //     .await
+        //     .inspect_err(|e| {
+        //         let peer_addr = stream.peer_addr().ok();
+        //         error!(
+        //             ?e,
+        //             ?peer_addr,
+        //             "Failed to respond with error to downstream after error"
+        //         )
+        //     });
     }
 }
 
 #[async_trait]
 impl StreamServerHook for StreamProxyServer {
-    #[instrument(skip(self, stream))]
+    #[instrument(skip(self))]
     async fn handle_stream<S>(&self, stream: S)
     where
-        S: IoStream + IoAddr,
+        S: IoStream + IoAddr + std::fmt::Debug,
     {
         if let Err(e) = self.proxy(stream).await {
             error!(?e, "Connection closed with error");
@@ -148,13 +148,13 @@ impl StreamProxyAcceptor {
         }
     }
 
-    #[instrument(skip(self, downstream))]
+    #[instrument(skip(self))]
     async fn establish<S>(
         &self,
         downstream: &mut S,
     ) -> Result<(CreatedStream, InternetAddr, SocketAddr), ProxyProtocolError>
     where
-        S: IoStream + IoAddr,
+        S: IoStream + IoAddr + std::fmt::Debug,
     {
         // Wait for heartbeat upgrade
         heartbeat::wait_upgrade(downstream).await.inspect_err(|e| {
@@ -183,14 +183,14 @@ impl StreamProxyAcceptor {
         let (upstream, sock_addr) =
             connect_with_pool(&header.upstream, &self.stream_pool, false).await?;
 
-        // Write Ok response
-        let resp = ResponseHeader { result: Ok(()) };
-        let mut write_crypto_cursor = XorCryptoCursor::new(&self.crypto);
-        write_header_async(downstream, &resp, &mut write_crypto_cursor)
-            .await
-            .inspect_err(
-                |e| error!(?e, ?header.upstream, "Failed to write response to downstream"),
-            )?;
+        // // Write Ok response
+        // let resp = ResponseHeader { result: Ok(()) };
+        // let mut write_crypto_cursor = XorCryptoCursor::new(&self.crypto);
+        // write_header_async(downstream, &resp, &mut write_crypto_cursor)
+        //     .await
+        //     .inspect_err(
+        //         |e| error!(?e, ?header.upstream, "Failed to write response to downstream"),
+        //     )?;
 
         // Return upstream
         Ok((upstream, header.upstream.address, sock_addr))

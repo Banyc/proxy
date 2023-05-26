@@ -128,7 +128,7 @@ pub async fn connect_with_pool(
 pub trait StreamServerHook {
     async fn handle_stream<S>(&self, stream: S)
     where
-        S: IoStream + IoAddr;
+        S: IoStream + IoAddr + std::fmt::Debug;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
