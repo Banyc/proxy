@@ -117,7 +117,10 @@ pub async fn connect_with_pool(
                 error!(?addr, "Refusing to connect to loopback address");
                 return Err(ProxyProtocolError::Loopback);
             }
-            let stream = connector.connect(sock_addr).await?;
+            let stream = connector
+                .connect(sock_addr)
+                .await
+                .inspect_err(|e| error!(?e, ?addr, ?sock_addr, "Failed to connect to address"))?;
             (stream, sock_addr)
         }
     };

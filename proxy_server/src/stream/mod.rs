@@ -180,8 +180,17 @@ impl StreamProxyAcceptor {
             })?;
 
         // Connect to upstream
-        let (upstream, sock_addr) =
-            connect_with_pool(&header.upstream, &self.stream_pool, false).await?;
+        let (upstream, sock_addr) = connect_with_pool(&header.upstream, &self.stream_pool, false)
+            .await
+            .inspect_err(|e| {
+                let downstream_addr = downstream.peer_addr().ok();
+                error!(
+                    ?e,
+                    ?downstream_addr,
+                    ?header.upstream,
+                    "Failed to connect to upstream"
+                )
+            })?;
 
         // // Write Ok response
         // let resp = ResponseHeader { result: Ok(()) };
