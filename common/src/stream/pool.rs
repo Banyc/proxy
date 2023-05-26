@@ -62,7 +62,7 @@ impl SocketCell {
                     match send_noop(stream, HEARTBEAT_INTERVAL).await {
                         Ok(()) => (),
                         Err(e) => {
-                            error!(?e, "Stream pool failed to send noop heartbeat");
+                            error!(?e, ?stream, "Stream pool failed to send noop heartbeat");
                             // Drop the stream
                             cell.take();
                             return Err(e);
