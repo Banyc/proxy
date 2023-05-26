@@ -196,14 +196,14 @@ impl StreamProxyAcceptor {
         Ok((upstream, header.upstream.address, sock_addr))
     }
 
-    #[instrument(skip(self, stream))]
+    #[instrument(skip(self))]
     async fn respond_with_error<S>(
         &self,
         stream: &mut S,
         error: ProxyProtocolError,
     ) -> Result<(), ProxyProtocolError>
     where
-        S: IoStream + IoAddr,
+        S: IoStream + IoAddr + std::fmt::Debug,
     {
         let local_addr = stream
             .local_addr()
