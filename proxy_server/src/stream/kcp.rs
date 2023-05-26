@@ -1,9 +1,9 @@
 use std::io;
 
-use common::stream::kcp::KcpServer;
+use common::stream::kcp::{fast_kcp_config, KcpServer};
 use serde::Deserialize;
 use tokio::net::ToSocketAddrs;
-use tokio_kcp::{KcpConfig, KcpListener};
+use tokio_kcp::KcpListener;
 use tracing::error;
 
 use super::{StreamProxyServer, StreamProxyServerBuilder};
@@ -26,7 +26,7 @@ pub async fn build_kcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyServer,
 ) -> io::Result<KcpServer<StreamProxyServer>> {
-    let config = KcpConfig::default();
+    let config = fast_kcp_config();
     let listener = KcpListener::bind(config, listen_addr)
         .await
         .inspect_err(|e| error!(?e, "Failed to bind to listen address"))?;

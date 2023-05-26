@@ -2,7 +2,7 @@ use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_kcp::{KcpConfig, KcpListener, KcpStream};
+use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
 use tracing::{error, info, instrument, trace};
 
 use super::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook};
@@ -118,7 +118,7 @@ pub struct KcpConnector;
 #[async_trait]
 impl ConnectStream for KcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
-        let config = KcpConfig::default();
+        let config = fast_kcp_config();
         let stream = KcpStream::connect(&config, addr)
             .await
             .inspect_err(|e| error!(?e, ?addr, "Failed to connect to address"))?;
@@ -132,5 +132,12 @@ impl ConnectStream for KcpConnector {
             peer_addr: addr,
         };
         Ok(CreatedStream::Kcp(stream))
+    }
+}
+
+pub fn fast_kcp_config() -> KcpConfig {
+    KcpConfig {
+        nodelay: KcpNoDelayConfig::fastest(),
+        ..Default::default()
     }
 }
