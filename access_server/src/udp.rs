@@ -23,14 +23,14 @@ use tracing::{error, info, trace};
 pub struct UdpProxyAccessBuilder {
     listen_addr: String,
     proxy_configs: Vec<UdpProxyConfigBuilder>,
-    destination: InternetAddr,
+    destination: String,
 }
 
 impl UdpProxyAccessBuilder {
     pub async fn build(self) -> io::Result<UdpServer<UdpProxyAccess>> {
         let access = UdpProxyAccess::new(
             self.proxy_configs.into_iter().map(|x| x.build()).collect(),
-            self.destination,
+            self.destination.into(),
         );
         let server = access.build(self.listen_addr).await?;
         Ok(server)

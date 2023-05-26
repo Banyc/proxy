@@ -9,7 +9,7 @@ use common::{
         pool::{Pool, PoolBuilder},
         tcp::TcpServer,
         xor::XorStream,
-        IoStream, StreamAddr, StreamServerHook,
+        IoStream, StreamAddr, StreamAddrBuilder, StreamServerHook,
     },
 };
 use proxy_client::stream::establish;
@@ -21,7 +21,7 @@ use tracing::{error, instrument};
 pub struct TcpProxyAccessBuilder {
     listen_addr: String,
     proxy_configs: Vec<StreamProxyConfigBuilder>,
-    destination: StreamAddr,
+    destination: StreamAddrBuilder,
     payload_xor_key: Option<Vec<u8>>,
     stream_pool: PoolBuilder,
 }
@@ -31,7 +31,7 @@ impl TcpProxyAccessBuilder {
         let stream_pool = self.stream_pool.build();
         let access = TcpProxyAccess::new(
             self.proxy_configs.into_iter().map(|x| x.build()).collect(),
-            self.destination,
+            self.destination.build(),
             self.payload_xor_key.map(XorCrypto::new),
             stream_pool,
         );
