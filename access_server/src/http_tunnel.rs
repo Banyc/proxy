@@ -4,7 +4,6 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use common::addr::any_addr;
 use common::crypto::XorCrypto;
 use common::header::InternetAddr;
 use common::stream::header::{StreamProxyConfig, StreamProxyConfigBuilder, StreamType};
@@ -172,7 +171,7 @@ impl HttpProxyAccess {
                 end,
                 upstream_addr,
                 upstream_sock_addr,
-                downstream_addr: any_addr(&upstream_sock_addr.ip()),
+                downstream_addr: None,
             };
             info!(%metrics, "Tunnel finished");
 
@@ -271,8 +270,6 @@ impl HttpConnect {
         let (mut upstream, upstream_addr, upstream_sock_addr) =
             establish(&self.proxy_configs, destination, &self.stream_pool).await?;
 
-        let downstream_addr = any_addr(&upstream_sock_addr.ip());
-
         // Proxying data
         let res = match &self.payload_crypto {
             Some(crypto) => {
@@ -290,7 +287,7 @@ impl HttpConnect {
                 end,
                 upstream_addr: upstream_addr.clone(),
                 upstream_sock_addr,
-                downstream_addr,
+                downstream_addr: None,
             },
         })?;
 
@@ -301,7 +298,7 @@ impl HttpConnect {
             bytes_downlink: from_server,
             upstream_addr,
             upstream_sock_addr,
-            downstream_addr,
+            downstream_addr: None,
         };
         Ok(metrics)
     }

@@ -184,7 +184,7 @@ pub struct StreamMetrics {
     pub bytes_downlink: u64,
     pub upstream_addr: StreamAddr,
     pub upstream_sock_addr: SocketAddr,
-    pub downstream_addr: SocketAddr,
+    pub downstream_addr: Option<SocketAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -193,7 +193,7 @@ pub struct FailedStreamMetrics {
     pub end: std::time::Instant,
     pub upstream_addr: StreamAddr,
     pub upstream_sock_addr: SocketAddr,
-    pub downstream_addr: SocketAddr,
+    pub downstream_addr: Option<SocketAddr>,
 }
 
 impl Display for StreamMetrics {
@@ -210,15 +210,18 @@ impl Display for StreamMetrics {
         };
         write!(
             f,
-            "up: {{ {}, {}/s }}, down: {{ {}, {}/s }}, duration: {:.1} s, upstream: {{ {} }}, downstream: {}",
+            "up: {{ {}, {}/s }}, down: {{ {}, {}/s }}, duration: {:.1} s, upstream: {{ {} }}",
             ByteSize::b(self.bytes_uplink),
             ByteSize::b(uplink_speed as u64),
             ByteSize::b(self.bytes_downlink),
             ByteSize::b(downlink_speed as u64),
             duration,
             upstream_addrs,
-            self.downstream_addr
-        )
+        )?;
+        if let Some(downstream_addr) = self.downstream_addr {
+            write!(f, ", downstream: {}", downstream_addr)?;
+        }
+        Ok(())
     }
 }
 
@@ -234,9 +237,13 @@ impl Display for FailedStreamMetrics {
         };
         write!(
             f,
-            "duration: {:.1} s, upstream: {{ {} }}, downstream: {}",
-            duration, upstream_addrs, self.downstream_addr
-        )
+            "duration: {:.1} s, upstream: {{ {} }}",
+            duration, upstream_addrs
+        )?;
+        if let Some(downstream_addr) = self.downstream_addr {
+            write!(f, ", downstream: {}", downstream_addr)?;
+        }
+        Ok(())
     }
 }
 

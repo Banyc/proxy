@@ -101,7 +101,7 @@ impl TcpProxyAccess {
                 end,
                 upstream_addr: upstream_addr.clone(),
                 upstream_sock_addr,
-                downstream_addr,
+                downstream_addr: Some(downstream_addr),
             },
         })?;
 
@@ -112,7 +112,7 @@ impl TcpProxyAccess {
             bytes_downlink,
             upstream_addr,
             upstream_sock_addr,
-            downstream_addr,
+            downstream_addr: Some(downstream_addr),
         };
         Ok(metrics)
     }

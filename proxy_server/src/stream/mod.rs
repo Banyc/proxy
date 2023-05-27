@@ -93,7 +93,7 @@ impl StreamProxyServer {
                 end,
                 upstream_addr: upstream_addr.clone(),
                 upstream_sock_addr,
-                downstream_addr,
+                downstream_addr: Some(downstream_addr),
             },
         })?;
 
@@ -104,7 +104,7 @@ impl StreamProxyServer {
             bytes_downlink,
             upstream_addr,
             upstream_sock_addr,
-            downstream_addr,
+            downstream_addr: Some(downstream_addr),
         };
         Ok(metrics)
     }
