@@ -4,15 +4,15 @@ use async_trait::async_trait;
 use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::ProxyProtocolError,
-    header::{read_header_async, InternetAddr},
+    header::read_header_async,
     heartbeat,
     stream::{
         connect_with_pool,
         header::StreamRequestHeader,
         pool::{Pool, PoolBuilder},
         xor::XorStream,
-        CreatedStream, FailedStreamMetrics, IoAddr, IoStream, StreamAddr, StreamMetrics,
-        StreamServerHook,
+        ConnectError, CreatedStream, FailedStreamMetrics, IoAddr, IoStream, StreamAddr,
+        StreamMetrics, StreamServerHook,
     },
 };
 use serde::Deserialize;
@@ -161,7 +161,7 @@ impl StreamProxyAcceptor {
     async fn establish<S>(
         &self,
         downstream: &mut S,
-    ) -> Result<(CreatedStream, InternetAddr, SocketAddr), StreamProxyAcceptorError>
+    ) -> Result<(CreatedStream, StreamAddr, SocketAddr), StreamProxyAcceptorError>
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
@@ -194,7 +194,6 @@ impl StreamProxyAcceptor {
                 StreamProxyAcceptorError::ConnectUpstream {
                     source: e,
                     downstream_addr,
-                    upstream_addr: header.upstream.clone(),
                 }
             })?;
 
@@ -208,7 +207,7 @@ impl StreamProxyAcceptor {
         //     )?;
 
         // Return upstream
-        Ok((upstream, header.upstream.address, sock_addr))
+        Ok((upstream, header.upstream, sock_addr))
     }
 
     // #[instrument(skip(self))]
@@ -273,8 +272,7 @@ pub enum StreamProxyAcceptorError {
     #[error("Failed to connect to upstream")]
     ConnectUpstream {
         #[source]
-        source: ProxyProtocolError,
-        upstream_addr: StreamAddr,
+        source: ConnectError,
         downstream_addr: Option<SocketAddr>,
     },
 }

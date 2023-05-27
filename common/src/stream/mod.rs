@@ -3,13 +3,14 @@ use std::{fmt::Display, io, net::SocketAddr, ops::DerefMut, pin::Pin};
 use async_trait::async_trait;
 use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
 use tracing::error;
 
-use crate::{error::ProxyProtocolError, header::InternetAddr};
+use crate::header::InternetAddr;
 
 use self::{
     header::StreamType,
@@ -46,6 +47,15 @@ impl StreamAddrBuilder {
 pub struct StreamAddr {
     pub address: InternetAddr,
     pub stream_type: StreamType,
+}
+
+impl Display for StreamAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.stream_type {
+            StreamType::Tcp => write!(f, "tcp://{}", self.address),
+            StreamType::Kcp => write!(f, "kcp://{}", self.address),
+        }
+    }
 }
 
 pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
@@ -101,30 +111,62 @@ pub async fn connect_with_pool(
     addr: &StreamAddr,
     stream_pool: &Pool,
     allow_loopback: bool,
-) -> Result<(CreatedStream, SocketAddr), ProxyProtocolError> {
+) -> Result<(CreatedStream, SocketAddr), ConnectError> {
     let stream = stream_pool.open_stream(addr).await;
     let ret = match stream {
         Some((stream, sock_addr)) => (stream, sock_addr),
         None => {
             let connector: StreamConnector = addr.stream_type.into();
-            let sock_addr = addr
-                .address
-                .to_socket_addr()
-                .await
-                .inspect_err(|e| error!(?e, ?addr, "Failed to resolve address"))?;
+            let sock_addr =
+                addr.address
+                    .to_socket_addr()
+                    .await
+                    .map_err(|e| ConnectError::ResolveAddr {
+                        source: e,
+                        addr: addr.clone(),
+                    })?;
             if !allow_loopback && sock_addr.ip().is_loopback() {
                 // Prevent connections to localhost
-                error!(?addr, "Refusing to connect to loopback address");
-                return Err(ProxyProtocolError::Loopback);
+                return Err(ConnectError::Loopback {
+                    addr: addr.clone(),
+                    sock_addr,
+                });
             }
-            let stream = connector
-                .connect(sock_addr)
-                .await
-                .inspect_err(|e| error!(?e, ?addr, ?sock_addr, "Failed to connect to address"))?;
+            let stream =
+                connector
+                    .connect(sock_addr)
+                    .await
+                    .map_err(|e| ConnectError::ConnectAddr {
+                        source: e,
+                        addr: addr.clone(),
+                        sock_addr,
+                    })?;
             (stream, sock_addr)
         }
     };
     Ok(ret)
+}
+
+#[derive(Debug, Error)]
+pub enum ConnectError {
+    #[error("Failed to resolve address")]
+    ResolveAddr {
+        #[source]
+        source: io::Error,
+        addr: StreamAddr,
+    },
+    #[error("Refused to connect to loopback address")]
+    Loopback {
+        addr: StreamAddr,
+        sock_addr: SocketAddr,
+    },
+    #[error("Failed to connect to address")]
+    ConnectAddr {
+        #[source]
+        source: io::Error,
+        addr: StreamAddr,
+        sock_addr: SocketAddr,
+    },
 }
 
 #[async_trait]
@@ -140,7 +182,7 @@ pub struct StreamMetrics {
     pub end: std::time::Instant,
     pub bytes_uplink: u64,
     pub bytes_downlink: u64,
-    pub upstream_addr: InternetAddr,
+    pub upstream_addr: StreamAddr,
     pub upstream_sock_addr: SocketAddr,
     pub downstream_addr: SocketAddr,
 }
@@ -149,7 +191,7 @@ pub struct StreamMetrics {
 pub struct FailedStreamMetrics {
     pub start: std::time::Instant,
     pub end: std::time::Instant,
-    pub upstream_addr: InternetAddr,
+    pub upstream_addr: StreamAddr,
     pub upstream_sock_addr: SocketAddr,
     pub downstream_addr: SocketAddr,
 }

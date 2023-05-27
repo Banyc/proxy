@@ -3,17 +3,17 @@ use std::io;
 use async_trait::async_trait;
 use common::{
     crypto::XorCrypto,
-    error::ProxyProtocolError,
     stream::{
         header::{StreamProxyConfig, StreamProxyConfigBuilder},
         pool::{Pool, PoolBuilder},
         tcp::TcpServer,
         xor::XorStream,
-        IoStream, StreamAddr, StreamAddrBuilder, StreamServerHook,
+        FailedStreamMetrics, IoAddr, IoStream, StreamAddr, StreamAddrBuilder, StreamServerHook,
     },
 };
-use proxy_client::stream::establish;
+use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tokio::net::ToSocketAddrs;
 use tracing::{error, instrument};
 
@@ -69,11 +69,15 @@ impl TcpProxyAccess {
         Ok(TcpServer::new(tcp_listener, self))
     }
 
-    async fn proxy<S>(&self, downstream: &mut S) -> Result<(), ProxyProtocolError>
+    async fn proxy<S>(&self, downstream: &mut S) -> Result<(), ProxyError>
     where
-        S: IoStream,
+        S: IoStream + IoAddr,
     {
-        let (mut upstream, _) = establish(
+        let start = std::time::Instant::now();
+
+        let downstream_addr = downstream.peer_addr().map_err(ProxyError::DownstreamAddr)?;
+
+        let (mut upstream, upstream_addr, upstream_sock_addr) = establish(
             &self.proxy_configs,
             self.destination.clone(),
             &self.stream_pool,
@@ -88,10 +92,34 @@ impl TcpProxyAccess {
             }
             None => tokio::io::copy_bidirectional(downstream, &mut upstream).await,
         };
-        res?;
+        let end = std::time::Instant::now();
+        res.map_err(|e| ProxyError::IoCopy {
+            source: e,
+            metrics: FailedStreamMetrics {
+                start,
+                end,
+                upstream_addr,
+                upstream_sock_addr,
+                downstream_addr,
+            },
+        })?;
 
         Ok(())
     }
+}
+
+#[derive(Debug, Error)]
+pub enum ProxyError {
+    #[error("Failed to get downstream address")]
+    DownstreamAddr(#[source] io::Error),
+    #[error("Failed to establish proxy chain")]
+    EstablishProxyChain(#[from] StreamEstablishError),
+    #[error("Failed to copy data between streams")]
+    IoCopy {
+        #[source]
+        source: io::Error,
+        metrics: FailedStreamMetrics,
+    },
 }
 
 #[async_trait]
@@ -99,7 +127,7 @@ impl StreamServerHook for TcpProxyAccess {
     #[instrument(skip(self, stream))]
     async fn handle_stream<S>(&self, mut stream: S)
     where
-        S: IoStream,
+        S: IoStream + IoAddr,
     {
         let res = self.proxy(&mut stream).await;
         if let Err(e) = res {

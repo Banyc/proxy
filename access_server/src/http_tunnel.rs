@@ -6,13 +6,12 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use common::addr::any_addr;
 use common::crypto::XorCrypto;
-use common::error::ProxyProtocolError;
 use common::header::InternetAddr;
 use common::stream::header::{StreamProxyConfig, StreamProxyConfigBuilder, StreamType};
 use common::stream::pool::{Pool, PoolBuilder};
 use common::stream::tcp::TcpServer;
 use common::stream::xor::XorStream;
-use common::stream::{IoStream, StreamAddr, StreamMetrics, StreamServerHook};
+use common::stream::{FailedStreamMetrics, IoStream, StreamAddr, StreamMetrics, StreamServerHook};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::body::Incoming;
@@ -20,7 +19,7 @@ use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{http, Method, Request, Response};
 
-use proxy_client::stream::establish;
+use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -75,7 +74,7 @@ impl HttpProxyAccess {
         Ok(TcpServer::new(tcp_listener, self))
     }
 
-    async fn proxy<S>(&self, downstream: S) -> Result<(), Error>
+    async fn proxy<S>(&self, downstream: S) -> Result<(), TunnelError>
     where
         S: IoStream,
     {
@@ -92,7 +91,7 @@ impl HttpProxyAccess {
     async fn proxy_svc(
         &self,
         req: Request<hyper::body::Incoming>,
-    ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error> {
+    ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError> {
         trace!(?req, "Received request");
 
         if Method::CONNECT == req.method() {
@@ -110,7 +109,7 @@ impl HttpProxyAccess {
             // connection be upgraded, so we can't return a response inside
             // `on_upgrade` future.
             if let Some(addr) = host_addr(req.uri()) {
-                let tunnel = HttpTunnel::new(
+                let tunnel = HttpConnect::new(
                     Arc::clone(&self.proxy_configs),
                     self.payload_crypto.clone(),
                     self.stream_pool.clone(),
@@ -118,8 +117,11 @@ impl HttpProxyAccess {
                 tokio::task::spawn(async move {
                     match hyper::upgrade::on(req).await {
                         Ok(upgraded) => {
-                            if let Err(e) = tunnel.tunnel(upgraded, addr.into()).await {
-                                error!(?e, "Tunnel error");
+                            match tunnel.proxy(upgraded, addr.into()).await {
+                                Ok(metrics) => {
+                                    info!(?metrics, "Tunnel finished");
+                                }
+                                Err(e) => error!(?e, "Tunnel error"),
                             };
                         }
                         Err(e) => error!(?e, "Upgrade error"),
@@ -137,16 +139,12 @@ impl HttpProxyAccess {
                 Ok(resp)
             }
         } else {
-            let host = req
-                .uri()
-                .host()
-                .ok_or(Error::HttpNoHost)
-                .inspect_err(|e| error!(?e, "No host in HTTP request"))?;
+            let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
             let port = req.uri().port_u16().unwrap_or(80);
             let addr = format!("{}:{}", host, port);
 
             // Establish ProxyProtocol
-            let (upstream, _) = establish(
+            let (upstream, _, _) = establish(
                 &self.proxy_configs,
                 StreamAddr {
                     address: addr.into(),
@@ -154,10 +152,7 @@ impl HttpProxyAccess {
                 },
                 &self.stream_pool,
             )
-            .await
-            .inspect_err(|e| {
-                error!(?e, "Failed to establish proxy protocol");
-            })?;
+            .await?;
 
             match &self.payload_crypto {
                 Some(crypto) => {
@@ -175,7 +170,7 @@ impl HttpProxyAccess {
         &self,
         upstream: S,
         req: Request<Incoming>,
-    ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error>
+    ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>
     where
         S: AsyncWrite + AsyncRead + Send + Unpin,
     {
@@ -202,12 +197,12 @@ impl HttpProxyAccess {
 }
 
 #[derive(Debug, Error)]
-pub enum Error {
-    #[error("Proxy protocol error")]
-    ProxyProtocolError(#[from] ProxyProtocolError),
+pub enum TunnelError {
+    #[error("Failed to establish proxy chain")]
+    EstablishProxyChain(#[from] StreamEstablishError),
     #[error("Hyper error")]
     HyperError(#[from] hyper::Error),
-    #[error("Http error")]
+    #[error("No host in HTTP request")]
     HttpNoHost,
 }
 
@@ -225,13 +220,13 @@ impl StreamServerHook for HttpProxyAccess {
     }
 }
 
-struct HttpTunnel {
+struct HttpConnect {
     proxy_configs: Arc<Vec<StreamProxyConfig>>,
     payload_crypto: Option<Arc<XorCrypto>>,
     stream_pool: Pool,
 }
 
-impl HttpTunnel {
+impl HttpConnect {
     pub fn new(
         proxy_configs: Arc<Vec<StreamProxyConfig>>,
         payload_crypto: Option<Arc<XorCrypto>>,
@@ -247,11 +242,11 @@ impl HttpTunnel {
     // Create a TCP connection to host:port, build a tunnel between the connection and
     // the upgraded connection
     #[instrument(skip(self, upgraded))]
-    pub async fn tunnel(
+    pub async fn proxy(
         &self,
         mut upgraded: Upgraded,
         address: InternetAddr,
-    ) -> Result<(), ProxyProtocolError> {
+    ) -> Result<StreamMetrics, HttpConnectError> {
         let start = Instant::now();
 
         // Establish ProxyProtocol
@@ -259,12 +254,8 @@ impl HttpTunnel {
             address: address.clone(),
             stream_type: StreamType::Tcp,
         };
-        let (mut upstream, upstream_sock_addr) =
-            establish(&self.proxy_configs, destination, &self.stream_pool)
-                .await
-                .inspect_err(|e| {
-                    error!(?e, "Failed to establish proxy protocol");
-                })?;
+        let (mut upstream, upstream_addr, upstream_sock_addr) =
+            establish(&self.proxy_configs, destination, &self.stream_pool).await?;
 
         let downstream_addr = any_addr(&upstream_sock_addr.ip());
 
@@ -277,25 +268,41 @@ impl HttpTunnel {
             }
             None => tokio::io::copy_bidirectional(&mut upgraded, &mut upstream).await,
         };
-        let (from_client, from_server) = res.inspect_err(|e| {
-            error!(?e, "Failed to copy data");
+        let end = Instant::now();
+        let (from_client, from_server) = res.map_err(|e| HttpConnectError::IoCopy {
+            source: e,
+            metrics: FailedStreamMetrics {
+                start,
+                end,
+                upstream_addr: upstream_addr.clone(),
+                upstream_sock_addr,
+                downstream_addr,
+            },
         })?;
 
-        // Print message when done
-        let end = Instant::now();
         let metrics = StreamMetrics {
             start,
             end,
             bytes_uplink: from_client,
             bytes_downlink: from_server,
-            upstream_addr: address,
+            upstream_addr,
             upstream_sock_addr,
             downstream_addr,
         };
-        info!(%metrics, "Tunnel closed normally");
-
-        Ok(())
+        Ok(metrics)
     }
+}
+
+#[derive(Debug, Error)]
+pub enum HttpConnectError {
+    #[error("Failed to establish proxy chain")]
+    EstablishProxyChain(#[from] StreamEstablishError),
+    #[error("Failed to copy data between streams")]
+    IoCopy {
+        #[source]
+        source: io::Error,
+        metrics: FailedStreamMetrics,
+    },
 }
 
 fn host_addr(uri: &http::Uri) -> Option<String> {
