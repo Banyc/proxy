@@ -1,13 +1,14 @@
 use std::net::SocketAddr;
 
 use common::{
+    config::convert_proxy_configs_to_header_crypto_pairs,
     crypto::XorCryptoCursor,
     error::ProxyProtocolError,
-    header::{convert_proxy_configs_to_header_crypto_pairs, write_header_async},
+    header::write_header_async,
     heartbeat,
     stream::{
-        connect_with_pool, header::StreamProxyConfig, pool::Pool, ConnectError, CreatedStream,
-        StreamAddr,
+        addr::StreamAddr, config::StreamProxyConfig, connect_with_pool, pool::Pool, ConnectError,
+        CreatedStream,
     },
 };
 use thiserror::Error;

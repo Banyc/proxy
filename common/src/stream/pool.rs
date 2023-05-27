@@ -15,7 +15,7 @@ use crate::{
     addr::InternetAddr, error::ProxyProtocolError, heartbeat::send_noop, stream::CreatedStream,
 };
 
-use super::{ConnectStream, IoAddr, StreamAddr, StreamAddrBuilder, StreamConnector};
+use super::{addr::StreamAddrBuilder, ConnectStream, IoAddr, StreamAddr, StreamConnector};
 
 const QUEUE_LEN: usize = 16;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
@@ -242,7 +242,7 @@ impl Default for Pool {
 mod tests {
     use tokio::{io::AsyncReadExt, net::TcpListener, task::JoinSet};
 
-    use crate::stream::header::StreamType;
+    use crate::stream::StreamType;
 
     use super::*;
 

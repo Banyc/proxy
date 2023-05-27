@@ -10,7 +10,7 @@ use common::{
     addr::InternetAddr,
     error::ProxyProtocolError,
     udp::{
-        header::{UdpProxyConfig, UdpProxyConfigBuilder},
+        config::{UdpProxyConfig, UdpProxyConfigBuilder},
         Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };

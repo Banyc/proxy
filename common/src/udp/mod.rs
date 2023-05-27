@@ -12,6 +12,7 @@ use tracing::{error, info, instrument, trace};
 
 use crate::addr::InternetAddr;
 
+pub mod config;
 pub mod header;
 
 #[derive(Debug, Clone)]

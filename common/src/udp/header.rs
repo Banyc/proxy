@@ -1,27 +1,5 @@
-use serde::{Deserialize, Serialize};
+use crate::{addr::InternetAddr, header::RequestHeader};
 
-use crate::{
-    addr::InternetAddr,
-    crypto::XorCrypto,
-    header::{ProxyConfig, RequestHeader},
-};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UdpProxyConfigBuilder {
-    pub address: String,
-    pub xor_key: Vec<u8>,
-}
-
-impl UdpProxyConfigBuilder {
-    pub fn build(self) -> UdpProxyConfig {
-        ProxyConfig {
-            address: self.address.into(),
-            crypto: XorCrypto::new(self.xor_key),
-        }
-    }
-}
-
-pub type UdpProxyConfig = ProxyConfig<InternetAddr>;
 pub type UdpRequestHeader = RequestHeader<InternetAddr>;
 
 #[cfg(test)]
@@ -32,7 +10,7 @@ mod tests {
 
     use crate::{
         crypto::{tests::create_random_crypto, XorCryptoCursor},
-        header::{read_header_async, write_header_async, MAX_HEADER_LEN},
+        header::{read_header_async, write_header_async, RequestHeader, MAX_HEADER_LEN},
     };
 
     use super::*;

@@ -43,9 +43,9 @@ mod tests {
         header::write_header_async,
         heartbeat,
         stream::{
-            header::{StreamRequestHeader, StreamType},
+            addr::{StreamAddr, StreamType},
+            header::StreamRequestHeader,
             pool::Pool,
-            StreamAddr,
         },
     };
     use tokio::{

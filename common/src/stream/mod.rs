@@ -2,7 +2,6 @@ use std::{fmt::Display, io, net::SocketAddr, ops::DerefMut, pin::Pin};
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -13,50 +12,21 @@ use tracing::error;
 use crate::addr::InternetAddr;
 
 use self::{
-    header::StreamType,
+    addr::{StreamAddr, StreamType},
     kcp::{AddressedKcpStream, KcpConnector},
     pool::Pool,
     quic::QuicIoStream,
     tcp::TcpConnector,
 };
 
+pub mod addr;
+pub mod config;
 pub mod header;
 pub mod kcp;
 pub mod pool;
 pub mod quic;
 pub mod tcp;
 pub mod xor;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct StreamAddrBuilder {
-    pub address: String,
-    pub stream_type: StreamType,
-}
-
-impl StreamAddrBuilder {
-    pub fn build(self) -> StreamAddr {
-        StreamAddr {
-            address: self.address.into(),
-            stream_type: self.stream_type,
-        }
-    }
-}
-
-/// A stream address
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct StreamAddr {
-    pub address: InternetAddr,
-    pub stream_type: StreamType,
-}
-
-impl Display for StreamAddr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.stream_type {
-            StreamType::Tcp => write!(f, "tcp://{}", self.address),
-            StreamType::Kcp => write!(f, "kcp://{}", self.address),
-        }
-    }
-}
 
 pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
 

@@ -7,12 +7,13 @@ use common::{
     header::read_header_async,
     heartbeat,
     stream::{
+        addr::StreamAddr,
         connect_with_pool,
         header::StreamRequestHeader,
         pool::{Pool, PoolBuilder},
         xor::XorStream,
-        ConnectError, CreatedStream, FailedStreamMetrics, IoAddr, IoStream, StreamAddr,
-        StreamMetrics, StreamServerHook,
+        ConnectError, CreatedStream, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics,
+        StreamServerHook,
     },
 };
 use serde::Deserialize;

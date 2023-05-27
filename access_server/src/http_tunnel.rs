@@ -6,12 +6,13 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use common::addr::InternetAddr;
 use common::crypto::XorCrypto;
-use common::stream::header::{StreamProxyConfig, StreamProxyConfigBuilder, StreamType};
+use common::stream::addr::StreamType;
+use common::stream::config::{StreamProxyConfig, StreamProxyConfigBuilder};
 use common::stream::pool::{Pool, PoolBuilder};
 use common::stream::tcp::TcpServer;
 use common::stream::xor::XorStream;
 use common::stream::{
-    FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamAddr, StreamMetrics,
+    addr::StreamAddr, FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamMetrics,
     StreamServerHook, TunnelMetrics,
 };
 use http_body_util::combinators::BoxBody;

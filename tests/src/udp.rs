@@ -2,9 +2,9 @@
 mod tests {
     use common::{
         addr::InternetAddr,
+        config::ProxyConfig,
         error::{ProxyProtocolError, ResponseErrorKind},
-        header::ProxyConfig,
-        udp::header::UdpProxyConfig,
+        udp::config::UdpProxyConfig,
     };
     use proxy_client::udp::UdpProxySocket;
     use proxy_server::udp::UdpProxyServer;

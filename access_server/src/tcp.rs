@@ -4,12 +4,12 @@ use async_trait::async_trait;
 use common::{
     crypto::XorCrypto,
     stream::{
-        header::{StreamProxyConfig, StreamProxyConfigBuilder},
+        addr::{StreamAddr, StreamAddrBuilder},
+        config::{StreamProxyConfig, StreamProxyConfigBuilder},
         pool::{Pool, PoolBuilder},
         tcp::TcpServer,
         xor::XorStream,
-        FailedStreamMetrics, IoAddr, IoStream, StreamAddr, StreamAddrBuilder, StreamMetrics,
-        StreamServerHook,
+        FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };
 use proxy_client::stream::{establish, StreamEstablishError};

@@ -5,11 +5,12 @@ use std::{
 
 use common::{
     addr::{any_addr, InternetAddr},
+    config::convert_proxy_configs_to_header_crypto_pairs,
     crypto::XorCryptoCursor,
     error::ProxyProtocolError,
-    header::{convert_proxy_configs_to_header_crypto_pairs, ResponseHeader},
+    header::ResponseHeader,
     header::{read_header, write_header},
-    udp::header::UdpProxyConfig,
+    udp::config::UdpProxyConfig,
 };
 use tokio::net::UdpSocket;
 use tracing::{error, instrument, trace};

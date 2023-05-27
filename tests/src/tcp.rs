@@ -3,11 +3,11 @@ mod tests {
     use std::io;
 
     use common::{
-        header::ProxyConfig,
+        config::ProxyConfig,
         stream::{
-            header::{StreamProxyConfig, StreamType},
+            addr::{StreamAddr, StreamType},
+            config::StreamProxyConfig,
             pool::Pool,
-            StreamAddr,
         },
     };
     use proxy_client::stream::establish;
