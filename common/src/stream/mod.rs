@@ -145,6 +145,15 @@ pub struct StreamMetrics {
     pub downstream_addr: SocketAddr,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FailedStreamMetrics {
+    pub start: std::time::Instant,
+    pub end: std::time::Instant,
+    pub upstream_addr: InternetAddr,
+    pub upstream_sock_addr: SocketAddr,
+    pub downstream_addr: SocketAddr,
+}
+
 impl Display for StreamMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let duration = self.end - self.start;

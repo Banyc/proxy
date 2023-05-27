@@ -1,7 +1,6 @@
 #![feature(result_option_inspect)]
 
-use std::io;
-
+use common::error::AnyResult;
 use http_tunnel::HttpProxyAccessBuilder;
 use serde::{Deserialize, Serialize};
 use tcp::TcpProxyAccessBuilder;
@@ -19,7 +18,7 @@ pub struct AccessServerSpawner {
 }
 
 impl AccessServerSpawner {
-    pub async fn spawn(self, join_set: &mut tokio::task::JoinSet<io::Result<()>>) {
+    pub async fn spawn(self, join_set: &mut tokio::task::JoinSet<AnyResult>) {
         if let Some(tcp_servers) = self.tcp_servers {
             for tcp_server in tcp_servers {
                 join_set.spawn(async move {

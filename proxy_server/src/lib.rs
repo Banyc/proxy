@@ -1,7 +1,6 @@
 #![feature(result_option_inspect)]
 
-use std::io;
-
+use common::error::AnyResult;
 use serde::Deserialize;
 use stream::{kcp::KcpProxyServerBuilder, tcp::TcpProxyServerBuilder};
 use udp::UdpProxyServerBuilder;
@@ -17,7 +16,7 @@ pub struct ProxyServerSpawner {
 }
 
 impl ProxyServerSpawner {
-    pub async fn spawn(self, join_set: &mut tokio::task::JoinSet<io::Result<()>>) {
+    pub async fn spawn(self, join_set: &mut tokio::task::JoinSet<AnyResult>) {
         if let Some(tcp_servers) = self.tcp_servers {
             for tcp_server in tcp_servers {
                 join_set.spawn(async move {

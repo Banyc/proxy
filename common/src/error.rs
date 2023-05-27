@@ -68,3 +68,5 @@ pub enum ResponseErrorKind {
     #[error("timeout error")]
     Timeout,
 }
+
+pub type AnyResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
