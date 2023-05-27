@@ -10,6 +10,7 @@ use common::stream::addr::StreamType;
 use common::stream::config::{StreamProxyConfig, StreamProxyConfigBuilder};
 use common::stream::pool::{Pool, PoolBuilder};
 use common::stream::tcp::TcpServer;
+use common::stream::tokio_io;
 use common::stream::xor::XorStream;
 use common::stream::{
     addr::StreamAddr, FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamMetrics,
@@ -285,9 +286,9 @@ impl HttpConnect {
             Some(crypto) => {
                 // Establish encrypted stream
                 let mut xor_stream = XorStream::upgrade(upstream, crypto);
-                tokio::io::copy_bidirectional(&mut upgraded, &mut xor_stream).await
+                tokio_io::copy_bidirectional(&mut upgraded, &mut xor_stream).await
             }
-            None => tokio::io::copy_bidirectional(&mut upgraded, &mut upstream).await,
+            None => tokio_io::copy_bidirectional(&mut upgraded, &mut upstream).await,
         };
         let end = Instant::now();
         let (from_client, from_server) = res.map_err(|e| HttpConnectError::IoCopy {

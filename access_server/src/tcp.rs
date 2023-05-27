@@ -8,6 +8,7 @@ use common::{
         config::{StreamProxyConfig, StreamProxyConfigBuilder},
         pool::{Pool, PoolBuilder},
         tcp::TcpServer,
+        tokio_io,
         xor::XorStream,
         FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
@@ -89,9 +90,9 @@ impl TcpProxyAccess {
             Some(crypto) => {
                 // Establish encrypted stream
                 let mut xor_stream = XorStream::upgrade(upstream, crypto);
-                tokio::io::copy_bidirectional(downstream, &mut xor_stream).await
+                tokio_io::copy_bidirectional(downstream, &mut xor_stream).await
             }
-            None => tokio::io::copy_bidirectional(downstream, &mut upstream).await,
+            None => tokio_io::copy_bidirectional(downstream, &mut upstream).await,
         };
         let end = std::time::Instant::now();
         let (bytes_uplink, bytes_downlink) = res.map_err(|e| ProxyError::IoCopy {

@@ -26,6 +26,7 @@ pub mod kcp;
 pub mod pool;
 pub mod quic;
 pub mod tcp;
+pub mod tokio_io;
 pub mod xor;
 
 pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}

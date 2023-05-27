@@ -11,6 +11,7 @@ use common::{
         connect_with_pool,
         header::StreamRequestHeader,
         pool::{Pool, PoolBuilder},
+        tokio_io,
         xor::XorStream,
         ConnectError, CreatedStream, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics,
         StreamServerHook,
@@ -82,9 +83,9 @@ impl StreamProxyServer {
             Some(crypto) => {
                 // Establish encrypted stream
                 let mut xor_stream = XorStream::upgrade(downstream, crypto);
-                tokio::io::copy_bidirectional(&mut xor_stream, &mut upstream).await
+                tokio_io::copy_bidirectional(&mut xor_stream, &mut upstream).await
             }
-            None => tokio::io::copy_bidirectional(&mut downstream, &mut upstream).await,
+            None => tokio_io::copy_bidirectional(&mut downstream, &mut upstream).await,
         };
         let end = std::time::Instant::now();
         let (bytes_uplink, bytes_downlink) = res.map_err(|e| StreamProxyServerError::IoCopy {
