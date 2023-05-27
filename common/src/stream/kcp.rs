@@ -5,6 +5,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
 use tracing::{error, info, instrument, trace};
 
+use crate::addr::any_addr;
+
 use super::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook};
 
 #[derive(Debug)]
@@ -122,10 +124,7 @@ impl ConnectStream for KcpConnector {
         let stream = KcpStream::connect(&config, addr)
             .await
             .inspect_err(|e| error!(?e, ?addr, "Failed to connect to address"))?;
-        let local_addr = match addr.ip() {
-            std::net::IpAddr::V4(_) => "0.0.0.0:0".parse().unwrap(),
-            std::net::IpAddr::V6(_) => "[::]:0".parse().unwrap(),
-        };
+        let local_addr = any_addr(&addr.ip());
         let stream = AddressedKcpStream {
             stream,
             local_addr,
