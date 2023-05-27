@@ -2,6 +2,7 @@ use std::io;
 
 use common::stream::tcp::TcpServer;
 use serde::Deserialize;
+use thiserror::Error;
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tracing::error;
 
@@ -15,7 +16,7 @@ pub struct TcpProxyServerBuilder {
 }
 
 impl TcpProxyServerBuilder {
-    pub async fn build(self) -> io::Result<TcpServer<StreamProxyServer>> {
+    pub async fn build(self) -> Result<TcpServer<StreamProxyServer>, ListenerBindError> {
         let stream_proxy = self.inner.build();
         build_tcp_proxy_server(self.listen_addr, stream_proxy).await
     }
@@ -24,13 +25,15 @@ impl TcpProxyServerBuilder {
 pub async fn build_tcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyServer,
-) -> io::Result<TcpServer<StreamProxyServer>> {
-    let listener = TcpListener::bind(listen_addr)
-        .await
-        .inspect_err(|e| error!(?e, "Failed to bind to listen address"))?;
+) -> Result<TcpServer<StreamProxyServer>, ListenerBindError> {
+    let listener = TcpListener::bind(listen_addr).await?;
     let server = TcpServer::new(listener, stream_proxy);
     Ok(server)
 }
+
+#[derive(Debug, Error)]
+#[error("Failed to bind to listen address")]
+pub struct ListenerBindError(#[from] io::Error);
 
 #[cfg(test)]
 mod tests {
