@@ -4,10 +4,10 @@ use std::{
 };
 
 use common::{
-    addr::any_addr,
+    addr::{any_addr, InternetAddr},
     crypto::XorCryptoCursor,
     error::ProxyProtocolError,
-    header::{convert_proxy_configs_to_header_crypto_pairs, InternetAddr, ResponseHeader},
+    header::{convert_proxy_configs_to_header_crypto_pairs, ResponseHeader},
     header::{read_header, write_header},
     udp::header::UdpProxyConfig,
 };

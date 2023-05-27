@@ -12,7 +12,7 @@ use tokio::sync::RwLock as TokioRwLock;
 use tracing::error;
 
 use crate::{
-    error::ProxyProtocolError, header::InternetAddr, heartbeat::send_noop, stream::CreatedStream,
+    addr::InternetAddr, error::ProxyProtocolError, heartbeat::send_noop, stream::CreatedStream,
 };
 
 use super::{ConnectStream, IoAddr, StreamAddr, StreamAddrBuilder, StreamConnector};

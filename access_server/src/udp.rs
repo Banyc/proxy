@@ -7,8 +7,8 @@ use std::{
 use async_trait::async_trait;
 use common::{
     addr::any_addr,
+    addr::InternetAddr,
     error::ProxyProtocolError,
-    header::InternetAddr,
     udp::{
         header::{UdpProxyConfig, UdpProxyConfigBuilder},
         Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,

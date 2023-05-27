@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{error, info, instrument, trace};
 
-use crate::header::InternetAddr;
+use crate::addr::InternetAddr;
 
 pub mod header;
 

@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    addr::InternetAddr,
     crypto::XorCrypto,
-    header::{InternetAddr, ProxyConfig, RequestHeader},
+    header::{ProxyConfig, RequestHeader},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

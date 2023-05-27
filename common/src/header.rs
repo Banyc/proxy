@@ -1,63 +1,14 @@
-use std::{
-    fmt::Display,
-    io::{self, Read, Write},
-    net::SocketAddr,
-};
+use std::io::{self, Read, Write};
 
 use duplicate::duplicate_item;
 use serde::{Deserialize, Serialize};
-use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::lookup_host,
-};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{instrument, trace};
 
 use crate::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::{ProxyProtocolError, ResponseError},
 };
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub enum InternetAddr {
-    SocketAddr(SocketAddr),
-    String(String),
-}
-
-impl Display for InternetAddr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::SocketAddr(addr) => write!(f, "{}", addr),
-            Self::String(string) => write!(f, "{}", string),
-        }
-    }
-}
-
-impl From<SocketAddr> for InternetAddr {
-    fn from(addr: SocketAddr) -> Self {
-        Self::SocketAddr(addr)
-    }
-}
-
-impl From<String> for InternetAddr {
-    fn from(string: String) -> Self {
-        match string.parse::<SocketAddr>() {
-            Ok(addr) => Self::SocketAddr(addr),
-            Err(_) => Self::String(string),
-        }
-    }
-}
-
-impl InternetAddr {
-    pub async fn to_socket_addr(&self) -> io::Result<SocketAddr> {
-        match self {
-            Self::SocketAddr(addr) => Ok(*addr),
-            Self::String(host) => lookup_host(host)
-                .await?
-                .next()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No address")),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct ProxyConfig<A> {
@@ -180,6 +131,8 @@ pub const MAX_HEADER_LEN: usize = 1024;
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use rand::Rng;
 
     use crate::{crypto::XorCrypto, error::ResponseErrorKind};

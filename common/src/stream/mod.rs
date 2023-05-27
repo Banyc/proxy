@@ -10,7 +10,7 @@ use tokio::{
 };
 use tracing::error;
 
-use crate::header::InternetAddr;
+use crate::addr::InternetAddr;
 
 use self::{
     header::StreamType,

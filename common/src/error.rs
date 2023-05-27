@@ -3,7 +3,7 @@ use std::{io, time::Duration};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::header::{InternetAddr, ResponseHeader};
+use crate::{addr::InternetAddr, header::ResponseHeader};
 
 #[derive(Debug, Error)]
 pub enum ProxyProtocolError {

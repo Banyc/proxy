@@ -4,8 +4,8 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use common::addr::InternetAddr;
 use common::crypto::XorCrypto;
-use common::header::InternetAddr;
 use common::stream::header::{StreamProxyConfig, StreamProxyConfigBuilder, StreamType};
 use common::stream::pool::{Pool, PoolBuilder};
 use common::stream::tcp::TcpServer;

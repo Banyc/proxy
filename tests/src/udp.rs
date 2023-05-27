@@ -1,8 +1,9 @@
 #[cfg(test)]
 mod tests {
     use common::{
+        addr::InternetAddr,
         error::{ProxyProtocolError, ResponseErrorKind},
-        header::{InternetAddr, ProxyConfig},
+        header::ProxyConfig,
         udp::header::UdpProxyConfig,
     };
     use proxy_client::udp::UdpProxySocket;
