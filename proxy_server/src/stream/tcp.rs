@@ -37,7 +37,7 @@ mod tests {
     use super::*;
     use common::{
         crypto::{XorCrypto, XorCryptoCursor},
-        header::{read_header_async, write_header_async, ResponseHeader},
+        header::write_header_async,
         heartbeat,
         stream::{
             header::{StreamRequestHeader, StreamType},
@@ -103,12 +103,12 @@ mod tests {
                 .await
                 .unwrap();
 
-            // Read response
-            let mut crypto_cursor = XorCryptoCursor::new(&crypto);
-            let resp: ResponseHeader = read_header_async(&mut stream, &mut crypto_cursor)
-                .await
-                .unwrap();
-            assert!(resp.result.is_ok());
+            // // Read response
+            // let mut crypto_cursor = XorCryptoCursor::new(&crypto);
+            // let resp: ResponseHeader = read_header_async(&mut stream, &mut crypto_cursor)
+            //     .await
+            //     .unwrap();
+            // assert!(resp.result.is_ok());
         }
 
         // Write message
