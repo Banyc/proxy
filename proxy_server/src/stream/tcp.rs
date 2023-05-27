@@ -16,7 +16,7 @@ pub struct TcpProxyServerBuilder {
 
 impl TcpProxyServerBuilder {
     pub async fn build(self) -> io::Result<TcpServer<StreamProxyServer>> {
-        let stream_proxy = self.inner.build().await?;
+        let stream_proxy = self.inner.build();
         build_tcp_proxy_server(self.listen_addr, stream_proxy).await
     }
 }
