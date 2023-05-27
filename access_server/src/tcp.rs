@@ -8,7 +8,7 @@ use common::{
         config::{StreamProxyConfig, StreamProxyConfigBuilder},
         pool::{Pool, PoolBuilder},
         tcp::TcpServer,
-        tokio_io,
+        tokio_io::{self, CopyBiError},
         xor::XorStream,
         FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
@@ -128,7 +128,7 @@ pub enum ProxyError {
     #[error("Failed to copy data between streams")]
     IoCopy {
         #[source]
-        source: io::Error,
+        source: CopyBiError,
         metrics: FailedStreamMetrics,
     },
 }

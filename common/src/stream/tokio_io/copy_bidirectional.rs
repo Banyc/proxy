@@ -5,6 +5,7 @@
 
 use super::copy::CopyBuffer;
 use futures_core::ready;
+use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::debug;
 
@@ -71,7 +72,7 @@ where
     A: AsyncRead + AsyncWrite + Unpin + ?Sized,
     B: AsyncRead + AsyncWrite + Unpin + ?Sized,
 {
-    type Output = io::Result<(u64, u64)>;
+    type Output = Result<(u64, u64), CopyBiError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // Unpack self into mut refs to each field to avoid borrow check issues.
@@ -82,8 +83,10 @@ where
             b_to_a,
         } = &mut *self;
 
-        let a_to_b = transfer_one_direction(cx, a_to_b, &mut *a, &mut *b)?;
-        let b_to_a = transfer_one_direction(cx, b_to_a, &mut *b, &mut *a)?;
+        let a_to_b =
+            transfer_one_direction(cx, a_to_b, &mut *a, &mut *b).map_err(CopyBiError::FromAToB)?;
+        let b_to_a =
+            transfer_one_direction(cx, b_to_a, &mut *b, &mut *a).map_err(CopyBiError::FromBToA)?;
 
         // It is not a problem if ready! returns early because transfer_one_direction for the
         // other direction will keep returning TransferState::Done(count) in future calls to poll
@@ -121,7 +124,7 @@ where
 /// # Return value
 ///
 /// Returns a tuple of bytes copied `a` to `b` and bytes copied `b` to `a`.
-pub async fn copy_bidirectional<A, B>(a: &mut A, b: &mut B) -> Result<(u64, u64), std::io::Error>
+pub async fn copy_bidirectional<A, B>(a: &mut A, b: &mut B) -> Result<(u64, u64), CopyBiError>
 where
     A: AsyncRead + AsyncWrite + Unpin + ?Sized,
     B: AsyncRead + AsyncWrite + Unpin + ?Sized,
@@ -133,4 +136,12 @@ where
         b_to_a: TransferState::Running(CopyBuffer::new()),
     }
     .await
+}
+
+#[derive(Debug, Error)]
+pub enum CopyBiError {
+    #[error("error copying from A to B")]
+    FromAToB(std::io::Error),
+    #[error("error copying from B to A")]
+    FromBToA(std::io::Error),
 }

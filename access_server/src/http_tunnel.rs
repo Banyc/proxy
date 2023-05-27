@@ -10,7 +10,7 @@ use common::stream::addr::StreamType;
 use common::stream::config::{StreamProxyConfig, StreamProxyConfigBuilder};
 use common::stream::pool::{Pool, PoolBuilder};
 use common::stream::tcp::TcpServer;
-use common::stream::tokio_io;
+use common::stream::tokio_io::{self, CopyBiError};
 use common::stream::xor::XorStream;
 use common::stream::{
     addr::StreamAddr, FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamMetrics,
@@ -328,7 +328,7 @@ pub enum HttpConnectError {
     #[error("Failed to copy data between streams")]
     IoCopy {
         #[source]
-        source: io::Error,
+        source: CopyBiError,
         metrics: FailedTunnelMetrics,
     },
 }

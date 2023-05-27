@@ -11,7 +11,7 @@ use common::{
         connect_with_pool,
         header::StreamRequestHeader,
         pool::{Pool, PoolBuilder},
-        tokio_io,
+        tokio_io::{self, CopyBiError},
         xor::XorStream,
         ConnectError, CreatedStream, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics,
         StreamServerHook,
@@ -255,7 +255,7 @@ pub enum StreamProxyServerError {
     #[error("Failed to copy data between streams")]
     IoCopy {
         #[source]
-        source: io::Error,
+        source: CopyBiError,
         metrics: FailedStreamMetrics,
     },
 }
