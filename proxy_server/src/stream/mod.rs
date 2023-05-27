@@ -142,7 +142,7 @@ impl StreamServerHook for StreamProxyServer {
         match self.proxy(stream).await {
             Ok(metrics) => info!(%metrics, "Proxy finished"),
             Err(StreamProxyServerError::IoCopy { source: e, metrics }) => {
-                info!(?e, %metrics, "Tunnel error");
+                info!(?e, %metrics, "Proxy error");
             }
             Err(e) => error!(?e, "Proxy error"),
         }
