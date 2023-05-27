@@ -120,6 +120,9 @@ impl HttpProxyAccess {
                                 Ok(metrics) => {
                                     info!(%metrics, "Tunnel finished");
                                 }
+                                Err(HttpConnectError::IoCopy { source: e, metrics }) => {
+                                    info!(?e, %metrics, "Tunnel error");
+                                }
                                 Err(e) => error!(?e, "Tunnel error"),
                             };
                         }

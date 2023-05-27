@@ -138,8 +138,11 @@ impl StreamServerHook for StreamProxyServer {
         S: IoStream + IoAddr + std::fmt::Debug,
     {
         match self.proxy(stream).await {
-            Ok(metrics) => info!(%metrics, "Connection closed"),
-            Err(e) => error!(?e, "Connection closed with error"),
+            Ok(metrics) => info!(%metrics, "Proxy finished"),
+            Err(StreamProxyServerError::IoCopy { source: e, metrics }) => {
+                info!(?e, %metrics, "Tunnel error");
+            }
+            Err(e) => error!(?e, "Proxy error"),
         }
     }
 }

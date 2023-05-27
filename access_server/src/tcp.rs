@@ -143,6 +143,9 @@ impl StreamServerHook for TcpProxyAccess {
             Ok(metrics) => {
                 info!(%metrics, "Proxy finished");
             }
+            Err(ProxyError::IoCopy { source: e, metrics }) => {
+                info!(?e, %metrics, "Proxy error");
+            }
             Err(e) => error!(?e, "Failed to proxy"),
         }
     }
