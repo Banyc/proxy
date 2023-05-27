@@ -202,24 +202,24 @@ impl Display for StreamMetrics {
         let duration = duration.as_secs_f64();
         let uplink_speed = self.bytes_uplink as f64 / duration;
         let downlink_speed = self.bytes_downlink as f64 / duration;
-        let upstream_addr = self.upstream_addr.to_string();
-        let upstream_sock_addr = self.upstream_sock_addr.to_string();
-        let upstream_addrs = match upstream_addr == upstream_sock_addr {
-            true => upstream_addr,
-            false => format!("{}, {}", upstream_addr, upstream_sock_addr),
+        let upstream_addrs = match &self.upstream_addr.address {
+            InternetAddr::SocketAddr(v) => v.to_string(),
+            InternetAddr::String(_) => {
+                format!("{},{}", self.upstream_addr, self.upstream_sock_addr.ip())
+            }
         };
         write!(
             f,
-            "up: {{ {}, {}/s }}, down: {{ {}, {}/s }}, duration: {:.1} s, upstream: {{ {} }}",
+            "{:.1}s,up{{{},{}/s}},dn{{{},{}/s}},up{{{}}}",
+            duration,
             ByteSize::b(self.bytes_uplink),
             ByteSize::b(uplink_speed as u64),
             ByteSize::b(self.bytes_downlink),
             ByteSize::b(downlink_speed as u64),
-            duration,
             upstream_addrs,
         )?;
         if let Some(downstream_addr) = self.downstream_addr {
-            write!(f, ", downstream: {}", downstream_addr)?;
+            write!(f, ",dn:{}", downstream_addr)?;
         }
         Ok(())
     }
@@ -229,19 +229,15 @@ impl Display for FailedStreamMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let duration = self.end - self.start;
         let duration = duration.as_secs_f64();
-        let upstream_addr = self.upstream_addr.to_string();
-        let upstream_sock_addr = self.upstream_sock_addr.to_string();
-        let upstream_addrs = match upstream_addr == upstream_sock_addr {
-            true => upstream_addr,
-            false => format!("{}, {}", upstream_addr, upstream_sock_addr),
+        let upstream_addrs = match &self.upstream_addr.address {
+            InternetAddr::SocketAddr(v) => v.to_string(),
+            InternetAddr::String(_) => {
+                format!("{},{}", self.upstream_addr, self.upstream_sock_addr.ip())
+            }
         };
-        write!(
-            f,
-            "duration: {:.1} s, upstream: {{ {} }}",
-            duration, upstream_addrs
-        )?;
+        write!(f, "{:.1}s,up{{{}}}", duration, upstream_addrs)?;
         if let Some(downstream_addr) = self.downstream_addr {
-            write!(f, ", downstream: {}", downstream_addr)?;
+            write!(f, ",dn:{}", downstream_addr)?;
         }
         Ok(())
     }
