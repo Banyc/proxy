@@ -138,7 +138,7 @@ impl StreamServerHook for StreamProxyServer {
         S: IoStream + IoAddr + std::fmt::Debug,
     {
         match self.proxy(stream).await {
-            Ok(metrics) => info!(?metrics, "Connection closed"),
+            Ok(metrics) => info!(%metrics, "Connection closed"),
             Err(e) => error!(?e, "Connection closed with error"),
         }
     }

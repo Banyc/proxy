@@ -119,7 +119,7 @@ impl HttpProxyAccess {
                         Ok(upgraded) => {
                             match tunnel.proxy(upgraded, addr.into()).await {
                                 Ok(metrics) => {
-                                    info!(?metrics, "Tunnel finished");
+                                    info!(%metrics, "Tunnel finished");
                                 }
                                 Err(e) => error!(?e, "Tunnel error"),
                             };
@@ -139,12 +139,14 @@ impl HttpProxyAccess {
                 Ok(resp)
             }
         } else {
+            let start = std::time::Instant::now();
+
             let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
             let port = req.uri().port_u16().unwrap_or(80);
             let addr = format!("{}:{}", host, port);
 
             // Establish ProxyProtocol
-            let (upstream, _, _) = establish(
+            let (upstream, upstream_addr, upstream_sock_addr) = establish(
                 &self.proxy_configs,
                 StreamAddr {
                     address: addr.into(),
@@ -154,7 +156,7 @@ impl HttpProxyAccess {
             )
             .await?;
 
-            match &self.payload_crypto {
+            let res = match &self.payload_crypto {
                 Some(crypto) => {
                     // Establish encrypted stream
                     let xor_stream = XorStream::upgrade(upstream, crypto);
@@ -162,7 +164,19 @@ impl HttpProxyAccess {
                     self.tls_http(xor_stream, req).await
                 }
                 None => self.tls_http(upstream, req).await,
-            }
+            };
+
+            let end = std::time::Instant::now();
+            let metrics = FailedStreamMetrics {
+                start,
+                end,
+                upstream_addr,
+                upstream_sock_addr,
+                downstream_addr: any_addr(&upstream_sock_addr.ip()),
+            };
+            info!(%metrics, "Tunnel finished");
+
+            res
         }
     }
 

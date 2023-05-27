@@ -141,7 +141,7 @@ impl StreamServerHook for TcpProxyAccess {
     {
         match self.proxy(&mut stream).await {
             Ok(metrics) => {
-                info!(?metrics, "Proxy finished");
+                info!(%metrics, "Proxy finished");
             }
             Err(e) => error!(?e, "Failed to proxy"),
         }

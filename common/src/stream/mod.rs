@@ -222,6 +222,24 @@ impl Display for StreamMetrics {
     }
 }
 
+impl Display for FailedStreamMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let duration = self.end - self.start;
+        let duration = duration.as_secs_f64();
+        let upstream_addr = self.upstream_addr.to_string();
+        let upstream_sock_addr = self.upstream_sock_addr.to_string();
+        let upstream_addrs = match upstream_addr == upstream_sock_addr {
+            true => upstream_addr,
+            false => format!("{}, {}", upstream_addr, upstream_sock_addr),
+        };
+        write!(
+            f,
+            "duration: {:.1} s, upstream: {{ {} }}, downstream: {}",
+            duration, upstream_addrs, self.downstream_addr
+        )
+    }
+}
+
 #[derive(Debug)]
 pub enum CreatedStream {
     Quic(QuicIoStream),
