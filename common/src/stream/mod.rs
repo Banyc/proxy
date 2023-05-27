@@ -196,6 +196,18 @@ pub struct FailedStreamMetrics {
     pub downstream_addr: Option<SocketAddr>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TunnelMetrics {
+    pub stream: StreamMetrics,
+    pub destination: InternetAddr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FailedTunnelMetrics {
+    pub stream: FailedStreamMetrics,
+    pub destination: InternetAddr,
+}
+
 impl Display for StreamMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let duration = self.end - self.start;
@@ -239,6 +251,22 @@ impl Display for FailedStreamMetrics {
         if let Some(downstream_addr) = self.downstream_addr {
             write!(f, ",dn:{}", downstream_addr)?;
         }
+        Ok(())
+    }
+}
+
+impl Display for TunnelMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.stream.to_string())?;
+        write!(f, ",dt:{}", self.destination)?;
+        Ok(())
+    }
+}
+
+impl Display for FailedTunnelMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.stream.to_string())?;
+        write!(f, ",dt:{}", self.destination)?;
         Ok(())
     }
 }

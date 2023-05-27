@@ -10,7 +10,10 @@ use common::stream::header::{StreamProxyConfig, StreamProxyConfigBuilder, Stream
 use common::stream::pool::{Pool, PoolBuilder};
 use common::stream::tcp::TcpServer;
 use common::stream::xor::XorStream;
-use common::stream::{FailedStreamMetrics, IoStream, StreamAddr, StreamMetrics, StreamServerHook};
+use common::stream::{
+    FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamAddr, StreamMetrics,
+    StreamServerHook, TunnelMetrics,
+};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::body::Incoming;
@@ -151,7 +154,7 @@ impl HttpProxyAccess {
             let (upstream, upstream_addr, upstream_sock_addr) = establish(
                 &self.proxy_configs,
                 StreamAddr {
-                    address: addr.into(),
+                    address: addr.clone().into(),
                     stream_type: StreamType::Tcp,
                 },
                 &self.stream_pool,
@@ -169,12 +172,15 @@ impl HttpProxyAccess {
             };
 
             let end = std::time::Instant::now();
-            let metrics = FailedStreamMetrics {
-                start,
-                end,
-                upstream_addr,
-                upstream_sock_addr,
-                downstream_addr: None,
+            let metrics = FailedTunnelMetrics {
+                stream: FailedStreamMetrics {
+                    start,
+                    end,
+                    upstream_addr,
+                    upstream_sock_addr,
+                    downstream_addr: None,
+                },
+                destination: addr.into(),
             };
             info!(%metrics, "Tunnel finished");
 
@@ -262,7 +268,7 @@ impl HttpConnect {
         &self,
         mut upgraded: Upgraded,
         address: InternetAddr,
-    ) -> Result<StreamMetrics, HttpConnectError> {
+    ) -> Result<TunnelMetrics, HttpConnectError> {
         let start = Instant::now();
 
         // Establish ProxyProtocol
@@ -285,23 +291,29 @@ impl HttpConnect {
         let end = Instant::now();
         let (from_client, from_server) = res.map_err(|e| HttpConnectError::IoCopy {
             source: e,
-            metrics: FailedStreamMetrics {
-                start,
-                end,
-                upstream_addr: upstream_addr.clone(),
-                upstream_sock_addr,
-                downstream_addr: None,
+            metrics: FailedTunnelMetrics {
+                stream: FailedStreamMetrics {
+                    start,
+                    end,
+                    upstream_addr: upstream_addr.clone(),
+                    upstream_sock_addr,
+                    downstream_addr: None,
+                },
+                destination: address.clone(),
             },
         })?;
 
-        let metrics = StreamMetrics {
-            start,
-            end,
-            bytes_uplink: from_client,
-            bytes_downlink: from_server,
-            upstream_addr,
-            upstream_sock_addr,
-            downstream_addr: None,
+        let metrics = TunnelMetrics {
+            stream: StreamMetrics {
+                start,
+                end,
+                bytes_uplink: from_client,
+                bytes_downlink: from_server,
+                upstream_addr,
+                upstream_sock_addr,
+                downstream_addr: None,
+            },
+            destination: address,
         };
         Ok(metrics)
     }
@@ -315,7 +327,7 @@ pub enum HttpConnectError {
     IoCopy {
         #[source]
         source: io::Error,
-        metrics: FailedStreamMetrics,
+        metrics: FailedTunnelMetrics,
     },
 }
 
