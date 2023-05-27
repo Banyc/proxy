@@ -8,14 +8,15 @@ use common::{
         pool::{Pool, PoolBuilder},
         tcp::TcpServer,
         xor::XorStream,
-        FailedStreamMetrics, IoAddr, IoStream, StreamAddr, StreamAddrBuilder, StreamServerHook,
+        FailedStreamMetrics, IoAddr, IoStream, StreamAddr, StreamAddrBuilder, StreamMetrics,
+        StreamServerHook,
     },
 };
 use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::ToSocketAddrs;
-use tracing::{error, instrument};
+use tracing::{error, info, instrument};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TcpProxyAccessBuilder {
@@ -69,7 +70,7 @@ impl TcpProxyAccess {
         Ok(TcpServer::new(tcp_listener, self))
     }
 
-    async fn proxy<S>(&self, downstream: &mut S) -> Result<(), ProxyError>
+    async fn proxy<S>(&self, downstream: &mut S) -> Result<StreamMetrics, ProxyError>
     where
         S: IoStream + IoAddr,
     {
@@ -93,18 +94,27 @@ impl TcpProxyAccess {
             None => tokio::io::copy_bidirectional(downstream, &mut upstream).await,
         };
         let end = std::time::Instant::now();
-        res.map_err(|e| ProxyError::IoCopy {
+        let (bytes_uplink, bytes_downlink) = res.map_err(|e| ProxyError::IoCopy {
             source: e,
             metrics: FailedStreamMetrics {
                 start,
                 end,
-                upstream_addr,
+                upstream_addr: upstream_addr.clone(),
                 upstream_sock_addr,
                 downstream_addr,
             },
         })?;
 
-        Ok(())
+        let metrics = StreamMetrics {
+            start,
+            end,
+            bytes_uplink,
+            bytes_downlink,
+            upstream_addr,
+            upstream_sock_addr,
+            downstream_addr,
+        };
+        Ok(metrics)
     }
 }
 
@@ -129,9 +139,11 @@ impl StreamServerHook for TcpProxyAccess {
     where
         S: IoStream + IoAddr,
     {
-        let res = self.proxy(&mut stream).await;
-        if let Err(e) = res {
-            error!(?e, "Failed to proxy");
+        match self.proxy(&mut stream).await {
+            Ok(metrics) => {
+                info!(?metrics, "Proxy finished");
+            }
+            Err(e) => error!(?e, "Failed to proxy"),
         }
     }
 }
