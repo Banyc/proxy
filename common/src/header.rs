@@ -2,13 +2,11 @@ use std::io::{self, Read, Write};
 
 use duplicate::duplicate_item;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{instrument, trace};
 
-use crate::{
-    crypto::XorCryptoCursor,
-    error::{ProxyProtocolError, ResponseError},
-};
+use crate::{crypto::XorCryptoCursor, error::ResponseError};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct RequestHeader<A> {
@@ -29,7 +27,7 @@ pub struct ResponseHeader {
 pub async fn read_header<'crypto, S, H>(
     stream: &mut S,
     crypto: &mut XorCryptoCursor,
-) -> Result<H, ProxyProtocolError>
+) -> Result<H, HeaderError>
 where
     S: stream_bounds,
     H: for<'de> Deserialize<'de> + std::fmt::Debug,
@@ -48,7 +46,7 @@ where
     let header = {
         let mut buf = [0; MAX_HEADER_LEN];
         if len > MAX_HEADER_LEN {
-            return Err(ProxyProtocolError::Io(io::Error::new(
+            return Err(HeaderError::Io(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Header too long",
             )));
@@ -74,7 +72,7 @@ pub async fn write_header<'crypto, S, H>(
     stream: &mut S,
     header: &H,
     crypto: &mut XorCryptoCursor,
-) -> Result<(), ProxyProtocolError>
+) -> Result<(), HeaderError>
 where
     S: stream_bounds,
     H: Serialize + std::fmt::Debug,
@@ -102,6 +100,14 @@ where
     add_await([stream.write_all(hdr)])?;
 
     Ok(())
+}
+
+#[derive(Debug, Error)]
+pub enum HeaderError {
+    #[error("IO error: {0}")]
+    Io(#[from] io::Error),
+    #[error("Bincode error: {0}")]
+    Bincode(#[from] bincode::Error),
 }
 
 pub const MAX_HEADER_LEN: usize = 1024;

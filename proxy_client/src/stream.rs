@@ -3,8 +3,7 @@ use std::net::SocketAddr;
 use common::{
     config::convert_proxy_configs_to_header_crypto_pairs,
     crypto::XorCryptoCursor,
-    error::ProxyProtocolError,
-    header::write_header_async,
+    header::{write_header_async, HeaderError},
     heartbeat,
     stream::{
         addr::StreamAddr, config::StreamProxyConfig, connect_with_pool, pool::Pool, ConnectError,
@@ -91,13 +90,13 @@ pub enum StreamEstablishError {
     #[error("Failed to write heartbeat upgrade to upstream")]
     WriteHeartbeatUpgrade {
         #[source]
-        source: ProxyProtocolError,
+        source: HeaderError,
         upstream_addr: StreamAddr,
     },
     #[error("Failed to read stream request header to upstream")]
     WriteStreamRequestHeader {
         #[source]
-        source: ProxyProtocolError,
+        source: HeaderError,
         upstream_addr: StreamAddr,
     },
 }

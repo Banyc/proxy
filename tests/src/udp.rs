@@ -1,12 +1,10 @@
 #[cfg(test)]
 mod tests {
     use common::{
-        addr::InternetAddr,
-        config::ProxyConfig,
-        error::{ProxyProtocolError, ResponseErrorKind},
+        addr::InternetAddr, config::ProxyConfig, error::ResponseErrorKind,
         udp::config::UdpProxyConfig,
     };
-    use proxy_client::udp::UdpProxySocket;
+    use proxy_client::udp::{UdpProxySocket, UdpProxySocketError};
     use proxy_server::udp::UdpProxyServer;
     use tokio::net::UdpSocket;
 
@@ -46,7 +44,7 @@ mod tests {
     async fn read_response(
         socket: &UdpProxySocket,
         resp_msg: &[u8],
-    ) -> Result<(), ProxyProtocolError> {
+    ) -> Result<(), UdpProxySocketError> {
         let mut buf = [0; 1024];
         let n = socket.recv(&mut buf).await?;
         let msg_buf = &buf[..n];
@@ -195,12 +193,12 @@ mod tests {
         let err = read_response(&socket, resp_msg).await.unwrap_err();
 
         match err {
-            ProxyProtocolError::Response(err) => {
-                match err.kind {
+            UdpProxySocketError::Response(e) => {
+                match e.kind {
                     ResponseErrorKind::Loopback => {}
-                    _ => panic!("Unexpected error: {:?}", err),
+                    _ => panic!("Unexpected error: {:?}", e),
                 }
-                assert_eq!(err.source, proxy_1_config.address);
+                assert_eq!(e.source, proxy_1_config.address);
             }
             _ => panic!("Unexpected error: {:?}", err),
         }

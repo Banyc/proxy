@@ -3,8 +3,7 @@ use std::{io, net::SocketAddr};
 use async_trait::async_trait;
 use common::{
     crypto::{XorCrypto, XorCryptoCursor},
-    error::ProxyProtocolError,
-    header::read_header_async,
+    header::{read_header_async, HeaderError},
     heartbeat,
     stream::{
         addr::StreamAddr,
@@ -265,13 +264,13 @@ pub enum StreamProxyAcceptorError {
     #[error("Failed to read heartbeat header from downstream")]
     ReadHeartbeatUpgrade {
         #[source]
-        source: ProxyProtocolError,
+        source: HeaderError,
         downstream_addr: Option<SocketAddr>,
     },
     #[error("Failed to read stream request header from downstream")]
     ReadStreamRequestHeader {
         #[source]
-        source: ProxyProtocolError,
+        source: HeaderError,
         downstream_addr: Option<SocketAddr>,
     },
     #[error("Failed to connect to upstream")]

@@ -12,7 +12,9 @@ use tokio::sync::RwLock as TokioRwLock;
 use tracing::error;
 
 use crate::{
-    addr::InternetAddr, error::ProxyProtocolError, heartbeat::send_noop, stream::CreatedStream,
+    addr::InternetAddr,
+    heartbeat::{send_noop, SendNoopError},
+    stream::CreatedStream,
 };
 
 use super::{addr::StreamAddrBuilder, ConnectStream, IoAddr, StreamAddr, StreamConnector};
@@ -69,7 +71,7 @@ impl SocketCell {
                         }
                     }
                 }
-                Result::<(), ProxyProtocolError>::Ok(())
+                Result::<(), SendNoopError>::Ok(())
             }
         });
         Ok(Self { cell })

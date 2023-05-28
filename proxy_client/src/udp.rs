@@ -7,11 +7,12 @@ use common::{
     addr::{any_addr, InternetAddr},
     config::convert_proxy_configs_to_header_crypto_pairs,
     crypto::XorCryptoCursor,
-    error::ProxyProtocolError,
+    error::ResponseError,
     header::ResponseHeader,
-    header::{read_header, write_header},
+    header::{read_header, write_header, HeaderError},
     udp::config::UdpProxyConfig,
 };
+use thiserror::Error;
 use tokio::net::UdpSocket;
 use tracing::{error, instrument, trace};
 
@@ -27,7 +28,7 @@ impl UdpProxySocket {
     pub async fn establish(
         proxy_configs: Vec<UdpProxyConfig>,
         destination: InternetAddr,
-    ) -> Result<UdpProxySocket, ProxyProtocolError> {
+    ) -> Result<UdpProxySocket, UdpProxySocketError> {
         // If there are no proxy configs, just connect to the destination
         if proxy_configs.is_empty() {
             let addr = destination.to_socket_addr().await.inspect_err(|e| {
@@ -126,7 +127,7 @@ impl UdpProxySocket {
     }
 
     #[instrument(skip_all)]
-    pub async fn recv(&self, buf: &mut [u8]) -> Result<usize, ProxyProtocolError> {
+    pub async fn recv(&self, buf: &mut [u8]) -> Result<usize, UdpProxySocketError> {
         let mut new_buf = vec![0; self.headers_bytes.len() + buf.len()];
 
         // Read data
@@ -152,8 +153,8 @@ impl UdpProxySocket {
                 })?;
             if let Err(mut err) = resp.result {
                 err.source = node.address.clone();
-                error!(?err, "Response was not successful");
-                return Err(ProxyProtocolError::Response(err));
+                error!(?err, "Upstream responded with an error");
+                return Err(UdpProxySocketError::Response(err));
             }
         }
 
@@ -171,4 +172,14 @@ impl Deref for UdpProxySocket {
     fn deref(&self) -> &Self::Target {
         &self.upstream
     }
+}
+
+#[derive(Debug, Error)]
+pub enum UdpProxySocketError {
+    #[error("IO error")]
+    Io(#[from] io::Error),
+    #[error("Header error")]
+    Header(#[from] HeaderError),
+    #[error("Upstream responded with an error")]
+    Response(ResponseError),
 }

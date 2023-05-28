@@ -8,13 +8,12 @@ use async_trait::async_trait;
 use common::{
     addr::any_addr,
     addr::InternetAddr,
-    error::ProxyProtocolError,
     udp::{
         config::{UdpProxyConfig, UdpProxyConfigBuilder},
         Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
-use proxy_client::udp::UdpProxySocket;
+use proxy_client::udp::{UdpProxySocket, UdpProxySocketError};
 use serde::{Deserialize, Serialize};
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tracing::{error, info, trace};
@@ -62,7 +61,7 @@ impl UdpProxyAccess {
         mut rx: mpsc::Receiver<Packet>,
         flow: Flow,
         downstream_writer: UdpDownstreamWriter,
-    ) -> Result<(), ProxyProtocolError> {
+    ) -> Result<(), UdpProxySocketError> {
         // Connect to upstream
         let upstream =
             UdpProxySocket::establish(self.proxy_configs.clone(), self.destination.clone()).await?;

@@ -1,12 +1,12 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{
     crypto::{XorCrypto, XorCryptoCursor},
-    error::ProxyProtocolError,
-    header::{read_header_async, write_header_async},
+    header::{read_header_async, write_header_async, HeaderError},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -15,7 +15,7 @@ pub enum HeartbeatRequest {
     Upgrade,
 }
 
-pub async fn send_noop<S>(stream: &mut S, timeout: Duration) -> Result<(), ProxyProtocolError>
+pub async fn send_noop<S>(stream: &mut S, timeout: Duration) -> Result<(), SendNoopError>
 where
     S: AsyncWrite + Unpin,
 {
@@ -27,13 +27,21 @@ where
             res?;
         }
         () = tokio::time::sleep(timeout) => {
-            return Err(ProxyProtocolError::Timeout(timeout));
+            return Err(SendNoopError::Timeout(timeout));
         }
     }
     Ok(())
 }
 
-pub async fn send_upgrade<S>(stream: &mut S) -> Result<(), ProxyProtocolError>
+#[derive(Debug, Error)]
+pub enum SendNoopError {
+    #[error("Failed to write header")]
+    Header(#[from] HeaderError),
+    #[error("Timeout")]
+    Timeout(Duration),
+}
+
+pub async fn send_upgrade<S>(stream: &mut S) -> Result<(), HeaderError>
 where
     S: AsyncWrite + Unpin,
 {
@@ -44,7 +52,7 @@ where
     Ok(())
 }
 
-pub async fn wait_upgrade<S>(stream: &mut S) -> Result<(), ProxyProtocolError>
+pub async fn wait_upgrade<S>(stream: &mut S) -> Result<(), HeaderError>
 where
     S: AsyncRead + Unpin,
 {
