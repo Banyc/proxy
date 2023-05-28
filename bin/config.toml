@@ -1,4 +1,4 @@
-[[access_server.tcp_servers]]
+[[access_server.tcp_server]]
 listen_addr = ""
 destination = "tcp://"
 # payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
@@ -9,14 +9,14 @@ proxies = [
     { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] }
 ]
 
-[[access_server.udp_servers]]
+[[access_server.udp_server]]
 listen_addr = ""
 destination = ""
 proxies = [
     { address = "", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] }
 ]
 
-[[access_server.http_servers]]
+[[access_server.http_server]]
 listen_addr = ""
 # payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 # stream_pool = [
@@ -26,7 +26,7 @@ proxies = [
     { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] }
 ]
 
-[[proxy_server.tcp_servers]]
+[[proxy_server.tcp_server]]
 listen_addr = ""
 header_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 # payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
@@ -34,7 +34,7 @@ header_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 #     "tcp://",
 # ]
 
-[[proxy_server.kcp_servers]]
+[[proxy_server.kcp_server]]
 listen_addr = ""
 header_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 # payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
@@ -42,6 +42,6 @@ header_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 #     "tcp://",
 # ]
 
-[[proxy_server.udp_servers]]
+[[proxy_server.udp_server]]
 listen_addr = ""
 header_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
