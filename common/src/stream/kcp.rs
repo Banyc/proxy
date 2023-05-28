@@ -136,6 +136,7 @@ impl ConnectStream for KcpConnector {
 
 pub fn fast_kcp_config() -> KcpConfig {
     KcpConfig {
+        /* cSpell:disable */
         nodelay: KcpNoDelayConfig::fastest(),
         ..Default::default()
     }

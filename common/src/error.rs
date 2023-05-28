@@ -13,7 +13,7 @@ pub struct ResponseError {
 pub enum ResponseErrorKind {
     #[error("io error")]
     Io,
-    #[error("bincode error")]
+    #[error("codec error")]
     Codec,
     #[error("loopback error")]
     Loopback,

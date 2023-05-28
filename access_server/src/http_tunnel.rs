@@ -280,7 +280,7 @@ impl HttpConnect {
         let (mut upstream, upstream_addr, upstream_sock_addr) =
             establish(&self.proxy_configs, destination, &self.stream_pool).await?;
 
-        // Proxying data
+        // Proxy data
         let res = match &self.payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
