@@ -1,6 +1,7 @@
 use std::{io, net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
+use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info, instrument, trace};
 
@@ -31,11 +32,8 @@ where
     H: StreamServerHook + Send + Sync + 'static,
 {
     #[instrument(skip(self))]
-    pub async fn serve(self) -> io::Result<()> {
-        let addr = self
-            .listener
-            .local_addr()
-            .inspect_err(|e| error!(?e, "Failed to get local address"))?;
+    pub async fn serve(self) -> Result<(), ServeError> {
+        let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
         // Arc hook
         let hook = Arc::new(self.hook);
@@ -45,7 +43,7 @@ where
                 .listener
                 .accept()
                 .await
-                .inspect_err(|e| error!(?e, "Failed to accept connection"))?;
+                .map_err(|e| ServeError::Accept { source: e, addr })?;
             // Arc hook
             let hook = Arc::clone(&hook);
             tokio::spawn(async move {
@@ -53,6 +51,18 @@ where
             });
         }
     }
+}
+
+#[derive(Debug, Error)]
+pub enum ServeError {
+    #[error("Failed to get local address")]
+    LocalAddr(#[source] io::Error),
+    #[error("Failed to accept connection")]
+    Accept {
+        #[source]
+        source: io::Error,
+        addr: SocketAddr,
+    },
 }
 
 impl IoStream for TcpStream {}

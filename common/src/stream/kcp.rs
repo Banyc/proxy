@@ -1,6 +1,7 @@
 use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
+use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
 use tracing::{error, info, instrument, trace};
@@ -34,21 +35,21 @@ where
     H: StreamServerHook + Send + Sync + 'static,
 {
     #[instrument(skip(self))]
-    pub async fn serve(mut self) -> io::Result<()> {
-        let addr = self
-            .listener
-            .local_addr()
-            .inspect_err(|e| error!(?e, "Failed to get local address"))?;
+    pub async fn serve(mut self) -> Result<(), ServeError> {
+        let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
         // Arc hook
         let hook = Arc::new(self.hook);
         loop {
             trace!("Waiting for connection");
-            let (stream, peer_addr) = self
-                .listener
-                .accept()
-                .await
-                .inspect_err(|e| error!(?e, "Failed to accept connection"))?;
+            let (stream, peer_addr) =
+                self.listener
+                    .accept()
+                    .await
+                    .map_err(|e| ServeError::Accept {
+                        source: e.into(),
+                        addr,
+                    })?;
             let stream = AddressedKcpStream {
                 stream,
                 local_addr: addr,
@@ -61,6 +62,18 @@ where
             });
         }
     }
+}
+
+#[derive(Debug, Error)]
+pub enum ServeError {
+    #[error("Failed to get local address")]
+    LocalAddr(#[source] io::Error),
+    #[error("Failed to accept connection")]
+    Accept {
+        #[source]
+        source: io::Error,
+        addr: SocketAddr,
+    },
 }
 
 #[derive(Debug)]

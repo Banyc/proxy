@@ -7,6 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{error, info, instrument, trace};
 
@@ -73,14 +74,14 @@ where
     H: UdpServerHook + Send + Sync + 'static,
 {
     #[instrument(skip(self))]
-    pub async fn serve(self) -> io::Result<()> {
+    pub async fn serve(self) -> Result<(), ServeError> {
         let flows: FlowMap = HashMap::new();
         let flows = Arc::new(RwLock::new(flows));
         let downstream_listener = Arc::new(self.listener);
 
         let addr = downstream_listener
             .local_addr()
-            .inspect_err(|e| error!(?e, "Failed to get local address"))?;
+            .map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
         let mut buf = [0; 1024];
         let hook = Arc::new(self.hook);
@@ -89,7 +90,7 @@ where
             let (n, downstream_addr) = downstream_listener
                 .recv_from(&mut buf)
                 .await
-                .inspect_err(|e| error!(?e, "Failed to receive packet from downstream"))?;
+                .map_err(|e| ServeError::RecvFrom { source: e, addr })?;
             let downstream_writer =
                 UdpDownstreamWriter::new(Arc::clone(&downstream_listener), downstream_addr);
 
@@ -102,6 +103,18 @@ where
             .await;
         }
     }
+}
+
+#[derive(Debug, Error)]
+pub enum ServeError {
+    #[error("Failed to get local address")]
+    LocalAddr(#[source] io::Error),
+    #[error("Failed to receive packet from downstream")]
+    RecvFrom {
+        #[source]
+        source: io::Error,
+        addr: SocketAddr,
+    },
 }
 
 #[instrument(skip(downstream_writer, flows, buf, hook))]
