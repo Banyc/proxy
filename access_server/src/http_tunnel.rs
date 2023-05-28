@@ -1,33 +1,32 @@
-use std::io;
-use std::sync::Arc;
-use std::time::Instant;
+use std::{io, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use common::addr::InternetAddr;
-use common::crypto::XorCrypto;
-use common::stream::addr::StreamType;
-use common::stream::config::{StreamProxyConfig, StreamProxyConfigBuilder};
-use common::stream::pool::{Pool, PoolBuilder};
-use common::stream::tcp::TcpServer;
-use common::stream::tokio_io::{self, CopyBiError};
-use common::stream::xor::XorStream;
-use common::stream::{
-    addr::StreamAddr, FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamMetrics,
-    StreamServerHook, TunnelMetrics,
+use common::{
+    addr::InternetAddr,
+    crypto::XorCrypto,
+    stream::{
+        addr::{StreamAddr, StreamType},
+        config::{StreamProxyConfig, StreamProxyConfigBuilder},
+        pool::{Pool, PoolBuilder},
+        tcp::TcpServer,
+        tokio_io::{self, CopyBiError},
+        xor::XorStream,
+        FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamMetrics, StreamServerHook,
+        TunnelMetrics,
+    },
 };
-use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, Empty, Full};
-use hyper::body::Incoming;
-use hyper::service::service_fn;
-use hyper::upgrade::Upgraded;
-use hyper::{http, Method, Request, Response};
-
+use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
+use hyper::{
+    body::Incoming, http, service::service_fn, upgrade::Upgraded, Method, Request, Response,
+};
 use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::ToSocketAddrs;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::ToSocketAddrs,
+};
 use tracing::{error, info, instrument, trace, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
