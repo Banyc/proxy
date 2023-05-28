@@ -32,7 +32,7 @@ use tracing::{error, info, instrument, trace, warn};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpProxyAccessBuilder {
     listen_addr: String,
-    proxy_configs: Vec<StreamProxyConfigBuilder>,
+    proxies: Vec<StreamProxyConfigBuilder>,
     payload_xor_key: Option<Vec<u8>>,
     stream_pool: PoolBuilder,
 }
@@ -41,7 +41,7 @@ impl HttpProxyAccessBuilder {
     pub async fn build(self) -> io::Result<TcpServer<HttpProxyAccess>> {
         let stream_pool = self.stream_pool.build();
         let access = HttpProxyAccess::new(
-            self.proxy_configs.into_iter().map(|x| x.build()).collect(),
+            self.proxies.into_iter().map(|x| x.build()).collect(),
             self.payload_xor_key.map(XorCrypto::new),
             stream_pool,
         );
@@ -51,19 +51,19 @@ impl HttpProxyAccessBuilder {
 }
 
 pub struct HttpProxyAccess {
-    proxy_configs: Arc<Vec<StreamProxyConfig>>,
+    proxies: Arc<Vec<StreamProxyConfig>>,
     payload_crypto: Option<Arc<XorCrypto>>,
     stream_pool: Pool,
 }
 
 impl HttpProxyAccess {
     pub fn new(
-        proxy_configs: Vec<StreamProxyConfig>,
+        proxies: Vec<StreamProxyConfig>,
         payload_crypto: Option<XorCrypto>,
         stream_pool: Pool,
     ) -> Self {
         Self {
-            proxy_configs: Arc::new(proxy_configs),
+            proxies: Arc::new(proxies),
             payload_crypto: payload_crypto.map(Arc::new),
             stream_pool,
         }
@@ -113,7 +113,7 @@ impl HttpProxyAccess {
             // `on_upgrade` future.
             if let Some(addr) = host_addr(req.uri()) {
                 let http_connect = HttpConnect::new(
-                    Arc::clone(&self.proxy_configs),
+                    Arc::clone(&self.proxies),
                     self.payload_crypto.clone(),
                     self.stream_pool.clone(),
                 );
@@ -154,7 +154,7 @@ impl HttpProxyAccess {
 
             // Establish proxy chain
             let (upstream, upstream_addr, upstream_sock_addr) = establish(
-                &self.proxy_configs,
+                &self.proxies,
                 StreamAddr {
                     address: addr.clone().into(),
                     stream_type: StreamType::Tcp,
@@ -245,19 +245,19 @@ impl StreamServerHook for HttpProxyAccess {
 }
 
 struct HttpConnect {
-    proxy_configs: Arc<Vec<StreamProxyConfig>>,
+    proxies: Arc<Vec<StreamProxyConfig>>,
     payload_crypto: Option<Arc<XorCrypto>>,
     stream_pool: Pool,
 }
 
 impl HttpConnect {
     pub fn new(
-        proxy_configs: Arc<Vec<StreamProxyConfig>>,
+        proxies: Arc<Vec<StreamProxyConfig>>,
         payload_crypto: Option<Arc<XorCrypto>>,
         stream_pool: Pool,
     ) -> Self {
         Self {
-            proxy_configs,
+            proxies,
             payload_crypto,
             stream_pool,
         }
@@ -279,7 +279,7 @@ impl HttpConnect {
             stream_type: StreamType::Tcp,
         };
         let (mut upstream, upstream_addr, upstream_sock_addr) =
-            establish(&self.proxy_configs, destination, &self.stream_pool).await?;
+            establish(&self.proxies, destination, &self.stream_pool).await?;
 
         // Proxy data
         let res = match &self.payload_crypto {

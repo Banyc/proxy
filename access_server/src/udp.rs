@@ -22,14 +22,14 @@ use tracing::{error, info, trace};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UdpProxyAccessBuilder {
     listen_addr: String,
-    proxy_configs: Vec<UdpProxyConfigBuilder>,
+    proxies: Vec<UdpProxyConfigBuilder>,
     destination: String,
 }
 
 impl UdpProxyAccessBuilder {
     pub async fn build(self) -> io::Result<UdpServer<UdpProxyAccess>> {
         let access = UdpProxyAccess::new(
-            self.proxy_configs.into_iter().map(|x| x.build()).collect(),
+            self.proxies.into_iter().map(|x| x.build()).collect(),
             self.destination.into(),
         );
         let server = access.build(self.listen_addr).await?;
@@ -38,14 +38,14 @@ impl UdpProxyAccessBuilder {
 }
 
 pub struct UdpProxyAccess {
-    proxy_configs: Vec<UdpProxyConfig>,
+    proxies: Vec<UdpProxyConfig>,
     destination: InternetAddr,
 }
 
 impl UdpProxyAccess {
-    pub fn new(proxy_configs: Vec<UdpProxyConfig>, destination: InternetAddr) -> Self {
+    pub fn new(proxies: Vec<UdpProxyConfig>, destination: InternetAddr) -> Self {
         Self {
-            proxy_configs,
+            proxies,
             destination,
         }
     }
@@ -65,7 +65,7 @@ impl UdpProxyAccess {
     ) -> Result<(), ProxyError> {
         // Connect to upstream
         let upstream =
-            UdpProxySocket::establish(self.proxy_configs.clone(), self.destination.clone()).await?;
+            UdpProxySocket::establish(self.proxies.clone(), self.destination.clone()).await?;
 
         // Periodic check if the flow is still alive
         let mut tick = tokio::time::interval(LIVE_CHECK_INTERVAL);

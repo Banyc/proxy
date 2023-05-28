@@ -8,7 +8,7 @@ pub struct ProxyConfig<A> {
     pub crypto: XorCrypto,
 }
 
-pub fn convert_proxy_configs_to_header_crypto_pairs<A>(
+pub fn convert_proxies_to_header_crypto_pairs<A>(
     nodes: &[ProxyConfig<A>],
     destination: A,
 ) -> Vec<(A, &XorCrypto)>

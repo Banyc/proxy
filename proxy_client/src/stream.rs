@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use common::{
-    config::convert_proxy_configs_to_header_crypto_pairs,
+    config::convert_proxies_to_header_crypto_pairs,
     crypto::XorCryptoCursor,
     header::{write_header_async, HeaderError},
     heartbeat,
@@ -13,14 +13,14 @@ use common::{
 use thiserror::Error;
 use tracing::{error, instrument, trace};
 
-#[instrument(skip(proxy_configs, stream_pool))]
+#[instrument(skip(proxies, stream_pool))]
 pub async fn establish(
-    proxy_configs: &[StreamProxyConfig],
+    proxies: &[StreamProxyConfig],
     destination: StreamAddr,
     stream_pool: &Pool,
 ) -> Result<(CreatedStream, StreamAddr, SocketAddr), StreamEstablishError> {
     // If there are no proxy configs, just connect to the destination
-    if proxy_configs.is_empty() {
+    if proxies.is_empty() {
         let (stream, sock_addr) = connect_with_pool(&destination, stream_pool, true)
             .await
             .map_err(StreamEstablishError::ConnectDestination)?;
@@ -29,7 +29,7 @@ pub async fn establish(
 
     // Connect to the first proxy
     let (mut stream, addr, sock_addr) = {
-        let proxy_addr = &proxy_configs[0].address;
+        let proxy_addr = &proxies[0].address;
         let (stream, sock_addr) = connect_with_pool(proxy_addr, stream_pool, true)
             .await
             .map_err(StreamEstablishError::ConnectFirstProxyServer)?;
@@ -37,7 +37,7 @@ pub async fn establish(
     };
 
     // Convert addresses to headers
-    let pairs = convert_proxy_configs_to_header_crypto_pairs(proxy_configs, destination);
+    let pairs = convert_proxies_to_header_crypto_pairs(proxies, destination);
 
     // Write headers to stream
     for (header, crypto) in pairs {
@@ -58,7 +58,7 @@ pub async fn establish(
     }
 
     // // Read response
-    // for node in proxy_configs {
+    // for node in proxies {
     //     trace!(?node.address.address, "Reading response from upstream address");
     //     let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
     //     let resp: ResponseHeader = read_header_async(&mut stream, &mut crypto_cursor)

@@ -6,7 +6,7 @@ use std::{
 
 use common::{
     addr::{any_addr, InternetAddr},
-    config::convert_proxy_configs_to_header_crypto_pairs,
+    config::convert_proxies_to_header_crypto_pairs,
     crypto::XorCryptoCursor,
     error::ResponseError,
     header::ResponseHeader,
@@ -21,17 +21,17 @@ use tracing::{error, instrument, trace};
 pub struct UdpProxySocket {
     upstream: UdpSocket,
     headers_bytes: Vec<u8>,
-    proxy_configs: Vec<UdpProxyConfig>,
+    proxies: Vec<UdpProxyConfig>,
 }
 
 impl UdpProxySocket {
     #[instrument(skip_all)]
     pub async fn establish(
-        proxy_configs: Vec<UdpProxyConfig>,
+        proxies: Vec<UdpProxyConfig>,
         destination: InternetAddr,
     ) -> Result<UdpProxySocket, EstablishError> {
         // If there are no proxy configs, just connect to the destination
-        if proxy_configs.is_empty() {
+        if proxies.is_empty() {
             let addr = destination.to_socket_addr().await.map_err(|e| {
                 EstablishError::ResolveDestination {
                     source: e,
@@ -53,12 +53,12 @@ impl UdpProxySocket {
             return Ok(UdpProxySocket {
                 upstream,
                 headers_bytes: Vec::new(),
-                proxy_configs,
+                proxies,
             });
         }
 
         // Connect to upstream
-        let proxy_addr = &proxy_configs[0].address;
+        let proxy_addr = &proxies[0].address;
         let addr =
             proxy_addr
                 .to_socket_addr()
@@ -81,7 +81,7 @@ impl UdpProxySocket {
             })?;
 
         // Convert addresses to headers
-        let pairs = convert_proxy_configs_to_header_crypto_pairs(&proxy_configs, destination);
+        let pairs = convert_proxies_to_header_crypto_pairs(&proxies, destination);
 
         // Save headers to buffer
         let mut buf = Vec::new();
@@ -96,7 +96,7 @@ impl UdpProxySocket {
         Ok(UdpProxySocket {
             upstream,
             headers_bytes: buf,
-            proxy_configs,
+            proxies,
         })
     }
 
@@ -140,7 +140,7 @@ impl UdpProxySocket {
         let mut reader = io::Cursor::new(&mut new_buf);
 
         // Decode and check headers
-        for node in self.proxy_configs.iter() {
+        for node in self.proxies.iter() {
             trace!(?node.address, "Reading response");
             let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
             let resp: ResponseHeader = read_header(&mut reader, &mut crypto_cursor)?;

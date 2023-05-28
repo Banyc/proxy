@@ -107,7 +107,7 @@ mod tests {
         // Start proxy servers
         let proxy_1_config = spawn_proxy("0.0.0.0:0").await;
         let proxy_2_config = spawn_proxy("0.0.0.0:0").await;
-        let proxy_configs = vec![proxy_1_config, proxy_2_config];
+        let proxies = vec![proxy_1_config, proxy_2_config];
 
         // Message to send
         let req_msg = b"hello world";
@@ -121,13 +121,12 @@ mod tests {
         let mut handles = tokio::task::JoinSet::new();
 
         for _ in 0..clients {
-            let proxy_configs = proxy_configs.clone();
+            let proxies = proxies.clone();
             let greet_addr = greet_addr.clone();
             handles.spawn(async move {
                 // Connect to proxy server
-                let (mut stream, _, _) = establish(&proxy_configs, greet_addr, &Pool::new())
-                    .await
-                    .unwrap();
+                let (mut stream, _, _) =
+                    establish(&proxies, greet_addr, &Pool::new()).await.unwrap();
 
                 // Send message
                 stream.write_all(req_msg).await.unwrap();
@@ -145,10 +144,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn stress_test() {
         // Start proxy servers
-        let mut proxy_configs = Vec::new();
+        let mut proxies = Vec::new();
         for _ in 0..10 {
             let proxy_config = spawn_proxy("0.0.0.0:0").await;
-            proxy_configs.push(proxy_config);
+            proxies.push(proxy_config);
         }
 
         // Message to send
@@ -161,15 +160,14 @@ mod tests {
         let mut handles = tokio::task::JoinSet::new();
 
         for _ in 0..50 {
-            let proxy_configs = proxy_configs.clone();
+            let proxies = proxies.clone();
             let greet_addr = greet_addr.clone();
             handles.spawn(async move {
                 for _ in 0..10 {
                     let greet_addr = greet_addr.clone();
                     // Connect to proxy server
-                    let (mut stream, _, _) = establish(&proxy_configs, greet_addr, &Pool::new())
-                        .await
-                        .unwrap();
+                    let (mut stream, _, _) =
+                        establish(&proxies, greet_addr, &Pool::new()).await.unwrap();
 
                     // Send message
                     stream.write_all(req_msg).await.unwrap();

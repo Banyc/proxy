@@ -22,7 +22,7 @@ use tracing::{error, info, instrument};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TcpProxyAccessBuilder {
     listen_addr: String,
-    proxy_configs: Vec<StreamProxyConfigBuilder>,
+    proxies: Vec<StreamProxyConfigBuilder>,
     destination: StreamAddrBuilder,
     payload_xor_key: Option<Vec<u8>>,
     stream_pool: PoolBuilder,
@@ -32,7 +32,7 @@ impl TcpProxyAccessBuilder {
     pub async fn build(self) -> io::Result<TcpServer<TcpProxyAccess>> {
         let stream_pool = self.stream_pool.build();
         let access = TcpProxyAccess::new(
-            self.proxy_configs.into_iter().map(|x| x.build()).collect(),
+            self.proxies.into_iter().map(|x| x.build()).collect(),
             self.destination.build(),
             self.payload_xor_key.map(XorCrypto::new),
             stream_pool,
@@ -43,7 +43,7 @@ impl TcpProxyAccessBuilder {
 }
 
 pub struct TcpProxyAccess {
-    proxy_configs: Vec<StreamProxyConfig>,
+    proxies: Vec<StreamProxyConfig>,
     destination: StreamAddr,
     payload_crypto: Option<XorCrypto>,
     stream_pool: Pool,
@@ -51,13 +51,13 @@ pub struct TcpProxyAccess {
 
 impl TcpProxyAccess {
     pub fn new(
-        proxy_configs: Vec<StreamProxyConfig>,
+        proxies: Vec<StreamProxyConfig>,
         destination: StreamAddr,
         payload_crypto: Option<XorCrypto>,
         stream_pool: Pool,
     ) -> Self {
         Self {
-            proxy_configs,
+            proxies,
             destination,
             payload_crypto,
             stream_pool,
@@ -79,12 +79,8 @@ impl TcpProxyAccess {
 
         let downstream_addr = downstream.peer_addr().map_err(ProxyError::DownstreamAddr)?;
 
-        let (mut upstream, upstream_addr, upstream_sock_addr) = establish(
-            &self.proxy_configs,
-            self.destination.clone(),
-            &self.stream_pool,
-        )
-        .await?;
+        let (mut upstream, upstream_addr, upstream_sock_addr) =
+            establish(&self.proxies, self.destination.clone(), &self.stream_pool).await?;
 
         let res = match &self.payload_crypto {
             Some(crypto) => {
