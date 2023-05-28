@@ -13,8 +13,9 @@ use common::{
         Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
-use proxy_client::udp::{UdpProxySocket, UdpProxySocketError};
+use proxy_client::udp::{EstablishError, RecvError, SendError, UdpProxySocket};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tracing::{error, info, trace};
 
@@ -61,7 +62,7 @@ impl UdpProxyAccess {
         mut rx: mpsc::Receiver<Packet>,
         flow: Flow,
         downstream_writer: UdpDownstreamWriter,
-    ) -> Result<(), UdpProxySocketError> {
+    ) -> Result<(), ProxyError> {
         // Connect to upstream
         let upstream =
             UdpProxySocket::establish(self.proxy_configs.clone(), self.destination.clone()).await?;
@@ -97,11 +98,11 @@ impl UdpProxyAccess {
 
                     // Write payload
                     let mut writer = io::Cursor::new(Vec::new());
-                    writer.write_all(pkt)?;
+                    writer.write_all(pkt).unwrap();
 
                     // Send packet to downstream
                     let pkt = writer.into_inner();
-                    downstream_writer.send(&pkt).await?;
+                    downstream_writer.send(&pkt).await.map_err(|e| ProxyError::SendDownstream { source: e, downstream: downstream_writer.clone() })?;
 
                     last_packet = std::time::Instant::now();
                 }
@@ -117,6 +118,22 @@ impl UdpProxyAccess {
 
         Ok(())
     }
+}
+
+#[derive(Debug, Error)]
+pub enum ProxyError {
+    #[error("Failed to establish proxy chain")]
+    EstablishError(#[from] EstablishError),
+    #[error("Failed to send to upstream")]
+    SendUpstream(#[from] SendError),
+    #[error("Failed to recv from upstream")]
+    RecvUpstream(#[from] RecvError),
+    #[error("Failed to send to downstream")]
+    SendDownstream {
+        #[source]
+        source: io::Error,
+        downstream: UdpDownstreamWriter,
+    },
 }
 
 #[async_trait]
