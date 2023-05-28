@@ -112,7 +112,7 @@ impl HttpProxyAccess {
             // connection be upgraded, so we can't return a response inside
             // `on_upgrade` future.
             if let Some(addr) = host_addr(req.uri()) {
-                let tunnel = HttpConnect::new(
+                let http_connect = HttpConnect::new(
                     Arc::clone(&self.proxy_configs),
                     self.payload_crypto.clone(),
                     self.stream_pool.clone(),
@@ -120,14 +120,14 @@ impl HttpProxyAccess {
                 tokio::task::spawn(async move {
                     match hyper::upgrade::on(req).await {
                         Ok(upgraded) => {
-                            match tunnel.proxy(upgraded, addr.into()).await {
+                            match http_connect.proxy(upgraded, addr.into()).await {
                                 Ok(metrics) => {
-                                    info!(%metrics, "Tunnel finished");
+                                    info!(%metrics, "CONNECT finished");
                                 }
                                 Err(HttpConnectError::IoCopy { source: e, metrics }) => {
-                                    info!(?e, %metrics, "Tunnel error");
+                                    info!(?e, %metrics, "CONNECT error");
                                 }
-                                Err(e) => error!(?e, "Tunnel error"),
+                                Err(e) => error!(?e, "CONNECT error"),
                             };
                         }
                         Err(e) => error!(?e, "Upgrade error"),
@@ -147,11 +147,12 @@ impl HttpProxyAccess {
         } else {
             let start = std::time::Instant::now();
 
+            let method = req.method().clone();
             let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
             let port = req.uri().port_u16().unwrap_or(80);
             let addr = format!("{}:{}", host, port);
 
-            // Establish ProxyProtocol
+            // Establish proxy chain
             let (upstream, upstream_addr, upstream_sock_addr) = establish(
                 &self.proxy_configs,
                 StreamAddr {
@@ -183,7 +184,7 @@ impl HttpProxyAccess {
                 },
                 destination: addr.into(),
             };
-            info!(%metrics, "Tunnel finished");
+            info!(%metrics, "{} finished", method);
 
             res
         }
@@ -272,7 +273,7 @@ impl HttpConnect {
     ) -> Result<TunnelMetrics, HttpConnectError> {
         let start = Instant::now();
 
-        // Establish ProxyProtocol
+        // Establish proxy chain
         let destination = StreamAddr {
             address: address.clone(),
             stream_type: StreamType::Tcp,
