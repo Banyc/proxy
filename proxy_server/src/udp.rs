@@ -1,11 +1,12 @@
 use std::{
     io::{self, Write},
+    net::SocketAddr,
     time::Duration,
 };
 
 use async_trait::async_trait;
 use common::{
-    addr::any_addr,
+    addr::{any_addr, InternetAddr},
     crypto::{XorCrypto, XorCryptoCursor},
     error::{ResponseError, ResponseErrorKind},
     header::{read_header, write_header, HeaderError, ResponseHeader},
@@ -59,8 +60,7 @@ impl UdpProxyServer {
         // Decode header
         let mut reader = io::Cursor::new(buf);
         let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
-        let header: UdpRequestHeader = read_header(&mut reader, &mut crypto_cursor)
-            .inspect_err(|e| error!(?e, "Failed to decode header from downstream"))?;
+        let header: UdpRequestHeader = read_header(&mut reader, &mut crypto_cursor)?;
         let header_len = reader.position() as usize;
         let payload = &buf[header_len..];
 
@@ -78,7 +78,7 @@ impl UdpProxyServer {
         let _ = self
             .respond_with_error(downstream_writer, kind)
             .await
-            .inspect_err(|e| error!(?e, ?peer_addr, "Failed to respond with error to downstream"));
+            .inspect_err(|e| trace!(?e, ?peer_addr, "Failed to respond with error to downstream"));
     }
 
     #[instrument(skip(self, rx, downstream_writer))]
@@ -92,18 +92,34 @@ impl UdpProxyServer {
 
         // Prevent connections to localhost
         let resolved_upstream =
-            flow.upstream.0.to_socket_addr().await.inspect_err(
-                |e| error!(?e, ?flow.upstream, "Failed to resolve upstream address"),
-            )?;
+            flow.upstream
+                .0
+                .to_socket_addr()
+                .await
+                .map_err(|e| ProxyError::Resolve {
+                    source: e,
+                    addr: flow.upstream.0.clone(),
+                })?;
         if resolved_upstream.ip().is_loopback() {
-            error!(?flow.upstream, ?resolved_upstream, "Loopback address is not allowed");
-            return Err(ProxyError::Loopback);
+            return Err(ProxyError::Loopback {
+                addr: flow.upstream.0,
+                sock_addr: resolved_upstream,
+            });
         }
 
         // Connect to upstream
         let any_addr = any_addr(&resolved_upstream.ip());
-        let upstream = UdpSocket::bind(any_addr).await?;
-        upstream.connect(resolved_upstream).await?;
+        let upstream = UdpSocket::bind(any_addr)
+            .await
+            .map_err(ProxyError::ClientBindAny)?;
+        upstream
+            .connect(resolved_upstream)
+            .await
+            .map_err(|e| ProxyError::ConnectUpstream {
+                source: e,
+                addr: flow.upstream.0.clone(),
+                sock_addr: resolved_upstream,
+            })?;
 
         // Periodic check if the flow is still alive
         let mut tick = tokio::time::interval(LIVE_CHECK_INTERVAL);
@@ -130,7 +146,11 @@ impl UdpProxyServer {
                     };
 
                     // Send packet to upstream
-                    upstream.send(&packet.0).await?;
+                    upstream.send(&packet.0).await.map_err(|e| ProxyError::ForwardUpstream {
+                        source: e,
+                        addr: flow.upstream.0.clone(),
+                sock_addr: resolved_upstream,
+                    })?;
                     bytes_uplink += &packet.0.len();
                     packets_uplink += 1;
 
@@ -138,7 +158,11 @@ impl UdpProxyServer {
                 }
                 res = upstream.recv(&mut downlink_buf) => {
                     trace!("Received packet from upstream");
-                    let n = res?;
+                    let n = res.map_err(|e| ProxyError::RecvUpstream {
+                        source: e,
+                        addr: flow.upstream.0.clone(),
+                sock_addr: resolved_upstream,
+                    })?;
                     let pkt = &downlink_buf[..n];
 
                     // Write header
@@ -147,14 +171,16 @@ impl UdpProxyServer {
                         result: Ok(()),
                     };
                     let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
-                    write_header(&mut writer, &header, &mut crypto_cursor)?;
+                    write_header(&mut writer, &header, &mut crypto_cursor).unwrap();
 
                     // Write payload
-                    writer.write_all(pkt)?;
+                    writer.write_all(pkt).unwrap();
 
                     // Send packet to downstream
                     let pkt = writer.into_inner();
-                    downstream_writer.send(&pkt).await?;
+                    downstream_writer.send(&pkt).await.map_err(|e| ProxyError::ForwardDownstream {
+                        source: e, downstream: downstream_writer.clone(),
+                    })?;
                     bytes_downlink += &pkt.len();
                     packets_downlink += 1;
 
@@ -189,17 +215,17 @@ impl UdpProxyServer {
     ) {
         match res {
             Ok(metrics) => {
-                info!(?metrics, "Connection closed normally");
+                info!(?metrics, "Proxy finished");
                 // No response
             }
             Err(e) => {
                 let peer_addr = downstream_writer.remote_addr();
-                error!(?e, ?peer_addr, "Connection closed with error");
+                error!(?e, ?peer_addr, "Proxy failed");
                 let kind = error_kind_from_proxy_error(e);
                 let _ = self
                     .respond_with_error(downstream_writer, kind)
                     .await
-                    .inspect_err(|e| error!(?e, ?peer_addr, "Failed to respond with error"));
+                    .inspect_err(|e| trace!(?e, ?peer_addr, "Failed to respond with error"));
             }
         }
     }
@@ -226,7 +252,7 @@ impl UdpProxyServer {
         write_header(&mut buf, &resp, &mut crypto_cursor).unwrap();
         downstream_writer.send(&buf).await.inspect_err(|e| {
             let peer_addr = downstream_writer.remote_addr();
-            error!(?e, ?peer_addr, "Failed to send response to downstream")
+            trace!(?e, ?peer_addr, "Failed to send response to downstream")
         })?;
 
         Ok(())
@@ -235,12 +261,48 @@ impl UdpProxyServer {
 
 #[derive(Debug, Error)]
 pub enum ProxyError {
-    #[error("IO error")]
-    Io(#[from] io::Error),
+    #[error("Failed to resolve upstream address")]
+    Resolve {
+        #[source]
+        source: io::Error,
+        addr: InternetAddr,
+    },
     #[error("Header error")]
     Header(#[from] HeaderError),
     #[error("Refused to connect to a loopback address")]
-    Loopback,
+    Loopback {
+        addr: InternetAddr,
+        sock_addr: SocketAddr,
+    },
+    #[error("Failed to created a client socket")]
+    ClientBindAny(#[source] io::Error),
+    #[error("Failed to connect to upstream")]
+    ConnectUpstream {
+        #[source]
+        source: io::Error,
+        addr: InternetAddr,
+        sock_addr: SocketAddr,
+    },
+    #[error("Failed to forward packet from downstream to upstream")]
+    ForwardUpstream {
+        #[source]
+        source: io::Error,
+        addr: InternetAddr,
+        sock_addr: SocketAddr,
+    },
+    #[error("Failed to recv from upstream")]
+    RecvUpstream {
+        #[source]
+        source: io::Error,
+        addr: InternetAddr,
+        sock_addr: SocketAddr,
+    },
+    #[error("Failed to forward packet from upstream to downstream")]
+    ForwardDownstream {
+        #[source]
+        source: io::Error,
+        downstream: UdpDownstreamWriter,
+    },
 }
 
 fn error_kind_from_header_error(e: HeaderError) -> ResponseErrorKind {
@@ -251,9 +313,14 @@ fn error_kind_from_header_error(e: HeaderError) -> ResponseErrorKind {
 }
 fn error_kind_from_proxy_error(e: ProxyError) -> ResponseErrorKind {
     match e {
-        ProxyError::Io(_) => ResponseErrorKind::Io,
+        ProxyError::Resolve { .. }
+        | ProxyError::ClientBindAny(_)
+        | ProxyError::ConnectUpstream { .. }
+        | ProxyError::ForwardUpstream { .. }
+        | ProxyError::RecvUpstream { .. }
+        | ProxyError::ForwardDownstream { .. } => ResponseErrorKind::Io,
         ProxyError::Header(e) => error_kind_from_header_error(e),
-        ProxyError::Loopback => ResponseErrorKind::Loopback,
+        ProxyError::Loopback { .. } => ResponseErrorKind::Loopback,
     }
 }
 
