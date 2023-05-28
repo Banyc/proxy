@@ -10,5 +10,5 @@ access_server = { path = "../access_server" }
 get_config = "0.1.1"
 proxy_server = { path = "../proxy_server" }
 serde = { version = "1.0.163", features = ["derive"] }
-tokio = { version = "1.28.1", features = ["full"] }
+tokio = { version = "1.28.2", features = ["full"] }
 tracing-subscriber = "0.3.17"

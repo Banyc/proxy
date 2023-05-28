@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 proxy_client = { path = "../proxy_client" }
 proxy_server = { path = "../proxy_server" }
-tokio = { version = "1.28.1", features = ["full"] }
+tokio = { version = "1.28.2", features = ["full"] }
 common = { path = "../common" }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
