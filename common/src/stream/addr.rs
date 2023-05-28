@@ -12,17 +12,14 @@ pub enum StreamType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(transparent)]
 pub struct StreamAddrBuilder {
     pub address: String,
-    pub stream_type: StreamType,
 }
 
 impl StreamAddrBuilder {
     pub fn build(self) -> StreamAddr {
-        StreamAddr {
-            address: self.address.into(),
-            stream_type: self.stream_type,
-        }
+        self.address.as_str().into()
     }
 }
 
@@ -39,5 +36,41 @@ impl Display for StreamAddr {
             StreamType::Tcp => write!(f, "tcp://{}", self.address),
             StreamType::Kcp => write!(f, "kcp://{}", self.address),
         }
+    }
+}
+
+impl From<&str> for StreamAddr {
+    fn from(s: &str) -> Self {
+        let mut parts = s.split("://");
+        let stream_type = match parts.next() {
+            Some("tcp") => StreamType::Tcp,
+            Some("kcp") => StreamType::Kcp,
+            _ => panic!("invalid stream address"),
+        };
+        let address: String = parts.next().unwrap().parse().unwrap();
+        assert!(parts.next().is_none());
+        StreamAddr {
+            address: address.into(),
+            stream_type,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+
+    use super::*;
+
+    #[test]
+    fn from_str_to_stream_addr() {
+        let addr: StreamAddr = "tcp://0.0.0.0:0".into();
+        assert_eq!(
+            addr,
+            StreamAddr {
+                address: "0.0.0.0:0".parse::<SocketAddr>().unwrap().into(),
+                stream_type: StreamType::Tcp,
+            }
+        );
     }
 }
