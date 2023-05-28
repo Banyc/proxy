@@ -11,6 +11,25 @@ pub enum StreamType {
     Kcp,
 }
 
+impl Display for StreamType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamType::Tcp => write!(f, "tcp"),
+            StreamType::Kcp => write!(f, "kcp"),
+        }
+    }
+}
+
+impl From<&str> for StreamType {
+    fn from(s: &str) -> Self {
+        match s {
+            "tcp" => StreamType::Tcp,
+            "kcp" => StreamType::Kcp,
+            _ => panic!("invalid stream type"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct StreamAddrBuilder {
@@ -32,21 +51,14 @@ pub struct StreamAddr {
 
 impl Display for StreamAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.stream_type {
-            StreamType::Tcp => write!(f, "tcp://{}", self.address),
-            StreamType::Kcp => write!(f, "kcp://{}", self.address),
-        }
+        write!(f, "{}://{}", self.stream_type, self.address)
     }
 }
 
 impl From<&str> for StreamAddr {
     fn from(s: &str) -> Self {
         let mut parts = s.split("://");
-        let stream_type = match parts.next() {
-            Some("tcp") => StreamType::Tcp,
-            Some("kcp") => StreamType::Kcp,
-            _ => panic!("invalid stream address"),
-        };
+        let stream_type: StreamType = parts.next().unwrap().into();
         let address: String = parts.next().unwrap().parse().unwrap();
         assert!(parts.next().is_none());
         StreamAddr {
