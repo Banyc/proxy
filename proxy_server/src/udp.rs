@@ -267,8 +267,6 @@ pub enum ProxyError {
         source: io::Error,
         addr: InternetAddr,
     },
-    #[error("Header error")]
-    Header(#[from] HeaderError),
     #[error("Refused to connect to a loopback address")]
     Loopback {
         addr: InternetAddr,
@@ -319,7 +317,6 @@ fn error_kind_from_proxy_error(e: ProxyError) -> ResponseErrorKind {
         | ProxyError::ForwardUpstream { .. }
         | ProxyError::RecvUpstream { .. }
         | ProxyError::ForwardDownstream { .. } => ResponseErrorKind::Io,
-        ProxyError::Header(e) => error_kind_from_header_error(e),
         ProxyError::Loopback { .. } => ResponseErrorKind::Loopback,
     }
 }
