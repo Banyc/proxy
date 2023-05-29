@@ -54,8 +54,10 @@ impl CopyBuffer {
                 match reader.as_mut().poll_read(cx, &mut buf) {
                     Poll::Ready(Ok(_)) => (),
                     Poll::Ready(Err(err)) => match err.kind() {
-                        ErrorKind::NotConnected | ErrorKind::ConnectionReset => {
-                            debug!("tokio copy: read data: ignore NotConnected/ConnectionReset error ignored");
+                        ErrorKind::NotConnected
+                        | ErrorKind::ConnectionReset
+                        | ErrorKind::BrokenPipe => {
+                            debug!("tokio copy: read data: ignore NotConnected/ConnectionReset/BrokenPipe error ignored");
                         }
                         _ => return Poll::Ready(Err(err)),
                     },
