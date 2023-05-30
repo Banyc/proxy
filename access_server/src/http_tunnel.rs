@@ -10,7 +10,7 @@ use common::{
         config::{StreamProxyConfig, StreamProxyConfigBuilder},
         pool::{Pool, PoolBuilder},
         tcp::TcpServer,
-        tokio_io::{self, CopyBiError},
+        tokio_io::{self, TimedCopyBiError},
         xor::XorStream,
         FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamMetrics, StreamServerHook,
         TunnelMetrics,
@@ -286,9 +286,9 @@ impl HttpConnect {
             Some(crypto) => {
                 // Establish encrypted stream
                 let mut xor_stream = XorStream::upgrade(upstream, crypto);
-                tokio_io::copy_bidirectional(&mut upgraded, &mut xor_stream).await
+                tokio_io::timed_copy_bidirectional(&mut upgraded, &mut xor_stream).await
             }
-            None => tokio_io::copy_bidirectional(&mut upgraded, &mut upstream).await,
+            None => tokio_io::timed_copy_bidirectional(&mut upgraded, &mut upstream).await,
         };
         let end = Instant::now();
         let (from_client, from_server) = res.map_err(|e| HttpConnectError::IoCopy {
@@ -328,7 +328,7 @@ pub enum HttpConnectError {
     #[error("Failed to copy data between streams")]
     IoCopy {
         #[source]
-        source: CopyBiError,
+        source: TimedCopyBiError,
         metrics: FailedTunnelMetrics,
     },
 }
