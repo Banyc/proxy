@@ -1,11 +1,14 @@
-use std::{io, net::SocketAddr, sync::Arc};
+use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
+use tokio_io_timeout::TimeoutStream;
 use tracing::{error, info, instrument, trace};
 
 use crate::stream::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook};
+
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 pub struct TcpServer<H> {
@@ -84,6 +87,8 @@ impl ConnectStream for TcpConnector {
         let stream = TcpStream::connect(addr)
             .await
             .inspect_err(|e| error!(?e, ?addr, "Failed to connect to address"))?;
-        Ok(CreatedStream::Tcp(stream))
+        let mut stream = TimeoutStream::new(stream);
+        stream.set_read_timeout(Some(READ_TIMEOUT));
+        Ok(CreatedStream::Tcp(Box::pin(stream)))
     }
 }

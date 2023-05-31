@@ -7,6 +7,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
+use tokio_io_timeout::TimeoutStream;
 use tracing::error;
 
 use crate::addr::InternetAddr;
@@ -244,7 +245,7 @@ impl Display for FailedTunnelMetrics {
 #[derive(Debug)]
 pub enum CreatedStream {
     Quic(QuicIoStream),
-    Tcp(TcpStream),
+    Tcp(Pin<Box<TimeoutStream<TcpStream>>>),
     Kcp(AddressedKcpStream),
 }
 
@@ -253,7 +254,7 @@ impl IoAddr for CreatedStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         match self {
             CreatedStream::Quic(x) => x.peer_addr(),
-            CreatedStream::Tcp(x) => x.peer_addr(),
+            CreatedStream::Tcp(x) => x.get_ref().peer_addr(),
             CreatedStream::Kcp(x) => x.peer_addr(),
         }
     }
@@ -261,7 +262,7 @@ impl IoAddr for CreatedStream {
     fn local_addr(&self) -> io::Result<SocketAddr> {
         match self {
             CreatedStream::Quic(x) => x.local_addr(),
-            CreatedStream::Tcp(x) => x.local_addr(),
+            CreatedStream::Tcp(x) => x.get_ref().local_addr(),
             CreatedStream::Kcp(x) => x.local_addr(),
         }
     }
