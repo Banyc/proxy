@@ -3,7 +3,7 @@ use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
 use quinn::{Endpoint, RecvStream, SendStream};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::{IoAddr, IoStream, StreamServerHook};
+use crate::stream::{IoAddr, IoStream, StreamServerHook};
 
 #[derive(Debug)]
 pub struct QuicServer<H> {

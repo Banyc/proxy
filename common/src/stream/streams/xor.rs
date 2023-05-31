@@ -2,9 +2,10 @@ use std::{io, net::SocketAddr, pin::Pin};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::crypto::{XorCrypto, XorCryptoCursor};
-
-use super::{IoAddr, IoStream};
+use crate::{
+    crypto::{XorCrypto, XorCryptoCursor},
+    stream::{IoAddr, IoStream},
+};
 
 pub struct XorStream<S> {
     write_crypto: XorCryptoCursor,

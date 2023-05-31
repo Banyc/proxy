@@ -13,21 +13,20 @@ use crate::addr::InternetAddr;
 
 use self::{
     addr::{StreamAddr, StreamType},
-    kcp::{AddressedKcpStream, KcpConnector},
     pool::Pool,
-    quic::QuicIoStream,
-    tcp::TcpConnector,
+    streams::{
+        kcp::{AddressedKcpStream, KcpConnector},
+        quic::QuicIoStream,
+        tcp::TcpConnector,
+    },
 };
 
 pub mod addr;
 pub mod config;
 pub mod header;
-pub mod kcp;
 pub mod pool;
-pub mod quic;
-pub mod tcp;
+pub mod streams;
 pub mod tokio_io;
-pub mod xor;
 
 pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
 

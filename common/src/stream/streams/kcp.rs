@@ -6,9 +6,10 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
 use tracing::{error, info, instrument, trace};
 
-use crate::addr::any_addr;
-
-use super::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook};
+use crate::{
+    addr::any_addr,
+    stream::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook},
+};
 
 #[derive(Debug)]
 pub struct KcpServer<H> {

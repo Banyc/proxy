@@ -7,9 +7,8 @@ use common::{
         addr::{StreamAddr, StreamAddrBuilder},
         config::{StreamProxyConfig, StreamProxyConfigBuilder},
         pool::{Pool, PoolBuilder},
-        tcp::TcpServer,
+        streams::{tcp::TcpServer, xor::XorStream},
         tokio_io::{self, TimedCopyBiError},
-        xor::XorStream,
         FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };

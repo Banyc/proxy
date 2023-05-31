@@ -1,6 +1,6 @@
 use std::io;
 
-use common::stream::tcp::TcpServer;
+use common::stream::streams::tcp::TcpServer;
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::net::{TcpListener, ToSocketAddrs};

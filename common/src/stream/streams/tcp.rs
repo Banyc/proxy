@@ -5,7 +5,7 @@ use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info, instrument, trace};
 
-use super::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook};
+use crate::stream::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook};
 
 #[derive(Debug)]
 pub struct TcpServer<H> {

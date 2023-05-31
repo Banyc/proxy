@@ -1,6 +1,6 @@
 use common::{
     error::AnyError,
-    stream::kcp::{fast_kcp_config, KcpServer},
+    stream::streams::kcp::{fast_kcp_config, KcpServer},
 };
 use serde::Deserialize;
 use thiserror::Error;
