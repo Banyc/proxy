@@ -13,7 +13,7 @@ use tracing::error;
 
 use crate::{
     addr::InternetAddr,
-    heartbeat::{send_noop, SendNoopError},
+    heartbeat::{send_noop, HeartbeatError},
     stream::CreatedStream,
 };
 
@@ -71,7 +71,7 @@ impl SocketCell {
                         }
                     }
                 }
-                Result::<(), SendNoopError>::Ok(())
+                Result::<(), HeartbeatError>::Ok(())
             }
         });
         Ok(Self { cell })

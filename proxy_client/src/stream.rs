@@ -1,10 +1,10 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
 use common::{
     config::convert_proxies_to_header_crypto_pairs,
     crypto::XorCryptoCursor,
     header::{write_header_async, HeaderError},
-    heartbeat,
+    heartbeat::{self, HeartbeatError},
     stream::{
         addr::StreamAddr, config::StreamProxyConfig, connect_with_pool, pool::Pool, ConnectError,
         CreatedStream,
@@ -12,6 +12,8 @@ use common::{
 };
 use thiserror::Error;
 use tracing::{error, instrument, trace};
+
+const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[instrument(skip(proxies, stream_pool))]
 pub async fn establish(
@@ -42,12 +44,12 @@ pub async fn establish(
     // Write headers to stream
     for (header, crypto) in pairs {
         trace!(?header, "Writing headers to stream");
-        heartbeat::send_upgrade(&mut stream).await.map_err(|e| {
-            StreamEstablishError::WriteHeartbeatUpgrade {
+        heartbeat::send_upgrade(&mut stream, IO_TIMEOUT)
+            .await
+            .map_err(|e| StreamEstablishError::WriteHeartbeatUpgrade {
                 source: e,
                 upstream_addr: addr.clone(),
-            }
-        })?;
+            })?;
         let mut crypto_cursor = XorCryptoCursor::new(crypto);
         write_header_async(&mut stream, &header, &mut crypto_cursor)
             .await
@@ -90,7 +92,7 @@ pub enum StreamEstablishError {
     #[error("Failed to write heartbeat upgrade to upstream")]
     WriteHeartbeatUpgrade {
         #[source]
-        source: HeaderError,
+        source: HeartbeatError,
         upstream_addr: StreamAddr,
     },
     #[error("Failed to read stream request header to upstream")]

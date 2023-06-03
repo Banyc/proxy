@@ -1,10 +1,10 @@
-use std::{io, net::SocketAddr};
+use std::{io, net::SocketAddr, time::Duration};
 
 use async_trait::async_trait;
 use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     header::{read_header_async, HeaderError},
-    heartbeat,
+    heartbeat::{self, HeartbeatError},
     stream::{
         addr::StreamAddr,
         connect_with_pool,
@@ -22,6 +22,8 @@ use tracing::{error, info, instrument};
 
 pub mod kcp;
 pub mod tcp;
+
+const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct StreamProxyServerBuilder {
@@ -170,18 +172,31 @@ impl StreamProxyAcceptor {
         S: IoStream + IoAddr + std::fmt::Debug,
     {
         // Wait for heartbeat upgrade
-        heartbeat::wait_upgrade(downstream).await.map_err(|e| {
-            let downstream_addr = downstream.peer_addr().ok();
-            StreamProxyAcceptorError::ReadHeartbeatUpgrade {
-                source: e,
-                downstream_addr,
-            }
-        })?;
+        heartbeat::wait_upgrade(downstream, IO_TIMEOUT)
+            .await
+            .map_err(|e| {
+                let downstream_addr = downstream.peer_addr().ok();
+                StreamProxyAcceptorError::ReadHeartbeatUpgrade {
+                    source: e,
+                    downstream_addr,
+                }
+            })?;
 
         // Decode header
         let mut read_crypto_cursor = XorCryptoCursor::new(&self.crypto);
-        let header: StreamRequestHeader = read_header_async(downstream, &mut read_crypto_cursor)
-            .await
+        let res = tokio::time::timeout(
+            IO_TIMEOUT,
+            read_header_async(downstream, &mut read_crypto_cursor),
+        )
+        .await;
+        let header: StreamRequestHeader = res
+            .map_err(|_| {
+                let downstream_addr = downstream.peer_addr().ok();
+                StreamProxyAcceptorError::ReadStreamRequestHeaderTimeout {
+                    downstream_addr,
+                    duration: IO_TIMEOUT,
+                }
+            })?
             .map_err(|e| {
                 let downstream_addr = downstream.peer_addr().ok();
                 StreamProxyAcceptorError::ReadStreamRequestHeader {
@@ -264,8 +279,13 @@ pub enum StreamProxyAcceptorError {
     #[error("Failed to read heartbeat header from downstream")]
     ReadHeartbeatUpgrade {
         #[source]
-        source: HeaderError,
+        source: HeartbeatError,
         downstream_addr: Option<SocketAddr>,
+    },
+    #[error("Failed to read stream request header from downstream")]
+    ReadStreamRequestHeaderTimeout {
+        downstream_addr: Option<SocketAddr>,
+        duration: Duration,
     },
     #[error("Failed to read stream request header from downstream")]
     ReadStreamRequestHeader {

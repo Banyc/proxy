@@ -37,6 +37,8 @@ pub struct ListenerBindError(#[from] io::Error);
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use common::{
         crypto::{XorCrypto, XorCryptoCursor},
@@ -93,7 +95,9 @@ mod tests {
 
         // Establish connection to origin server
         {
-            heartbeat::send_upgrade(&mut stream).await.unwrap();
+            heartbeat::send_upgrade(&mut stream, Duration::from_secs(1))
+                .await
+                .unwrap();
             // Encode header
             let header = StreamRequestHeader {
                 upstream: StreamAddr {

@@ -15,51 +15,56 @@ pub enum HeartbeatRequest {
     Upgrade,
 }
 
-pub async fn send_noop<S>(stream: &mut S, timeout: Duration) -> Result<(), SendNoopError>
+pub async fn send_noop<S>(stream: &mut S, timeout: Duration) -> Result<(), HeartbeatError>
 where
     S: AsyncWrite + Unpin,
 {
     let crypto = XorCrypto::new(vec![]);
     let mut crypto_cursor = XorCryptoCursor::new(&crypto);
     let req = HeartbeatRequest::Noop;
-    tokio::select! {
-        res = write_header_async(stream, &req, &mut crypto_cursor) => {
-            res?;
-        }
-        () = tokio::time::sleep(timeout) => {
-            return Err(SendNoopError::Timeout(timeout));
-        }
-    }
+    let res = tokio::time::timeout(
+        timeout,
+        write_header_async(stream, &req, &mut crypto_cursor),
+    )
+    .await;
+    res.map_err(|_| HeartbeatError::Timeout(timeout))??;
     Ok(())
 }
 
 #[derive(Debug, Error)]
-pub enum SendNoopError {
-    #[error("Failed to write header")]
+pub enum HeartbeatError {
+    #[error("Failed to read/write header")]
     Header(#[from] HeaderError),
     #[error("Timeout")]
     Timeout(Duration),
 }
 
-pub async fn send_upgrade<S>(stream: &mut S) -> Result<(), HeaderError>
+pub async fn send_upgrade<S>(stream: &mut S, timeout: Duration) -> Result<(), HeartbeatError>
 where
     S: AsyncWrite + Unpin,
 {
     let crypto = XorCrypto::new(vec![]);
     let mut crypto_cursor = XorCryptoCursor::new(&crypto);
     let req = HeartbeatRequest::Upgrade;
-    write_header_async(stream, &req, &mut crypto_cursor).await?;
+    let res = tokio::time::timeout(
+        timeout,
+        write_header_async(stream, &req, &mut crypto_cursor),
+    )
+    .await;
+    res.map_err(|_| HeartbeatError::Timeout(timeout))??;
     Ok(())
 }
 
-pub async fn wait_upgrade<S>(stream: &mut S) -> Result<(), HeaderError>
+pub async fn wait_upgrade<S>(stream: &mut S, timeout: Duration) -> Result<(), HeartbeatError>
 where
     S: AsyncRead + Unpin,
 {
     let crypto = XorCrypto::new(vec![]);
     loop {
         let mut crypto_cursor = XorCryptoCursor::new(&crypto);
-        let header: HeartbeatRequest = read_header_async(stream, &mut crypto_cursor).await?;
+        let res =
+            tokio::time::timeout(timeout, read_header_async(stream, &mut crypto_cursor)).await;
+        let header: HeartbeatRequest = res.map_err(|_| HeartbeatError::Timeout(timeout))??;
         if header == HeartbeatRequest::Upgrade {
             break;
         }

@@ -8,7 +8,7 @@ use tracing::{error, info, instrument, trace};
 
 use crate::stream::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook};
 
-const UPLINK_TIMEOUT: Duration = Duration::from_secs(60);
+// const UPLINK_TIMEOUT: Duration = Duration::from_secs(60);
 const DOWNLINK_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
@@ -48,8 +48,8 @@ where
                 .accept()
                 .await
                 .map_err(|e| ServeError::Accept { source: e, addr })?;
-            let mut stream = TimeoutStream::new(stream);
-            stream.set_read_timeout(Some(UPLINK_TIMEOUT));
+            let mut stream: TimeoutStream<TcpStream> = TimeoutStream::new(stream);
+            // stream.set_read_timeout(Some(UPLINK_TIMEOUT));
             stream.set_write_timeout(Some(DOWNLINK_TIMEOUT));
             // Arc hook
             let hook = Arc::clone(&hook);
@@ -94,7 +94,7 @@ impl ConnectStream for TcpConnector {
             .inspect_err(|e| error!(?e, ?addr, "Failed to connect to address"))?;
         let mut stream = TimeoutStream::new(stream);
         stream.set_read_timeout(Some(DOWNLINK_TIMEOUT));
-        stream.set_write_timeout(Some(UPLINK_TIMEOUT));
+        // stream.set_write_timeout(Some(UPLINK_TIMEOUT));
         Ok(CreatedStream::Tcp(Box::pin(stream)))
     }
 }
