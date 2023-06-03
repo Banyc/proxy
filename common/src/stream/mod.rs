@@ -276,7 +276,7 @@ impl AsyncWrite for CreatedStream {
     ) -> std::task::Poll<Result<usize, io::Error>> {
         match self.deref_mut() {
             CreatedStream::Quic(x) => Pin::new(x).poll_write(cx, buf),
-            CreatedStream::Tcp(x) => Pin::new(x).poll_write(cx, buf),
+            CreatedStream::Tcp(x) => x.as_mut().poll_write(cx, buf),
             CreatedStream::Kcp(x) => Pin::new(x).poll_write(cx, buf),
         }
     }
@@ -287,7 +287,7 @@ impl AsyncWrite for CreatedStream {
     ) -> std::task::Poll<Result<(), io::Error>> {
         match self.deref_mut() {
             CreatedStream::Quic(x) => Pin::new(x).poll_flush(cx),
-            CreatedStream::Tcp(x) => Pin::new(x).poll_flush(cx),
+            CreatedStream::Tcp(x) => x.as_mut().poll_flush(cx),
             CreatedStream::Kcp(x) => Pin::new(x).poll_flush(cx),
         }
     }
@@ -298,7 +298,7 @@ impl AsyncWrite for CreatedStream {
     ) -> std::task::Poll<Result<(), io::Error>> {
         match self.deref_mut() {
             CreatedStream::Quic(x) => Pin::new(x).poll_shutdown(cx),
-            CreatedStream::Tcp(x) => Pin::new(x).poll_shutdown(cx),
+            CreatedStream::Tcp(x) => x.as_mut().poll_shutdown(cx),
             CreatedStream::Kcp(x) => Pin::new(x).poll_shutdown(cx),
         }
     }
@@ -312,7 +312,7 @@ impl AsyncRead for CreatedStream {
     ) -> std::task::Poll<io::Result<()>> {
         match self.deref_mut() {
             CreatedStream::Quic(x) => Pin::new(x).poll_read(cx, buf),
-            CreatedStream::Tcp(x) => Pin::new(x).poll_read(cx, buf),
+            CreatedStream::Tcp(x) => x.as_mut().poll_read(cx, buf),
             CreatedStream::Kcp(x) => Pin::new(x).poll_read(cx, buf),
         }
     }
