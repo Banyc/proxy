@@ -28,14 +28,9 @@ where
     let a = a_r.unsplit(a_w);
     let b = b_r.unsplit(b_w);
 
-    let res = tokio::select! {
-        res = transfer_after_fin(done, a, b) => res,
-        () = tokio::time::sleep(POST_FIN_TIMEOUT) => {
-            Err(TimedCopyBiError::FinTimeout(done))
-        }
-    };
-
-    res
+    tokio::time::timeout(POST_FIN_TIMEOUT, transfer_after_fin(done, a, b))
+        .await
+        .map_err(|_| TimedCopyBiError::FinTimeout(done))?
 }
 
 async fn transfer_after_fin<A, B>(
