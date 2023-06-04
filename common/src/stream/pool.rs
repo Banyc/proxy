@@ -49,7 +49,9 @@ impl SocketCell {
         heartbeat_interval: Duration,
     ) -> io::Result<Self> {
         let sock_addr = addr.to_socket_addr().await?;
-        let stream = connector.connect(sock_addr).await?;
+        let stream = connector
+            .timed_connect(sock_addr, HEARTBEAT_INTERVAL)
+            .await?;
         let cell = Arc::new(TokioRwLock::new(Some(stream)));
         tokio::spawn({
             let cell = Arc::clone(&cell);

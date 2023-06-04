@@ -196,15 +196,16 @@ impl StreamProxyAcceptor {
                 })?;
 
         // Connect to upstream
-        let (upstream, sock_addr) = connect_with_pool(&header.upstream, &self.stream_pool, false)
-            .await
-            .map_err(|e| {
-                let downstream_addr = downstream.peer_addr().ok();
-                StreamProxyAcceptorError::ConnectUpstream {
-                    source: e,
-                    downstream_addr,
-                }
-            })?;
+        let (upstream, sock_addr) =
+            connect_with_pool(&header.upstream, &self.stream_pool, false, IO_TIMEOUT)
+                .await
+                .map_err(|e| {
+                    let downstream_addr = downstream.peer_addr().ok();
+                    StreamProxyAcceptorError::ConnectUpstream {
+                        source: e,
+                        downstream_addr,
+                    }
+                })?;
 
         // // Write Ok response
         // let resp = ResponseHeader { result: Ok(()) };

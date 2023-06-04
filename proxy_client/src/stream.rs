@@ -3,7 +3,7 @@ use std::{net::SocketAddr, time::Duration};
 use common::{
     config::convert_proxies_to_header_crypto_pairs,
     crypto::XorCryptoCursor,
-    header::{write_header_async, HeaderError},
+    header::{timed_write_header_async, HeaderError},
     heartbeat::{self, HeartbeatError},
     stream::{
         addr::StreamAddr, config::StreamProxyConfig, connect_with_pool, pool::Pool, ConnectError,
@@ -23,7 +23,7 @@ pub async fn establish(
 ) -> Result<(CreatedStream, StreamAddr, SocketAddr), StreamEstablishError> {
     // If there are no proxy configs, just connect to the destination
     if proxies.is_empty() {
-        let (stream, sock_addr) = connect_with_pool(&destination, stream_pool, true)
+        let (stream, sock_addr) = connect_with_pool(&destination, stream_pool, true, IO_TIMEOUT)
             .await
             .map_err(StreamEstablishError::ConnectDestination)?;
         return Ok((stream, destination, sock_addr));
@@ -32,7 +32,7 @@ pub async fn establish(
     // Connect to the first proxy
     let (mut stream, addr, sock_addr) = {
         let proxy_addr = &proxies[0].address;
-        let (stream, sock_addr) = connect_with_pool(proxy_addr, stream_pool, true)
+        let (stream, sock_addr) = connect_with_pool(proxy_addr, stream_pool, true, IO_TIMEOUT)
             .await
             .map_err(StreamEstablishError::ConnectFirstProxyServer)?;
         (stream, proxy_addr.clone(), sock_addr)
@@ -51,7 +51,7 @@ pub async fn establish(
                 upstream_addr: addr.clone(),
             })?;
         let mut crypto_cursor = XorCryptoCursor::new(crypto);
-        write_header_async(&mut stream, &header, &mut crypto_cursor)
+        timed_write_header_async(&mut stream, &header, &mut crypto_cursor, IO_TIMEOUT)
             .await
             .map_err(|e| StreamEstablishError::WriteStreamRequestHeader {
                 source: e,

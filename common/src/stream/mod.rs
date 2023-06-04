@@ -1,4 +1,4 @@
-use std::{fmt::Display, io, net::SocketAddr, ops::DerefMut, pin::Pin};
+use std::{fmt::Display, io, net::SocketAddr, ops::DerefMut, pin::Pin, time::Duration};
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
@@ -39,6 +39,17 @@ pub trait IoAddr {
 #[async_trait]
 pub trait ConnectStream {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream>;
+    async fn timed_connect(
+        &self,
+        addr: SocketAddr,
+        timeout: Duration,
+    ) -> io::Result<CreatedStream> {
+        let res = tokio::time::timeout(timeout, self.connect(addr)).await;
+        match res {
+            Ok(res) => res,
+            Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "Timed out")),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -82,6 +93,7 @@ pub async fn connect_with_pool(
     addr: &StreamAddr,
     stream_pool: &Pool,
     allow_loopback: bool,
+    timeout: Duration,
 ) -> Result<(CreatedStream, SocketAddr), ConnectError> {
     let stream = stream_pool.open_stream(addr).await;
     let ret = match stream {
@@ -103,15 +115,14 @@ pub async fn connect_with_pool(
                     sock_addr,
                 });
             }
-            let stream =
-                connector
-                    .connect(sock_addr)
-                    .await
-                    .map_err(|e| ConnectError::ConnectAddr {
-                        source: e,
-                        addr: addr.clone(),
-                        sock_addr,
-                    })?;
+            let stream = connector
+                .timed_connect(sock_addr, timeout)
+                .await
+                .map_err(|e| ConnectError::ConnectAddr {
+                    source: e,
+                    addr: addr.clone(),
+                    sock_addr,
+                })?;
             (stream, sock_addr)
         }
     };
