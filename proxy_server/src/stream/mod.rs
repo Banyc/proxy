@@ -3,7 +3,7 @@ use std::{io, net::SocketAddr, time::Duration};
 use async_trait::async_trait;
 use common::{
     crypto::{XorCrypto, XorCryptoCursor},
-    header::{read_header_async, HeaderError},
+    header::{timed_read_header_async, HeaderError},
     heartbeat::{self, HeartbeatError},
     stream::{
         addr::StreamAddr,
@@ -184,26 +184,16 @@ impl StreamProxyAcceptor {
 
         // Decode header
         let mut read_crypto_cursor = XorCryptoCursor::new(&self.crypto);
-        let res = tokio::time::timeout(
-            IO_TIMEOUT,
-            read_header_async(downstream, &mut read_crypto_cursor),
-        )
-        .await;
-        let header: StreamRequestHeader = res
-            .map_err(|_| {
-                let downstream_addr = downstream.peer_addr().ok();
-                StreamProxyAcceptorError::ReadStreamRequestHeaderTimeout {
-                    downstream_addr,
-                    duration: IO_TIMEOUT,
-                }
-            })?
-            .map_err(|e| {
-                let downstream_addr = downstream.peer_addr().ok();
-                StreamProxyAcceptorError::ReadStreamRequestHeader {
-                    source: e,
-                    downstream_addr,
-                }
-            })?;
+        let header: StreamRequestHeader =
+            timed_read_header_async(downstream, &mut read_crypto_cursor, IO_TIMEOUT)
+                .await
+                .map_err(|e| {
+                    let downstream_addr = downstream.peer_addr().ok();
+                    StreamProxyAcceptorError::ReadStreamRequestHeader {
+                        source: e,
+                        downstream_addr,
+                    }
+                })?;
 
         // Connect to upstream
         let (upstream, sock_addr) = connect_with_pool(&header.upstream, &self.stream_pool, false)
@@ -281,11 +271,6 @@ pub enum StreamProxyAcceptorError {
         #[source]
         source: HeartbeatError,
         downstream_addr: Option<SocketAddr>,
-    },
-    #[error("Failed to read stream request header from downstream")]
-    ReadStreamRequestHeaderTimeout {
-        downstream_addr: Option<SocketAddr>,
-        duration: Duration,
     },
     #[error("Failed to read stream request header from downstream")]
     ReadStreamRequestHeader {

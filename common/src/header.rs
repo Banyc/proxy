@@ -1,4 +1,7 @@
-use std::io::{self, Read, Write};
+use std::{
+    io::{self, Read, Write},
+    time::Duration,
+};
 
 use duplicate::duplicate_item;
 use serde::{Deserialize, Serialize};
@@ -100,6 +103,45 @@ where
     add_await([stream.write_all(hdr)])?;
 
     Ok(())
+}
+
+pub async fn timed_read_header_async<'crypto, S, H>(
+    stream: &mut S,
+    crypto: &mut XorCryptoCursor,
+    timeout: Duration,
+) -> Result<H, HeaderError>
+where
+    S: AsyncRead + Unpin,
+    H: for<'de> Deserialize<'de> + std::fmt::Debug,
+{
+    let res = tokio::time::timeout(timeout, read_header_async(stream, crypto)).await;
+    match res {
+        Ok(res) => res,
+        Err(_) => Err(HeaderError::Io(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "Timed out",
+        ))),
+    }
+}
+
+pub async fn timed_write_header_async<'crypto, S, H>(
+    stream: &mut S,
+    header: &H,
+    crypto: &mut XorCryptoCursor,
+    timeout: Duration,
+) -> Result<(), HeaderError>
+where
+    S: AsyncWrite + Unpin,
+    H: Serialize + std::fmt::Debug,
+{
+    let res = tokio::time::timeout(timeout, write_header_async(stream, header, crypto)).await;
+    match res {
+        Ok(res) => res,
+        Err(_) => Err(HeaderError::Io(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "Timed out",
+        ))),
+    }
 }
 
 #[derive(Debug, Error)]
