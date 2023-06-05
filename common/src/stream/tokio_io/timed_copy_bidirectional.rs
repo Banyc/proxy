@@ -25,12 +25,20 @@ where
         }
     };
 
-    let a = a_r.unsplit(a_w);
-    let b = b_r.unsplit(b_w);
+    if cfg!(feature = "leak-fd") {
+        let a = a_r.unsplit(a_w);
+        let b = b_r.unsplit(b_w);
 
-    tokio::time::timeout(POST_FIN_TIMEOUT, transfer_after_fin(done, a, b))
-        .await
-        .map_err(|_| TimedCopyBiError::FinTimeout(done))?
+        tokio::time::timeout(POST_FIN_TIMEOUT, transfer_after_fin(done, a, b))
+            .await
+            .map_err(|_| TimedCopyBiError::FinTimeout(done))?
+    } else {
+        let res = match done {
+            Done::FromAToB(a_to_b) => (a_to_b, 0),
+            Done::FromBToA(b_to_a) => (0, b_to_a),
+        };
+        Ok(res)
+    }
 }
 
 async fn transfer_after_fin<A, B>(
