@@ -29,6 +29,9 @@ pub mod pool;
 pub mod streams;
 pub mod tokio_io;
 
+pub const UPLINK_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 2);
+pub const DOWNLINK_TIMEOUT: Duration = Duration::from_secs(60);
+
 pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
 
 pub trait IoAddr {

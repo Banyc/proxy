@@ -1,4 +1,4 @@
-use std::{io, net::SocketAddr, sync::Arc, time::Duration};
+use std::{io, net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
 use thiserror::Error;
@@ -6,10 +6,10 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_io_timeout::TimeoutStream;
 use tracing::{error, info, instrument, trace};
 
-use crate::stream::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook};
-
-const UPLINK_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 2);
-const DOWNLINK_TIMEOUT: Duration = Duration::from_secs(60);
+use crate::stream::{
+    ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook, DOWNLINK_TIMEOUT,
+    UPLINK_TIMEOUT,
+};
 
 #[derive(Debug)]
 pub struct TcpServer<H> {
