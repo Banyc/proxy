@@ -69,7 +69,7 @@ impl StreamProxyServer {
             .map_err(StreamProxyServerError::DownstreamAddr)?;
 
         // Establish proxy chain
-        let (mut upstream, upstream_addr, upstream_sock_addr) =
+        let (upstream, upstream_addr, upstream_sock_addr) =
             match self.acceptor.establish(&mut downstream).await {
                 Ok(upstream) => upstream,
                 Err(e) => {
@@ -82,10 +82,10 @@ impl StreamProxyServer {
         let res = match &self.payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
-                let mut xor_stream = XorStream::upgrade(downstream, crypto);
-                tokio_io::copy_bidirectional(&mut xor_stream, &mut upstream).await
+                let xor_stream = XorStream::upgrade(downstream, crypto);
+                tokio_io::timed_copy_bidirectional(xor_stream, upstream).await
             }
-            None => tokio_io::copy_bidirectional(&mut downstream, &mut upstream).await,
+            None => tokio_io::timed_copy_bidirectional(downstream, upstream).await,
         };
         let end = std::time::Instant::now();
         let (bytes_uplink, bytes_downlink) = res.map_err(|e| StreamProxyServerError::IoCopy {

@@ -3,13 +3,9 @@ use std::{io, net::SocketAddr, sync::Arc};
 use async_trait::async_trait;
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
-use tokio_io_timeout::TimeoutStream;
 use tracing::{error, info, instrument, trace};
 
-use crate::stream::{
-    ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook, DOWNLINK_TIMEOUT,
-    UPLINK_TIMEOUT,
-};
+use crate::stream::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook};
 
 #[derive(Debug)]
 pub struct TcpServer<H> {
@@ -48,14 +44,10 @@ where
                 .accept()
                 .await
                 .map_err(|e| ServeError::Accept { source: e, addr })?;
-            let mut stream: TimeoutStream<TcpStream> = TimeoutStream::new(stream);
-            stream.set_read_timeout(Some(UPLINK_TIMEOUT));
-            stream.set_write_timeout(Some(DOWNLINK_TIMEOUT));
             // Arc hook
             let hook = Arc::clone(&hook);
             tokio::spawn(async move {
-                hook.handle_stream(CreatedStream::Tcp(Box::pin(stream)))
-                    .await;
+                hook.handle_stream(stream).await;
             });
         }
     }
@@ -92,9 +84,6 @@ impl ConnectStream for TcpConnector {
         let stream = TcpStream::connect(addr)
             .await
             .inspect_err(|e| error!(?e, ?addr, "Failed to connect to address"))?;
-        let mut stream = TimeoutStream::new(stream);
-        stream.set_read_timeout(Some(DOWNLINK_TIMEOUT));
-        stream.set_write_timeout(Some(UPLINK_TIMEOUT));
-        Ok(CreatedStream::Tcp(Box::pin(stream)))
+        Ok(CreatedStream::Tcp(stream))
     }
 }

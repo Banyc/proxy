@@ -69,7 +69,7 @@ impl TcpProxyAccess {
         Ok(TcpServer::new(tcp_listener, self))
     }
 
-    async fn proxy<S>(&self, downstream: &mut S) -> Result<StreamMetrics, ProxyError>
+    async fn proxy<S>(&self, downstream: S) -> Result<StreamMetrics, ProxyError>
     where
         S: IoStream + IoAddr,
     {
@@ -77,16 +77,16 @@ impl TcpProxyAccess {
 
         let downstream_addr = downstream.peer_addr().map_err(ProxyError::DownstreamAddr)?;
 
-        let (mut upstream, upstream_addr, upstream_sock_addr) =
+        let (upstream, upstream_addr, upstream_sock_addr) =
             establish(&self.proxies, self.destination.clone(), &self.stream_pool).await?;
 
         let res = match &self.payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
-                let mut xor_stream = XorStream::upgrade(upstream, crypto);
-                tokio_io::copy_bidirectional(downstream, &mut xor_stream).await
+                let xor_stream = XorStream::upgrade(upstream, crypto);
+                tokio_io::timed_copy_bidirectional(downstream, xor_stream).await
             }
-            None => tokio_io::copy_bidirectional(downstream, &mut upstream).await,
+            None => tokio_io::timed_copy_bidirectional(downstream, upstream).await,
         };
         let end = std::time::Instant::now();
         let (bytes_uplink, bytes_downlink) = res.map_err(|e| ProxyError::IoCopy {
@@ -130,11 +130,11 @@ pub enum ProxyError {
 #[async_trait]
 impl StreamServerHook for TcpProxyAccess {
     #[instrument(skip(self, stream))]
-    async fn handle_stream<S>(&self, mut stream: S)
+    async fn handle_stream<S>(&self, stream: S)
     where
         S: IoStream + IoAddr,
     {
-        match self.proxy(&mut stream).await {
+        match self.proxy(stream).await {
             Ok(metrics) => {
                 info!(%metrics, "Proxy finished");
             }

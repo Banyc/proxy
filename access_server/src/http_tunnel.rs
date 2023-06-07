@@ -266,7 +266,7 @@ impl HttpConnect {
     #[instrument(skip(self, upgraded))]
     pub async fn proxy(
         &self,
-        mut upgraded: Upgraded,
+        upgraded: Upgraded,
         address: InternetAddr,
     ) -> Result<TunnelMetrics, HttpConnectError> {
         let start = Instant::now();
@@ -276,17 +276,17 @@ impl HttpConnect {
             address: address.clone(),
             stream_type: StreamType::Tcp,
         };
-        let (mut upstream, upstream_addr, upstream_sock_addr) =
+        let (upstream, upstream_addr, upstream_sock_addr) =
             establish(&self.proxies, destination, &self.stream_pool).await?;
 
         // Proxy data
         let res = match &self.payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
-                let mut xor_stream = XorStream::upgrade(upstream, crypto);
-                tokio_io::copy_bidirectional(&mut upgraded, &mut xor_stream).await
+                let xor_stream = XorStream::upgrade(upstream, crypto);
+                tokio_io::timed_copy_bidirectional(upgraded, xor_stream).await
             }
-            None => tokio_io::copy_bidirectional(&mut upgraded, &mut upstream).await,
+            None => tokio_io::timed_copy_bidirectional(upgraded, upstream).await,
         };
         let end = Instant::now();
         let (from_client, from_server) = res.map_err(|e| HttpConnectError::IoCopy {

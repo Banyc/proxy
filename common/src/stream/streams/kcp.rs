@@ -3,16 +3,12 @@ use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
 use async_trait::async_trait;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_io_timeout::TimeoutStream;
 use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
 use tracing::{error, info, instrument, trace};
 
 use crate::{
     addr::any_addr,
-    stream::{
-        ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook, DOWNLINK_TIMEOUT,
-        UPLINK_TIMEOUT,
-    },
+    stream::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook},
 };
 
 #[derive(Debug)]
@@ -55,11 +51,8 @@ where
                         source: e.into(),
                         addr,
                     })?;
-            let mut stream = TimeoutStream::new(stream);
-            stream.set_read_timeout(Some(UPLINK_TIMEOUT));
-            stream.set_write_timeout(Some(DOWNLINK_TIMEOUT));
             let stream = AddressedKcpStream {
-                stream: Box::pin(stream),
+                stream,
                 local_addr: addr,
                 peer_addr,
             };
@@ -86,7 +79,7 @@ pub enum ServeError {
 
 #[derive(Debug)]
 pub struct AddressedKcpStream {
-    stream: Pin<Box<TimeoutStream<KcpStream>>>,
+    stream: KcpStream,
     local_addr: SocketAddr,
     peer_addr: SocketAddr,
 }
@@ -107,7 +100,7 @@ impl AsyncRead for AddressedKcpStream {
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<io::Result<()>> {
-        self.stream.as_mut().poll_read(cx, buf)
+        Pin::new(&mut self.stream).poll_read(cx, buf)
     }
 }
 
@@ -117,21 +110,21 @@ impl AsyncWrite for AddressedKcpStream {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, io::Error>> {
-        self.stream.as_mut().poll_write(cx, buf)
+        Pin::new(&mut self.stream).poll_write(cx, buf)
     }
 
     fn poll_flush(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), io::Error>> {
-        self.stream.as_mut().poll_flush(cx)
+        Pin::new(&mut self.stream).poll_flush(cx)
     }
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), io::Error>> {
-        self.stream.as_mut().poll_shutdown(cx)
+        Pin::new(&mut self.stream).poll_shutdown(cx)
     }
 }
 
@@ -146,11 +139,8 @@ impl ConnectStream for KcpConnector {
             .await
             .inspect_err(|e| error!(?e, ?addr, "Failed to connect to address"))?;
         let local_addr = any_addr(&addr.ip());
-        let mut stream = TimeoutStream::new(stream);
-        stream.set_read_timeout(Some(DOWNLINK_TIMEOUT));
-        stream.set_write_timeout(Some(UPLINK_TIMEOUT));
         let stream = AddressedKcpStream {
-            stream: Box::pin(stream),
+            stream,
             local_addr,
             peer_addr: addr,
         };
