@@ -11,9 +11,8 @@ use common::{
         header::StreamRequestHeader,
         pool::{Pool, PoolBuilder},
         streams::xor::XorStream,
-        tokio_io::{self, TimedCopyBiError},
-        ConnectError, CreatedStream, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics,
-        StreamServerHook,
+        tokio_io, ConnectError, CreatedStream, FailedStreamMetrics, IoAddr, IoStream,
+        StreamMetrics, StreamServerHook,
     },
 };
 use serde::Deserialize;
@@ -84,9 +83,9 @@ impl StreamProxyServer {
             Some(crypto) => {
                 // Establish encrypted stream
                 let mut xor_stream = XorStream::upgrade(downstream, crypto);
-                tokio_io::timed_copy_bidirectional(&mut xor_stream, &mut upstream).await
+                tokio_io::copy_bidirectional(&mut xor_stream, &mut upstream).await
             }
-            None => tokio_io::timed_copy_bidirectional(&mut downstream, &mut upstream).await,
+            None => tokio_io::copy_bidirectional(&mut downstream, &mut upstream).await,
         };
         let end = std::time::Instant::now();
         let (bytes_uplink, bytes_downlink) = res.map_err(|e| StreamProxyServerError::IoCopy {
@@ -260,7 +259,7 @@ pub enum StreamProxyServerError {
     #[error("Failed to copy data between streams")]
     IoCopy {
         #[source]
-        source: TimedCopyBiError,
+        source: tokio_io::CopyBiError,
         metrics: FailedStreamMetrics,
     },
 }
