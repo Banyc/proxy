@@ -18,3 +18,4 @@ hyper = { version = "1.0.0-rc.3", features = ["full"] }
 bytes = "1.4.0"
 http-body-util = "0.1.0-rc.2"
 thiserror = "1.0.40"
+filter = { path = "../filter" }

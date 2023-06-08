@@ -15,6 +15,7 @@ use common::{
         StreamServerHook, TunnelMetrics,
     },
 };
+use filter::{Filter, FilterBuilder};
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::{
     body::Incoming, http, service::service_fn, upgrade::Upgraded, Method, Request, Response,
@@ -34,6 +35,7 @@ pub struct HttpProxyAccessBuilder {
     proxies: Vec<StreamProxyConfigBuilder>,
     payload_xor_key: Option<Vec<u8>>,
     stream_pool: PoolBuilder,
+    filter: FilterBuilder,
 }
 
 impl HttpProxyAccessBuilder {
@@ -43,6 +45,12 @@ impl HttpProxyAccessBuilder {
             self.proxies.into_iter().map(|x| x.build()).collect(),
             self.payload_xor_key.map(XorCrypto::new),
             stream_pool,
+            self.filter.build().map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Failed to build filter: {}", e),
+                )
+            })?,
         );
         let server = access.build(self.listen_addr).await?;
         Ok(server)
@@ -53,6 +61,7 @@ pub struct HttpProxyAccess {
     proxies: Arc<Vec<StreamProxyConfig>>,
     payload_crypto: Option<Arc<XorCrypto>>,
     stream_pool: Pool,
+    filter: Filter,
 }
 
 impl HttpProxyAccess {
@@ -60,11 +69,13 @@ impl HttpProxyAccess {
         proxies: Vec<StreamProxyConfig>,
         payload_crypto: Option<XorCrypto>,
         stream_pool: Pool,
+        filter: Filter,
     ) -> Self {
         Self {
             proxies: Arc::new(proxies),
             payload_crypto: payload_crypto.map(Arc::new),
             stream_pool,
+            filter,
         }
     }
 
@@ -111,6 +122,18 @@ impl HttpProxyAccess {
             // connection be upgraded, so we can't return a response inside
             // `on_upgrade` future.
             if let Some(addr) = host_addr(req.uri()) {
+                let action = self.filter.filter(&addr);
+                match action {
+                    filter::Action::Proxy => (),
+                    filter::Action::Block => {
+                        return Ok(Response::builder()
+                            .status(503)
+                            .body(full("Blocked"))
+                            .unwrap());
+                    }
+                    filter::Action::Direct => (),
+                }
+
                 let http_connect = HttpConnect::new(
                     Arc::clone(&self.proxies),
                     self.payload_crypto.clone(),
@@ -119,6 +142,24 @@ impl HttpProxyAccess {
                 tokio::task::spawn(async move {
                     match hyper::upgrade::on(req).await {
                         Ok(upgraded) => {
+                            if action == filter::Action::Direct {
+                                let upstream = match tokio::net::TcpStream::connect(&addr).await {
+                                    Ok(upstream) => upstream,
+                                    Err(e) => {
+                                        error!(?e, "Failed to connect to upstream directly");
+                                        return;
+                                    }
+                                };
+                                match tokio_io::timed_copy_bidirectional(upgraded, upstream).await {
+                                    Ok(metrics) => {
+                                        info!(?addr, ?metrics, "Direct CONNECT finished");
+                                    }
+                                    Err(e) => {
+                                        error!(?addr, ?e, "Direct CONNECT error");
+                                    }
+                                }
+                                return;
+                            }
                             match http_connect.proxy(upgraded, addr.into()).await {
                                 Ok(metrics) => {
                                     info!(%metrics, "CONNECT finished");
@@ -150,6 +191,25 @@ impl HttpProxyAccess {
             let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
             let port = req.uri().port_u16().unwrap_or(80);
             let addr = format!("{}:{}", host, port);
+
+            let action = self.filter.filter(&addr);
+            match action {
+                filter::Action::Proxy => (),
+                filter::Action::Block => {
+                    return Ok(Response::builder()
+                        .status(503)
+                        .body(full("Blocked"))
+                        .unwrap());
+                }
+                filter::Action::Direct => {
+                    let upstream = tokio::net::TcpStream::connect(&addr)
+                        .await
+                        .map_err(TunnelError::Direct)?;
+                    let res = self.tls_http(upstream, req).await;
+                    info!(?addr, "Direct {} finished", method);
+                    return res;
+                }
+            }
 
             // Establish proxy chain
             let (upstream, upstream_addr, upstream_sock_addr) = establish(
@@ -227,6 +287,8 @@ pub enum TunnelError {
     HyperError(#[from] hyper::Error),
     #[error("No host in HTTP request")]
     HttpNoHost,
+    #[error("Direct connection error")]
+    Direct(#[source] io::Error),
 }
 
 #[async_trait]

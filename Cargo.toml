@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "filter",
     "common",
     "proxy_client",
     "proxy_server",
