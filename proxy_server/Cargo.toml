@@ -16,4 +16,4 @@ common = { path = "../common" }
 get_config = "0.1.1"
 async-trait = "0.1.68"
 quinn = "0.10.1"
-tokio_kcp = { git = "https://github.com/Matrix-Zhang/tokio_kcp.git" }
+tokio_kcp = "0.9.5"

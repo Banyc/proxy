@@ -16,7 +16,7 @@ serde = { version = "1.0.163", features = ["derive",  "rc"] }
 thiserror = "1.0.40"
 tokio = { version = "1.28.2", features = ["full"] }
 tokio-io-timeout = "1.2.0"
-tokio_kcp = { git = "https://github.com/Matrix-Zhang/tokio_kcp.git" }
+tokio_kcp = "0.9.5"
 tracing = "0.1.37"
 
 [dev-dependencies]
