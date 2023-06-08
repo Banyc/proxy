@@ -8,6 +8,7 @@ use common::{
     stream::{
         addr::{StreamAddr, StreamType},
         config::{StreamProxyConfig, StreamProxyConfigBuilder},
+        copy_bidirectional_with_payload_crypto,
         pool::{Pool, PoolBuilder},
         streams::{tcp::TcpServer, xor::XorStream},
         tokio_io, FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamMetrics,
@@ -280,14 +281,12 @@ impl HttpConnect {
             establish(&self.proxies, destination, &self.stream_pool).await?;
 
         // Proxy data
-        let res = match &self.payload_crypto {
-            Some(crypto) => {
-                // Establish encrypted stream
-                let xor_stream = XorStream::upgrade(upstream, crypto);
-                tokio_io::timed_copy_bidirectional(upgraded, xor_stream).await
-            }
-            None => tokio_io::timed_copy_bidirectional(upgraded, upstream).await,
-        };
+        let res = copy_bidirectional_with_payload_crypto(
+            upgraded,
+            upstream,
+            self.payload_crypto.as_ref().map(|a| a.as_ref()),
+        )
+        .await;
         let end = Instant::now();
         let (from_client, from_server) = res.map_err(|e| HttpConnectError::IoCopy {
             source: e,

@@ -6,8 +6,9 @@ use common::{
     stream::{
         addr::{StreamAddr, StreamAddrBuilder},
         config::{StreamProxyConfig, StreamProxyConfigBuilder},
+        copy_bidirectional_with_payload_crypto,
         pool::{Pool, PoolBuilder},
-        streams::{tcp::TcpServer, xor::XorStream},
+        streams::tcp::TcpServer,
         tokio_io, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };
@@ -80,14 +81,12 @@ impl TcpProxyAccess {
         let (upstream, upstream_addr, upstream_sock_addr) =
             establish(&self.proxies, self.destination.clone(), &self.stream_pool).await?;
 
-        let res = match &self.payload_crypto {
-            Some(crypto) => {
-                // Establish encrypted stream
-                let xor_stream = XorStream::upgrade(upstream, crypto);
-                tokio_io::timed_copy_bidirectional(downstream, xor_stream).await
-            }
-            None => tokio_io::timed_copy_bidirectional(downstream, upstream).await,
-        };
+        let res = copy_bidirectional_with_payload_crypto(
+            downstream,
+            upstream,
+            self.payload_crypto.as_ref(),
+        )
+        .await;
         let end = std::time::Instant::now();
         let (bytes_uplink, bytes_downlink) = res.map_err(|e| ProxyError::IoCopy {
             source: e,

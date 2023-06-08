@@ -9,7 +9,7 @@ use tokio::{
 };
 use tracing::error;
 
-use crate::addr::InternetAddr;
+use crate::{addr::InternetAddr, crypto::XorCrypto};
 
 use self::{
     addr::{StreamAddr, StreamType},
@@ -18,6 +18,7 @@ use self::{
         kcp::{AddressedKcpStream, KcpConnector},
         quic::QuicIoStream,
         tcp::TcpConnector,
+        xor::XorStream,
     },
 };
 
@@ -325,5 +326,24 @@ impl AsyncRead for CreatedStream {
             CreatedStream::Tcp(x) => Pin::new(x).poll_read(cx, buf),
             CreatedStream::Kcp(x) => Pin::new(x).poll_read(cx, buf),
         }
+    }
+}
+
+pub async fn copy_bidirectional_with_payload_crypto<DS, US>(
+    downstream: DS,
+    upstream: US,
+    payload_crypto: Option<&XorCrypto>,
+) -> Result<(u64, u64), tokio_io::CopyBiError>
+where
+    US: AsyncRead + AsyncWrite + Unpin,
+    DS: AsyncRead + AsyncWrite + Unpin,
+{
+    match payload_crypto {
+        Some(crypto) => {
+            // Establish encrypted stream
+            let xor_stream = XorStream::upgrade(upstream, crypto);
+            tokio_io::timed_copy_bidirectional(downstream, xor_stream).await
+        }
+        None => tokio_io::timed_copy_bidirectional(downstream, upstream).await,
     }
 }
