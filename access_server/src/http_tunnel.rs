@@ -259,6 +259,8 @@ async fn upgrade(req: Request<Incoming>, addr: String, http_connect: Option<Http
             return;
         }
     };
+
+    // Proxy
     if let Some(http_connect) = http_connect {
         match http_connect.proxy(upgraded, addr.into()).await {
             Ok(metrics) => {
@@ -271,6 +273,8 @@ async fn upgrade(req: Request<Incoming>, addr: String, http_connect: Option<Http
         };
         return;
     }
+
+    // Direct
     let upstream = match tokio::net::TcpStream::connect(&addr).await {
         Ok(upstream) => upstream,
         Err(e) => {
