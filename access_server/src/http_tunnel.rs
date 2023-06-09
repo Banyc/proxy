@@ -108,141 +108,118 @@ impl HttpProxyAccess {
         trace!(?req, "Received request");
 
         if Method::CONNECT == req.method() {
-            // Received an HTTP request like:
-            // ```
-            // CONNECT www.domain.com:443 HTTP/1.1
-            // Host: www.domain.com:443
-            // Proxy-Connection: Keep-Alive
-            // ```
-            //
-            // When HTTP method is CONNECT we should return an empty body
-            // then we can eventually upgrade the connection and talk a new protocol.
-            //
-            // Note: only after client received an empty body with STATUS_OK can the
-            // connection be upgraded, so we can't return a response inside
-            // `on_upgrade` future.
-            if let Some(addr) = host_addr(req.uri()) {
-                let action = self.filter.filter(&addr);
-                match action {
-                    filter::Action::Proxy => (),
-                    filter::Action::Block => {
-                        trace!(?addr, "Blocked CONNECT");
-                        return Ok(respond_with_rejection());
-                    }
-                    filter::Action::Direct => (),
-                }
+            return self.proxy_connect(req).await;
+        }
 
-                let http_connect = HttpConnect::new(
-                    Arc::clone(&self.proxies),
-                    self.payload_crypto.clone(),
-                    self.stream_pool.clone(),
-                );
-                tokio::task::spawn(async move {
-                    match hyper::upgrade::on(req).await {
-                        Ok(upgraded) => {
-                            if action == filter::Action::Direct {
-                                let upstream = match tokio::net::TcpStream::connect(&addr).await {
-                                    Ok(upstream) => upstream,
-                                    Err(e) => {
-                                        error!(?e, "Failed to connect to upstream directly");
-                                        return;
-                                    }
-                                };
-                                match tokio_io::timed_copy_bidirectional(upgraded, upstream).await {
-                                    Ok(metrics) => {
-                                        info!(?addr, ?metrics, "Direct CONNECT finished");
-                                    }
-                                    Err(e) => {
-                                        info!(?addr, ?e, "Direct CONNECT error");
-                                    }
-                                }
-                                return;
-                            }
-                            match http_connect.proxy(upgraded, addr.into()).await {
-                                Ok(metrics) => {
-                                    info!(%metrics, "CONNECT finished");
-                                }
-                                Err(HttpConnectError::IoCopy { source: e, metrics }) => {
-                                    info!(?e, %metrics, "CONNECT error");
-                                }
-                                Err(e) => error!(?e, "CONNECT error"),
-                            };
-                        }
-                        Err(e) => error!(?e, "Upgrade error"),
-                    }
-                });
+        let start = std::time::Instant::now();
 
-                // Return STATUS_OK
-                Ok(Response::new(empty()))
-            } else {
+        let method = req.method().clone();
+        let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
+        let port = req.uri().port_u16().unwrap_or(80);
+        let addr = format!("{}:{}", host, port);
+
+        let action = self.filter.filter(&addr);
+        match action {
+            filter::Action::Proxy => (),
+            filter::Action::Block => {
+                trace!(?addr, "Blocked {}", method);
+                return Ok(respond_with_rejection());
+            }
+            filter::Action::Direct => {
+                let upstream = tokio::net::TcpStream::connect(&addr)
+                    .await
+                    .map_err(TunnelError::Direct)?;
+                let res = self.tls_http(upstream, req).await;
+                info!(?addr, "Direct {} finished", method);
+                return res;
+            }
+        }
+
+        // Establish proxy chain
+        let (upstream, upstream_addr, upstream_sock_addr) = establish(
+            &self.proxies,
+            StreamAddr {
+                address: addr.clone().into(),
+                stream_type: StreamType::Tcp,
+            },
+            &self.stream_pool,
+        )
+        .await?;
+
+        let res = match &self.payload_crypto {
+            Some(crypto) => {
+                // Establish encrypted stream
+                let xor_stream = XorStream::upgrade(upstream, crypto);
+
+                self.tls_http(xor_stream, req).await
+            }
+            None => self.tls_http(upstream, req).await,
+        };
+
+        let end = std::time::Instant::now();
+        let metrics = FailedTunnelMetrics {
+            stream: FailedStreamMetrics {
+                start,
+                end,
+                upstream_addr,
+                upstream_sock_addr,
+                downstream_addr: None,
+            },
+            destination: addr.into(),
+        };
+        info!(%metrics, "{} finished", method);
+
+        res
+    }
+
+    async fn proxy_connect(
+        &self,
+        req: Request<Incoming>,
+    ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError> {
+        // Received an HTTP request like:
+        // ```
+        // CONNECT www.domain.com:443 HTTP/1.1
+        // Host: www.domain.com:443
+        // Proxy-Connection: Keep-Alive
+        // ```
+        //
+        // When HTTP method is CONNECT we should return an empty body
+        // then we can eventually upgrade the connection and talk a new protocol.
+        //
+        // Note: only after client received an empty body with STATUS_OK can the
+        // connection be upgraded, so we can't return a response inside
+        // `on_upgrade` future.
+        let addr = match host_addr(req.uri()) {
+            Some(addr) => addr,
+            None => {
                 let uri = req.uri().to_string();
                 error!(?uri, "CONNECT host is not socket addr");
                 let mut resp = Response::new(full("CONNECT must be to a socket address"));
                 *resp.status_mut() = http::StatusCode::BAD_REQUEST;
 
-                Ok(resp)
+                return Ok(resp);
             }
-        } else {
-            let start = std::time::Instant::now();
-
-            let method = req.method().clone();
-            let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
-            let port = req.uri().port_u16().unwrap_or(80);
-            let addr = format!("{}:{}", host, port);
-
-            let action = self.filter.filter(&addr);
-            match action {
-                filter::Action::Proxy => (),
-                filter::Action::Block => {
-                    trace!(?addr, "Blocked {}", method);
-                    return Ok(respond_with_rejection());
-                }
-                filter::Action::Direct => {
-                    let upstream = tokio::net::TcpStream::connect(&addr)
-                        .await
-                        .map_err(TunnelError::Direct)?;
-                    let res = self.tls_http(upstream, req).await;
-                    info!(?addr, "Direct {} finished", method);
-                    return res;
-                }
+        };
+        let action = self.filter.filter(&addr);
+        let http_connect = match action {
+            filter::Action::Proxy => Some(HttpConnect::new(
+                Arc::clone(&self.proxies),
+                self.payload_crypto.clone(),
+                self.stream_pool.clone(),
+            )),
+            filter::Action::Block => {
+                trace!(?addr, "Blocked CONNECT");
+                return Ok(respond_with_rejection());
             }
+            filter::Action::Direct => None,
+        };
 
-            // Establish proxy chain
-            let (upstream, upstream_addr, upstream_sock_addr) = establish(
-                &self.proxies,
-                StreamAddr {
-                    address: addr.clone().into(),
-                    stream_type: StreamType::Tcp,
-                },
-                &self.stream_pool,
-            )
-            .await?;
+        tokio::task::spawn(async move {
+            upgrade(req, addr, http_connect).await;
+        });
 
-            let res = match &self.payload_crypto {
-                Some(crypto) => {
-                    // Establish encrypted stream
-                    let xor_stream = XorStream::upgrade(upstream, crypto);
-
-                    self.tls_http(xor_stream, req).await
-                }
-                None => self.tls_http(upstream, req).await,
-            };
-
-            let end = std::time::Instant::now();
-            let metrics = FailedTunnelMetrics {
-                stream: FailedStreamMetrics {
-                    start,
-                    end,
-                    upstream_addr,
-                    upstream_sock_addr,
-                    downstream_addr: None,
-                },
-                destination: addr.into(),
-            };
-            info!(%metrics, "{} finished", method);
-
-            res
-        }
+        // Return STATUS_OK
+        Ok(Response::new(empty()))
     }
 
     async fn tls_http<S>(
@@ -272,6 +249,43 @@ impl HttpProxyAccess {
             .await
             .inspect_err(|e| error!(?e, "Failed to send HTTP/1 request to upstream"))?;
         Ok(resp.map(|b| b.boxed()))
+    }
+}
+
+async fn upgrade(req: Request<Incoming>, addr: String, http_connect: Option<HttpConnect>) {
+    let upgraded = match hyper::upgrade::on(req).await {
+        Ok(upgraded) => upgraded,
+        Err(e) => {
+            error!(?e, "Upgrade error");
+            return;
+        }
+    };
+    if let Some(http_connect) = http_connect {
+        match http_connect.proxy(upgraded, addr.into()).await {
+            Ok(metrics) => {
+                info!(%metrics, "CONNECT finished");
+            }
+            Err(HttpConnectError::IoCopy { source: e, metrics }) => {
+                info!(?e, %metrics, "CONNECT error");
+            }
+            Err(e) => error!(?e, "CONNECT error"),
+        };
+        return;
+    }
+    let upstream = match tokio::net::TcpStream::connect(&addr).await {
+        Ok(upstream) => upstream,
+        Err(e) => {
+            error!(?e, "Failed to connect to upstream directly");
+            return;
+        }
+    };
+    match tokio_io::timed_copy_bidirectional(upgraded, upstream).await {
+        Ok(metrics) => {
+            info!(?addr, ?metrics, "Direct CONNECT finished");
+        }
+        Err(e) => {
+            info!(?addr, ?e, "Direct CONNECT error");
+        }
     }
 }
 
