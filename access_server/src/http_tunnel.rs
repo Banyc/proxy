@@ -129,7 +129,7 @@ impl HttpProxyAccess {
                 let upstream = tokio::net::TcpStream::connect(&addr)
                     .await
                     .map_err(TunnelError::Direct)?;
-                let res = self.tls_http(upstream, req).await;
+                let res = tls_http(upstream, req).await;
                 info!(?addr, "Direct {} finished", method);
                 return res;
             }
@@ -151,9 +151,9 @@ impl HttpProxyAccess {
                 // Establish encrypted stream
                 let xor_stream = XorStream::upgrade(upstream, crypto);
 
-                self.tls_http(xor_stream, req).await
+                tls_http(xor_stream, req).await
             }
-            None => self.tls_http(upstream, req).await,
+            None => tls_http(upstream, req).await,
         };
 
         let end = std::time::Instant::now();
@@ -221,35 +221,34 @@ impl HttpProxyAccess {
         // Return STATUS_OK
         Ok(Response::new(empty()))
     }
+}
 
-    async fn tls_http<S>(
-        &self,
-        upstream: S,
-        req: Request<Incoming>,
-    ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>
-    where
-        S: AsyncWrite + AsyncRead + Send + Unpin,
-    {
-        // Establish TLS connection
-        let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
-            .preserve_header_case(true)
-            .title_case_headers(true)
-            .handshake(upstream)
-            .await
-            .inspect_err(|e| error!(?e, "Failed to establish HTTP/1 handshake to upstream"))?;
-        tokio::task::spawn(async move {
-            if let Err(err) = conn.await {
-                warn!(?err, "Connection failed");
-            }
-        });
+async fn tls_http<S>(
+    upstream: S,
+    req: Request<Incoming>,
+) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>
+where
+    S: AsyncWrite + AsyncRead + Send + Unpin,
+{
+    // Establish TLS connection
+    let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
+        .preserve_header_case(true)
+        .title_case_headers(true)
+        .handshake(upstream)
+        .await
+        .inspect_err(|e| error!(?e, "Failed to establish HTTP/1 handshake to upstream"))?;
+    tokio::task::spawn(async move {
+        if let Err(err) = conn.await {
+            warn!(?err, "Connection failed");
+        }
+    });
 
-        // Send HTTP/1 request
-        let resp = sender
-            .send_request(req)
-            .await
-            .inspect_err(|e| error!(?e, "Failed to send HTTP/1 request to upstream"))?;
-        Ok(resp.map(|b| b.boxed()))
-    }
+    // Send HTTP/1 request
+    let resp = sender
+        .send_request(req)
+        .await
+        .inspect_err(|e| error!(?e, "Failed to send HTTP/1 request to upstream"))?;
+    Ok(resp.map(|b| b.boxed()))
 }
 
 async fn upgrade(req: Request<Incoming>, addr: String, http_connect: Option<HttpConnect>) {
