@@ -126,10 +126,8 @@ impl HttpProxyAccess {
                 match action {
                     filter::Action::Proxy => (),
                     filter::Action::Block => {
-                        return Ok(Response::builder()
-                            .status(503)
-                            .body(full("Blocked"))
-                            .unwrap());
+                        trace!(?addr, "Blocked CONNECT");
+                        return Ok(respond_with_rejection());
                     }
                     filter::Action::Direct => (),
                 }
@@ -155,7 +153,7 @@ impl HttpProxyAccess {
                                         info!(?addr, ?metrics, "Direct CONNECT finished");
                                     }
                                     Err(e) => {
-                                        error!(?addr, ?e, "Direct CONNECT error");
+                                        info!(?addr, ?e, "Direct CONNECT error");
                                     }
                                 }
                                 return;
@@ -196,10 +194,8 @@ impl HttpProxyAccess {
             match action {
                 filter::Action::Proxy => (),
                 filter::Action::Block => {
-                    return Ok(Response::builder()
-                        .status(503)
-                        .body(full("Blocked"))
-                        .unwrap());
+                    trace!(?addr, "Blocked {}", method);
+                    return Ok(respond_with_rejection());
                 }
                 filter::Action::Direct => {
                     let upstream = tokio::net::TcpStream::connect(&addr)
@@ -406,4 +402,11 @@ fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
     Full::new(chunk.into())
         .map_err(|never| match never {})
         .boxed()
+}
+
+fn respond_with_rejection() -> Response<BoxBody<Bytes, hyper::Error>> {
+    Response::builder()
+        .status(503)
+        .body(full("Blocked"))
+        .unwrap()
 }
