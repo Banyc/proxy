@@ -7,5 +7,5 @@ members = [
     "proxy_server",
     "access_server",
     "tests",
-    "bin",
+    "server",
 ]

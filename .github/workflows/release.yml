@@ -25,5 +25,5 @@ jobs:
         with:
           RUSTTARGET: ${{ matrix.target }}
           ARCHIVE_TYPES: ${{ matrix.archive }}
-          SRC_DIR: "bin"
-          EXTRA_FILES: "bin/config.toml"
+          SRC_DIR: "server"
+          EXTRA_FILES: "server/config.toml"
