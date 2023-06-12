@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "filter",
+    "access_server",
     "common",
+    "filter",
     "proxy_client",
     "proxy_server",
-    "access_server",
-    "tests",
     "server",
+    "tests",
 ]
