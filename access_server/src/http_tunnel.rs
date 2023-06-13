@@ -255,7 +255,7 @@ async fn upgrade(req: Request<Incoming>, addr: String, http_connect: Option<Http
     let upgraded = match hyper::upgrade::on(req).await {
         Ok(upgraded) => upgraded,
         Err(e) => {
-            error!(?e, "Upgrade error");
+            error!(?e, ?addr, "Upgrade error");
             return;
         }
     };
@@ -278,7 +278,7 @@ async fn upgrade(req: Request<Incoming>, addr: String, http_connect: Option<Http
     let upstream = match tokio::net::TcpStream::connect(&addr).await {
         Ok(upstream) => upstream,
         Err(e) => {
-            error!(?e, "Failed to connect to upstream directly");
+            error!(?e, ?addr, "Failed to connect to upstream directly");
             return;
         }
     };
@@ -287,7 +287,7 @@ async fn upgrade(req: Request<Incoming>, addr: String, http_connect: Option<Http
             info!(?addr, ?metrics, "Direct CONNECT finished");
         }
         Err(e) => {
-            info!(?addr, ?e, "Direct CONNECT error");
+            info!(?e, ?addr, "Direct CONNECT error");
         }
     }
 }
