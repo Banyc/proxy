@@ -3,23 +3,29 @@ listen_addr = ""
 destination = "tcp://"
 # payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 # stream_pool = ["tcp://"]
-proxies = [
-    { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] }
+proxy_table = [
+    { weight = 1, chain = [
+        { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
+    ] },
 ]
 
 [[access_server.udp_server]]
 listen_addr = ""
 destination = ""
-proxies = [
-    { address = "", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] }
+proxy_table = [
+    { weight = 1, chain = [
+        { address = "", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
+    ] },
 ]
 
 [[access_server.http_server]]
 listen_addr = ""
 # payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 # stream_pool = ["tcp://"]
-proxies = [
-    { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] }
+proxy_table = [
+    { weight = 1, chain = [
+        { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
+    ] },
 ]
 filter = [
     { match = "127\\.0\\.0\\.1:", action = "direct" },

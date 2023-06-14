@@ -9,7 +9,7 @@ use common::{
     addr::any_addr,
     addr::InternetAddr,
     udp::{
-        config::{UdpProxyConfig, UdpProxyConfigBuilder},
+        config::{UdpProxyTable, UdpProxyTableBuilder},
         Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
@@ -22,30 +22,27 @@ use tracing::{error, info, trace};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UdpProxyAccessBuilder {
     listen_addr: String,
-    proxies: Vec<UdpProxyConfigBuilder>,
+    proxy_table: UdpProxyTableBuilder,
     destination: String,
 }
 
 impl UdpProxyAccessBuilder {
     pub async fn build(self) -> io::Result<UdpServer<UdpProxyAccess>> {
-        let access = UdpProxyAccess::new(
-            self.proxies.into_iter().map(|x| x.build()).collect(),
-            self.destination.into(),
-        );
+        let access = UdpProxyAccess::new(self.proxy_table.build(), self.destination.into());
         let server = access.build(self.listen_addr).await?;
         Ok(server)
     }
 }
 
 pub struct UdpProxyAccess {
-    proxies: Vec<UdpProxyConfig>,
+    proxy_table: UdpProxyTable,
     destination: InternetAddr,
 }
 
 impl UdpProxyAccess {
-    pub fn new(proxies: Vec<UdpProxyConfig>, destination: InternetAddr) -> Self {
+    pub fn new(proxy_table: UdpProxyTable, destination: InternetAddr) -> Self {
         Self {
-            proxies,
+            proxy_table,
             destination,
         }
     }
@@ -64,8 +61,9 @@ impl UdpProxyAccess {
         downstream_writer: UdpDownstreamWriter,
     ) -> Result<(), ProxyError> {
         // Connect to upstream
+        let proxy_chain = self.proxy_table.choose_chain();
         let upstream =
-            UdpProxySocket::establish(self.proxies.clone(), self.destination.clone()).await?;
+            UdpProxySocket::establish(proxy_chain.chain.clone(), self.destination.clone()).await?;
 
         // Periodic check if the flow is still alive
         let mut tick = tokio::time::interval(LIVE_CHECK_INTERVAL);

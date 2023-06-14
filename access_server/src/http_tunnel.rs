@@ -7,7 +7,7 @@ use common::{
     crypto::XorCrypto,
     stream::{
         addr::{StreamAddr, StreamType},
-        config::{StreamProxyConfig, StreamProxyConfigBuilder},
+        config::{StreamProxyTable, StreamProxyTableBuilder},
         copy_bidirectional_with_payload_crypto,
         pool::{Pool, PoolBuilder},
         streams::{tcp::TcpServer, xor::XorStream},
@@ -32,7 +32,7 @@ use tracing::{error, info, instrument, trace, warn};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpProxyAccessBuilder {
     listen_addr: String,
-    proxies: Vec<StreamProxyConfigBuilder>,
+    proxy_table: StreamProxyTableBuilder,
     payload_xor_key: Option<Vec<u8>>,
     stream_pool: PoolBuilder,
     filter: FilterBuilder,
@@ -42,7 +42,7 @@ impl HttpProxyAccessBuilder {
     pub async fn build(self) -> io::Result<TcpServer<HttpProxyAccess>> {
         let stream_pool = self.stream_pool.build();
         let access = HttpProxyAccess::new(
-            self.proxies.into_iter().map(|x| x.build()).collect(),
+            self.proxy_table.build(),
             self.payload_xor_key.map(XorCrypto::new),
             stream_pool,
             self.filter.build().map_err(|e| {
@@ -58,7 +58,7 @@ impl HttpProxyAccessBuilder {
 }
 
 pub struct HttpProxyAccess {
-    proxies: Arc<Vec<StreamProxyConfig>>,
+    proxy_table: Arc<StreamProxyTable>,
     payload_crypto: Option<Arc<XorCrypto>>,
     stream_pool: Pool,
     filter: Filter,
@@ -66,13 +66,13 @@ pub struct HttpProxyAccess {
 
 impl HttpProxyAccess {
     pub fn new(
-        proxies: Vec<StreamProxyConfig>,
+        proxy_table: StreamProxyTable,
         payload_crypto: Option<XorCrypto>,
         stream_pool: Pool,
         filter: Filter,
     ) -> Self {
         Self {
-            proxies: Arc::new(proxies),
+            proxy_table: Arc::new(proxy_table),
             payload_crypto: payload_crypto.map(Arc::new),
             stream_pool,
             filter,
@@ -136,8 +136,9 @@ impl HttpProxyAccess {
         }
 
         // Establish proxy chain
+        let proxy_chain = self.proxy_table.choose_chain();
         let (upstream, upstream_addr, upstream_sock_addr) = establish(
-            &self.proxies,
+            &proxy_chain.chain,
             StreamAddr {
                 address: addr.clone().into(),
                 stream_type: StreamType::Tcp,
@@ -203,7 +204,7 @@ impl HttpProxyAccess {
         let action = self.filter.filter(&addr);
         let http_connect = match action {
             filter::Action::Proxy => Some(HttpConnect::new(
-                Arc::clone(&self.proxies),
+                Arc::clone(&self.proxy_table),
                 self.payload_crypto.clone(),
                 self.stream_pool.clone(),
             )),
@@ -319,19 +320,19 @@ impl StreamServerHook for HttpProxyAccess {
 }
 
 struct HttpConnect {
-    proxies: Arc<Vec<StreamProxyConfig>>,
+    proxy_table: Arc<StreamProxyTable>,
     payload_crypto: Option<Arc<XorCrypto>>,
     stream_pool: Pool,
 }
 
 impl HttpConnect {
     pub fn new(
-        proxies: Arc<Vec<StreamProxyConfig>>,
+        proxy_table: Arc<StreamProxyTable>,
         payload_crypto: Option<Arc<XorCrypto>>,
         stream_pool: Pool,
     ) -> Self {
         Self {
-            proxies,
+            proxy_table,
             payload_crypto,
             stream_pool,
         }
@@ -352,8 +353,9 @@ impl HttpConnect {
             address: address.clone(),
             stream_type: StreamType::Tcp,
         };
+        let proxy_chain = self.proxy_table.choose_chain();
         let (upstream, upstream_addr, upstream_sock_addr) =
-            establish(&self.proxies, destination, &self.stream_pool).await?;
+            establish(&proxy_chain.chain, destination, &self.stream_pool).await?;
 
         // Proxy data
         let res = copy_bidirectional_with_payload_crypto(

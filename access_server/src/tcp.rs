@@ -5,7 +5,7 @@ use common::{
     crypto::XorCrypto,
     stream::{
         addr::{StreamAddr, StreamAddrBuilder},
-        config::{StreamProxyConfig, StreamProxyConfigBuilder},
+        config::{StreamProxyTable, StreamProxyTableBuilder},
         copy_bidirectional_with_payload_crypto,
         pool::{Pool, PoolBuilder},
         streams::tcp::TcpServer,
@@ -21,7 +21,7 @@ use tracing::{error, info, instrument};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TcpProxyAccessBuilder {
     listen_addr: String,
-    proxies: Vec<StreamProxyConfigBuilder>,
+    proxy_table: StreamProxyTableBuilder,
     destination: StreamAddrBuilder,
     payload_xor_key: Option<Vec<u8>>,
     stream_pool: PoolBuilder,
@@ -31,7 +31,7 @@ impl TcpProxyAccessBuilder {
     pub async fn build(self) -> io::Result<TcpServer<TcpProxyAccess>> {
         let stream_pool = self.stream_pool.build();
         let access = TcpProxyAccess::new(
-            self.proxies.into_iter().map(|x| x.build()).collect(),
+            self.proxy_table.build(),
             self.destination.build(),
             self.payload_xor_key.map(XorCrypto::new),
             stream_pool,
@@ -42,7 +42,7 @@ impl TcpProxyAccessBuilder {
 }
 
 pub struct TcpProxyAccess {
-    proxies: Vec<StreamProxyConfig>,
+    proxy_table: StreamProxyTable,
     destination: StreamAddr,
     payload_crypto: Option<XorCrypto>,
     stream_pool: Pool,
@@ -50,13 +50,13 @@ pub struct TcpProxyAccess {
 
 impl TcpProxyAccess {
     pub fn new(
-        proxies: Vec<StreamProxyConfig>,
+        proxy_table: StreamProxyTable,
         destination: StreamAddr,
         payload_crypto: Option<XorCrypto>,
         stream_pool: Pool,
     ) -> Self {
         Self {
-            proxies,
+            proxy_table,
             destination,
             payload_crypto,
             stream_pool,
@@ -78,8 +78,13 @@ impl TcpProxyAccess {
 
         let downstream_addr = downstream.peer_addr().map_err(ProxyError::DownstreamAddr)?;
 
-        let (upstream, upstream_addr, upstream_sock_addr) =
-            establish(&self.proxies, self.destination.clone(), &self.stream_pool).await?;
+        let proxy_chain = self.proxy_table.choose_chain();
+        let (upstream, upstream_addr, upstream_sock_addr) = establish(
+            &proxy_chain.chain,
+            self.destination.clone(),
+            &self.stream_pool,
+        )
+        .await?;
 
         let res = copy_bidirectional_with_payload_crypto(
             downstream,

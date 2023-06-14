@@ -1,3 +1,4 @@
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::XorCrypto;
@@ -23,4 +24,44 @@ where
     }
     pairs.push((destination, &nodes.last().unwrap().crypto));
     pairs
+}
+
+pub struct ProxyTable<A> {
+    chains: Vec<WeightedProxyChain<A>>,
+    cum_weight: usize,
+}
+
+impl<A> ProxyTable<A> {
+    pub fn new(chains: Vec<WeightedProxyChain<A>>) -> Option<Self> {
+        let cum_weight = chains.iter().map(|c| c.weight).sum();
+        if cum_weight == 0 {
+            return None;
+        }
+        Some(Self { chains, cum_weight })
+    }
+
+    pub fn add_chain(&mut self, chain: WeightedProxyChain<A>) {
+        self.cum_weight += chain.weight;
+        self.chains.push(chain);
+    }
+
+    pub fn choose_chain(&self) -> &WeightedProxyChain<A> {
+        if self.chains.len() == 1 {
+            return &self.chains[0];
+        }
+        let mut rng = rand::thread_rng();
+        let mut weight = rng.gen_range(0..self.cum_weight);
+        for chain in &self.chains {
+            if weight < chain.weight {
+                return chain;
+            }
+            weight -= chain.weight;
+        }
+        unreachable!();
+    }
+}
+
+pub struct WeightedProxyChain<A> {
+    pub weight: usize,
+    pub chain: Vec<ProxyConfig<A>>,
 }
