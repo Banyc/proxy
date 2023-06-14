@@ -26,6 +26,7 @@ impl StreamProxyConfigBuilder {
 pub struct StreamWeightedProxyChainBuilder {
     pub weight: usize,
     pub chain: Vec<StreamProxyConfigBuilder>,
+    pub payload_xor_key: Option<Vec<u8>>,
 }
 
 impl StreamWeightedProxyChainBuilder {
@@ -33,6 +34,7 @@ impl StreamWeightedProxyChainBuilder {
         WeightedProxyChain {
             weight: self.weight,
             chain: self.chain.into_iter().map(|c| c.build()).collect(),
+            payload_crypto: self.payload_xor_key.map(XorCrypto::new),
         }
     }
 }

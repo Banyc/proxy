@@ -64,4 +64,5 @@ impl<A> ProxyTable<A> {
 pub struct WeightedProxyChain<A> {
     pub weight: usize,
     pub chain: Vec<ProxyConfig<A>>,
+    pub payload_crypto: Option<XorCrypto>,
 }

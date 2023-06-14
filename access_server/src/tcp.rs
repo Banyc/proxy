@@ -1,16 +1,13 @@
 use std::io;
 
 use async_trait::async_trait;
-use common::{
-    crypto::XorCrypto,
-    stream::{
-        addr::{StreamAddr, StreamAddrBuilder},
-        config::{StreamProxyTable, StreamProxyTableBuilder},
-        copy_bidirectional_with_payload_crypto,
-        pool::{Pool, PoolBuilder},
-        streams::tcp::TcpServer,
-        tokio_io, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
-    },
+use common::stream::{
+    addr::{StreamAddr, StreamAddrBuilder},
+    config::{StreamProxyTable, StreamProxyTableBuilder},
+    copy_bidirectional_with_payload_crypto,
+    pool::{Pool, PoolBuilder},
+    streams::tcp::TcpServer,
+    tokio_io, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
 };
 use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
@@ -23,7 +20,6 @@ pub struct TcpProxyAccessBuilder {
     listen_addr: String,
     proxy_table: StreamProxyTableBuilder,
     destination: StreamAddrBuilder,
-    payload_xor_key: Option<Vec<u8>>,
     stream_pool: PoolBuilder,
 }
 
@@ -33,7 +29,6 @@ impl TcpProxyAccessBuilder {
         let access = TcpProxyAccess::new(
             self.proxy_table.build(),
             self.destination.build(),
-            self.payload_xor_key.map(XorCrypto::new),
             stream_pool,
         );
         let server = access.build(self.listen_addr).await?;
@@ -44,21 +39,14 @@ impl TcpProxyAccessBuilder {
 pub struct TcpProxyAccess {
     proxy_table: StreamProxyTable,
     destination: StreamAddr,
-    payload_crypto: Option<XorCrypto>,
     stream_pool: Pool,
 }
 
 impl TcpProxyAccess {
-    pub fn new(
-        proxy_table: StreamProxyTable,
-        destination: StreamAddr,
-        payload_crypto: Option<XorCrypto>,
-        stream_pool: Pool,
-    ) -> Self {
+    pub fn new(proxy_table: StreamProxyTable, destination: StreamAddr, stream_pool: Pool) -> Self {
         Self {
             proxy_table,
             destination,
-            payload_crypto,
             stream_pool,
         }
     }
@@ -89,7 +77,7 @@ impl TcpProxyAccess {
         let res = copy_bidirectional_with_payload_crypto(
             downstream,
             upstream,
-            self.payload_crypto.as_ref(),
+            proxy_chain.payload_crypto.as_ref(),
         )
         .await;
         let end = std::time::Instant::now();

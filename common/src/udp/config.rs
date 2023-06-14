@@ -32,6 +32,7 @@ impl UdpWeightedProxyChainBuilder {
         WeightedProxyChain {
             weight: self.weight,
             chain: self.chain.into_iter().map(|c| c.build()).collect(),
+            payload_crypto: None,
         }
     }
 }
