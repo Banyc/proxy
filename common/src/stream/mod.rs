@@ -197,7 +197,7 @@ impl Display for StreamMetrics {
         let uplink_speed = self.bytes_uplink as f64 / duration;
         let downlink_speed = self.bytes_downlink as f64 / duration;
         let upstream_addrs = match &self.upstream_addr.address {
-            InternetAddr::SocketAddr(v) => v.to_string(),
+            InternetAddr::SocketAddr(_) => self.upstream_addr.to_string(),
             InternetAddr::String(_) => {
                 format!("{},{}", self.upstream_addr, self.upstream_sock_addr.ip())
             }
@@ -224,7 +224,7 @@ impl Display for FailedStreamMetrics {
         let duration = self.end - self.start;
         let duration = duration.as_secs_f64();
         let upstream_addrs = match &self.upstream_addr.address {
-            InternetAddr::SocketAddr(v) => v.to_string(),
+            InternetAddr::SocketAddr(_) => self.upstream_addr.to_string(),
             InternetAddr::String(_) => {
                 format!("{},{}", self.upstream_addr, self.upstream_sock_addr.ip())
             }
