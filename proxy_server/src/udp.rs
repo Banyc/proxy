@@ -161,7 +161,7 @@ impl UdpProxyServer {
                     let n = res.map_err(|e| ProxyError::RecvUpstream {
                         source: e,
                         addr: flow.upstream.0.clone(),
-                sock_addr: resolved_upstream,
+                        sock_addr: resolved_upstream,
                     })?;
                     let pkt = &downlink_buf[..n];
 
