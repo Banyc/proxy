@@ -95,10 +95,15 @@ where
         let hook = Arc::new(self.hook);
         loop {
             trace!("Waiting for packet");
-            let (n, downstream_addr) = downstream_listener
-                .recv_from(&mut buf)
-                .await
-                .map_err(|e| ServeError::RecvFrom { source: e, addr })?;
+            let (n, downstream_addr) = match downstream_listener.recv_from(&mut buf).await {
+                Ok((n, addr)) => (n, addr),
+                Err(e) => {
+                    // Ref: https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-recvfrom
+                    error!(?e, ?addr, "Failed to receive packet");
+                    continue;
+                }
+            };
+
             let downstream_writer =
                 UdpDownstreamWriter::new(Arc::clone(&downstream_listener), downstream_addr);
 
