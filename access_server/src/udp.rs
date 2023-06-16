@@ -71,6 +71,7 @@ impl UdpProxyAccess {
 
         // Forward packets
         let mut downlink_buf = [0; 1024];
+        let mut downlink_protocol_buf = Vec::new();
         loop {
             trace!("Waiting for packet");
             tokio::select! {
@@ -94,13 +95,16 @@ impl UdpProxyAccess {
                     let n = res?;
                     let pkt = &downlink_buf[..n];
 
+                    // Set up protocol buffer writer
+                    downlink_protocol_buf.clear();
+                    let mut writer = io::Cursor::new(&mut downlink_protocol_buf);
+
                     // Write payload
-                    let mut writer = io::Cursor::new(Vec::new());
                     writer.write_all(pkt).unwrap();
 
                     // Send packet to downstream
                     let pkt = writer.into_inner();
-                    downstream_writer.send(&pkt).await.map_err(|e| ProxyError::SendDownstream { source: e, downstream: downstream_writer.clone() })?;
+                    downstream_writer.send(pkt).await.map_err(|e| ProxyError::SendDownstream { source: e, downstream: downstream_writer.clone() })?;
 
                     last_packet = std::time::Instant::now();
                 }

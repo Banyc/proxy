@@ -132,6 +132,7 @@ impl UdpProxyServer {
 
         // Forward packets
         let mut downlink_buf = [0; 1024];
+        let mut downlink_protocol_buf = Vec::new();
         loop {
             trace!("Waiting for packet");
             tokio::select! {
@@ -149,7 +150,7 @@ impl UdpProxyServer {
                     upstream.send(&packet.0).await.map_err(|e| ProxyError::ForwardUpstream {
                         source: e,
                         addr: flow.upstream.0.clone(),
-                sock_addr: resolved_upstream,
+                        sock_addr: resolved_upstream,
                     })?;
                     bytes_uplink += &packet.0.len();
                     packets_uplink += 1;
@@ -165,8 +166,11 @@ impl UdpProxyServer {
                     })?;
                     let pkt = &downlink_buf[..n];
 
+                    // Set up protocol buffer writer
+                    downlink_protocol_buf.clear();
+                    let mut writer = io::Cursor::new(&mut downlink_protocol_buf);
+
                     // Write header
-                    let mut writer = io::Cursor::new(Vec::new());
                     let header = ResponseHeader {
                         result: Ok(()),
                     };
@@ -178,10 +182,10 @@ impl UdpProxyServer {
 
                     // Send packet to downstream
                     let pkt = writer.into_inner();
-                    downstream_writer.send(&pkt).await.map_err(|e| ProxyError::ForwardDownstream {
+                    downstream_writer.send(pkt).await.map_err(|e| ProxyError::ForwardDownstream {
                         source: e, downstream: downstream_writer.clone(),
                     })?;
-                    bytes_downlink += &pkt.len();
+                    bytes_downlink += pkt.len();
                     packets_downlink += 1;
 
                     last_packet = std::time::Instant::now();
