@@ -1,8 +1,4 @@
-use std::{
-    io::{self, Write},
-    net::Ipv4Addr,
-    time::Duration,
-};
+use std::{io, net::Ipv4Addr};
 
 use async_trait::async_trait;
 use common::{
@@ -10,7 +6,8 @@ use common::{
     addr::InternetAddr,
     udp::{
         config::{UdpProxyTable, UdpProxyTableBuilder},
-        Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
+        Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
+        BUFFER_LENGTH, LIVE_CHECK_INTERVAL, TIMEOUT,
     },
 };
 use proxy_client::udp::{EstablishError, RecvError, SendError, UdpProxySocket};
@@ -59,7 +56,9 @@ impl UdpProxyAccess {
         mut rx: mpsc::Receiver<Packet>,
         flow: Flow,
         downstream_writer: UdpDownstreamWriter,
-    ) -> Result<(), ProxyError> {
+    ) -> Result<FlowMetrics, ProxyError> {
+        let start = std::time::Instant::now();
+
         // Connect to upstream
         let proxy_chain = self.proxy_table.choose_chain();
         let upstream =
@@ -69,9 +68,13 @@ impl UdpProxyAccess {
         let mut tick = tokio::time::interval(LIVE_CHECK_INTERVAL);
         let mut last_packet = std::time::Instant::now();
 
+        let mut bytes_uplink = 0;
+        let mut bytes_downlink = 0;
+        let mut packets_uplink = 0;
+        let mut packets_downlink = 0;
+
         // Forward packets
-        let mut downlink_buf = [0; 1024];
-        let mut downlink_protocol_buf = Vec::new();
+        let mut downlink_buf = [0; BUFFER_LENGTH];
         loop {
             trace!("Waiting for packet");
             tokio::select! {
@@ -87,6 +90,8 @@ impl UdpProxyAccess {
 
                     // Send packet to upstream
                     upstream.send(&packet.0).await?;
+                    bytes_uplink += packet.0.len() as u64;
+                    packets_uplink += 1;
 
                     last_packet = std::time::Instant::now();
                 }
@@ -95,30 +100,32 @@ impl UdpProxyAccess {
                     let n = res?;
                     let pkt = &downlink_buf[..n];
 
-                    // Set up protocol buffer writer
-                    downlink_protocol_buf.clear();
-                    let mut writer = io::Cursor::new(&mut downlink_protocol_buf);
-
-                    // Write payload
-                    writer.write_all(pkt).unwrap();
-
                     // Send packet to downstream
-                    let pkt = writer.into_inner();
                     downstream_writer.send(pkt).await.map_err(|e| ProxyError::SendDownstream { source: e, downstream: downstream_writer.clone() })?;
+                    bytes_downlink += pkt.len() as u64;
+                    packets_downlink += 1;
 
                     last_packet = std::time::Instant::now();
                 }
                 _ = tick.tick() => {
                     trace!("Checking if flow is still alive");
                     if last_packet.elapsed() > TIMEOUT {
-                        info!(?flow, "Flow timed out");
+                        trace!(?flow, "Flow timed out");
                         break;
                     }
                 }
             }
         }
 
-        Ok(())
+        Ok(FlowMetrics {
+            flow,
+            start,
+            end: last_packet,
+            bytes_uplink,
+            bytes_downlink,
+            packets_uplink,
+            packets_downlink,
+        })
     }
 }
 
@@ -158,11 +165,13 @@ impl UdpServerHook for UdpProxyAccess {
         downstream_writer: UdpDownstreamWriter,
     ) {
         let res = self.proxy(rx, flow, downstream_writer).await;
-        if let Err(e) = res {
-            error!(?e, "Failed to proxy");
+        match res {
+            Ok(metrics) => {
+                info!(%metrics, "Proxy finished");
+            }
+            Err(e) => {
+                error!(?e, "Failed to proxy");
+            }
         }
     }
 }
-
-const TIMEOUT: Duration = Duration::from_secs(10);
-const LIVE_CHECK_INTERVAL: Duration = Duration::from_secs(1);

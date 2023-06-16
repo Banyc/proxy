@@ -1,7 +1,6 @@
 use std::{
     io::{self, Write},
     net::SocketAddr,
-    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -11,8 +10,8 @@ use common::{
     error::{ResponseError, ResponseErrorKind},
     header::{read_header, write_header, HeaderError, ResponseHeader},
     udp::{
-        header::UdpRequestHeader, Flow, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook,
-        UpstreamAddr,
+        header::UdpRequestHeader, Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer,
+        UdpServerHook, UpstreamAddr, BUFFER_LENGTH, LIVE_CHECK_INTERVAL, TIMEOUT,
     },
 };
 use serde::Deserialize;
@@ -72,7 +71,7 @@ impl UdpProxyServer {
         downstream_writer: &UdpDownstreamWriter,
         error: HeaderError,
     ) {
-        let peer_addr = downstream_writer.remote_addr();
+        let peer_addr = downstream_writer.peer_addr();
         error!(?error, ?peer_addr, "Failed to steer");
         let kind = error_kind_from_header_error(error);
         let _ = self
@@ -131,7 +130,7 @@ impl UdpProxyServer {
         let mut packets_downlink = 0;
 
         // Forward packets
-        let mut downlink_buf = [0; 1024];
+        let mut downlink_buf = [0; BUFFER_LENGTH];
         let mut downlink_protocol_buf = Vec::new();
         loop {
             trace!("Waiting for packet");
@@ -147,23 +146,15 @@ impl UdpProxyServer {
                     };
 
                     // Send packet to upstream
-                    upstream.send(&packet.0).await.map_err(|e| ProxyError::ForwardUpstream {
-                        source: e,
-                        addr: flow.upstream.0.clone(),
-                        sock_addr: resolved_upstream,
-                    })?;
-                    bytes_uplink += &packet.0.len();
+                    upstream.send(&packet.0).await.map_err(|e| ProxyError::ForwardUpstream { source: e, addr: flow.upstream.0.clone(), sock_addr: resolved_upstream })?;
+                    bytes_uplink += packet.0.len() as u64;
                     packets_uplink += 1;
 
                     last_packet = std::time::Instant::now();
                 }
                 res = upstream.recv(&mut downlink_buf) => {
                     trace!("Received packet from upstream");
-                    let n = res.map_err(|e| ProxyError::RecvUpstream {
-                        source: e,
-                        addr: flow.upstream.0.clone(),
-                        sock_addr: resolved_upstream,
-                    })?;
+                    let n = res.map_err(|e| ProxyError::RecvUpstream { source: e, addr: flow.upstream.0.clone(), sock_addr: resolved_upstream })?;
                     let pkt = &downlink_buf[..n];
 
                     // Set up protocol buffer writer
@@ -181,11 +172,10 @@ impl UdpProxyServer {
                     writer.write_all(pkt).unwrap();
 
                     // Send packet to downstream
-                    let pkt = writer.into_inner();
-                    downstream_writer.send(pkt).await.map_err(|e| ProxyError::ForwardDownstream {
-                        source: e, downstream: downstream_writer.clone(),
-                    })?;
-                    bytes_downlink += pkt.len();
+                    let pos = writer.position() as usize;
+                    let pkt = &downlink_protocol_buf[..pos];
+                    downstream_writer.send(pkt).await.map_err(|e| ProxyError::ForwardDownstream { source: e, downstream: downstream_writer.clone() })?;
+                    bytes_downlink += pkt.len() as u64;
                     packets_downlink += 1;
 
                     last_packet = std::time::Instant::now();
@@ -193,7 +183,7 @@ impl UdpProxyServer {
                 _ = tick.tick() => {
                     trace!("Checking if flow is still alive");
                     if last_packet.elapsed() > TIMEOUT {
-                        info!(?flow, "Flow timed out");
+                        trace!(?flow, "Flow timed out");
                         break;
                     }
                 }
@@ -211,7 +201,6 @@ impl UdpProxyServer {
         })
     }
 
-    #[instrument(skip(self, downstream_writer, res))]
     async fn handle_proxy_result(
         &self,
         downstream_writer: &UdpDownstreamWriter,
@@ -219,11 +208,11 @@ impl UdpProxyServer {
     ) {
         match res {
             Ok(metrics) => {
-                info!(?metrics, "Proxy finished");
+                info!(%metrics, "Proxy finished");
                 // No response
             }
             Err(e) => {
-                let peer_addr = downstream_writer.remote_addr();
+                let peer_addr = downstream_writer.peer_addr();
                 error!(?e, ?peer_addr, "Proxy failed");
                 let kind = error_kind_from_proxy_error(e);
                 let _ = self
@@ -255,7 +244,7 @@ impl UdpProxyServer {
         let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
         write_header(&mut buf, &resp, &mut crypto_cursor).unwrap();
         downstream_writer.send(&buf).await.inspect_err(|e| {
-            let peer_addr = downstream_writer.remote_addr();
+            let peer_addr = downstream_writer.peer_addr();
             trace!(?e, ?peer_addr, "Failed to send response to downstream")
         })?;
 
@@ -351,18 +340,4 @@ impl UdpServerHook for UdpProxyServer {
         let res = self.proxy(rx, flow, downstream_writer.clone()).await;
         self.handle_proxy_result(&downstream_writer, res).await;
     }
-}
-
-const TIMEOUT: Duration = Duration::from_secs(10);
-const LIVE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct FlowMetrics {
-    flow: Flow,
-    start: std::time::Instant,
-    end: std::time::Instant,
-    bytes_uplink: usize,
-    bytes_downlink: usize,
-    packets_uplink: usize,
-    packets_downlink: usize,
 }

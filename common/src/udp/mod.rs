@@ -1,12 +1,15 @@
 use std::{
     collections::HashMap,
+    fmt::Display,
     io,
     net::SocketAddr,
     ops::Deref,
     sync::{Arc, RwLock},
+    time::Duration,
 };
 
 use async_trait::async_trait;
+use bytesize::ByteSize;
 use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{error, info, instrument, trace};
@@ -15,6 +18,11 @@ use crate::addr::InternetAddr;
 
 pub mod config;
 pub mod header;
+
+pub const BUFFER_LENGTH: usize = 1024 * 3;
+
+pub const TIMEOUT: Duration = Duration::from_secs(10);
+pub const LIVE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct UdpDownstreamWriter {
@@ -36,7 +44,7 @@ impl UdpDownstreamWriter {
             .await
     }
 
-    pub fn remote_addr(&self) -> SocketAddr {
+    pub fn peer_addr(&self) -> SocketAddr {
         self.downstream_addr
     }
 }
@@ -83,7 +91,7 @@ where
             .local_addr()
             .map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
-        let mut buf = [0; 1024];
+        let mut buf = [0; BUFFER_LENGTH];
         let hook = Arc::new(self.hook);
         loop {
             trace!("Waiting for packet");
@@ -137,7 +145,7 @@ async fn steer<H>(
     // Create flow if not exists
     let flow = Flow {
         upstream,
-        downstream: DownstreamAddr(downstream_writer.remote_addr()),
+        downstream: DownstreamAddr(downstream_writer.peer_addr()),
     };
     let flow_tx = {
         let flows = flows.read().unwrap();
@@ -150,7 +158,7 @@ async fn steer<H>(
         }
         None => {
             trace!(?flow, "Creating flow");
-            let (tx, rx) = mpsc::channel(1);
+            let (tx, rx) = mpsc::channel(64);
             flows.write().unwrap().insert(flow.clone(), tx.clone());
 
             let hook = Arc::clone(&hook);
@@ -201,3 +209,37 @@ pub struct Flow {
 }
 
 pub struct Packet(pub Vec<u8>);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FlowMetrics {
+    pub flow: Flow,
+    pub start: std::time::Instant,
+    pub end: std::time::Instant,
+    pub bytes_uplink: u64,
+    pub bytes_downlink: u64,
+    pub packets_uplink: usize,
+    pub packets_downlink: usize,
+}
+
+impl Display for FlowMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let duration = self.end - self.start;
+        let duration = duration.as_secs_f64();
+        let uplink_speed = self.bytes_uplink as f64 / duration;
+        let downlink_speed = self.bytes_downlink as f64 / duration;
+        write!(
+            f,
+            "{:.1}s,up{{{},{},{}/s}},dn{{{},{},{}/s}},up:{},dn:{}",
+            duration,
+            self.packets_uplink,
+            ByteSize::b(self.bytes_uplink),
+            ByteSize::b(uplink_speed as u64),
+            self.packets_downlink,
+            ByteSize::b(self.bytes_downlink),
+            ByteSize::b(downlink_speed as u64),
+            self.flow.upstream.0,
+            self.flow.downstream.0,
+        )?;
+        Ok(())
+    }
+}
