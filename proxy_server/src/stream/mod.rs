@@ -40,6 +40,7 @@ impl StreamProxyServerBuilder {
     }
 }
 
+#[derive(Debug)]
 pub struct StreamProxyServer {
     acceptor: StreamProxyAcceptor,
     payload_crypto: Option<XorCrypto>,
@@ -149,6 +150,7 @@ impl StreamServerHook for StreamProxyServer {
     }
 }
 
+#[derive(Debug)]
 pub struct StreamProxyAcceptor {
     crypto: XorCrypto,
     stream_pool: Pool,

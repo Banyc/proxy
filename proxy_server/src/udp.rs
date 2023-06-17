@@ -29,6 +29,28 @@ pub struct UdpProxyServerBuilder {
     pub header_xor_key: Vec<u8>,
 }
 
+#[async_trait]
+impl loading::Builder for UdpProxyServerBuilder {
+    type Hook = UdpProxyServer;
+    type Server = UdpServer<Self::Hook>;
+
+    async fn build_server(self) -> io::Result<Self::Server> {
+        let header_crypto = XorCrypto::new(self.header_xor_key);
+        let tcp_proxy = UdpProxyServer::new(header_crypto);
+        let server = tcp_proxy.build(self.listen_addr).await?;
+        Ok(server)
+    }
+
+    fn build_hook(self) -> io::Result<Self::Hook> {
+        let header_crypto = XorCrypto::new(self.header_xor_key);
+        Ok(UdpProxyServer::new(header_crypto))
+    }
+
+    fn key(&self) -> &str {
+        &self.listen_addr
+    }
+}
+
 impl UdpProxyServerBuilder {
     pub async fn build(self) -> io::Result<UdpServer<UdpProxyServer>> {
         let header_crypto = XorCrypto::new(self.header_xor_key);
@@ -38,6 +60,7 @@ impl UdpProxyServerBuilder {
     }
 }
 
+#[derive(Debug)]
 pub struct UdpProxyServer {
     header_crypto: XorCrypto,
 }

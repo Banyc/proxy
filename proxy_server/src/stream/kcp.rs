@@ -1,5 +1,8 @@
+use std::io;
+
+use async_trait::async_trait;
 use common::{
-    error::AnyError,
+    loading,
     stream::streams::kcp::{fast_kcp_config, KcpServer},
 };
 use serde::Deserialize;
@@ -15,6 +18,27 @@ pub struct KcpProxyServerBuilder {
     pub listen_addr: String,
     #[serde(flatten)]
     pub inner: StreamProxyServerBuilder,
+}
+
+#[async_trait]
+impl loading::Builder for KcpProxyServerBuilder {
+    type Hook = StreamProxyServer;
+    type Server = KcpServer<Self::Hook>;
+
+    async fn build_server(self) -> io::Result<Self::Server> {
+        let stream_proxy = self.inner.build();
+        build_kcp_proxy_server(self.listen_addr, stream_proxy)
+            .await
+            .map_err(|e| e.0)
+    }
+
+    fn build_hook(self) -> io::Result<Self::Hook> {
+        Ok(self.inner.build())
+    }
+
+    fn key(&self) -> &str {
+        &self.listen_addr
+    }
 }
 
 impl KcpProxyServerBuilder {
@@ -38,4 +62,4 @@ pub async fn build_kcp_proxy_server(
 
 #[derive(Debug, Error)]
 #[error("Failed to bind to listen address")]
-pub struct ListenerBindError(#[source] AnyError);
+pub struct ListenerBindError(#[source] io::Error);

@@ -1,6 +1,7 @@
 use std::io;
 
-use common::stream::streams::tcp::TcpServer;
+use async_trait::async_trait;
+use common::{loading, stream::streams::tcp::TcpServer};
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::net::{TcpListener, ToSocketAddrs};
@@ -15,10 +16,24 @@ pub struct TcpProxyServerBuilder {
     pub inner: StreamProxyServerBuilder,
 }
 
-impl TcpProxyServerBuilder {
-    pub async fn build(self) -> Result<TcpServer<StreamProxyServer>, ListenerBindError> {
+#[async_trait]
+impl loading::Builder for TcpProxyServerBuilder {
+    type Hook = StreamProxyServer;
+    type Server = TcpServer<Self::Hook>;
+
+    async fn build_server(self) -> io::Result<Self::Server> {
         let stream_proxy = self.inner.build();
-        build_tcp_proxy_server(self.listen_addr, stream_proxy).await
+        build_tcp_proxy_server(self.listen_addr, stream_proxy)
+            .await
+            .map_err(|e| e.0)
+    }
+
+    fn build_hook(self) -> io::Result<Self::Hook> {
+        Ok(self.inner.build())
+    }
+
+    fn key(&self) -> &str {
+        &self.listen_addr
     }
 }
 

@@ -1,6 +1,6 @@
 use access_server::{AccessServerLoader, AccessServerSpawner};
 use clap::Parser;
-use proxy_server::ProxyServerSpawner;
+use proxy_server::{ProxyServerLoader, ProxyServerSpawner};
 use serde::Deserialize;
 
 #[derive(Debug, Parser)]
@@ -19,6 +19,7 @@ async fn main() {
     }
     let config: ServerConfig = toml::from_str(&config_str).unwrap();
     let mut access_server_loader = AccessServerLoader::new();
+    let mut proxy_server_loader = ProxyServerLoader::new();
     let mut join_set = tokio::task::JoinSet::new();
     if let Some(access_server) = config.access_server {
         access_server
@@ -27,7 +28,10 @@ async fn main() {
             .unwrap();
     }
     if let Some(proxy_server) = config.proxy_server {
-        proxy_server.spawn(&mut join_set).await;
+        proxy_server
+            .spawn(&mut join_set, &mut proxy_server_loader)
+            .await
+            .unwrap();
     }
     join_set.join_next().await.unwrap().unwrap().unwrap();
 }

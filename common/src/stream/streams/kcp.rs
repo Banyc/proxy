@@ -11,6 +11,8 @@ use tracing::{error, info, instrument, trace};
 
 use crate::{
     addr::any_addr,
+    error::AnyResult,
+    loading,
     stream::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook},
 };
 
@@ -40,9 +42,21 @@ impl<H> KcpServer<H> {
     pub fn listener_mut(&mut self) -> &mut KcpListener {
         &mut self.listener
     }
+}
 
-    pub fn set_hook_tx(&self) -> &mpsc::Sender<H> {
+#[async_trait]
+impl<H> loading::Server for KcpServer<H>
+where
+    H: StreamServerHook + Send + Sync + 'static,
+{
+    type Hook = H;
+
+    fn set_hook_tx(&self) -> &mpsc::Sender<Self::Hook> {
         &self.set_hook_tx
+    }
+
+    async fn serve(self) -> AnyResult {
+        self.serve_().await.map_err(|e| e.into())
     }
 }
 
@@ -51,7 +65,7 @@ where
     H: StreamServerHook + Send + Sync + 'static,
 {
     #[instrument(skip(self))]
-    pub async fn serve(mut self) -> Result<(), ServeError> {
+    pub async fn serve_(mut self) -> Result<(), ServeError> {
         drop(self.set_hook_tx);
 
         let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
