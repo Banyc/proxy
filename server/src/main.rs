@@ -34,7 +34,12 @@ async fn main() {
         .await
         .unwrap();
 
-    join_set.join_next().await.unwrap().unwrap().unwrap();
+    join_set
+        .join_next()
+        .await
+        .expect("No servers running")
+        .unwrap()
+        .unwrap();
 }
 
 #[derive(Debug, Deserialize)]
