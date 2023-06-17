@@ -87,7 +87,9 @@ async fn load(
         .spawn_and_kill(join_set, access_server_loader)
         .await?;
     let proxy_server = config.proxy_server.unwrap_or_default();
-    proxy_server.spawn(join_set, proxy_server_loader).await?;
+    proxy_server
+        .spawn_and_kill(join_set, proxy_server_loader)
+        .await?;
     Ok(())
 }
 

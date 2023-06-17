@@ -26,7 +26,7 @@ impl ProxyServerConfig {
         }
     }
 
-    pub async fn spawn(
+    pub async fn spawn_and_kill(
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut ProxyServerLoader,
