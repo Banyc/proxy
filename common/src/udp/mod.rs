@@ -19,7 +19,7 @@ use crate::addr::InternetAddr;
 pub mod config;
 pub mod header;
 
-pub const BUFFER_LENGTH: usize = 1024 * 3;
+pub const BUFFER_LENGTH: usize = 1024 * 8;
 
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 pub const LIVE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
