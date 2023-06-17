@@ -7,9 +7,14 @@ edition = "2021"
 
 [dependencies]
 access_server = { path = "../access_server" }
+async-trait = "0.1.68"
 clap = { version = "4.3.4", features = ["derive"] }
+common = { path = "../common" }
+file_watcher_tokio = "0.2.0"
+notify = "6.0.1"
 proxy_server = { path = "../proxy_server" }
 serde = { version = "1.0.163", features = ["derive"] }
 tokio = { version = "1.28.2", features = ["full"] }
 toml = "0.7.4"
+tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
