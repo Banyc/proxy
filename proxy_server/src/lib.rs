@@ -11,13 +11,21 @@ pub mod stream;
 pub mod udp;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
-pub struct ProxyServerSpawner {
+pub struct ProxyServerConfig {
     pub tcp_server: Option<Vec<TcpProxyServerBuilder>>,
     pub udp_server: Option<Vec<UdpProxyServerBuilder>>,
     pub kcp_server: Option<Vec<KcpProxyServerBuilder>>,
 }
 
-impl ProxyServerSpawner {
+impl ProxyServerConfig {
+    pub fn new() -> Self {
+        Self {
+            tcp_server: None,
+            udp_server: None,
+            kcp_server: None,
+        }
+    }
+
     pub async fn spawn(
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
@@ -33,6 +41,12 @@ impl ProxyServerSpawner {
         loader.kcp_server.load(join_set, kcp_server).await?;
 
         Ok(())
+    }
+}
+
+impl Default for ProxyServerConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

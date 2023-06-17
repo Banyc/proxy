@@ -13,14 +13,22 @@ pub mod tcp;
 pub mod udp;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AccessServerSpawner {
+pub struct AccessServerConfig {
     pub tcp_server: Option<Vec<TcpProxyAccessBuilder>>,
     pub udp_server: Option<Vec<UdpProxyAccessBuilder>>,
     pub http_server: Option<Vec<HttpProxyAccessBuilder>>,
 }
 
-impl AccessServerSpawner {
-    pub async fn spawn(
+impl AccessServerConfig {
+    pub fn new() -> AccessServerConfig {
+        AccessServerConfig {
+            tcp_server: None,
+            udp_server: None,
+            http_server: None,
+        }
+    }
+
+    pub async fn spawn_and_kill(
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut AccessServerLoader,
@@ -35,6 +43,12 @@ impl AccessServerSpawner {
         loader.http_server.load(join_set, http_server).await?;
 
         Ok(())
+    }
+}
+
+impl Default for AccessServerConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
