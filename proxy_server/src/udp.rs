@@ -9,6 +9,7 @@ use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::{ResponseError, ResponseErrorKind},
     header::{read_header, write_header, HeaderError, ResponseHeader},
+    loading,
     udp::{
         header::UdpRequestHeader, Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer,
         UdpServerHook, UpstreamAddr, BUFFER_LENGTH, LIVE_CHECK_INTERVAL, TIMEOUT,
@@ -313,6 +314,8 @@ fn error_kind_from_proxy_error(e: ProxyError) -> ResponseErrorKind {
         ProxyError::Loopback { .. } => ResponseErrorKind::Loopback,
     }
 }
+
+impl loading::Hook for UdpProxyServer {}
 
 #[async_trait]
 impl UdpServerHook for UdpProxyServer {

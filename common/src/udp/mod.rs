@@ -14,7 +14,7 @@ use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{error, info, instrument, trace};
 
-use crate::addr::InternetAddr;
+use crate::{addr::InternetAddr, error::AnyResult, loading};
 
 pub mod config;
 pub mod header;
@@ -61,11 +61,19 @@ impl Deref for UdpDownstreamWriter {
 pub struct UdpServer<H> {
     listener: UdpSocket,
     hook: H,
+    set_hook_tx: mpsc::Sender<H>,
+    set_hook_rx: mpsc::Receiver<H>,
 }
 
 impl<H> UdpServer<H> {
     pub fn new(listener: UdpSocket, hook: H) -> Self {
-        Self { listener, hook }
+        let (set_hook_tx, set_hook_rx) = mpsc::channel(64);
+        Self {
+            listener,
+            hook,
+            set_hook_tx,
+            set_hook_rx,
+        }
     }
 
     pub fn listener(&self) -> &UdpSocket {
@@ -77,12 +85,30 @@ impl<H> UdpServer<H> {
     }
 }
 
+#[async_trait]
+impl<H> loading::Server for UdpServer<H>
+where
+    H: UdpServerHook + Send + Sync + 'static,
+{
+    type Hook = H;
+
+    fn set_hook_tx(&self) -> &mpsc::Sender<Self::Hook> {
+        &self.set_hook_tx
+    }
+
+    async fn serve(self) -> AnyResult {
+        self.serve_().await.map_err(|e| e.into())
+    }
+}
+
 impl<H> UdpServer<H>
 where
     H: UdpServerHook + Send + Sync + 'static,
 {
     #[instrument(skip(self))]
-    pub async fn serve(self) -> Result<(), ServeError> {
+    pub async fn serve_(mut self) -> Result<(), ServeError> {
+        drop(self.set_hook_tx);
+
         let flows: FlowMap = HashMap::new();
         let flows = Arc::new(RwLock::new(flows));
         let downstream_listener = Arc::new(self.listener);
@@ -92,29 +118,41 @@ where
             .map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
         let mut buf = [0; BUFFER_LENGTH];
-        let hook = Arc::new(self.hook);
+        let mut hook = Arc::new(self.hook);
         loop {
             trace!("Waiting for packet");
-            let (n, downstream_addr) = match downstream_listener.recv_from(&mut buf).await {
-                Ok((n, addr)) => (n, addr),
-                Err(e) => {
-                    // Ref: https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-recvfrom
-                    error!(?e, ?addr, "Failed to receive packet");
-                    continue;
+            tokio::select! {
+                res = downstream_listener.recv_from(&mut buf) => {
+                    let (n, downstream_addr) = match res {
+                        Ok((n, addr)) => (n, addr),
+                        Err(e) => {
+                            // Ref: https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-recvfrom
+                            error!(?e, ?addr, "Failed to receive packet");
+                            continue;
+                        }
+                    };
+
+                    let downstream_writer =
+                        UdpDownstreamWriter::new(Arc::clone(&downstream_listener), downstream_addr);
+                    steer(
+                        downstream_writer.clone(),
+                        Arc::clone(&flows),
+                        &buf[..n],
+                        Arc::clone(&hook),
+                    )
+                    .await;
                 }
-            };
-
-            let downstream_writer =
-                UdpDownstreamWriter::new(Arc::clone(&downstream_listener), downstream_addr);
-
-            steer(
-                downstream_writer.clone(),
-                Arc::clone(&flows),
-                &buf[..n],
-                Arc::clone(&hook),
-            )
-            .await;
+                res = self.set_hook_rx.recv() => {
+                    let new_hook = match res {
+                        Some(new_hook) => new_hook,
+                        None => break,
+                    };
+                    info!("Hook set");
+                    hook = Arc::new(new_hook);
+                }
+            }
         }
+        Ok(())
     }
 }
 
@@ -184,7 +222,7 @@ async fn steer<H>(
 }
 
 #[async_trait]
-pub trait UdpServerHook {
+pub trait UdpServerHook: loading::Hook {
     async fn parse_upstream_addr<'buf>(
         &self,
         buf: &'buf [u8],

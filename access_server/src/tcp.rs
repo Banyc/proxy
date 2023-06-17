@@ -1,13 +1,16 @@
 use std::io;
 
 use async_trait::async_trait;
-use common::stream::{
-    addr::{StreamAddr, StreamAddrBuilder},
-    config::{StreamProxyTable, StreamProxyTableBuilder},
-    copy_bidirectional_with_payload_crypto,
-    pool::{Pool, PoolBuilder},
-    streams::tcp::TcpServer,
-    tokio_io, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
+use common::{
+    loading,
+    stream::{
+        addr::{StreamAddr, StreamAddrBuilder},
+        config::{StreamProxyTable, StreamProxyTableBuilder},
+        copy_bidirectional_with_payload_crypto,
+        pool::{Pool, PoolBuilder},
+        streams::tcp::TcpServer,
+        tokio_io, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
+    },
 };
 use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
@@ -23,8 +26,12 @@ pub struct TcpProxyAccessBuilder {
     stream_pool: PoolBuilder,
 }
 
-impl TcpProxyAccessBuilder {
-    pub async fn build(self) -> io::Result<TcpServer<TcpProxyAccess>> {
+#[async_trait]
+impl loading::Builder for TcpProxyAccessBuilder {
+    type Hook = TcpProxyAccess;
+    type Server = TcpServer<Self::Hook>;
+
+    async fn build_server(self) -> io::Result<TcpServer<TcpProxyAccess>> {
         let stream_pool = self.stream_pool.build();
         let access = TcpProxyAccess::new(
             self.proxy_table.build(),
@@ -34,8 +41,22 @@ impl TcpProxyAccessBuilder {
         let server = access.build(self.listen_addr).await?;
         Ok(server)
     }
+
+    fn key(&self) -> &str {
+        &self.listen_addr
+    }
+
+    fn build_hook(self) -> io::Result<Self::Hook> {
+        let stream_pool = self.stream_pool.build();
+        Ok(TcpProxyAccess::new(
+            self.proxy_table.build(),
+            self.destination.build(),
+            stream_pool,
+        ))
+    }
 }
 
+#[derive(Debug)]
 pub struct TcpProxyAccess {
     proxy_table: StreamProxyTable,
     destination: StreamAddr,
@@ -118,6 +139,8 @@ pub enum ProxyError {
         metrics: FailedStreamMetrics,
     },
 }
+
+impl loading::Hook for TcpProxyAccess {}
 
 #[async_trait]
 impl StreamServerHook for TcpProxyAccess {

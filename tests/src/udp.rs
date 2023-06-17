@@ -16,7 +16,7 @@ mod tests {
         let server = proxy.build(addr).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         tokio::spawn(async move {
-            server.serve().await.unwrap();
+            server.serve_().await.unwrap();
         });
         ProxyConfig {
             address: proxy_addr.into(),

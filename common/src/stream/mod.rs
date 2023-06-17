@@ -9,7 +9,7 @@ use tokio::{
 };
 use tracing::error;
 
-use crate::{addr::InternetAddr, crypto::XorCrypto};
+use crate::{addr::InternetAddr, crypto::XorCrypto, loading};
 
 use self::{
     addr::{StreamAddr, StreamType},
@@ -152,7 +152,7 @@ pub enum ConnectError {
 }
 
 #[async_trait]
-pub trait StreamServerHook {
+pub trait StreamServerHook: loading::Hook {
     async fn handle_stream<S>(&self, stream: S)
     where
         S: IoStream + IoAddr + std::fmt::Debug;

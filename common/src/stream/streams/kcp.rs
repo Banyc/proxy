@@ -2,7 +2,10 @@ use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::mpsc,
+};
 use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
 use tracing::{error, info, instrument, trace};
 
@@ -15,11 +18,19 @@ use crate::{
 pub struct KcpServer<H> {
     listener: KcpListener,
     hook: H,
+    set_hook_tx: mpsc::Sender<H>,
+    set_hook_rx: mpsc::Receiver<H>,
 }
 
 impl<H> KcpServer<H> {
     pub fn new(listener: KcpListener, hook: H) -> Self {
-        Self { listener, hook }
+        let (set_hook_tx, set_hook_rx) = mpsc::channel(64);
+        Self {
+            listener,
+            hook,
+            set_hook_tx,
+            set_hook_rx,
+        }
     }
 
     pub fn listener(&self) -> &KcpListener {
@@ -29,6 +40,10 @@ impl<H> KcpServer<H> {
     pub fn listener_mut(&mut self) -> &mut KcpListener {
         &mut self.listener
     }
+
+    pub fn set_hook_tx(&self) -> &mpsc::Sender<H> {
+        &self.set_hook_tx
+    }
 }
 
 impl<H> KcpServer<H>
@@ -37,31 +52,39 @@ where
 {
     #[instrument(skip(self))]
     pub async fn serve(mut self) -> Result<(), ServeError> {
+        drop(self.set_hook_tx);
+
         let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
         // Arc hook
-        let hook = Arc::new(self.hook);
+        let mut hook = Arc::new(self.hook);
         loop {
             trace!("Waiting for connection");
-            let (stream, peer_addr) =
-                self.listener
-                    .accept()
-                    .await
-                    .map_err(|e| ServeError::Accept {
-                        source: e.into(),
-                        addr,
-                    })?;
-            let stream = AddressedKcpStream {
-                stream,
-                local_addr: addr,
-                peer_addr,
-            };
-            // Arc hook
-            let hook = Arc::clone(&hook);
-            tokio::spawn(async move {
-                hook.handle_stream(stream).await;
-            });
+            tokio::select! {
+                res = self.listener.accept() => {
+                    let (stream, peer_addr) = res.map_err(|e| ServeError::Accept { source: e.into(), addr })?;
+                    let stream = AddressedKcpStream {
+                        stream,
+                        local_addr: addr,
+                        peer_addr,
+                    };
+                    // Arc hook
+                    let hook = Arc::clone(&hook);
+                    tokio::spawn(async move {
+                        hook.handle_stream(stream).await;
+                    });
+                }
+                res = self.set_hook_rx.recv() => {
+                    let new_hook = match res {
+                        Some(new_hook) => new_hook,
+                        None => break,
+                    };
+                    info!("Hook set");
+                    hook = Arc::new(new_hook);
+                }
+            }
         }
+        Ok(())
     }
 }
 

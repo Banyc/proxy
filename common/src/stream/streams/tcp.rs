@@ -2,20 +2,35 @@ use std::{io, net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
 use thiserror::Error;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::mpsc,
+};
 use tracing::{error, info, instrument, trace};
 
-use crate::stream::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook};
+use crate::{
+    error::AnyResult,
+    loading,
+    stream::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook},
+};
 
 #[derive(Debug)]
 pub struct TcpServer<H> {
     listener: TcpListener,
     hook: H,
+    set_hook_tx: mpsc::Sender<H>,
+    set_hook_rx: mpsc::Receiver<H>,
 }
 
 impl<H> TcpServer<H> {
     pub fn new(listener: TcpListener, hook: H) -> Self {
-        Self { listener, hook }
+        let (set_hook_tx, set_hook_rx) = mpsc::channel(64);
+        Self {
+            listener,
+            hook,
+            set_hook_tx,
+            set_hook_rx,
+        }
     }
 
     pub fn listener(&self) -> &TcpListener {
@@ -27,29 +42,56 @@ impl<H> TcpServer<H> {
     }
 }
 
+#[async_trait]
+impl<H> loading::Server for TcpServer<H>
+where
+    H: StreamServerHook + Send + Sync + 'static,
+{
+    type Hook = H;
+
+    fn set_hook_tx(&self) -> &mpsc::Sender<Self::Hook> {
+        &self.set_hook_tx
+    }
+
+    async fn serve(self) -> AnyResult {
+        self.serve_().await.map_err(|e| e.into())
+    }
+}
+
 impl<H> TcpServer<H>
 where
     H: StreamServerHook + Send + Sync + 'static,
 {
     #[instrument(skip(self))]
-    pub async fn serve(self) -> Result<(), ServeError> {
+    pub async fn serve_(mut self) -> Result<(), ServeError> {
+        drop(self.set_hook_tx);
+
         let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
         // Arc hook
-        let hook = Arc::new(self.hook);
+        let mut hook = Arc::new(self.hook);
         loop {
             trace!("Waiting for connection");
-            let (stream, _) = self
-                .listener
-                .accept()
-                .await
-                .map_err(|e| ServeError::Accept { source: e, addr })?;
-            // Arc hook
-            let hook = Arc::clone(&hook);
-            tokio::spawn(async move {
-                hook.handle_stream(stream).await;
-            });
+            tokio::select! {
+                res = self.listener.accept() => {
+                    let (stream, _) = res.map_err(|e| ServeError::Accept { source: e, addr })?;
+                    // Arc hook
+                    let hook = Arc::clone(&hook);
+                    tokio::spawn(async move {
+                        hook.handle_stream(stream).await;
+                    });
+                }
+                res = self.set_hook_rx.recv() => {
+                    let new_hook = match res {
+                        Some(new_hook) => new_hook,
+                        None => break,
+                    };
+                    info!("Hook set");
+                    hook = Arc::new(new_hook);
+                }
+            }
         }
+        Ok(())
     }
 }
 

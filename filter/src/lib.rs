@@ -35,10 +35,12 @@ impl MatchActBuilder {
     }
 }
 
+#[derive(Debug)]
 pub struct Filter {
     match_acts: Vec<MatchAct>,
 }
 
+#[derive(Debug)]
 struct MatchAct {
     matcher: Regex,
     action: Action,

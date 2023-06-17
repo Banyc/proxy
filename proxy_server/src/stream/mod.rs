@@ -5,6 +5,7 @@ use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     header::{timed_read_header_async, HeaderError},
     heartbeat::{self, HeartbeatError},
+    loading,
     stream::{
         addr::StreamAddr,
         connect_with_pool, copy_bidirectional_with_payload_crypto,
@@ -128,6 +129,8 @@ impl StreamProxyServer {
     //         });
     // }
 }
+
+impl loading::Hook for StreamProxyServer {}
 
 #[async_trait]
 impl StreamServerHook for StreamProxyServer {

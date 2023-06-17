@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use common::{
     addr::any_addr,
     addr::InternetAddr,
+    loading,
     udp::{
         config::{UdpProxyTable, UdpProxyTableBuilder},
         Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
@@ -23,18 +24,36 @@ pub struct UdpProxyAccessBuilder {
     destination: String,
 }
 
-impl UdpProxyAccessBuilder {
-    pub async fn build(self) -> io::Result<UdpServer<UdpProxyAccess>> {
+#[async_trait]
+impl loading::Builder for UdpProxyAccessBuilder {
+    type Hook = UdpProxyAccess;
+    type Server = UdpServer<Self::Hook>;
+
+    async fn build_server(self) -> io::Result<UdpServer<UdpProxyAccess>> {
         let access = UdpProxyAccess::new(self.proxy_table.build(), self.destination.into());
         let server = access.build(self.listen_addr).await?;
         Ok(server)
     }
+
+    fn key(&self) -> &str {
+        &self.listen_addr
+    }
+
+    fn build_hook(self) -> io::Result<UdpProxyAccess> {
+        Ok(UdpProxyAccess::new(
+            self.proxy_table.build(),
+            self.destination.into(),
+        ))
+    }
 }
 
+#[derive(Debug)]
 pub struct UdpProxyAccess {
     proxy_table: UdpProxyTable,
     destination: InternetAddr,
 }
+
+impl loading::Hook for UdpProxyAccess {}
 
 impl UdpProxyAccess {
     pub fn new(proxy_table: UdpProxyTable, destination: InternetAddr) -> Self {

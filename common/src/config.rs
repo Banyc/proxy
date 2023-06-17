@@ -26,6 +26,7 @@ where
     pairs
 }
 
+#[derive(Debug)]
 pub struct ProxyTable<A> {
     chains: Vec<WeightedProxyChain<A>>,
     cum_weight: usize,
@@ -61,6 +62,7 @@ impl<A> ProxyTable<A> {
     }
 }
 
+#[derive(Debug)]
 pub struct WeightedProxyChain<A> {
     pub weight: usize,
     pub chain: Vec<ProxyConfig<A>>,

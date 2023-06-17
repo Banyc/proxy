@@ -21,7 +21,7 @@ impl ProxyServerSpawner {
             for server in tcp_server {
                 join_set.spawn(async move {
                     let server = server.build().await?;
-                    server.serve().await?;
+                    server.serve_().await?;
                     Ok(())
                 });
             }
@@ -30,7 +30,7 @@ impl ProxyServerSpawner {
             for server in udp_server {
                 join_set.spawn(async move {
                     let server = server.build().await?;
-                    server.serve().await?;
+                    server.serve_().await?;
                     Ok(())
                 });
             }

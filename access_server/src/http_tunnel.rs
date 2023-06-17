@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use common::{
     addr::InternetAddr,
+    loading,
     stream::{
         addr::{StreamAddr, StreamType},
         config::{StreamProxyTable, StreamProxyTableBuilder},
@@ -36,8 +37,12 @@ pub struct HttpProxyAccessBuilder {
     filter: FilterBuilder,
 }
 
-impl HttpProxyAccessBuilder {
-    pub async fn build(self) -> io::Result<TcpServer<HttpProxyAccess>> {
+#[async_trait]
+impl loading::Builder for HttpProxyAccessBuilder {
+    type Hook = HttpProxyAccess;
+    type Server = TcpServer<Self::Hook>;
+
+    async fn build_server(self) -> io::Result<TcpServer<HttpProxyAccess>> {
         let stream_pool = self.stream_pool.build();
         let access = HttpProxyAccess::new(
             self.proxy_table.build(),
@@ -52,8 +57,28 @@ impl HttpProxyAccessBuilder {
         let server = access.build(self.listen_addr).await?;
         Ok(server)
     }
+
+    fn key(&self) -> &str {
+        &self.listen_addr
+    }
+
+    fn build_hook(self) -> io::Result<HttpProxyAccess> {
+        let stream_pool = self.stream_pool.build();
+        let access = HttpProxyAccess::new(
+            self.proxy_table.build(),
+            stream_pool,
+            self.filter.build().map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Failed to build filter: {}", e),
+                )
+            })?,
+        );
+        Ok(access)
+    }
 }
 
+#[derive(Debug)]
 pub struct HttpProxyAccess {
     proxy_table: Arc<StreamProxyTable>,
     stream_pool: Pool,
@@ -293,6 +318,8 @@ pub enum TunnelError {
     #[error("Direct connection error")]
     Direct(#[source] io::Error),
 }
+
+impl loading::Hook for HttpProxyAccess {}
 
 #[async_trait]
 impl StreamServerHook for HttpProxyAccess {

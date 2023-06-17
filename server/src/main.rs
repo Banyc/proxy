@@ -1,4 +1,4 @@
-use access_server::AccessServerSpawner;
+use access_server::{AccessServerLoader, AccessServerSpawner};
 use clap::Parser;
 use proxy_server::ProxyServerSpawner;
 use serde::Deserialize;
@@ -18,9 +18,13 @@ async fn main() {
         config_str.push_str(&std::fs::read_to_string(config_file).unwrap());
     }
     let config: ServerConfig = toml::from_str(&config_str).unwrap();
+    let mut access_server_loader = AccessServerLoader::new();
     let mut join_set = tokio::task::JoinSet::new();
     if let Some(access_server) = config.access_server {
-        access_server.spawn(&mut join_set).await;
+        access_server
+            .spawn(&mut join_set, &mut access_server_loader)
+            .await
+            .unwrap();
     }
     if let Some(proxy_server) = config.proxy_server {
         proxy_server.spawn(&mut join_set).await;

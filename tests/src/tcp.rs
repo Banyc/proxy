@@ -25,7 +25,7 @@ mod tests {
         let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         tokio::spawn(async move {
-            server.serve().await.unwrap();
+            server.serve_().await.unwrap();
         });
         ProxyConfig {
             address: StreamAddr {
