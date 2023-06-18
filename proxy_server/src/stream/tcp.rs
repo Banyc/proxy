@@ -72,7 +72,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_proxy() {
-        let crypto = XorCrypto::default();
+        let crypto = XorCrypto::new(vec![].into());
 
         // Start proxy server
         let proxy_addr = {

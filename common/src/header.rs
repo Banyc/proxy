@@ -170,7 +170,7 @@ mod tests {
         for _ in 0..MAX_HEADER_LEN {
             key.push(rng.gen());
         }
-        XorCrypto::new(key)
+        XorCrypto::new(key.into())
     }
 
     #[tokio::test]

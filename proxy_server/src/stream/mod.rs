@@ -1,4 +1,4 @@
-use std::{io, net::SocketAddr, time::Duration};
+use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use common::{
@@ -26,8 +26,8 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct StreamProxyServerBuilder {
-    pub header_xor_key: Vec<u8>,
-    pub payload_xor_key: Option<Vec<u8>>,
+    pub header_xor_key: Arc<[u8]>,
+    pub payload_xor_key: Option<Arc<[u8]>>,
     pub stream_pool: PoolBuilder,
 }
 

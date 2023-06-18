@@ -17,7 +17,9 @@ impl FilterBuilder {
                 match_acts.push(match_act.build()?);
             }
         }
-        Ok(Filter { match_acts })
+        Ok(Filter {
+            match_acts: match_acts.into(),
+        })
     }
 }
 
@@ -39,7 +41,7 @@ impl MatchActBuilder {
 
 #[derive(Debug)]
 pub struct Filter {
-    match_acts: Vec<MatchAct>,
+    match_acts: Arc<[MatchAct]>,
 }
 
 #[derive(Debug)]
@@ -58,7 +60,7 @@ pub enum Action {
 
 impl Filter {
     pub fn filter(&self, addr: &str) -> Action {
-        for match_act in &self.match_acts {
+        for match_act in self.match_acts.as_ref() {
             if match_act.matcher.is_match(addr) {
                 return match_act.action;
             }

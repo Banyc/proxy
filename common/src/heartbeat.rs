@@ -19,7 +19,7 @@ pub async fn send_noop<S>(stream: &mut S, timeout: Duration) -> Result<(), Heart
 where
     S: AsyncWrite + Unpin,
 {
-    let crypto = XorCrypto::new(vec![]);
+    let crypto = XorCrypto::new(vec![].into());
     let mut crypto_cursor = XorCryptoCursor::new(&crypto);
     let req = HeartbeatRequest::Noop;
     let res = tokio::time::timeout(
@@ -43,7 +43,7 @@ pub async fn send_upgrade<S>(stream: &mut S, timeout: Duration) -> Result<(), He
 where
     S: AsyncWrite + Unpin,
 {
-    let crypto = XorCrypto::new(vec![]);
+    let crypto = XorCrypto::new(vec![].into());
     let mut crypto_cursor = XorCryptoCursor::new(&crypto);
     let req = HeartbeatRequest::Upgrade;
     let res = tokio::time::timeout(
@@ -59,7 +59,7 @@ pub async fn wait_upgrade<S>(stream: &mut S, timeout: Duration) -> Result<(), He
 where
     S: AsyncRead + Unpin,
 {
-    let crypto = XorCrypto::new(vec![]);
+    let crypto = XorCrypto::new(vec![].into());
     loop {
         let mut crypto_cursor = XorCryptoCursor::new(&crypto);
         let res =

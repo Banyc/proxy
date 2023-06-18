@@ -5,22 +5,22 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-type Key = Vec<u8>;
+type Key = Arc<[u8]>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct XorCrypto {
-    key: Arc<Key>,
+    key: Key,
 }
 
 impl XorCrypto {
-    pub fn new(key: Vec<u8>) -> Self {
-        Self { key: Arc::new(key) }
+    pub fn new(key: Key) -> Self {
+        Self { key }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct XorCryptoCursor {
-    key: Arc<Key>,
+    key: Key,
     pos: usize,
 }
 
@@ -75,6 +75,6 @@ pub mod tests {
         for _ in 0..len {
             key.push(rng.gen());
         }
-        XorCrypto::new(key)
+        XorCrypto::new(key.into())
     }
 }

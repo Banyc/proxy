@@ -2,6 +2,7 @@ use std::{
     io::{self, Write},
     net::SocketAddr,
     ops::Deref,
+    sync::Arc,
 };
 
 use common::{
@@ -20,14 +21,14 @@ use tracing::{error, instrument, trace};
 #[derive(Debug)]
 pub struct UdpProxySocket {
     upstream: UdpSocket,
-    headers_bytes: Vec<u8>,
-    proxies: Vec<UdpProxyConfig>,
+    headers_bytes: Arc<[u8]>,
+    proxies: Arc<[UdpProxyConfig]>,
 }
 
 impl UdpProxySocket {
     #[instrument(skip_all)]
     pub async fn establish(
-        proxies: Vec<UdpProxyConfig>,
+        proxies: Arc<[UdpProxyConfig]>,
         destination: InternetAddr,
     ) -> Result<UdpProxySocket, EstablishError> {
         // If there are no proxy configs, just connect to the destination
@@ -52,7 +53,7 @@ impl UdpProxySocket {
                 })?;
             return Ok(UdpProxySocket {
                 upstream,
-                headers_bytes: Vec::new(),
+                headers_bytes: vec![].into(),
                 proxies,
             });
         }
@@ -86,7 +87,7 @@ impl UdpProxySocket {
         // Save headers to buffer
         let mut buf = Vec::new();
         let mut writer = io::Cursor::new(&mut buf);
-        for (header, crypto) in pairs {
+        for (header, crypto) in pairs.as_ref() {
             trace!(?header, "Writing header to buffer");
             let mut crypto_cursor = XorCryptoCursor::new(crypto);
             write_header(&mut writer, &header, &mut crypto_cursor).unwrap();
@@ -95,7 +96,7 @@ impl UdpProxySocket {
         // Return stream
         Ok(UdpProxySocket {
             upstream,
-            headers_bytes: buf,
+            headers_bytes: buf.into(),
             proxies,
         })
     }

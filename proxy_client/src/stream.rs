@@ -42,7 +42,7 @@ pub async fn establish(
     let pairs = convert_proxies_to_header_crypto_pairs(proxies, destination);
 
     // Write headers to stream
-    for (header, crypto) in pairs {
+    for (header, crypto) in pairs.as_ref() {
         trace!(?header, "Writing headers to stream");
         heartbeat::send_upgrade(&mut stream, IO_TIMEOUT)
             .await

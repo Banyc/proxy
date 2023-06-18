@@ -11,7 +11,7 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UdpProxyConfigBuilder {
     pub address: Arc<str>,
-    pub xor_key: Vec<u8>,
+    pub xor_key: Arc<[u8]>,
 }
 
 impl UdpProxyConfigBuilder {

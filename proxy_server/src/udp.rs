@@ -27,7 +27,7 @@ use tracing::{error, info, instrument, trace};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct UdpProxyServerBuilder {
     pub listen_addr: Arc<str>,
-    pub header_xor_key: Vec<u8>,
+    pub header_xor_key: Arc<[u8]>,
 }
 
 #[async_trait]
