@@ -86,7 +86,7 @@ where
                         Some(new_hook) => new_hook,
                         None => break,
                     };
-                    info!("Hook set");
+                    info!(?addr, "Hook set");
                     hook = Arc::new(new_hook);
                 }
             }
