@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::error::AnyResult;
 
+#[derive(Debug)]
 pub struct Loader<H> {
     set_hook_tx: HashMap<String, mpsc::Sender<H>>,
 }
