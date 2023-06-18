@@ -2,6 +2,7 @@ use std::{
     fmt::Display,
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    sync::Arc,
 };
 
 use serde::{Deserialize, Serialize};
@@ -18,7 +19,7 @@ pub fn any_addr(ip_version: &IpAddr) -> SocketAddr {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum InternetAddr {
     SocketAddr(SocketAddr),
-    String(String),
+    String(Arc<str>),
 }
 
 impl Display for InternetAddr {
@@ -36,8 +37,8 @@ impl From<SocketAddr> for InternetAddr {
     }
 }
 
-impl From<String> for InternetAddr {
-    fn from(string: String) -> Self {
+impl From<Arc<str>> for InternetAddr {
+    fn from(string: Arc<str>) -> Self {
         match string.parse::<SocketAddr>() {
             Ok(addr) => Self::SocketAddr(addr),
             Err(_) => Self::String(string),
@@ -49,7 +50,7 @@ impl InternetAddr {
     pub async fn to_socket_addr(&self) -> io::Result<SocketAddr> {
         match self {
             Self::SocketAddr(addr) => Ok(*addr),
-            Self::String(host) => lookup_host(host)
+            Self::String(host) => lookup_host(host.as_ref())
                 .await?
                 .next()
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No address")),

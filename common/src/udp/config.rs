@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -8,7 +10,7 @@ use crate::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UdpProxyConfigBuilder {
-    pub address: String,
+    pub address: Arc<str>,
     pub xor_key: Vec<u8>,
 }
 

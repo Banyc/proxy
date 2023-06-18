@@ -1,4 +1,4 @@
-use std::{io, net::Ipv4Addr};
+use std::{io, net::Ipv4Addr, sync::Arc};
 
 use async_trait::async_trait;
 use common::{
@@ -19,9 +19,9 @@ use tracing::{error, info, trace};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UdpProxyAccessBuilder {
-    listen_addr: String,
+    listen_addr: Arc<str>,
     proxy_table: UdpProxyTableBuilder,
-    destination: String,
+    destination: Arc<str>,
 }
 
 #[async_trait]
@@ -31,11 +31,11 @@ impl loading::Builder for UdpProxyAccessBuilder {
 
     async fn build_server(self) -> io::Result<UdpServer<UdpProxyAccess>> {
         let access = UdpProxyAccess::new(self.proxy_table.build(), self.destination.into());
-        let server = access.build(self.listen_addr).await?;
+        let server = access.build(self.listen_addr.as_ref()).await?;
         Ok(server)
     }
 
-    fn key(&self) -> &str {
+    fn key(&self) -> &Arc<str> {
         &self.listen_addr
     }
 

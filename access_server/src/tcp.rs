@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, sync::Arc};
 
 use async_trait::async_trait;
 use common::{
@@ -20,7 +20,7 @@ use tracing::{error, info, instrument};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TcpProxyAccessBuilder {
-    listen_addr: String,
+    listen_addr: Arc<str>,
     proxy_table: StreamProxyTableBuilder,
     destination: StreamAddrBuilder,
     stream_pool: PoolBuilder,
@@ -38,11 +38,11 @@ impl loading::Builder for TcpProxyAccessBuilder {
             self.destination.build(),
             stream_pool,
         );
-        let server = access.build(self.listen_addr).await?;
+        let server = access.build(self.listen_addr.as_ref()).await?;
         Ok(server)
     }
 
-    fn key(&self) -> &str {
+    fn key(&self) -> &Arc<str> {
         &self.listen_addr
     }
 

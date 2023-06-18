@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 
@@ -33,12 +33,12 @@ impl From<&str> for StreamType {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct StreamAddrBuilder {
-    pub address: String,
+    pub address: Arc<str>,
 }
 
 impl StreamAddrBuilder {
     pub fn build(self) -> StreamAddr {
-        self.address.as_str().into()
+        self.address.as_ref().into()
     }
 }
 
@@ -59,7 +59,7 @@ impl From<&str> for StreamAddr {
     fn from(s: &str) -> Self {
         let mut parts = s.split("://");
         let stream_type: StreamType = parts.next().unwrap().into();
-        let address: String = parts.next().unwrap().parse().unwrap();
+        let address: Arc<str> = Arc::from(parts.next().unwrap());
         assert!(parts.next().is_none());
         StreamAddr {
             address: address.into(),

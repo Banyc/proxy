@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     io,
+    sync::Arc,
 };
 
 use async_trait::async_trait;
@@ -10,7 +11,7 @@ use crate::error::AnyResult;
 
 #[derive(Debug)]
 pub struct Loader<H> {
-    set_hook_tx: HashMap<String, mpsc::Sender<H>>,
+    set_hook_tx: HashMap<Arc<str>, mpsc::Sender<H>>,
 }
 
 impl<H> Loader<H>
@@ -85,7 +86,7 @@ pub trait Builder {
     type Server: Server<Hook = Self::Hook>;
     async fn build_server(self) -> io::Result<Self::Server>;
     fn build_hook(self) -> io::Result<Self::Hook>;
-    fn key(&self) -> &str;
+    fn key(&self) -> &Arc<str>;
 }
 
 #[async_trait]

@@ -31,7 +31,7 @@ use tracing::{error, info, instrument, trace, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpProxyAccessBuilder {
-    listen_addr: String,
+    listen_addr: Arc<str>,
     proxy_table: StreamProxyTableBuilder,
     stream_pool: PoolBuilder,
     filter: FilterBuilder,
@@ -54,11 +54,11 @@ impl loading::Builder for HttpProxyAccessBuilder {
                 )
             })?,
         );
-        let server = access.build(self.listen_addr).await?;
+        let server = access.build(self.listen_addr.as_ref()).await?;
         Ok(server)
     }
 
-    fn key(&self) -> &str {
+    fn key(&self) -> &Arc<str> {
         &self.listen_addr
     }
 
@@ -132,6 +132,7 @@ impl HttpProxyAccess {
         let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
         let port = req.uri().port_u16().unwrap_or(80);
         let addr = format!("{}:{}", host, port);
+        let addr = Arc::from(addr.as_str());
 
         let action = self.filter.filter(&addr);
         match action {
@@ -141,7 +142,7 @@ impl HttpProxyAccess {
                 return Ok(respond_with_rejection());
             }
             filter::Action::Direct => {
-                let upstream = tokio::net::TcpStream::connect(&addr)
+                let upstream = tokio::net::TcpStream::connect(addr.as_ref())
                     .await
                     .map_err(TunnelError::Direct)?;
                 let res = tls_http(upstream, req).await;
@@ -216,6 +217,7 @@ impl HttpProxyAccess {
                 return Ok(resp);
             }
         };
+        let addr = Arc::from(addr.as_str());
         let action = self.filter.filter(&addr);
         let http_connect = match action {
             filter::Action::Proxy => Some(HttpConnect::new(
@@ -266,7 +268,7 @@ where
     Ok(resp.map(|b| b.boxed()))
 }
 
-async fn upgrade(req: Request<Incoming>, addr: String, http_connect: Option<HttpConnect>) {
+async fn upgrade(req: Request<Incoming>, addr: Arc<str>, http_connect: Option<HttpConnect>) {
     let upgraded = match hyper::upgrade::on(req).await {
         Ok(upgraded) => upgraded,
         Err(e) => {
@@ -290,7 +292,7 @@ async fn upgrade(req: Request<Incoming>, addr: String, http_connect: Option<Http
     }
 
     // Direct
-    let upstream = match tokio::net::TcpStream::connect(&addr).await {
+    let upstream = match tokio::net::TcpStream::connect(addr.as_ref()).await {
         Ok(upstream) => upstream,
         Err(e) => {
             error!(?e, ?addr, "Failed to connect to upstream directly");

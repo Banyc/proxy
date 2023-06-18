@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +24,7 @@ impl FilterBuilder {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatchActBuilder {
     #[serde(rename = "match")]
-    pub match_pattern: String,
+    pub match_pattern: Arc<str>,
     pub action: Action,
 }
 

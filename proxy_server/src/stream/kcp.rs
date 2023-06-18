@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, sync::Arc};
 
 use async_trait::async_trait;
 use common::{
@@ -15,7 +15,7 @@ use super::{StreamProxyServer, StreamProxyServerBuilder};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct KcpProxyServerBuilder {
-    pub listen_addr: String,
+    pub listen_addr: Arc<str>,
     #[serde(flatten)]
     pub inner: StreamProxyServerBuilder,
 }
@@ -27,7 +27,7 @@ impl loading::Builder for KcpProxyServerBuilder {
 
     async fn build_server(self) -> io::Result<Self::Server> {
         let stream_proxy = self.inner.build();
-        build_kcp_proxy_server(self.listen_addr, stream_proxy)
+        build_kcp_proxy_server(self.listen_addr.as_ref(), stream_proxy)
             .await
             .map_err(|e| e.0)
     }
@@ -36,7 +36,7 @@ impl loading::Builder for KcpProxyServerBuilder {
         Ok(self.inner.build())
     }
 
-    fn key(&self) -> &str {
+    fn key(&self) -> &Arc<str> {
         &self.listen_addr
     }
 }
@@ -44,7 +44,7 @@ impl loading::Builder for KcpProxyServerBuilder {
 impl KcpProxyServerBuilder {
     pub async fn build(self) -> Result<KcpServer<StreamProxyServer>, ListenerBindError> {
         let stream_proxy = self.inner.build();
-        build_kcp_proxy_server(self.listen_addr, stream_proxy).await
+        build_kcp_proxy_server(self.listen_addr.as_ref(), stream_proxy).await
     }
 }
 

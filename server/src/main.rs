@@ -12,7 +12,7 @@ use tracing::{error, info};
 #[derive(Debug, Parser)]
 struct Args {
     /// Paths to the configuration files.
-    config_files: Vec<String>,
+    config_files: Vec<Arc<str>>,
 }
 
 #[tokio::main]
@@ -28,7 +28,7 @@ async fn main() {
     for file in &args.config_files {
         let file = file.clone();
         let watcher = Arc::clone(&watcher);
-        tokio::spawn(async move { file_watcher_tokio::watch_file(file, watcher).await });
+        tokio::spawn(async move { file_watcher_tokio::watch_file(file.as_ref(), watcher).await });
     }
 
     let mut access_server_loader = AccessServerLoader::new();
@@ -66,10 +66,10 @@ async fn main() {
     }
 }
 
-async fn read_config(config_files: &[String]) -> Result<ServerConfig, AnyError> {
+async fn read_config(config_files: &[Arc<str>]) -> Result<ServerConfig, AnyError> {
     let mut config_str = String::new();
     for config_file in config_files {
-        let src = tokio::fs::read_to_string(config_file).await?;
+        let src = tokio::fs::read_to_string(config_file.as_ref()).await?;
         config_str.push_str(&src);
     }
     let config: ServerConfig = toml::from_str(&config_str)?;

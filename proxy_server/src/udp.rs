@@ -1,6 +1,7 @@
 use std::{
     io::{self, Write},
     net::SocketAddr,
+    sync::Arc,
 };
 
 use async_trait::async_trait;
@@ -25,7 +26,7 @@ use tracing::{error, info, instrument, trace};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct UdpProxyServerBuilder {
-    pub listen_addr: String,
+    pub listen_addr: Arc<str>,
     pub header_xor_key: Vec<u8>,
 }
 
@@ -37,7 +38,7 @@ impl loading::Builder for UdpProxyServerBuilder {
     async fn build_server(self) -> io::Result<Self::Server> {
         let header_crypto = XorCrypto::new(self.header_xor_key);
         let tcp_proxy = UdpProxyServer::new(header_crypto);
-        let server = tcp_proxy.build(self.listen_addr).await?;
+        let server = tcp_proxy.build(self.listen_addr.as_ref()).await?;
         Ok(server)
     }
 
@@ -46,7 +47,7 @@ impl loading::Builder for UdpProxyServerBuilder {
         Ok(UdpProxyServer::new(header_crypto))
     }
 
-    fn key(&self) -> &str {
+    fn key(&self) -> &Arc<str> {
         &self.listen_addr
     }
 }
@@ -55,7 +56,7 @@ impl UdpProxyServerBuilder {
     pub async fn build(self) -> io::Result<UdpServer<UdpProxyServer>> {
         let header_crypto = XorCrypto::new(self.header_xor_key);
         let tcp_proxy = UdpProxyServer::new(header_crypto);
-        let server = tcp_proxy.build(self.listen_addr).await?;
+        let server = tcp_proxy.build(self.listen_addr.as_ref()).await?;
         Ok(server)
     }
 }
