@@ -1,12 +1,12 @@
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use common::{
         addr::InternetAddr, config::ProxyConfig, header::route::RouteErrorKind, loading::Server,
         udp::config::UdpProxyConfig,
     };
-    use proxy_client::udp::{RecvError, UdpProxySocket};
+    use proxy_client::udp::{trace_rtt, RecvError, UdpProxySocket};
     use proxy_server::udp::UdpProxyServer;
     use tokio::net::UdpSocket;
 
@@ -58,6 +58,7 @@ mod tests {
         let proxy_1_config = spawn_proxy("0.0.0.0:0").await;
         let proxy_2_config = spawn_proxy("0.0.0.0:0").await;
         let proxy_3_config = spawn_proxy("0.0.0.0:0").await;
+        let proxies: Arc<[_]> = vec![proxy_1_config, proxy_2_config, proxy_3_config].into();
 
         // Message to send
         let req_msg = b"hello world";
@@ -67,18 +68,20 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut client = UdpProxySocket::establish(
-            vec![proxy_1_config, proxy_2_config, proxy_3_config].into(),
-            greet_addr,
-        )
-        .await
-        .unwrap();
+        let mut client = UdpProxySocket::establish(proxies.clone(), greet_addr)
+            .await
+            .unwrap();
 
         // Send message
         client.send(req_msg).await.unwrap();
 
         // Read response
         read_response(&mut client, resp_msg).await.unwrap();
+
+        // Trace
+        let rtt = trace_rtt(proxies).await.unwrap();
+        assert!(rtt > Duration::from_secs(0));
+        assert!(rtt < Duration::from_secs(1));
     }
 
     #[tokio::test(flavor = "multi_thread")]

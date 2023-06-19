@@ -14,7 +14,7 @@ use common::{
         codec::{read_header, write_header, CodecError},
         route::{RouteError, RouteResponse},
     },
-    udp::config::UdpProxyConfig,
+    udp::{config::UdpProxyConfig, BUFFER_LENGTH},
 };
 use thiserror::Error;
 use tokio::net::UdpSocket;
@@ -259,13 +259,13 @@ pub async fn trace_rtt(proxies: Arc<[UdpProxyConfig]>) -> Result<Duration, Trace
     upstream.send(&buf).await?;
 
     // Recv response
-    buf.clear();
-    upstream.recv(&mut buf).await?;
+    buf.resize(BUFFER_LENGTH, 0);
+    let n = upstream.recv(&mut buf).await?;
 
     let end = Instant::now();
 
     // Decode and check headers
-    let mut reader = io::Cursor::new(&buf);
+    let mut reader = io::Cursor::new(&buf[..n]);
     for node in proxies.iter() {
         trace!(?node.address, "Reading response");
         let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
