@@ -3,6 +3,7 @@ use std::{
     net::SocketAddr,
     ops::Deref,
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use common::{
@@ -219,6 +220,69 @@ pub enum RecvError {
         source: io::Error,
         sock_addr: Option<SocketAddr>,
     },
+    #[error("Failed to read response from upstream")]
+    Header(#[from] CodecError),
+    #[error("Upstream responded with an error")]
+    Response { err: RouteError, addr: InternetAddr },
+}
+
+pub async fn trace_rtt(proxies: Arc<[UdpProxyConfig]>) -> Result<Duration, TraceError> {
+    if proxies.is_empty() {
+        return Ok(Duration::from_secs(0));
+    }
+
+    // Connect to upstream
+    let proxy_addr = &proxies[0].address;
+    let addr = proxy_addr.to_socket_addr().await?;
+    let any_addr = any_addr(&addr.ip());
+    let upstream = UdpSocket::bind(any_addr).await?;
+    upstream.connect(addr).await?;
+
+    // Convert addresses to headers
+    let pairs = convert_proxies_to_header_crypto_pairs(&proxies, None);
+
+    // Save headers to buffer
+    let mut buf = Vec::new();
+    let mut writer = io::Cursor::new(&mut buf);
+    for (header, crypto) in pairs.as_ref() {
+        let mut crypto_cursor = XorCryptoCursor::new(crypto);
+        write_header(&mut writer, &header, &mut crypto_cursor).unwrap();
+    }
+
+    let start = Instant::now();
+
+    // Send request
+    upstream.send(&buf).await?;
+
+    // Recv response
+    buf.clear();
+    upstream.recv(&mut buf).await?;
+
+    let end = Instant::now();
+
+    let mut reader = io::Cursor::new(&mut buf);
+
+    // Decode and check headers
+    for node in proxies.iter() {
+        trace!(?node.address, "Reading response");
+        let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
+        let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor)?;
+        if let Err(err) = resp.result {
+            error!(?err, %node.address, "Upstream responded with an error");
+            return Err(TraceError::Response {
+                err,
+                addr: node.address.clone(),
+            });
+        }
+    }
+
+    Ok(end.duration_since(start))
+}
+
+#[derive(Debug, Error)]
+pub enum TraceError {
+    #[error("IO error")]
+    Io(#[from] io::Error),
     #[error("Failed to read response from upstream")]
     Header(#[from] CodecError),
     #[error("Upstream responded with an error")]
