@@ -1,11 +1,9 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::addr::InternetAddr;
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct RouteRequest<A> {
-    pub upstream: A,
+    pub upstream: Option<A>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -15,7 +13,6 @@ pub struct RouteResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct RouteError {
-    pub source: InternetAddr,
     pub kind: RouteErrorKind,
 }
 
@@ -33,7 +30,7 @@ pub enum RouteErrorKind {
 
 #[cfg(test)]
 mod tests {
-    use std::{io, net::SocketAddr};
+    use std::io;
 
     use rand::Rng;
     use tracing::trace;
@@ -63,7 +60,6 @@ mod tests {
         // Encode header
         let original_header = RouteResponse {
             result: Err(RouteError {
-                source: "1.1.1.1:8080".parse::<SocketAddr>().unwrap().into(),
                 kind: RouteErrorKind::Io,
             }),
         };

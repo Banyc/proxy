@@ -41,7 +41,7 @@ pub async fn establish(
     };
 
     // Convert addresses to headers
-    let pairs = convert_proxies_to_header_crypto_pairs(proxies, destination);
+    let pairs = convert_proxies_to_header_crypto_pairs(proxies, Some(destination));
 
     // Write headers to stream
     for (header, crypto) in pairs.as_ref() {

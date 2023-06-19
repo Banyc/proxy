@@ -3,7 +3,7 @@ use std::sync::Arc;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::crypto::XorCrypto;
+use crate::{crypto::XorCrypto, header::route::RouteRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct ProxyConfig<A> {
@@ -13,8 +13,8 @@ pub struct ProxyConfig<A> {
 
 pub fn convert_proxies_to_header_crypto_pairs<A>(
     nodes: &[ProxyConfig<A>],
-    destination: A,
-) -> Arc<[(A, &XorCrypto)]>
+    destination: Option<A>,
+) -> Arc<[(RouteRequest<A>, &XorCrypto)]>
 where
     A: Clone,
 {
@@ -22,9 +22,15 @@ where
     for i in 0..nodes.len() - 1 {
         let node = &nodes[i];
         let next_node = &nodes[i + 1];
-        pairs.push((next_node.address.clone(), &node.crypto));
+        let route_req = RouteRequest {
+            upstream: Some(next_node.address.clone()),
+        };
+        pairs.push((route_req, &node.crypto));
     }
-    pairs.push((destination, &nodes.last().unwrap().crypto));
+    let route_req = RouteRequest {
+        upstream: destination,
+    };
+    pairs.push((route_req, &nodes.last().unwrap().crypto));
     pairs.into()
 }
 

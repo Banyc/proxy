@@ -4,8 +4,9 @@ use async_trait::async_trait;
 use common::{
     crypto::{XorCrypto, XorCryptoCursor},
     header::{
-        codec::{timed_read_header_async, CodecError},
+        codec::{timed_read_header_async, timed_write_header_async, CodecError},
         heartbeat::{self, HeartbeatError},
+        route::RouteResponse,
     },
     loading,
     stream::{
@@ -61,7 +62,10 @@ impl StreamProxyServer {
     }
 
     #[instrument(skip(self))]
-    async fn proxy<S>(&self, mut downstream: S) -> Result<StreamMetrics, StreamProxyServerError>
+    async fn proxy<S>(
+        &self,
+        mut downstream: S,
+    ) -> Result<Option<StreamMetrics>, StreamProxyServerError>
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
@@ -74,7 +78,8 @@ impl StreamProxyServer {
         // Establish proxy chain
         let (upstream, upstream_addr, upstream_sock_addr) =
             match self.acceptor.establish(&mut downstream).await {
-                Ok(upstream) => upstream,
+                Ok(Some(upstream)) => upstream,
+                Ok(None) => return Ok(None),
                 Err(e) => {
                     // self.handle_proxy_error(&mut downstream, e).await;
                     return Err(StreamProxyServerError::EstablishProxyChain(e));
@@ -109,7 +114,7 @@ impl StreamProxyServer {
             upstream_sock_addr,
             downstream_addr: Some(downstream_addr),
         };
-        Ok(metrics)
+        Ok(Some(metrics))
     }
 
     // #[instrument(skip(self, e))]
@@ -143,7 +148,8 @@ impl StreamServerHook for StreamProxyServer {
         S: IoStream + IoAddr + std::fmt::Debug,
     {
         match self.proxy(stream).await {
-            Ok(metrics) => info!(%metrics, "Proxy finished"),
+            Ok(Some(metrics)) => info!(%metrics, "Proxy finished"),
+            Ok(None) => info!("Echo finished"),
             Err(StreamProxyServerError::IoCopy { source: e, metrics }) => {
                 info!(?e, %metrics, "Proxy error");
             }
@@ -170,7 +176,7 @@ impl StreamProxyAcceptor {
     async fn establish<S>(
         &self,
         downstream: &mut S,
-    ) -> Result<(CreatedStream, StreamAddr, SocketAddr), StreamProxyAcceptorError>
+    ) -> Result<Option<(CreatedStream, StreamAddr, SocketAddr)>, StreamProxyAcceptorError>
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
@@ -198,17 +204,36 @@ impl StreamProxyAcceptor {
                     }
                 })?;
 
+        // Echo
+        let addr = match header.upstream {
+            Some(upstream) => upstream,
+            None => {
+                let resp = RouteResponse { result: Ok(()) };
+                let mut write_crypto_cursor = XorCryptoCursor::new(&self.crypto);
+                timed_write_header_async(downstream, &resp, &mut write_crypto_cursor, IO_TIMEOUT)
+                    .await
+                    .map_err(|e| {
+                        let downstream_addr = downstream.peer_addr().ok();
+                        StreamProxyAcceptorError::WriteEchoResponse {
+                            source: e,
+                            downstream_addr,
+                        }
+                    })?;
+
+                return Ok(None);
+            }
+        };
+
         // Connect to upstream
-        let (upstream, sock_addr) =
-            connect_with_pool(&header.upstream, &self.stream_pool, false, IO_TIMEOUT)
-                .await
-                .map_err(|e| {
-                    let downstream_addr = downstream.peer_addr().ok();
-                    StreamProxyAcceptorError::ConnectUpstream {
-                        source: e,
-                        downstream_addr,
-                    }
-                })?;
+        let (upstream, sock_addr) = connect_with_pool(&addr, &self.stream_pool, false, IO_TIMEOUT)
+            .await
+            .map_err(|e| {
+                let downstream_addr = downstream.peer_addr().ok();
+                StreamProxyAcceptorError::ConnectUpstream {
+                    source: e,
+                    downstream_addr,
+                }
+            })?;
 
         // // Write Ok response
         // let resp = ResponseHeader { result: Ok(()) };
@@ -220,7 +245,7 @@ impl StreamProxyAcceptor {
         //     )?;
 
         // Return upstream
-        Ok((upstream, header.upstream, sock_addr))
+        Ok(Some((upstream, addr, sock_addr)))
     }
 
     // #[instrument(skip(self))]
@@ -278,6 +303,12 @@ pub enum StreamProxyAcceptorError {
     },
     #[error("Failed to read stream request header from downstream")]
     ReadStreamRequestHeader {
+        #[source]
+        source: CodecError,
+        downstream_addr: Option<SocketAddr>,
+    },
+    #[error("Failed to write echo response to downstream")]
+    WriteEchoResponse {
         #[source]
         source: CodecError,
         downstream_addr: Option<SocketAddr>,

@@ -83,7 +83,7 @@ impl UdpProxySocket {
             })?;
 
         // Convert addresses to headers
-        let pairs = convert_proxies_to_header_crypto_pairs(&proxies, destination);
+        let pairs = convert_proxies_to_header_crypto_pairs(&proxies, Some(destination));
 
         // Save headers to buffer
         let mut buf = Vec::new();
@@ -146,10 +146,12 @@ impl UdpProxySocket {
             trace!(?node.address, "Reading response");
             let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
             let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor)?;
-            if let Err(mut err) = resp.result {
-                err.source = node.address.clone();
-                error!(?err, "Upstream responded with an error");
-                return Err(RecvError::Response(err));
+            if let Err(err) = resp.result {
+                error!(?err, %node.address, "Upstream responded with an error");
+                return Err(RecvError::Response {
+                    err,
+                    addr: node.address.clone(),
+                });
             }
         }
 
@@ -220,5 +222,5 @@ pub enum RecvError {
     #[error("Failed to read response from upstream")]
     Header(#[from] CodecError),
     #[error("Upstream responded with an error")]
-    Response(RouteError),
+    Response { err: RouteError, addr: InternetAddr },
 }

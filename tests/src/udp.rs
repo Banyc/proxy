@@ -194,12 +194,12 @@ mod tests {
         let err = read_response(&socket, resp_msg).await.unwrap_err();
 
         match err {
-            RecvError::Response(e) => {
-                match e.kind {
+            RecvError::Response { err, addr } => {
+                match err.kind {
                     RouteErrorKind::Loopback => {}
-                    _ => panic!("Unexpected error: {:?}", e),
+                    _ => panic!("Unexpected error: {:?}", err),
                 }
-                assert_eq!(e.source, proxy_1_config.address);
+                assert_eq!(addr, proxy_1_config.address);
             }
             _ => panic!("Unexpected error: {:?}", err),
         }

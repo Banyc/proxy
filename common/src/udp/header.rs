@@ -23,7 +23,7 @@ mod tests {
 
         // Encode header
         let original_header: UdpRequestHeader = RouteRequest {
-            upstream: "1.1.1.1:8080".parse::<SocketAddr>().unwrap().into(),
+            upstream: Some("1.1.1.1:8080".parse::<SocketAddr>().unwrap().into()),
         };
         let mut crypto_cursor = XorCryptoCursor::new(&crypto);
         write_header_async(&mut stream, &original_header, &mut crypto_cursor)

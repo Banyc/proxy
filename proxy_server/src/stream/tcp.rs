@@ -116,10 +116,10 @@ mod tests {
                 .unwrap();
             // Encode header
             let header = StreamRequestHeader {
-                upstream: StreamAddr {
+                upstream: Some(StreamAddr {
                     address: origin_addr.into(),
                     stream_type: StreamType::Tcp,
-                },
+                }),
             };
             let mut crypto_cursor = XorCryptoCursor::new(&crypto);
             write_header_async(&mut stream, &header, &mut crypto_cursor)

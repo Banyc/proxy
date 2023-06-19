@@ -178,9 +178,9 @@ async fn steer<H>(
     H: UdpServerHook + Send + Sync + 'static,
 {
     let (upstream, payload) = match hook.parse_upstream_addr(buf, &downstream_writer).await {
-        Ok(x) => x,
-        Err(e) => {
-            error!(?e, "Failed to parse upstream address");
+        Some(x) => x,
+        None => {
+            trace!("No upstream address found");
             return;
         }
     };
@@ -227,7 +227,7 @@ pub trait UdpServerHook: loading::Hook {
         &self,
         buf: &'buf [u8],
         downstream_writer: &UdpDownstreamWriter,
-    ) -> Result<(UpstreamAddr, &'buf [u8]), ()>;
+    ) -> Option<(UpstreamAddr, &'buf [u8])>;
 
     async fn handle_flow(
         &self,

@@ -170,8 +170,8 @@ impl UdpServerHook for UdpProxyAccess {
         &self,
         buf: &'buf [u8],
         _downstream_writer: &UdpDownstreamWriter,
-    ) -> Result<(UpstreamAddr, &'buf [u8]), ()> {
-        Ok((
+    ) -> Option<(UpstreamAddr, &'buf [u8])> {
+        Some((
             UpstreamAddr(any_addr(&Ipv4Addr::UNSPECIFIED.into()).into()),
             buf,
         ))
