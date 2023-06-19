@@ -264,9 +264,8 @@ pub async fn trace_rtt(proxies: Arc<[UdpProxyConfig]>) -> Result<Duration, Trace
 
     let end = Instant::now();
 
-    let mut reader = io::Cursor::new(&mut buf);
-
     // Decode and check headers
+    let mut reader = io::Cursor::new(&buf);
     for node in proxies.iter() {
         trace!(?node.address, "Reading response");
         let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
