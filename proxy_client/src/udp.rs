@@ -25,6 +25,8 @@ pub struct UdpProxySocket {
     upstream: UdpSocket,
     headers_bytes: Arc<[u8]>,
     proxies: Arc<[UdpProxyConfig]>,
+    read_buf: Vec<u8>,
+    write_buf: Vec<u8>,
 }
 
 impl UdpProxySocket {
@@ -57,6 +59,8 @@ impl UdpProxySocket {
                 upstream,
                 headers_bytes: vec![].into(),
                 proxies,
+                read_buf: vec![],
+                write_buf: vec![],
             });
         }
 
@@ -100,22 +104,23 @@ impl UdpProxySocket {
             upstream,
             headers_bytes: buf.into(),
             proxies,
+            read_buf: vec![],
+            write_buf: vec![],
         })
     }
 
     #[instrument(skip_all)]
-    pub async fn send(&self, buf: &[u8]) -> Result<usize, SendError> {
-        let mut new_buf = Vec::new();
-        let mut writer = io::Cursor::new(&mut new_buf);
+    pub async fn send(&mut self, buf: &[u8]) -> Result<usize, SendError> {
+        self.write_buf.clear();
 
         // Write header
-        writer.write_all(&self.headers_bytes).unwrap();
+        self.write_buf.write_all(&self.headers_bytes).unwrap();
 
         // Write payload
-        writer.write_all(buf).unwrap();
+        self.write_buf.write_all(buf).unwrap();
 
         // Send data
-        self.upstream.send(&new_buf).await.map_err(|e| {
+        self.upstream.send(&self.write_buf).await.map_err(|e| {
             let peer_addr = self.upstream.peer_addr().ok();
             SendError {
                 source: e,
@@ -127,20 +132,19 @@ impl UdpProxySocket {
     }
 
     #[instrument(skip_all)]
-    pub async fn recv(&self, buf: &mut [u8]) -> Result<usize, RecvError> {
-        let mut new_buf = vec![0; self.headers_bytes.len() + buf.len()];
+    pub async fn recv(&mut self, buf: &mut [u8]) -> Result<usize, RecvError> {
+        let cap = self.headers_bytes.len() + buf.len();
+        self.read_buf.resize(cap, 0);
 
         // Read data
-        let n = self.upstream.recv(&mut new_buf).await.map_err(|e| {
+        let n = self.upstream.recv(&mut self.read_buf).await.map_err(|e| {
             let peer_addr = self.upstream.peer_addr().ok();
             RecvError::RecvUpstream {
                 source: e,
                 sock_addr: peer_addr,
             }
         })?;
-        let mut new_buf = &mut new_buf[..n];
-
-        let mut reader = io::Cursor::new(&mut new_buf);
+        let mut reader = io::Cursor::new(&self.read_buf[..n]);
 
         // Decode and check headers
         for node in self.proxies.iter() {

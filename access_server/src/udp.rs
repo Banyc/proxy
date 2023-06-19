@@ -80,7 +80,7 @@ impl UdpProxyAccess {
 
         // Connect to upstream
         let proxy_chain = self.proxy_table.choose_chain();
-        let upstream =
+        let mut upstream =
             UdpProxySocket::establish(proxy_chain.chain.clone(), self.destination.clone()).await?;
 
         // Periodic check if the flow is still alive
