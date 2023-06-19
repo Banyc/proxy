@@ -8,8 +8,10 @@ use async_trait::async_trait;
 use common::{
     addr::{any_addr, InternetAddr},
     crypto::{XorCrypto, XorCryptoCursor},
-    error::{ResponseError, ResponseErrorKind},
-    header::{read_header, write_header, HeaderError, ResponseHeader},
+    header::{
+        codec::{read_header, write_header, CodecError},
+        route::{RouteError, RouteErrorKind, RouteResponse},
+    },
     loading,
     udp::{
         header::UdpRequestHeader, Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer,
@@ -77,10 +79,7 @@ impl UdpProxyServer {
     }
 
     #[instrument(skip(self, buf))]
-    async fn steer<'buf>(
-        &self,
-        buf: &'buf [u8],
-    ) -> Result<(UpstreamAddr, &'buf [u8]), HeaderError> {
+    async fn steer<'buf>(&self, buf: &'buf [u8]) -> Result<(UpstreamAddr, &'buf [u8]), CodecError> {
         // Decode header
         let mut reader = io::Cursor::new(buf);
         let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
@@ -91,11 +90,7 @@ impl UdpProxyServer {
         Ok((UpstreamAddr(header.upstream), payload))
     }
 
-    async fn handle_steer_error(
-        &self,
-        downstream_writer: &UdpDownstreamWriter,
-        error: HeaderError,
-    ) {
+    async fn handle_steer_error(&self, downstream_writer: &UdpDownstreamWriter, error: CodecError) {
         let peer_addr = downstream_writer.peer_addr();
         error!(?error, ?peer_addr, "Failed to steer");
         let kind = error_kind_from_header_error(error);
@@ -187,7 +182,7 @@ impl UdpProxyServer {
                     let mut writer = io::Cursor::new(&mut downlink_protocol_buf);
 
                     // Write header
-                    let header = ResponseHeader {
+                    let header = RouteResponse {
                         result: Ok(()),
                     };
                     let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
@@ -252,15 +247,15 @@ impl UdpProxyServer {
     async fn respond_with_error(
         &self,
         downstream_writer: &UdpDownstreamWriter,
-        kind: ResponseErrorKind,
+        kind: RouteErrorKind,
     ) -> Result<(), io::Error> {
         let local_addr = downstream_writer
             .local_addr()
             .inspect_err(|e| error!(?e, "Failed to get local address"))?;
 
         // Respond with error
-        let resp = ResponseHeader {
-            result: Err(ResponseError {
+        let resp = RouteResponse {
+            result: Err(RouteError {
                 source: local_addr.into(),
                 kind,
             }),
@@ -321,21 +316,21 @@ pub enum ProxyError {
     },
 }
 
-fn error_kind_from_header_error(e: HeaderError) -> ResponseErrorKind {
+fn error_kind_from_header_error(e: CodecError) -> RouteErrorKind {
     match e {
-        HeaderError::Io(_) => ResponseErrorKind::Io,
-        HeaderError::Bincode(_) => ResponseErrorKind::Codec,
+        CodecError::Io(_) => RouteErrorKind::Io,
+        CodecError::Bincode(_) => RouteErrorKind::Codec,
     }
 }
-fn error_kind_from_proxy_error(e: ProxyError) -> ResponseErrorKind {
+fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
     match e {
         ProxyError::Resolve { .. }
         | ProxyError::ClientBindAny(_)
         | ProxyError::ConnectUpstream { .. }
         | ProxyError::ForwardUpstream { .. }
         | ProxyError::RecvUpstream { .. }
-        | ProxyError::ForwardDownstream { .. } => ResponseErrorKind::Io,
-        ProxyError::Loopback { .. } => ResponseErrorKind::Loopback,
+        | ProxyError::ForwardDownstream { .. } => RouteErrorKind::Io,
+        ProxyError::Loopback { .. } => RouteErrorKind::Loopback,
     }
 }
 

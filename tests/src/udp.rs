@@ -3,7 +3,7 @@ mod tests {
     use std::sync::Arc;
 
     use common::{
-        addr::InternetAddr, config::ProxyConfig, error::ResponseErrorKind, loading::Server,
+        addr::InternetAddr, config::ProxyConfig, header::route::RouteErrorKind, loading::Server,
         udp::config::UdpProxyConfig,
     };
     use proxy_client::udp::{RecvError, UdpProxySocket};
@@ -196,7 +196,7 @@ mod tests {
         match err {
             RecvError::Response(e) => {
                 match e.kind {
-                    ResponseErrorKind::Loopback => {}
+                    RouteErrorKind::Loopback => {}
                     _ => panic!("Unexpected error: {:?}", e),
                 }
                 assert_eq!(e.source, proxy_1_config.address);

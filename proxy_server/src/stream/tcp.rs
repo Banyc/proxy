@@ -57,8 +57,7 @@ mod tests {
     use super::*;
     use common::{
         crypto::{XorCrypto, XorCryptoCursor},
-        header::write_header_async,
-        heartbeat,
+        header::{codec::write_header_async, heartbeat},
         loading::Server,
         stream::{
             addr::{StreamAddr, StreamType},

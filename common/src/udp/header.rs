@@ -1,6 +1,6 @@
-use crate::{addr::InternetAddr, header::RequestHeader};
+use crate::{addr::InternetAddr, header::route::RouteRequest};
 
-pub type UdpRequestHeader = RequestHeader<InternetAddr>;
+pub type UdpRequestHeader = RouteRequest<InternetAddr>;
 
 #[cfg(test)]
 mod tests {
@@ -10,7 +10,7 @@ mod tests {
 
     use crate::{
         crypto::{tests::create_random_crypto, XorCryptoCursor},
-        header::{read_header_async, write_header_async, RequestHeader, MAX_HEADER_LEN},
+        header::codec::{read_header_async, write_header_async, MAX_HEADER_LEN},
     };
 
     use super::*;
@@ -22,7 +22,7 @@ mod tests {
         let crypto = create_random_crypto(MAX_HEADER_LEN);
 
         // Encode header
-        let original_header: UdpRequestHeader = RequestHeader {
+        let original_header: UdpRequestHeader = RouteRequest {
             upstream: "1.1.1.1:8080".parse::<SocketAddr>().unwrap().into(),
         };
         let mut crypto_cursor = XorCryptoCursor::new(&crypto);

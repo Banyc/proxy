@@ -3,8 +3,10 @@ use std::{net::SocketAddr, time::Duration};
 use common::{
     config::convert_proxies_to_header_crypto_pairs,
     crypto::XorCryptoCursor,
-    header::{timed_write_header_async, HeaderError},
-    heartbeat::{self, HeartbeatError},
+    header::{
+        codec::{timed_write_header_async, CodecError},
+        heartbeat::{self, HeartbeatError},
+    },
     stream::{
         addr::StreamAddr, config::StreamProxyConfig, connect_with_pool, pool::Pool, ConnectError,
         CreatedStream,
@@ -98,7 +100,7 @@ pub enum StreamEstablishError {
     #[error("Failed to read stream request header to upstream")]
     WriteStreamRequestHeader {
         #[source]
-        source: HeaderError,
+        source: CodecError,
         upstream_addr: StreamAddr,
     },
 }

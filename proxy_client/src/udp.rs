@@ -9,9 +9,10 @@ use common::{
     addr::{any_addr, InternetAddr},
     config::convert_proxies_to_header_crypto_pairs,
     crypto::XorCryptoCursor,
-    error::ResponseError,
-    header::ResponseHeader,
-    header::{read_header, write_header, HeaderError},
+    header::{
+        codec::{read_header, write_header, CodecError},
+        route::{RouteError, RouteResponse},
+    },
     udp::config::UdpProxyConfig,
 };
 use thiserror::Error;
@@ -144,7 +145,7 @@ impl UdpProxySocket {
         for node in self.proxies.iter() {
             trace!(?node.address, "Reading response");
             let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
-            let resp: ResponseHeader = read_header(&mut reader, &mut crypto_cursor)?;
+            let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor)?;
             if let Err(mut err) = resp.result {
                 err.source = node.address.clone();
                 error!(?err, "Upstream responded with an error");
@@ -217,7 +218,7 @@ pub enum RecvError {
         sock_addr: Option<SocketAddr>,
     },
     #[error("Failed to read response from upstream")]
-    Header(#[from] HeaderError),
+    Header(#[from] CodecError),
     #[error("Upstream responded with an error")]
-    Response(ResponseError),
+    Response(RouteError),
 }

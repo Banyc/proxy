@@ -1,5 +1,5 @@
-use crate::header::RequestHeader;
+use crate::header::route::RouteRequest;
 
 use super::StreamAddr;
 
-pub type StreamRequestHeader = RequestHeader<StreamAddr>;
+pub type StreamRequestHeader = RouteRequest<StreamAddr>;

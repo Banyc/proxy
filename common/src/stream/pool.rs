@@ -13,7 +13,7 @@ use tracing::error;
 
 use crate::{
     addr::InternetAddr,
-    heartbeat::{send_noop, HeartbeatError},
+    header::heartbeat::{send_noop, HeartbeatError},
     stream::CreatedStream,
 };
 

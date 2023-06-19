@@ -9,17 +9,9 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{instrument, trace};
 
-use crate::{crypto::XorCryptoCursor, error::ResponseError};
+use crate::crypto::XorCryptoCursor;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct RequestHeader<A> {
-    pub upstream: A,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct ResponseHeader {
-    pub result: Result<(), ResponseError>,
-}
+pub const MAX_HEADER_LEN: usize = 1024;
 
 #[duplicate_item(
     read_header         async   stream_bounds       add_await(code) ;
@@ -30,7 +22,7 @@ pub struct ResponseHeader {
 pub async fn read_header<'crypto, S, H>(
     stream: &mut S,
     crypto: &mut XorCryptoCursor,
-) -> Result<H, HeaderError>
+) -> Result<H, CodecError>
 where
     S: stream_bounds,
     H: for<'de> Deserialize<'de> + std::fmt::Debug,
@@ -49,7 +41,7 @@ where
     let header = {
         let mut buf = [0; MAX_HEADER_LEN];
         if len > MAX_HEADER_LEN {
-            return Err(HeaderError::Io(io::Error::new(
+            return Err(CodecError::Io(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Header too long",
             )));
@@ -75,7 +67,7 @@ pub async fn write_header<'crypto, S, H>(
     stream: &mut S,
     header: &H,
     crypto: &mut XorCryptoCursor,
-) -> Result<(), HeaderError>
+) -> Result<(), CodecError>
 where
     S: stream_bounds,
     H: Serialize + std::fmt::Debug,
@@ -109,7 +101,7 @@ pub async fn timed_read_header_async<'crypto, S, H>(
     stream: &mut S,
     crypto: &mut XorCryptoCursor,
     timeout: Duration,
-) -> Result<H, HeaderError>
+) -> Result<H, CodecError>
 where
     S: AsyncRead + Unpin,
     H: for<'de> Deserialize<'de> + std::fmt::Debug,
@@ -117,7 +109,7 @@ where
     let res = tokio::time::timeout(timeout, read_header_async(stream, crypto)).await;
     match res {
         Ok(res) => res,
-        Err(_) => Err(HeaderError::Io(io::Error::new(
+        Err(_) => Err(CodecError::Io(io::Error::new(
             io::ErrorKind::TimedOut,
             "Timed out",
         ))),
@@ -129,7 +121,7 @@ pub async fn timed_write_header_async<'crypto, S, H>(
     header: &H,
     crypto: &mut XorCryptoCursor,
     timeout: Duration,
-) -> Result<(), HeaderError>
+) -> Result<(), CodecError>
 where
     S: AsyncWrite + Unpin,
     H: Serialize + std::fmt::Debug,
@@ -137,7 +129,7 @@ where
     let res = tokio::time::timeout(timeout, write_header_async(stream, header, crypto)).await;
     match res {
         Ok(res) => res,
-        Err(_) => Err(HeaderError::Io(io::Error::new(
+        Err(_) => Err(CodecError::Io(io::Error::new(
             io::ErrorKind::TimedOut,
             "Timed out",
         ))),
@@ -145,61 +137,9 @@ where
 }
 
 #[derive(Debug, Error)]
-pub enum HeaderError {
+pub enum CodecError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
     #[error("Bincode error: {0}")]
     Bincode(#[from] bincode::Error),
-}
-
-pub const MAX_HEADER_LEN: usize = 1024;
-
-#[cfg(test)]
-mod tests {
-    use std::net::SocketAddr;
-
-    use rand::Rng;
-
-    use crate::{crypto::XorCrypto, error::ResponseErrorKind};
-
-    use super::*;
-
-    fn create_random_crypto() -> XorCrypto {
-        let mut rng = rand::thread_rng();
-        let mut key = Vec::new();
-        for _ in 0..MAX_HEADER_LEN {
-            key.push(rng.gen());
-        }
-        XorCrypto::new(key.into())
-    }
-
-    #[tokio::test]
-    async fn test_response_header() {
-        let mut buf = [0; 4 + MAX_HEADER_LEN];
-        let mut stream = io::Cursor::new(&mut buf[..]);
-        let crypto = create_random_crypto();
-
-        // Encode header
-        let original_header = ResponseHeader {
-            result: Err(ResponseError {
-                source: "1.1.1.1:8080".parse::<SocketAddr>().unwrap().into(),
-                kind: ResponseErrorKind::Io,
-            }),
-        };
-        let mut crypto_cursor = XorCryptoCursor::new(&crypto);
-        write_header_async(&mut stream, &original_header, &mut crypto_cursor)
-            .await
-            .unwrap();
-        let len = stream.position();
-        let buf = &buf[..len as usize];
-        trace!(?original_header, ?len, "Encoded header");
-
-        // Decode header
-        let mut stream = io::Cursor::new(buf);
-        let mut crypto_cursor = XorCryptoCursor::new(&crypto);
-        let decoded_header = read_header_async(&mut stream, &mut crypto_cursor)
-            .await
-            .unwrap();
-        assert_eq!(original_header, decoded_header);
-    }
 }

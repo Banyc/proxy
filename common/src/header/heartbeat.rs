@@ -4,10 +4,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::{
-    crypto::{XorCrypto, XorCryptoCursor},
-    header::{read_header_async, write_header_async, HeaderError},
-};
+use crate::crypto::{XorCrypto, XorCryptoCursor};
+
+use super::codec::{read_header_async, write_header_async, CodecError};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HeartbeatRequest {
@@ -34,7 +33,7 @@ where
 #[derive(Debug, Error)]
 pub enum HeartbeatError {
     #[error("Failed to read/write header")]
-    Header(#[from] HeaderError),
+    Header(#[from] CodecError),
     #[error("Timeout")]
     Timeout(Duration),
 }

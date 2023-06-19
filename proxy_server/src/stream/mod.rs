@@ -3,8 +3,10 @@ use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use common::{
     crypto::{XorCrypto, XorCryptoCursor},
-    header::{timed_read_header_async, HeaderError},
-    heartbeat::{self, HeartbeatError},
+    header::{
+        codec::{timed_read_header_async, CodecError},
+        heartbeat::{self, HeartbeatError},
+    },
     loading,
     stream::{
         addr::StreamAddr,
@@ -277,7 +279,7 @@ pub enum StreamProxyAcceptorError {
     #[error("Failed to read stream request header from downstream")]
     ReadStreamRequestHeader {
         #[source]
-        source: HeaderError,
+        source: CodecError,
         downstream_addr: Option<SocketAddr>,
     },
     #[error("Failed to connect to upstream")]
