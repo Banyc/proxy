@@ -59,6 +59,7 @@ mod tests {
         crypto::{XorCrypto, XorCryptoCursor},
         header::write_header_async,
         heartbeat,
+        loading::Server,
         stream::{
             addr::{StreamAddr, StreamType},
             header::StreamRequestHeader,
@@ -70,7 +71,7 @@ mod tests {
         net::{TcpListener, TcpStream},
     };
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_proxy() {
         let crypto = XorCrypto::new(vec![].into());
 
@@ -81,7 +82,8 @@ mod tests {
             let server = build_tcp_proxy_server("localhost:0", proxy).await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
             tokio::spawn(async move {
-                server.serve_().await.unwrap();
+                let _handle = server.handle().clone();
+                server.serve().await.unwrap();
             });
             proxy_addr
         };

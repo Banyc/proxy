@@ -18,7 +18,7 @@ use crate::{
 pub struct TcpServer<H> {
     listener: TcpListener,
     hook: H,
-    set_hook_tx: mpsc::Sender<H>,
+    handle: mpsc::Sender<H>,
     set_hook_rx: mpsc::Receiver<H>,
 }
 
@@ -28,7 +28,7 @@ impl<H> TcpServer<H> {
         Self {
             listener,
             hook,
-            set_hook_tx,
+            handle: set_hook_tx,
             set_hook_rx,
         }
     }
@@ -49,8 +49,8 @@ where
 {
     type Hook = H;
 
-    fn set_hook_tx(&self) -> &mpsc::Sender<Self::Hook> {
-        &self.set_hook_tx
+    fn handle(&self) -> mpsc::Sender<Self::Hook> {
+        self.handle.clone()
     }
 
     async fn serve(self) -> AnyResult {
@@ -63,8 +63,8 @@ where
     H: StreamServerHook + Send + Sync + 'static,
 {
     #[instrument(skip(self))]
-    pub async fn serve_(mut self) -> Result<(), ServeError> {
-        drop(self.set_hook_tx);
+    async fn serve_(mut self) -> Result<(), ServeError> {
+        drop(self.handle);
 
         let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");

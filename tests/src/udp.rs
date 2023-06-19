@@ -1,7 +1,9 @@
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use common::{
-        addr::InternetAddr, config::ProxyConfig, error::ResponseErrorKind,
+        addr::InternetAddr, config::ProxyConfig, error::ResponseErrorKind, loading::Server,
         udp::config::UdpProxyConfig,
     };
     use proxy_client::udp::{RecvError, UdpProxySocket};
@@ -16,7 +18,8 @@ mod tests {
         let server = proxy.build(addr).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         tokio::spawn(async move {
-            server.serve_().await.unwrap();
+            let _handle = server.handle().clone();
+            server.serve().await.unwrap();
         });
         ProxyConfig {
             address: proxy_addr.into(),
@@ -65,7 +68,7 @@ mod tests {
 
         // Connect to proxy server
         let socket = UdpProxySocket::establish(
-            vec![proxy_1_config, proxy_2_config, proxy_3_config],
+            vec![proxy_1_config, proxy_2_config, proxy_3_config].into(),
             greet_addr,
         )
         .await
@@ -83,7 +86,7 @@ mod tests {
         // Start proxy servers
         let proxy_1_config = spawn_proxy("0.0.0.0:0").await;
         let proxy_2_config = spawn_proxy("0.0.0.0:0").await;
-        let proxies = vec![proxy_1_config, proxy_2_config];
+        let proxies: Arc<[_]> = vec![proxy_1_config, proxy_2_config].into();
 
         // Message to send
         let req_msg = b"hello world";
@@ -126,6 +129,7 @@ mod tests {
             let proxy_config = spawn_proxy("0.0.0.0:0").await;
             proxies.push(proxy_config);
         }
+        let proxies: Arc<[_]> = proxies.into();
 
         // Message to send
         let req_msg = b"hello world";
@@ -177,7 +181,7 @@ mod tests {
 
         // Connect to proxy server
         let socket = UdpProxySocket::establish(
-            vec![proxy_1_config.clone(), proxy_2_config, proxy_3_config],
+            vec![proxy_1_config.clone(), proxy_2_config, proxy_3_config].into(),
             greet_addr,
         )
         .await
@@ -213,7 +217,9 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let socket = UdpProxySocket::establish(vec![], greet_addr).await.unwrap();
+        let socket = UdpProxySocket::establish(vec![].into(), greet_addr)
+            .await
+            .unwrap();
 
         // Send message
         socket.send(req_msg).await.unwrap();

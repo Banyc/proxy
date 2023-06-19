@@ -4,6 +4,7 @@ mod tests {
 
     use common::{
         config::ProxyConfig,
+        loading::Server,
         stream::{
             addr::{StreamAddr, StreamType},
             config::StreamProxyConfig,
@@ -25,7 +26,8 @@ mod tests {
         let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         tokio::spawn(async move {
-            server.serve_().await.unwrap();
+            let _handle = server.handle().clone();
+            server.serve().await.unwrap();
         });
         ProxyConfig {
             address: StreamAddr {

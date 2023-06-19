@@ -11,7 +11,7 @@ use crate::error::AnyResult;
 
 #[derive(Debug)]
 pub struct Loader<H> {
-    set_hook_tx: HashMap<Arc<str>, mpsc::Sender<H>>,
+    handles: HashMap<Arc<str>, mpsc::Sender<H>>,
 }
 
 impl<H> Loader<H>
@@ -20,7 +20,7 @@ where
 {
     pub fn new() -> Self {
         Self {
-            set_hook_tx: HashMap::new(),
+            handles: HashMap::new(),
         }
     }
 
@@ -39,16 +39,16 @@ where
             keys.insert(server.key().to_owned());
 
             // Hot reloading
-            if let Some(set_hook_tx) = self.set_hook_tx.get(server.key()) {
+            if let Some(handle) = self.handles.get(server.key()) {
                 let hook = server.build_hook()?;
-                set_hook_tx.send(hook).await.unwrap();
+                handle.send(hook).await.unwrap();
                 continue;
             }
 
             // Spawn server
             let key = server.key().to_owned();
             let server = server.build_server().await?;
-            self.set_hook_tx.insert(key, server.set_hook_tx().clone());
+            self.handles.insert(key, server.handle().clone());
             join_set.spawn(async move {
                 server.serve().await?;
                 Ok(())
@@ -57,13 +57,13 @@ where
 
         // Remove servers
         let mut remove_setters = Vec::new();
-        self.set_hook_tx.iter().for_each(|(cur_key, _)| {
+        self.handles.iter().for_each(|(cur_key, _)| {
             if !keys.contains(cur_key) {
                 remove_setters.push(cur_key.clone());
             }
         });
         for cur_key in remove_setters {
-            self.set_hook_tx.remove(&cur_key);
+            self.handles.remove(&cur_key);
         }
         Ok(())
     }
@@ -92,6 +92,7 @@ pub trait Builder {
 #[async_trait]
 pub trait Server {
     type Hook: Hook;
-    fn set_hook_tx(&self) -> &mpsc::Sender<Self::Hook>;
+    fn handle(&self) -> mpsc::Sender<Self::Hook>;
+    /// Server ends if the caller does not hold a handle to the server.
     async fn serve(self) -> AnyResult;
 }
