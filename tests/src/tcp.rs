@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use std::io;
+    use std::{io, time::Duration};
 
     use common::{
         config::ProxyConfig,
@@ -11,7 +11,7 @@ mod tests {
             pool::Pool,
         },
     };
-    use proxy_client::stream::establish;
+    use proxy_client::stream::{establish, trace_rtt};
     use proxy_server::stream::{tcp::build_tcp_proxy_server, StreamProxyServer};
     use tokio::{
         io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -80,6 +80,7 @@ mod tests {
         let proxy_1_config = spawn_proxy("0.0.0.0:0").await;
         let proxy_2_config = spawn_proxy("0.0.0.0:0").await;
         let proxy_3_config = spawn_proxy("0.0.0.0:0").await;
+        let proxies = vec![proxy_1_config, proxy_2_config, proxy_3_config];
 
         // Message to send
         let req_msg = b"hello world";
@@ -89,19 +90,18 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let (mut stream, _, _) = establish(
-            &[proxy_1_config, proxy_2_config, proxy_3_config],
-            greet_addr,
-            &Pool::new(),
-        )
-        .await
-        .unwrap();
+        let (mut stream, _, _) = establish(&proxies, greet_addr, &Pool::new()).await.unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();
 
         // Read response
         read_response(&mut stream, resp_msg).await.unwrap();
+
+        // Trace
+        let rtt = trace_rtt(&proxies, &Pool::new()).await.unwrap();
+        assert!(rtt > Duration::from_secs(0));
+        assert!(rtt < Duration::from_secs(1));
     }
 
     #[tokio::test(flavor = "multi_thread")]
