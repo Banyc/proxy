@@ -37,9 +37,10 @@ impl PoolBuilder {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct SocketCell {
     cell: Arc<TokioRwLock<Option<CreatedStream>>>,
+    task_handle: tokio::task::JoinHandle<Result<(), HeartbeatError>>,
 }
 
 impl SocketCell {
@@ -53,7 +54,7 @@ impl SocketCell {
             .timed_connect(sock_addr, HEARTBEAT_INTERVAL)
             .await?;
         let cell = Arc::new(TokioRwLock::new(Some(stream)));
-        tokio::spawn({
+        let task_handle = tokio::spawn({
             let cell = Arc::clone(&cell);
             async move {
                 loop {
@@ -76,7 +77,7 @@ impl SocketCell {
                 Result::<(), HeartbeatError>::Ok(())
             }
         });
-        Ok(Self { cell })
+        Ok(Self { cell, task_handle })
     }
 
     pub fn try_take(&self) -> TryTake {
@@ -91,46 +92,55 @@ impl SocketCell {
     }
 }
 
+impl Drop for SocketCell {
+    fn drop(&mut self) {
+        self.task_handle.abort();
+    }
+}
+
 enum TryTake {
     Ok(CreatedStream),
     Occupied,
     Killed,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct SocketQueue {
     queue: Arc<RwLock<VecDeque<SocketCell>>>,
+    task_handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl SocketQueue {
     pub fn new() -> Self {
         Self {
             queue: Default::default(),
+            task_handles: Default::default(),
         }
     }
 
-    pub async fn insert(
-        &self,
+    async fn insert(
+        queue: Arc<RwLock<VecDeque<SocketCell>>>,
         connector: &StreamConnector,
         addr: &InternetAddr,
         heartbeat_interval: Duration,
     ) -> io::Result<()> {
         let cell = SocketCell::create(connector, addr, heartbeat_interval).await?;
-        let mut queue = self.queue.write().unwrap();
+        let mut queue = queue.write().unwrap();
         queue.push_back(cell);
         Ok(())
     }
 
     pub fn spawn_insert(
-        &self,
+        &mut self,
         connector: Arc<StreamConnector>,
         addr: InternetAddr,
         heartbeat_interval: Duration,
     ) {
-        let this = self.clone();
-        tokio::spawn(async move {
+        let queue = self.queue.clone();
+        let task_handle = tokio::spawn(async move {
             loop {
-                match this.insert(&connector, &addr, heartbeat_interval).await {
+                let queue = queue.clone();
+                match Self::insert(queue, &connector, &addr, heartbeat_interval).await {
                     Ok(()) => break,
                     Err(_e) => {
                         tokio::time::sleep(RETRY_INTERVAL).await;
@@ -138,10 +148,11 @@ impl SocketQueue {
                 }
             }
         });
+        self.task_handles.push(task_handle);
     }
 
     pub fn try_swap(
-        &self,
+        &mut self,
         connector: Arc<StreamConnector>,
         addr: &InternetAddr,
         heartbeat_interval: Duration,
@@ -193,7 +204,7 @@ impl Pool {
     }
 
     pub fn add_queue(&self, addr: StreamAddr) {
-        let queue = SocketQueue::new();
+        let mut queue = SocketQueue::new();
         let connector = {
             let connector = addr.stream_type.into();
             Arc::new(connector)
@@ -210,11 +221,11 @@ impl Pool {
 
     pub async fn open_stream(&self, addr: &StreamAddr) -> Option<(CreatedStream, SocketAddr)> {
         let stream = {
-            let pool = match self.pool.try_read() {
+            let mut pool = match self.pool.try_write() {
                 Ok(x) => x,
                 Err(_) => return None,
             };
-            let queue = match pool.get(addr) {
+            let queue = match pool.get_mut(addr) {
                 Some(x) => x,
                 None => return None,
             };
