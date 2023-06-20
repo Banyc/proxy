@@ -12,7 +12,7 @@ use common::{
         tokio_io, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };
-use proxy_client::stream::{establish, StreamEstablishError};
+use proxy_client::stream::{establish, StreamEstablishError, StreamTracer};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::ToSocketAddrs;
@@ -34,7 +34,7 @@ impl loading::Builder for TcpProxyAccessBuilder {
     async fn build_server(self) -> io::Result<TcpServer<TcpProxyAccess>> {
         let stream_pool = self.stream_pool.build();
         let access = TcpProxyAccess::new(
-            self.proxy_table.build(),
+            self.proxy_table.build::<StreamTracer>(None),
             self.destination.build(),
             stream_pool,
         );
@@ -49,7 +49,7 @@ impl loading::Builder for TcpProxyAccessBuilder {
     fn build_hook(self) -> io::Result<Self::Hook> {
         let stream_pool = self.stream_pool.build();
         Ok(TcpProxyAccess::new(
-            self.proxy_table.build(),
+            self.proxy_table.build::<StreamTracer>(None),
             self.destination.build(),
             stream_pool,
         ))

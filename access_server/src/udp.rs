@@ -11,7 +11,7 @@ use common::{
         BUFFER_LENGTH, LIVE_CHECK_INTERVAL, TIMEOUT,
     },
 };
-use proxy_client::udp::{EstablishError, RecvError, SendError, UdpProxySocket};
+use proxy_client::udp::{EstablishError, RecvError, SendError, UdpProxySocket, UdpTracer};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
@@ -30,7 +30,10 @@ impl loading::Builder for UdpProxyAccessBuilder {
     type Server = UdpServer<Self::Hook>;
 
     async fn build_server(self) -> io::Result<UdpServer<UdpProxyAccess>> {
-        let access = UdpProxyAccess::new(self.proxy_table.build(), self.destination.into());
+        let access = UdpProxyAccess::new(
+            self.proxy_table.build::<UdpTracer>(None),
+            self.destination.into(),
+        );
         let server = access.build(self.listen_addr.as_ref()).await?;
         Ok(server)
     }
@@ -41,7 +44,7 @@ impl loading::Builder for UdpProxyAccessBuilder {
 
     fn build_hook(self) -> io::Result<UdpProxyAccess> {
         Ok(UdpProxyAccess::new(
-            self.proxy_table.build(),
+            self.proxy_table.build::<UdpTracer>(None),
             self.destination.into(),
         ))
     }

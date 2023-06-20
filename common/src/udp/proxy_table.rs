@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     addr::InternetAddr,
     crypto::XorCrypto,
-    proxy_table::{ProxyConfig, ProxyTable, WeightedProxyChain},
+    proxy_table::{ProxyConfig, ProxyTable, Tracer, WeightedProxyChain},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,9 +46,12 @@ pub struct UdpProxyTableBuilder {
 }
 
 impl UdpProxyTableBuilder {
-    pub fn build(self) -> UdpProxyTable {
+    pub fn build<T>(self, tracer: Option<T>) -> UdpProxyTable
+    where
+        T: Tracer<Address = InternetAddr> + Send + Sync + 'static,
+    {
         let chains = self.chains.into_iter().map(|c| c.build()).collect();
-        ProxyTable::new(chains).expect("Proxy chain is invalid")
+        ProxyTable::new(chains, tracer).expect("Proxy chain is invalid")
     }
 }
 

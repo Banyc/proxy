@@ -20,7 +20,7 @@ use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::{
     body::Incoming, http, service::service_fn, upgrade::Upgraded, Method, Request, Response,
 };
-use proxy_client::stream::{establish, StreamEstablishError};
+use proxy_client::stream::{establish, StreamEstablishError, StreamTracer};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
@@ -45,7 +45,7 @@ impl loading::Builder for HttpProxyAccessBuilder {
     async fn build_server(self) -> io::Result<TcpServer<HttpProxyAccess>> {
         let stream_pool = self.stream_pool.build();
         let access = HttpProxyAccess::new(
-            self.proxy_table.build(),
+            self.proxy_table.build::<StreamTracer>(None),
             stream_pool,
             self.filter.build().map_err(|e| {
                 io::Error::new(
@@ -65,7 +65,7 @@ impl loading::Builder for HttpProxyAccessBuilder {
     fn build_hook(self) -> io::Result<HttpProxyAccess> {
         let stream_pool = self.stream_pool.build();
         let access = HttpProxyAccess::new(
-            self.proxy_table.build(),
+            self.proxy_table.build::<StreamTracer>(None),
             stream_pool,
             self.filter.build().map_err(|e| {
                 io::Error::new(
