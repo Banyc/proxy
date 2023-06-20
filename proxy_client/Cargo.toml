@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-trait = "0.1.68"
 common = { path = "../common" }
 thiserror = "1.0.40"
 tokio = { version = "1.28.2", features = ["full"] }

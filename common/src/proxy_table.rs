@@ -1,9 +1,10 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
+use async_trait::async_trait;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::{crypto::XorCrypto, header::route::RouteRequest};
+use crate::{crypto::XorCrypto, error::AnyError, header::route::RouteRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct ProxyConfig<A> {
@@ -70,4 +71,10 @@ pub struct WeightedProxyChain<A> {
     pub weight: usize,
     pub chain: Arc<[ProxyConfig<A>]>,
     pub payload_crypto: Option<XorCrypto>,
+}
+
+#[async_trait]
+pub trait Tracer {
+    type Address;
+    async fn trace_rtt(&self, chain: &[ProxyConfig<Self::Address>]) -> Result<Duration, AnyError>;
 }

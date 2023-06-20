@@ -3,14 +3,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+use async_trait::async_trait;
 use common::{
     crypto::XorCryptoCursor,
+    error::AnyError,
     header::{
         codec::{timed_read_header_async, timed_write_header_async, CodecError},
         heartbeat::{self, HeartbeatError},
         route::{RouteError, RouteResponse},
     },
-    proxy_table::convert_proxies_to_header_crypto_pairs,
+    proxy_table::{convert_proxies_to_header_crypto_pairs, Tracer},
     stream::{
         addr::StreamAddr, connect_with_pool, pool::Pool, proxy_table::StreamProxyConfig,
         ConnectError, CreatedStream,
@@ -107,6 +109,28 @@ pub enum StreamEstablishError {
         source: CodecError,
         upstream_addr: StreamAddr,
     },
+}
+
+#[derive(Debug, Clone)]
+pub struct StreamTracer {
+    stream_pool: Pool,
+}
+
+impl StreamTracer {
+    pub fn new(stream_pool: Pool) -> Self {
+        Self { stream_pool }
+    }
+}
+
+#[async_trait]
+impl Tracer for StreamTracer {
+    type Address = StreamAddr;
+
+    async fn trace_rtt(&self, chain: &[StreamProxyConfig]) -> Result<Duration, AnyError> {
+        trace_rtt(chain, &self.stream_pool)
+            .await
+            .map_err(|e| e.into())
+    }
 }
 
 pub async fn trace_rtt(

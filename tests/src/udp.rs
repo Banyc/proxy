@@ -79,7 +79,7 @@ mod tests {
         read_response(&mut client, resp_msg).await.unwrap();
 
         // Trace
-        let rtt = trace_rtt(proxies).await.unwrap();
+        let rtt = trace_rtt(&proxies).await.unwrap();
         assert!(rtt > Duration::from_secs(0));
         assert!(rtt < Duration::from_secs(1));
     }

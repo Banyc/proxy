@@ -6,14 +6,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+use async_trait::async_trait;
 use common::{
     addr::{any_addr, InternetAddr},
     crypto::XorCryptoCursor,
+    error::AnyError,
     header::{
         codec::{read_header, write_header, CodecError},
         route::{RouteError, RouteResponse},
     },
-    proxy_table::convert_proxies_to_header_crypto_pairs,
+    proxy_table::{convert_proxies_to_header_crypto_pairs, Tracer},
     udp::{proxy_table::UdpProxyConfig, BUFFER_LENGTH},
 };
 use thiserror::Error;
@@ -230,7 +232,31 @@ pub enum RecvError {
     Response { err: RouteError, addr: InternetAddr },
 }
 
-pub async fn trace_rtt(proxies: Arc<[UdpProxyConfig]>) -> Result<Duration, TraceError> {
+#[derive(Debug, Clone)]
+pub struct UdpTracer {}
+
+impl UdpTracer {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Default for UdpTracer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tracer for UdpTracer {
+    type Address = InternetAddr;
+
+    async fn trace_rtt(&self, chain: &[UdpProxyConfig]) -> Result<Duration, AnyError> {
+        trace_rtt(chain).await.map_err(|e| e.into())
+    }
+}
+
+pub async fn trace_rtt(proxies: &[UdpProxyConfig]) -> Result<Duration, TraceError> {
     if proxies.is_empty() {
         return Ok(Duration::from_secs(0));
     }
@@ -243,7 +269,7 @@ pub async fn trace_rtt(proxies: Arc<[UdpProxyConfig]>) -> Result<Duration, Trace
     upstream.connect(addr).await?;
 
     // Convert addresses to headers
-    let pairs = convert_proxies_to_header_crypto_pairs(&proxies, None);
+    let pairs = convert_proxies_to_header_crypto_pairs(proxies, None);
 
     // Save headers to buffer
     let mut buf = Vec::new();
