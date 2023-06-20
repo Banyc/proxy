@@ -6,7 +6,7 @@ use std::{
 use async_trait::async_trait;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{crypto::XorCrypto, error::AnyError, header::route::RouteRequest};
 
@@ -49,7 +49,7 @@ pub struct ProxyTable<A> {
 
 impl<A> ProxyTable<A>
 where
-    A: Send + Sync + 'static,
+    A: std::fmt::Debug + Clone + Send + Sync + 'static,
 {
     pub fn new<T>(chains: Vec<WeightedProxyChain<A>>, tracer: Option<T>) -> Option<Self>
     where
@@ -100,7 +100,7 @@ struct GaugedProxyChain<A> {
 
 impl<A> GaugedProxyChain<A>
 where
-    A: Send + Sync + 'static,
+    A: std::fmt::Debug + Clone + Send + Sync + 'static,
 {
     pub fn new<T>(weighted: WeightedProxyChain<A>, tracer: Option<Arc<T>>) -> Self
     where
@@ -115,6 +115,9 @@ where
                     let rtt = tracer.trace_rtt(&chain).await;
                     match rtt {
                         Ok(rtt) => {
+                            let addresses =
+                                chain.iter().map(|c| c.address.clone()).collect::<Vec<_>>();
+                            info!(?addresses, ?rtt, "Traced RTT");
                             let mut rtt_clone = rtt_clone.write().unwrap();
                             *rtt_clone = Some(rtt);
                         }

@@ -33,6 +33,7 @@ use tracing::{error, info, instrument, trace, warn};
 pub struct HttpProxyAccessBuilder {
     listen_addr: Arc<str>,
     proxy_table: StreamProxyTableBuilder,
+    trace_rtt: bool,
     stream_pool: PoolBuilder,
     filter: FilterBuilder,
 }
@@ -43,18 +44,9 @@ impl loading::Builder for HttpProxyAccessBuilder {
     type Server = TcpServer<Self::Hook>;
 
     async fn build_server(self) -> io::Result<TcpServer<HttpProxyAccess>> {
-        let stream_pool = self.stream_pool.build();
-        let access = HttpProxyAccess::new(
-            self.proxy_table.build::<StreamTracer>(None),
-            stream_pool,
-            self.filter.build().map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("Failed to build filter: {}", e),
-                )
-            })?,
-        );
-        let server = access.build(self.listen_addr.as_ref()).await?;
+        let listen_addr = self.listen_addr.clone();
+        let access = self.build_hook()?;
+        let server = access.build(listen_addr.as_ref()).await?;
         Ok(server)
     }
 
@@ -64,8 +56,12 @@ impl loading::Builder for HttpProxyAccessBuilder {
 
     fn build_hook(self) -> io::Result<HttpProxyAccess> {
         let stream_pool = self.stream_pool.build();
+        let tracer = match self.trace_rtt {
+            true => Some(StreamTracer::new(stream_pool.clone())),
+            false => None,
+        };
         let access = HttpProxyAccess::new(
-            self.proxy_table.build::<StreamTracer>(None),
+            self.proxy_table.build::<StreamTracer>(tracer),
             stream_pool,
             self.filter.build().map_err(|e| {
                 io::Error::new(

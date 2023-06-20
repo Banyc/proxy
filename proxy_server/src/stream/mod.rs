@@ -20,6 +20,7 @@ use common::{
 };
 use serde::Deserialize;
 use thiserror::Error;
+use tokio::io::AsyncWriteExt;
 use tracing::{error, info, instrument, warn};
 
 pub mod kcp;
@@ -219,6 +220,7 @@ impl StreamProxyAcceptor {
                             downstream_addr,
                         }
                     })?;
+                let _ = tokio::time::timeout(IO_TIMEOUT, downstream.flush()).await;
 
                 return Ok(None);
             }

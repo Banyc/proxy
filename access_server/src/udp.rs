@@ -21,6 +21,7 @@ use tracing::{error, info, trace, warn};
 pub struct UdpProxyAccessBuilder {
     listen_addr: Arc<str>,
     proxy_table: UdpProxyTableBuilder,
+    trace_rtt: bool,
     destination: Arc<str>,
 }
 
@@ -30,11 +31,9 @@ impl loading::Builder for UdpProxyAccessBuilder {
     type Server = UdpServer<Self::Hook>;
 
     async fn build_server(self) -> io::Result<UdpServer<UdpProxyAccess>> {
-        let access = UdpProxyAccess::new(
-            self.proxy_table.build::<UdpTracer>(None),
-            self.destination.into(),
-        );
-        let server = access.build(self.listen_addr.as_ref()).await?;
+        let listen_addr = self.listen_addr.clone();
+        let access = self.build_hook()?;
+        let server = access.build(listen_addr.as_ref()).await?;
         Ok(server)
     }
 
@@ -43,8 +42,12 @@ impl loading::Builder for UdpProxyAccessBuilder {
     }
 
     fn build_hook(self) -> io::Result<UdpProxyAccess> {
+        let tracer = match self.trace_rtt {
+            true => Some(UdpTracer::new()),
+            false => None,
+        };
         Ok(UdpProxyAccess::new(
-            self.proxy_table.build::<UdpTracer>(None),
+            self.proxy_table.build::<UdpTracer>(tracer),
             self.destination.into(),
         ))
     }

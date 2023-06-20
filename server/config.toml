@@ -7,6 +7,7 @@ proxy_table = [
         { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
     ],                        payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
 ]
+trace_rtt = false
 
 [[access_server.udp_server]]
 listen_addr = ""
@@ -16,6 +17,7 @@ proxy_table = [
         { address = "", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
     ] },
 ]
+trace_rtt = false
 
 [[access_server.http_server]]
 listen_addr = ""
@@ -25,6 +27,7 @@ proxy_table = [
         { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
     ],                        payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
 ]
+trace_rtt = false
 filter = [
     { match = "127\\.0\\.0\\.1:", action = "direct" },
     { match = "[::1]:", action = "direct" },

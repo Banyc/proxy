@@ -22,6 +22,7 @@ use tracing::{error, info, instrument, warn};
 pub struct TcpProxyAccessBuilder {
     listen_addr: Arc<str>,
     proxy_table: StreamProxyTableBuilder,
+    trace_rtt: bool,
     destination: StreamAddrBuilder,
     stream_pool: PoolBuilder,
 }
@@ -32,13 +33,9 @@ impl loading::Builder for TcpProxyAccessBuilder {
     type Server = TcpServer<Self::Hook>;
 
     async fn build_server(self) -> io::Result<TcpServer<TcpProxyAccess>> {
-        let stream_pool = self.stream_pool.build();
-        let access = TcpProxyAccess::new(
-            self.proxy_table.build::<StreamTracer>(None),
-            self.destination.build(),
-            stream_pool,
-        );
-        let server = access.build(self.listen_addr.as_ref()).await?;
+        let listen_addr = self.listen_addr.clone();
+        let access = self.build_hook()?;
+        let server = access.build(listen_addr.as_ref()).await?;
         Ok(server)
     }
 
@@ -48,8 +45,12 @@ impl loading::Builder for TcpProxyAccessBuilder {
 
     fn build_hook(self) -> io::Result<Self::Hook> {
         let stream_pool = self.stream_pool.build();
+        let tracer = match self.trace_rtt {
+            true => Some(StreamTracer::new(stream_pool.clone())),
+            false => None,
+        };
         Ok(TcpProxyAccess::new(
-            self.proxy_table.build::<StreamTracer>(None),
+            self.proxy_table.build::<StreamTracer>(tracer),
             self.destination.build(),
             stream_pool,
         ))
