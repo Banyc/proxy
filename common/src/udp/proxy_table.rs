@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     addr::InternetAddr,
-    config::{ProxyConfig, ProxyTable, WeightedProxyChain},
     crypto::XorCrypto,
+    proxy_table::{ProxyConfig, ProxyTable, WeightedProxyChain},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

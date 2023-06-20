@@ -4,16 +4,16 @@ use std::{
 };
 
 use common::{
-    config::convert_proxies_to_header_crypto_pairs,
     crypto::XorCryptoCursor,
     header::{
         codec::{timed_read_header_async, timed_write_header_async, CodecError},
         heartbeat::{self, HeartbeatError},
         route::{RouteError, RouteResponse},
     },
+    proxy_table::convert_proxies_to_header_crypto_pairs,
     stream::{
-        addr::StreamAddr, config::StreamProxyConfig, connect_with_pool, pool::Pool, ConnectError,
-        CreatedStream,
+        addr::StreamAddr, connect_with_pool, pool::Pool, proxy_table::StreamProxyConfig,
+        ConnectError, CreatedStream,
     },
 };
 use thiserror::Error;

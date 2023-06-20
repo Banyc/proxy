@@ -6,7 +6,7 @@ use common::{
     addr::InternetAddr,
     loading,
     udp::{
-        config::{UdpProxyTable, UdpProxyTableBuilder},
+        proxy_table::{UdpProxyTable, UdpProxyTableBuilder},
         Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
         BUFFER_LENGTH, LIVE_CHECK_INTERVAL, TIMEOUT,
     },

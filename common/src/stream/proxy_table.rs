@@ -3,8 +3,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{ProxyConfig, ProxyTable, WeightedProxyChain},
     crypto::XorCrypto,
+    proxy_table::{ProxyConfig, ProxyTable, WeightedProxyChain},
 };
 
 use super::StreamAddr;

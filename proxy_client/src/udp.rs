@@ -8,13 +8,13 @@ use std::{
 
 use common::{
     addr::{any_addr, InternetAddr},
-    config::convert_proxies_to_header_crypto_pairs,
     crypto::XorCryptoCursor,
     header::{
         codec::{read_header, write_header, CodecError},
         route::{RouteError, RouteResponse},
     },
-    udp::{config::UdpProxyConfig, BUFFER_LENGTH},
+    proxy_table::convert_proxies_to_header_crypto_pairs,
+    udp::{proxy_table::UdpProxyConfig, BUFFER_LENGTH},
 };
 use thiserror::Error;
 use tokio::net::UdpSocket;

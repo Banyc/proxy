@@ -3,12 +3,12 @@ mod tests {
     use std::{io, time::Duration};
 
     use common::{
-        config::ProxyConfig,
         loading::Server,
+        proxy_table::ProxyConfig,
         stream::{
             addr::{StreamAddr, StreamType},
-            config::StreamProxyConfig,
             pool::Pool,
+            proxy_table::StreamProxyConfig,
         },
     };
     use proxy_client::stream::{establish, trace_rtt};

@@ -16,8 +16,8 @@ use tracing::{error, info, instrument, trace};
 
 use crate::{addr::InternetAddr, error::AnyResult, loading};
 
-pub mod config;
 pub mod header;
+pub mod proxy_table;
 
 pub const BUFFER_LENGTH: usize = 1024 * 8;
 

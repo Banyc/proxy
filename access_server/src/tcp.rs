@@ -5,9 +5,9 @@ use common::{
     loading,
     stream::{
         addr::{StreamAddr, StreamAddrBuilder},
-        config::{StreamProxyTable, StreamProxyTableBuilder},
         copy_bidirectional_with_payload_crypto,
         pool::{Pool, PoolBuilder},
+        proxy_table::{StreamProxyTable, StreamProxyTableBuilder},
         streams::tcp::TcpServer,
         tokio_io, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },

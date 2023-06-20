@@ -3,8 +3,8 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use common::{
-        addr::InternetAddr, config::ProxyConfig, header::route::RouteErrorKind, loading::Server,
-        udp::config::UdpProxyConfig,
+        addr::InternetAddr, header::route::RouteErrorKind, loading::Server,
+        proxy_table::ProxyConfig, udp::proxy_table::UdpProxyConfig,
     };
     use proxy_client::udp::{trace_rtt, RecvError, UdpProxySocket};
     use proxy_server::udp::UdpProxyServer;
