@@ -16,7 +16,7 @@ use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::ToSocketAddrs;
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TcpProxyAccessBuilder {
@@ -156,7 +156,7 @@ impl StreamServerHook for TcpProxyAccess {
             Err(ProxyError::IoCopy { source: e, metrics }) => {
                 info!(?e, %metrics, "Proxy error");
             }
-            Err(e) => error!(?e, "Failed to proxy"),
+            Err(e) => warn!(?e, "Failed to proxy"),
         }
     }
 }

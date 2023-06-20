@@ -20,7 +20,7 @@ use common::{
 };
 use thiserror::Error;
 use tokio::net::UdpSocket;
-use tracing::{error, instrument, trace};
+use tracing::{error, instrument, trace, warn};
 
 #[derive(Debug)]
 pub struct UdpProxySocket {
@@ -154,7 +154,7 @@ impl UdpProxySocket {
             let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
             let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor)?;
             if let Err(err) = resp.result {
-                error!(?err, %node.address, "Upstream responded with an error");
+                warn!(?err, %node.address, "Upstream responded with an error");
                 return Err(RecvError::Response {
                     err,
                     addr: node.address.clone(),
@@ -297,7 +297,7 @@ pub async fn trace_rtt(proxies: &[UdpProxyConfig]) -> Result<Duration, TraceErro
         let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
         let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor)?;
         if let Err(err) = resp.result {
-            error!(?err, %node.address, "Upstream responded with an error");
+            warn!(?err, %node.address, "Upstream responded with an error");
             return Err(TraceError::Response {
                 err,
                 addr: node.address.clone(),

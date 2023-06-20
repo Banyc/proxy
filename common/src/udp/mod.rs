@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use bytesize::ByteSize;
 use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
-use tracing::{error, info, instrument, trace};
+use tracing::{error, info, instrument, trace, warn};
 
 use crate::{addr::InternetAddr, error::AnyResult, loading};
 
@@ -127,7 +127,7 @@ where
                         Ok((n, addr)) => (n, addr),
                         Err(e) => {
                             // Ref: https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-recvfrom
-                            error!(?e, ?addr, "Failed to receive packet");
+                            warn!(?e, ?addr, "Failed to receive packet");
                             continue;
                         }
                     };

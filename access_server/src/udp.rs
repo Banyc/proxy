@@ -15,7 +15,7 @@ use proxy_client::udp::{EstablishError, RecvError, SendError, UdpProxySocket};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UdpProxyAccessBuilder {
@@ -189,7 +189,7 @@ impl UdpServerHook for UdpProxyAccess {
                 info!(%metrics, "Proxy finished");
             }
             Err(e) => {
-                error!(?e, "Failed to proxy");
+                warn!(?e, "Failed to proxy");
             }
         }
     }

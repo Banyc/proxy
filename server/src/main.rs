@@ -7,7 +7,7 @@ use common::error::{AnyError, AnyResult};
 use file_watcher_tokio::EventActor;
 use proxy_server::{ProxyServerConfig, ProxyServerLoader};
 use serde::Deserialize;
-use tracing::{error, info};
+use tracing::{info, warn};
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -55,7 +55,7 @@ async fn main() {
                 let config = match read_config(&args.config_files).await {
                     Ok(config) => config,
                     Err(e) => {
-                        error!(?e, "Failed to read config file");
+                        warn!(?e, "Failed to read config file");
                         continue;
                     }
                 };

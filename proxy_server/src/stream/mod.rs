@@ -20,7 +20,7 @@ use common::{
 };
 use serde::Deserialize;
 use thiserror::Error;
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, warn};
 
 pub mod kcp;
 pub mod tcp;
@@ -153,7 +153,7 @@ impl StreamServerHook for StreamProxyServer {
             Err(StreamProxyServerError::IoCopy { source: e, metrics }) => {
                 info!(?e, %metrics, "Proxy error");
             }
-            Err(e) => error!(?e, "Proxy error"),
+            Err(e) => warn!(?e, "Proxy error"),
         }
     }
 }

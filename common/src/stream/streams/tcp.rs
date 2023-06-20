@@ -6,7 +6,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::mpsc,
 };
-use tracing::{error, info, instrument, trace};
+use tracing::{info, instrument, trace, warn};
 
 use crate::{
     error::AnyResult,
@@ -125,7 +125,7 @@ impl ConnectStream for TcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
         let stream = TcpStream::connect(addr)
             .await
-            .inspect_err(|e| error!(?e, ?addr, "Failed to connect to address"))?;
+            .inspect_err(|e| warn!(?e, ?addr, "Failed to connect to address"))?;
         Ok(CreatedStream::Tcp(stream))
     }
 }

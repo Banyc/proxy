@@ -24,7 +24,7 @@ use tokio::{
     net::{ToSocketAddrs, UdpSocket},
     sync::mpsc,
 };
-use tracing::{error, info, instrument, trace};
+use tracing::{error, info, instrument, trace, warn};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct UdpProxyServerBuilder {
@@ -95,7 +95,7 @@ impl UdpProxyServer {
 
     async fn handle_steer_error(&self, downstream_writer: &UdpDownstreamWriter, error: CodecError) {
         let peer_addr = downstream_writer.peer_addr();
-        error!(?error, ?peer_addr, "Failed to steer");
+        warn!(?error, ?peer_addr, "Failed to steer");
         let kind = error_kind_from_header_error(error);
         let _ = self
             .respond_with_error(downstream_writer, kind)
@@ -236,7 +236,7 @@ impl UdpProxyServer {
             }
             Err(e) => {
                 let peer_addr = downstream_writer.peer_addr();
-                error!(?e, ?peer_addr, "Proxy failed");
+                warn!(?e, ?peer_addr, "Proxy failed");
                 let kind = error_kind_from_proxy_error(e);
                 let _ = self
                     .respond_with_error(downstream_writer, kind)
@@ -356,7 +356,7 @@ impl UdpServerHook for UdpProxyServer {
                 let downstream_writer = downstream_writer.clone();
                 tokio::spawn(async move {
                     if let Err(e) = downstream_writer.send(&wtr).await {
-                        error!(
+                        warn!(
                             ?e,
                             ?downstream_writer,
                             "Failed to send response to downstream"

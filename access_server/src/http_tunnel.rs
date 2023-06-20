@@ -210,7 +210,7 @@ impl HttpProxyAccess {
             Some(addr) => addr,
             None => {
                 let uri = req.uri().to_string();
-                error!(?uri, "CONNECT host is not socket addr");
+                warn!(?uri, "CONNECT host is not socket addr");
                 let mut resp = Response::new(full("CONNECT must be to a socket address"));
                 *resp.status_mut() = http::StatusCode::BAD_REQUEST;
 
@@ -253,7 +253,7 @@ where
         .title_case_headers(true)
         .handshake(upstream)
         .await
-        .inspect_err(|e| error!(?e, "Failed to establish HTTP/1 handshake to upstream"))?;
+        .inspect_err(|e| warn!(?e, "Failed to establish HTTP/1 handshake to upstream"))?;
     tokio::task::spawn(async move {
         if let Err(err) = conn.await {
             warn!(?err, "Connection failed");
@@ -264,7 +264,7 @@ where
     let resp = sender
         .send_request(req)
         .await
-        .inspect_err(|e| error!(?e, "Failed to send HTTP/1 request to upstream"))?;
+        .inspect_err(|e| warn!(?e, "Failed to send HTTP/1 request to upstream"))?;
     Ok(resp.map(|b| b.boxed()))
 }
 
@@ -272,7 +272,7 @@ async fn upgrade(req: Request<Incoming>, addr: Arc<str>, http_connect: Option<Ht
     let upgraded = match hyper::upgrade::on(req).await {
         Ok(upgraded) => upgraded,
         Err(e) => {
-            error!(?e, ?addr, "Upgrade error");
+            warn!(?e, ?addr, "Upgrade error");
             return;
         }
     };
@@ -286,7 +286,7 @@ async fn upgrade(req: Request<Incoming>, addr: Arc<str>, http_connect: Option<Ht
             Err(HttpConnectError::IoCopy { source: e, metrics }) => {
                 info!(?e, %metrics, "CONNECT error");
             }
-            Err(e) => error!(?e, "CONNECT error"),
+            Err(e) => warn!(?e, "CONNECT error"),
         };
         return;
     }
@@ -295,7 +295,7 @@ async fn upgrade(req: Request<Incoming>, addr: Arc<str>, http_connect: Option<Ht
     let upstream = match tokio::net::TcpStream::connect(addr.as_ref()).await {
         Ok(upstream) => upstream,
         Err(e) => {
-            error!(?e, ?addr, "Failed to connect to upstream directly");
+            warn!(?e, ?addr, "Failed to connect to upstream directly");
             return;
         }
     };
@@ -332,7 +332,7 @@ impl StreamServerHook for HttpProxyAccess {
     {
         let res = self.proxy(stream).await;
         if let Err(e) = res {
-            error!(?e, "Failed to proxy");
+            warn!(?e, "Failed to proxy");
         }
     }
 }
