@@ -76,15 +76,68 @@ where
             return self.chains[0].weighted();
         }
         let mut rng = rand::thread_rng();
-        let mut weight = rng.gen_range(0..self.cum_weight);
-        for chain in self.chains.as_ref() {
-            if weight < chain.weighted().weight {
+        let scores = self.scores();
+        trace!(?scores, "Choosing chain");
+        let sum_scores = scores.iter().sum::<f64>();
+        if sum_scores == 0. {
+            let i = rng.gen_range(0..self.chains.len());
+            return self.chains[i].weighted();
+        }
+        let mut rand_score = rng.gen_range(0. ..sum_scores);
+        for (score, chain) in scores.into_iter().zip(self.chains.iter()) {
+            if rand_score < score {
                 return chain.weighted();
             }
-            weight -= chain.weighted().weight;
+            rand_score -= score;
         }
         unreachable!();
     }
+
+    fn scores(&self) -> Vec<f64> {
+        let weights_hat = self
+            .chains
+            .iter()
+            .map(|c| c.weighted().weight as f64 / self.cum_weight as f64)
+            .collect::<Vec<_>>();
+
+        let rtt = self
+            .chains
+            .iter()
+            .map(|c| c.rtt().map(|r| r.as_secs_f64()))
+            .collect::<Vec<_>>();
+        let rtt_hat = normalize(&rtt);
+
+        let losses = self.chains.iter().map(|c| c.loss()).collect::<Vec<_>>();
+        let losses_hat = normalize(&losses);
+
+        (0..self.chains.len())
+            .map(|i| (1. - losses_hat[i]).powi(2) * (1. - rtt_hat[i]).powi(2) * weights_hat[i])
+            .collect::<Vec<_>>()
+    }
+}
+
+fn normalize(list: &[Option<f64>]) -> Vec<f64> {
+    let sum_some: f64 = list.iter().map(|x| x.unwrap_or(0.)).sum();
+    let count_some = list.iter().map(|x| x.map(|_| 1).unwrap_or(0)).sum();
+    let hat = match count_some {
+        0 => {
+            let hat_mean = 1. / list.len() as f64;
+            (0..list.len()).map(|_| hat_mean).collect::<Vec<_>>()
+        }
+        _ => {
+            let mean = sum_some / count_some as f64;
+            let sum: f64 = list.iter().map(|x| x.unwrap_or(mean)).sum();
+            if sum == 0. {
+                (0..list.len()).map(|_| 0.).collect::<Vec<_>>()
+            } else {
+                let hat_mean = mean / sum;
+                list.iter()
+                    .map(|x| x.map(|x| x / sum).unwrap_or(hat_mean))
+                    .collect::<Vec<_>>()
+            }
+        }
+    };
+    hat
 }
 
 #[derive(Debug)]
