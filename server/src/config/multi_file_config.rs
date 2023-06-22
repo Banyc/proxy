@@ -6,6 +6,20 @@ use serde::Deserialize;
 
 use crate::ConfigReader;
 
+use super::ConfigWatcher;
+
+pub fn spawn_watch_tasks(config_files: &[Arc<str>]) -> Arc<tokio::sync::Notify> {
+    let watcher = ConfigWatcher::new();
+    let notify_rx = Arc::clone(watcher.notify_rx());
+    let watcher = Arc::new(watcher);
+    for file in config_files {
+        let file = file.clone();
+        let watcher = Arc::clone(&watcher);
+        tokio::spawn(async move { file_watcher_tokio::watch_file(file.as_ref(), watcher).await });
+    }
+    notify_rx
+}
+
 pub struct MultiFileConfigReader<C> {
     config_files: Arc<[Arc<str>]>,
     phantom_config: PhantomData<C>,

@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use server::{multi_file_config::MultiFileConfigReader, serve, ConfigWatcher};
+use server::{
+    config::multi_file_config::{spawn_watch_tasks, MultiFileConfigReader},
+    serve,
+};
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -14,14 +17,7 @@ async fn main() {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
 
-    let watcher = ConfigWatcher::new();
-    let notify_rx = Arc::clone(watcher.notify_rx());
-    let watcher = Arc::new(watcher);
-    for file in &args.config_files {
-        let file = file.clone();
-        let watcher = Arc::clone(&watcher);
-        tokio::spawn(async move { file_watcher_tokio::watch_file(file.as_ref(), watcher).await });
-    }
+    let notify_rx = spawn_watch_tasks(&args.config_files);
     let config_reader = MultiFileConfigReader::new(args.config_files.into());
     serve(notify_rx, config_reader).await;
 }

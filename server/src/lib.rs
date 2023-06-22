@@ -1,20 +1,13 @@
 use std::{io, sync::Arc};
 
 use access_server::{AccessServerConfig, AccessServerLoader};
-use async_trait::async_trait;
-use common::error::{AnyError, AnyResult};
-use file_watcher_tokio::EventActor;
+use common::error::AnyResult;
+use config::ConfigReader;
 use proxy_server::{ProxyServerConfig, ProxyServerLoader};
 use serde::Deserialize;
 use tracing::{info, warn};
 
-pub mod multi_file_config;
-
-#[async_trait]
-pub trait ConfigReader {
-    type Config;
-    async fn read_config(&self) -> Result<Self::Config, AnyError>;
-}
+pub mod config;
 
 pub async fn serve<CR>(notify_rx: Arc<tokio::sync::Notify>, config_reader: CR) -> !
 where
@@ -78,32 +71,4 @@ pub async fn load(
 pub struct ServerConfig {
     pub access_server: Option<AccessServerConfig>,
     pub proxy_server: Option<ProxyServerConfig>,
-}
-
-pub struct ConfigWatcher {
-    tx: Arc<tokio::sync::Notify>,
-}
-
-impl ConfigWatcher {
-    pub fn new() -> Self {
-        let tx = Arc::new(tokio::sync::Notify::new());
-        Self { tx }
-    }
-
-    pub fn notify_rx(&self) -> &Arc<tokio::sync::Notify> {
-        &self.tx
-    }
-}
-
-impl Default for ConfigWatcher {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl EventActor for ConfigWatcher {
-    async fn notify(&self, _event: notify::Event) {
-        self.tx.notify_one();
-    }
 }
