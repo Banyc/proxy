@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use common::error::AnyResult;
 use server::{
     config::multi_file_config::{spawn_watch_tasks, MultiFileConfigReader},
     serve,
@@ -13,11 +14,11 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> AnyResult {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
 
     let notify_rx = spawn_watch_tasks(&args.config_files);
     let config_reader = MultiFileConfigReader::new(args.config_files.into());
-    serve(notify_rx, config_reader).await;
+    serve(notify_rx, config_reader).await.map_err(|e| e.into())
 }

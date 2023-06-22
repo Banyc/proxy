@@ -1,15 +1,19 @@
 use std::{io, sync::Arc};
 
 use access_server::{AccessServerConfig, AccessServerLoader};
-use common::error::AnyResult;
+use common::error::{AnyError, AnyResult};
 use config::ConfigReader;
 use proxy_server::{ProxyServerConfig, ProxyServerLoader};
 use serde::Deserialize;
+use thiserror::Error;
 use tracing::{info, warn};
 
 pub mod config;
 
-pub async fn serve<CR>(notify_rx: Arc<tokio::sync::Notify>, config_reader: CR) -> !
+pub async fn serve<CR>(
+    notify_rx: Arc<tokio::sync::Notify>,
+    config_reader: CR,
+) -> Result<(), ServeError>
 where
     CR: ConfigReader<Config = ServerConfig>,
 {
@@ -17,7 +21,10 @@ where
     let mut proxy_server_loader = ProxyServerLoader::new();
     let mut join_set = tokio::task::JoinSet::new();
 
-    let config = config_reader.read_config().await.unwrap();
+    let config = config_reader
+        .read_config()
+        .await
+        .map_err(ServeError::Config)?;
 
     load(
         config,
@@ -26,12 +33,14 @@ where
         &mut proxy_server_loader,
     )
     .await
-    .unwrap();
+    .map_err(ServeError::Load)?;
 
     loop {
         tokio::select! {
             res = join_set.join_next() => {
-                res.expect("No servers running").unwrap().unwrap();
+                let res = res.ok_or(ServeError::NoServersRunning)?;
+                let res = res.unwrap();
+                res.map_err(ServeError::ServerTask)?;
             }
             _ = notify_rx.notified() => {
                 info!("Config file changed");
@@ -44,10 +53,22 @@ where
                     }
                 };
 
-                load(config, &mut join_set, &mut access_server_loader, &mut proxy_server_loader).await.unwrap();
+                load(config, &mut join_set, &mut access_server_loader, &mut proxy_server_loader).await.map_err(ServeError::Load)?;
             }
         }
     }
+}
+
+#[derive(Debug, Error)]
+pub enum ServeError {
+    #[error("Failed to read config file")]
+    Config(AnyError),
+    #[error("Failed to load config")]
+    Load(io::Error),
+    #[error("No servers running")]
+    NoServersRunning,
+    #[error("Server task failed")]
+    ServerTask(AnyError),
 }
 
 pub async fn load(
