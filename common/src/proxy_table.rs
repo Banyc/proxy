@@ -164,61 +164,10 @@ where
     where
         T: Tracer<Address = A> + Send + Sync + 'static,
     {
-        let chain = weighted.chain.clone();
         let rtt = Arc::new(RwLock::new(None));
         let loss = Arc::new(RwLock::new(None));
-        let rtt_clone = rtt.clone();
-        let loss_clone = loss.clone();
-        let task_handle = tracer.map(|tracer| {
-            tokio::task::spawn(async move {
-                let mut wave = tokio::task::JoinSet::new();
-                loop {
-                    // Spawn tracing tasks
-                    for _ in 0..TRACES_PER_WAVE {
-                        let chain = chain.clone();
-                        let tracer = tracer.clone();
-                        wave.spawn(async move { tracer.trace_rtt(&chain).await });
-                        tokio::time::sleep(TRACE_BURST_GAP).await;
-                    }
-
-                    // Collect RTT
-                    let mut rtt_sum = Duration::from_secs(0);
-                    let mut rtt_count: usize = 0;
-                    while let Some(res) = wave.join_next().await {
-                        match res.unwrap() {
-                            Ok(rtt) => {
-                                rtt_sum += rtt;
-                                rtt_count += 1;
-                            }
-                            Err(e) => {
-                                trace!("{:?}", e);
-                            }
-                        }
-                    }
-                    let rtt = rtt_sum / (rtt_count as u32);
-                    let loss = (TRACES_PER_WAVE - rtt_count) as f64 / TRACES_PER_WAVE as f64;
-
-                    // Store RTT
-                    let addresses = DisplayChain(&chain);
-                    info!(%addresses, ?rtt, ?loss, "Traced RTT");
-                    {
-                        let mut rtt_clone = rtt_clone.write().unwrap();
-                        *rtt_clone = Some(rtt);
-                    }
-                    {
-                        let mut loss_clone = loss_clone.write().unwrap();
-                        *loss_clone = Some(loss);
-                    }
-
-                    // Sleep
-                    if rtt_count == 0 {
-                        tokio::time::sleep(TRACE_DEAD_INTERVAL).await;
-                    } else {
-                        tokio::time::sleep(TRACE_INTERVAL).await;
-                    }
-                }
-            })
-        });
+        let task_handle = tracer
+            .map(|tracer| spawn_tracer(tracer, weighted.chain.clone(), rtt.clone(), loss.clone()));
         Self {
             weighted,
             rtt,
@@ -238,6 +187,66 @@ where
     pub fn loss(&self) -> Option<f64> {
         *self.loss.read().unwrap()
     }
+}
+
+fn spawn_tracer<T, A>(
+    tracer: Arc<T>,
+    chain: Arc<[ProxyConfig<A>]>,
+    rtt_store: Arc<RwLock<Option<Duration>>>,
+    loss_store: Arc<RwLock<Option<f64>>>,
+) -> tokio::task::JoinHandle<()>
+where
+    T: Tracer<Address = A> + Send + Sync + 'static,
+    A: Display + Send + Sync + 'static,
+{
+    tokio::task::spawn(async move {
+        let mut wave = tokio::task::JoinSet::new();
+        loop {
+            // Spawn tracing tasks
+            for _ in 0..TRACES_PER_WAVE {
+                let chain = chain.clone();
+                let tracer = tracer.clone();
+                wave.spawn(async move { tracer.trace_rtt(&chain).await });
+                tokio::time::sleep(TRACE_BURST_GAP).await;
+            }
+
+            // Collect RTT
+            let mut rtt_sum = Duration::from_secs(0);
+            let mut rtt_count: usize = 0;
+            while let Some(res) = wave.join_next().await {
+                match res.unwrap() {
+                    Ok(rtt) => {
+                        rtt_sum += rtt;
+                        rtt_count += 1;
+                    }
+                    Err(e) => {
+                        trace!("{:?}", e);
+                    }
+                }
+            }
+            let rtt = rtt_sum / (rtt_count as u32);
+            let loss = (TRACES_PER_WAVE - rtt_count) as f64 / TRACES_PER_WAVE as f64;
+
+            // Store RTT
+            let addresses = DisplayChain(&chain);
+            info!(%addresses, ?rtt, ?loss, "Traced RTT");
+            {
+                let mut rtt_store = rtt_store.write().unwrap();
+                *rtt_store = Some(rtt);
+            }
+            {
+                let mut loss_store = loss_store.write().unwrap();
+                *loss_store = Some(loss);
+            }
+
+            // Sleep
+            if rtt_count == 0 {
+                tokio::time::sleep(TRACE_DEAD_INTERVAL).await;
+            } else {
+                tokio::time::sleep(TRACE_INTERVAL).await;
+            }
+        }
+    })
 }
 
 impl<A> Drop for GaugedProxyChain<A> {
