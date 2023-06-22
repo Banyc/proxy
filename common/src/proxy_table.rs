@@ -1,7 +1,7 @@
 use std::{
     fmt::Display,
     sync::{Arc, RwLock},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -9,7 +9,9 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
 
-use crate::{crypto::XorCrypto, error::AnyError, header::route::RouteRequest};
+use crate::{
+    cache_cell::CacheCell, crypto::XorCrypto, error::AnyError, header::route::RouteRequest,
+};
 
 const TRACE_INTERVAL: Duration = Duration::from_secs(30);
 const TRACE_DEAD_INTERVAL: Duration = Duration::from_secs(60 * 60);
@@ -71,7 +73,7 @@ where
             .map(|c| GaugedProxyChain::new(c, tracer.clone()))
             .collect::<Arc<[_]>>();
         let empty_scores = (0..chains.len()).map(|_| 0.).collect::<Arc<[_]>>();
-        let score_store = Arc::new(RwLock::new(ScoreStore::new(empty_scores)));
+        let score_store = Arc::new(RwLock::new(ScoreStore::new(empty_scores, TRACE_INTERVAL)));
         Some(Self {
             chains,
             cum_weight,
@@ -158,32 +160,7 @@ fn normalize(list: &[Option<f64>]) -> Vec<f64> {
     hat
 }
 
-#[derive(Debug)]
-struct ScoreStore {
-    scores: Arc<[f64]>,
-    last_update: Instant,
-}
-
-impl ScoreStore {
-    pub fn new(scores: Arc<[f64]>) -> Self {
-        Self {
-            scores,
-            last_update: Instant::now(),
-        }
-    }
-
-    pub fn get(&self) -> Option<&Arc<[f64]>> {
-        if self.last_update.elapsed() > TRACE_INTERVAL {
-            return None;
-        }
-        Some(&self.scores)
-    }
-
-    pub fn set(&mut self, scores: Arc<[f64]>) {
-        self.scores = scores;
-        self.last_update = Instant::now();
-    }
-}
+type ScoreStore = CacheCell<Arc<[f64]>>;
 
 #[derive(Debug)]
 pub struct WeightedProxyChain<A> {
