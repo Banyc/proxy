@@ -123,9 +123,10 @@ pub struct TcpConnector;
 #[async_trait]
 impl ConnectStream for TcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
-        let stream = TcpStream::connect(addr)
-            .await
-            .inspect_err(|e| warn!(?e, ?addr, "Failed to connect to address"))?;
+        let stream = TcpStream::connect(addr).await.map_err(|e| {
+            warn!(?e, ?addr, "Failed to connect to address");
+            e
+        })?;
         Ok(CreatedStream::Tcp(stream))
     }
 }

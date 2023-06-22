@@ -172,9 +172,10 @@ pub struct KcpConnector;
 impl ConnectStream for KcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
         let config = fast_kcp_config();
-        let stream = KcpStream::connect(&config, addr)
-            .await
-            .inspect_err(|e| warn!(?e, ?addr, "Failed to connect to address"))?;
+        let stream = KcpStream::connect(&config, addr).await.map_err(|e| {
+            warn!(?e, ?addr, "Failed to connect to address");
+            e
+        })?;
         let local_addr = any_addr(&addr.ip());
         let stream = AddressedKcpStream {
             stream,

@@ -72,7 +72,10 @@ impl UdpProxyAccess {
     pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<UdpServer<Self>> {
         let listener = tokio::net::UdpSocket::bind(listen_addr)
             .await
-            .inspect_err(|e| error!(?e, "Failed to bind to listen address"))?;
+            .map_err(|e| {
+                error!(?e, "Failed to bind to listen address");
+                e
+            })?;
         Ok(UdpServer::new(listener, self))
     }
 

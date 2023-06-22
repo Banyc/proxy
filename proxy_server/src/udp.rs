@@ -97,10 +97,9 @@ impl UdpProxyServer {
         let peer_addr = downstream_writer.peer_addr();
         warn!(?error, ?peer_addr, "Failed to steer");
         let kind = error_kind_from_header_error(error);
-        let _ = self
-            .respond_with_error(downstream_writer, kind)
-            .await
-            .inspect_err(|e| trace!(?e, ?peer_addr, "Failed to respond with error to downstream"));
+        if let Err(e) = self.respond_with_error(downstream_writer, kind).await {
+            trace!(?e, ?peer_addr, "Failed to respond with error to downstream");
+        }
     }
 
     #[instrument(skip(self, rx, downstream_writer))]
@@ -238,10 +237,9 @@ impl UdpProxyServer {
                 let peer_addr = downstream_writer.peer_addr();
                 warn!(?e, ?peer_addr, "Proxy failed");
                 let kind = error_kind_from_proxy_error(e);
-                let _ = self
-                    .respond_with_error(downstream_writer, kind)
-                    .await
-                    .inspect_err(|e| trace!(?e, ?peer_addr, "Failed to respond with error"));
+                if let Err(e) = self.respond_with_error(downstream_writer, kind).await {
+                    trace!(?e, ?peer_addr, "Failed to respond with error");
+                }
             }
         }
     }
@@ -259,9 +257,10 @@ impl UdpProxyServer {
         let mut buf = Vec::new();
         let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
         write_header(&mut buf, &resp, &mut crypto_cursor).unwrap();
-        downstream_writer.send(&buf).await.inspect_err(|e| {
+        downstream_writer.send(&buf).await.map_err(|e| {
             let peer_addr = downstream_writer.peer_addr();
-            trace!(?e, ?peer_addr, "Failed to send response to downstream")
+            trace!(?e, ?peer_addr, "Failed to send response to downstream");
+            e
         })?;
 
         Ok(())

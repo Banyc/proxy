@@ -94,7 +94,10 @@ impl HttpProxyAccess {
     pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<TcpServer<Self>> {
         let tcp_listener = tokio::net::TcpListener::bind(listen_addr)
             .await
-            .inspect_err(|e| error!(?e, "Failed to bind to listen address"))?;
+            .map_err(|e| {
+                error!(?e, "Failed to bind to listen address");
+                e
+            })?;
         Ok(TcpServer::new(tcp_listener, self))
     }
 
@@ -249,7 +252,10 @@ where
         .title_case_headers(true)
         .handshake(upstream)
         .await
-        .inspect_err(|e| warn!(?e, "Failed to establish HTTP/1 handshake to upstream"))?;
+        .map_err(|e| {
+            warn!(?e, "Failed to establish HTTP/1 handshake to upstream");
+            e
+        })?;
     tokio::task::spawn(async move {
         if let Err(err) = conn.await {
             warn!(?err, "Connection failed");
@@ -257,10 +263,10 @@ where
     });
 
     // Send HTTP/1 request
-    let resp = sender
-        .send_request(req)
-        .await
-        .inspect_err(|e| warn!(?e, "Failed to send HTTP/1 request to upstream"))?;
+    let resp = sender.send_request(req).await.map_err(|e| {
+        warn!(?e, "Failed to send HTTP/1 request to upstream");
+        e
+    })?;
     Ok(resp.map(|b| b.boxed()))
 }
 

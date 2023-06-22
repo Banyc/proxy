@@ -76,7 +76,10 @@ impl TcpProxyAccess {
     pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<TcpServer<Self>> {
         let tcp_listener = tokio::net::TcpListener::bind(listen_addr)
             .await
-            .inspect_err(|e| error!(?e, "Failed to bind to listen address"))?;
+            .map_err(|e| {
+                error!(?e, "Failed to bind to listen address");
+                e
+            })?;
         Ok(TcpServer::new(tcp_listener, self))
     }
 

@@ -1,5 +1,3 @@
-#![feature(result_option_inspect)]
-
 pub mod addr;
 pub mod crypto;
 pub mod error;
