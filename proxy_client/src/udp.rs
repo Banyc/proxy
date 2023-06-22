@@ -16,7 +16,7 @@ use common::{
         route::{RouteError, RouteResponse},
     },
     proxy_table::{convert_proxies_to_header_crypto_pairs, Tracer},
-    udp::{proxy_table::UdpProxyConfig, BUFFER_LENGTH},
+    udp::{proxy_table::UdpProxyChain, BUFFER_LENGTH},
 };
 use thiserror::Error;
 use tokio::net::UdpSocket;
@@ -26,7 +26,7 @@ use tracing::{error, instrument, trace, warn};
 pub struct UdpProxySocket {
     upstream: UdpSocket,
     headers_bytes: Arc<[u8]>,
-    proxies: Arc<[UdpProxyConfig]>,
+    proxies: Arc<UdpProxyChain>,
     read_buf: Vec<u8>,
     write_buf: Vec<u8>,
 }
@@ -34,7 +34,7 @@ pub struct UdpProxySocket {
 impl UdpProxySocket {
     #[instrument(skip_all)]
     pub async fn establish(
-        proxies: Arc<[UdpProxyConfig]>,
+        proxies: Arc<UdpProxyChain>,
         destination: InternetAddr,
     ) -> Result<UdpProxySocket, EstablishError> {
         // If there are no proxy configs, just connect to the destination
@@ -95,7 +95,7 @@ impl UdpProxySocket {
         // Save headers to buffer
         let mut buf = Vec::new();
         let mut writer = io::Cursor::new(&mut buf);
-        for (header, crypto) in pairs.as_ref() {
+        for (header, crypto) in &pairs {
             trace!(?header, "Writing header to buffer");
             let mut crypto_cursor = XorCryptoCursor::new(crypto);
             write_header(&mut writer, &header, &mut crypto_cursor).unwrap();
@@ -251,12 +251,12 @@ impl Default for UdpTracer {
 impl Tracer for UdpTracer {
     type Address = InternetAddr;
 
-    async fn trace_rtt(&self, chain: &[UdpProxyConfig]) -> Result<Duration, AnyError> {
+    async fn trace_rtt(&self, chain: &UdpProxyChain) -> Result<Duration, AnyError> {
         trace_rtt(chain).await.map_err(|e| e.into())
     }
 }
 
-pub async fn trace_rtt(proxies: &[UdpProxyConfig]) -> Result<Duration, TraceError> {
+pub async fn trace_rtt(proxies: &UdpProxyChain) -> Result<Duration, TraceError> {
     if proxies.is_empty() {
         return Ok(Duration::from_secs(0));
     }
@@ -274,7 +274,7 @@ pub async fn trace_rtt(proxies: &[UdpProxyConfig]) -> Result<Duration, TraceErro
     // Save headers to buffer
     let mut buf = Vec::new();
     let mut writer = io::Cursor::new(&mut buf);
-    for (header, crypto) in pairs.as_ref() {
+    for (header, crypto) in &pairs {
         let mut crypto_cursor = XorCryptoCursor::new(crypto);
         write_header(&mut writer, &header, &mut crypto_cursor).unwrap();
     }

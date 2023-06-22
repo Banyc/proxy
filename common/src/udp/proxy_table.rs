@@ -56,5 +56,6 @@ impl UdpProxyTableBuilder {
 }
 
 pub type UdpProxyConfig = ProxyConfig<InternetAddr>;
+pub type UdpProxyChain = [UdpProxyConfig];
 pub type UdpWeightedProxyChain = WeightedProxyChain<InternetAddr>;
 pub type UdpProxyTable = ProxyTable<InternetAddr>;

@@ -14,7 +14,7 @@ use common::{
     },
     proxy_table::{convert_proxies_to_header_crypto_pairs, Tracer},
     stream::{
-        addr::StreamAddr, connect_with_pool, pool::Pool, proxy_table::StreamProxyConfig,
+        addr::StreamAddr, connect_with_pool, pool::Pool, proxy_table::StreamProxyChain,
         ConnectError, CreatedStream,
     },
 };
@@ -25,7 +25,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[instrument(skip(proxies, stream_pool))]
 pub async fn establish(
-    proxies: &[StreamProxyConfig],
+    proxies: &StreamProxyChain,
     destination: StreamAddr,
     stream_pool: &Pool,
 ) -> Result<(CreatedStream, StreamAddr, SocketAddr), StreamEstablishError> {
@@ -50,7 +50,7 @@ pub async fn establish(
     let pairs = convert_proxies_to_header_crypto_pairs(proxies, Some(destination));
 
     // Write headers to stream
-    for (header, crypto) in pairs.as_ref() {
+    for (header, crypto) in &pairs {
         trace!(?header, "Writing headers to stream");
         heartbeat::send_upgrade(&mut stream, IO_TIMEOUT)
             .await
@@ -126,7 +126,7 @@ impl StreamTracer {
 impl Tracer for StreamTracer {
     type Address = StreamAddr;
 
-    async fn trace_rtt(&self, chain: &[StreamProxyConfig]) -> Result<Duration, AnyError> {
+    async fn trace_rtt(&self, chain: &StreamProxyChain) -> Result<Duration, AnyError> {
         trace_rtt(chain, &self.stream_pool)
             .await
             .map_err(|e| e.into())
@@ -134,7 +134,7 @@ impl Tracer for StreamTracer {
 }
 
 pub async fn trace_rtt(
-    proxies: &[StreamProxyConfig],
+    proxies: &StreamProxyChain,
     stream_pool: &Pool,
 ) -> Result<Duration, TraceError> {
     if proxies.is_empty() {
@@ -155,7 +155,7 @@ pub async fn trace_rtt(
     let start = Instant::now();
 
     // Write headers to stream
-    for (header, crypto) in pairs.as_ref() {
+    for (header, crypto) in &pairs {
         heartbeat::send_upgrade(&mut stream, IO_TIMEOUT).await?;
         let mut crypto_cursor = XorCryptoCursor::new(crypto);
         timed_write_header_async(&mut stream, &header, &mut crypto_cursor, IO_TIMEOUT).await?;

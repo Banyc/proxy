@@ -18,6 +18,8 @@ const TRACE_DEAD_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const TRACES_PER_WAVE: usize = 60;
 const TRACE_BURST_GAP: Duration = Duration::from_millis(10);
 
+pub type ProxyChain<A> = [ProxyConfig<A>];
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct ProxyConfig<A> {
     pub address: A,
@@ -25,9 +27,9 @@ pub struct ProxyConfig<A> {
 }
 
 pub fn convert_proxies_to_header_crypto_pairs<A>(
-    nodes: &[ProxyConfig<A>],
+    nodes: &ProxyChain<A>,
     destination: Option<A>,
-) -> Arc<[(RouteRequest<A>, &XorCrypto)]>
+) -> Vec<(RouteRequest<A>, &XorCrypto)>
 where
     A: Clone,
 {
@@ -44,7 +46,7 @@ where
         upstream: destination,
     };
     pairs.push((route_req, &nodes.last().unwrap().crypto));
-    pairs.into()
+    pairs
 }
 
 #[derive(Debug)]
@@ -165,7 +167,7 @@ type ScoreStore = CacheCell<Arc<[f64]>>;
 #[derive(Debug)]
 pub struct WeightedProxyChain<A> {
     pub weight: usize,
-    pub chain: Arc<[ProxyConfig<A>]>,
+    pub chain: Arc<ProxyChain<A>>,
     pub payload_crypto: Option<XorCrypto>,
 }
 
@@ -212,7 +214,7 @@ where
 
 fn spawn_tracer<T, A>(
     tracer: Arc<T>,
-    chain: Arc<[ProxyConfig<A>]>,
+    chain: Arc<ProxyChain<A>>,
     rtt_store: Arc<RwLock<Option<Duration>>>,
     loss_store: Arc<RwLock<Option<f64>>>,
 ) -> tokio::task::JoinHandle<()>
@@ -278,7 +280,7 @@ impl<A> Drop for GaugedProxyChain<A> {
     }
 }
 
-pub struct DisplayChain<'chain, A>(&'chain [ProxyConfig<A>]);
+pub struct DisplayChain<'chain, A>(&'chain ProxyChain<A>);
 
 impl<'chain, A> Display for DisplayChain<'chain, A>
 where
@@ -300,5 +302,5 @@ where
 #[async_trait]
 pub trait Tracer {
     type Address;
-    async fn trace_rtt(&self, chain: &[ProxyConfig<Self::Address>]) -> Result<Duration, AnyError>;
+    async fn trace_rtt(&self, chain: &ProxyChain<Self::Address>) -> Result<Duration, AnyError>;
 }

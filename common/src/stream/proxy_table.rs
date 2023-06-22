@@ -58,5 +58,6 @@ impl StreamProxyTableBuilder {
 }
 
 pub type StreamProxyConfig = ProxyConfig<StreamAddr>;
+pub type StreamProxyChain = [StreamProxyConfig];
 pub type StreamWeightedProxyChain = WeightedProxyChain<StreamAddr>;
 pub type StreamProxyTable = ProxyTable<StreamAddr>;
