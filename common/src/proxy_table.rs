@@ -1,7 +1,7 @@
 use std::{
     fmt::Display,
     sync::{Arc, RwLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
@@ -49,6 +49,7 @@ where
 pub struct ProxyTable<A> {
     chains: Arc<[GaugedProxyChain<A>]>,
     cum_weight: usize,
+    score_store: Arc<RwLock<ScoreStore>>,
 }
 
 impl<A> ProxyTable<A>
@@ -69,24 +70,40 @@ where
             .into_iter()
             .map(|c| GaugedProxyChain::new(c, tracer.clone()))
             .collect::<Arc<[_]>>();
-        Some(Self { chains, cum_weight })
+        let empty_scores = (0..chains.len()).map(|_| 0.).collect::<Arc<[_]>>();
+        let score_store = Arc::new(RwLock::new(ScoreStore::new(empty_scores)));
+        Some(Self {
+            chains,
+            cum_weight,
+            score_store,
+        })
     }
 
     pub fn choose_chain(&self) -> &WeightedProxyChain<A> {
         if self.chains.len() == 1 {
             return self.chains[0].weighted();
         }
+
+        let scores = self.score_store.read().unwrap().get().cloned();
+        let scores = match scores {
+            Some(scores) => scores,
+            None => {
+                let scores: Arc<[f64]> = self.scores().into();
+                info!(?scores, "Calculated scores");
+                self.score_store.write().unwrap().set(Arc::clone(&scores));
+                scores
+            }
+        };
+
         let mut rng = rand::thread_rng();
-        let scores = self.scores();
-        trace!(?scores, "Choosing chain");
         let sum_scores = scores.iter().sum::<f64>();
         if sum_scores == 0. {
             let i = rng.gen_range(0..self.chains.len());
             return self.chains[i].weighted();
         }
         let mut rand_score = rng.gen_range(0. ..sum_scores);
-        for (score, chain) in scores.into_iter().zip(self.chains.iter()) {
-            if rand_score < score {
+        for (score, chain) in scores.iter().zip(self.chains.iter()) {
+            if rand_score < *score {
                 return chain.weighted();
             }
             rand_score -= score;
@@ -139,6 +156,33 @@ fn normalize(list: &[Option<f64>]) -> Vec<f64> {
         }
     };
     hat
+}
+
+#[derive(Debug)]
+struct ScoreStore {
+    scores: Arc<[f64]>,
+    last_update: Instant,
+}
+
+impl ScoreStore {
+    pub fn new(scores: Arc<[f64]>) -> Self {
+        Self {
+            scores,
+            last_update: Instant::now(),
+        }
+    }
+
+    pub fn get(&self) -> Option<&Arc<[f64]>> {
+        if self.last_update.elapsed() > TRACE_INTERVAL {
+            return None;
+        }
+        Some(&self.scores)
+    }
+
+    pub fn set(&mut self, scores: Arc<[f64]>) {
+        self.scores = scores;
+        self.last_update = Instant::now();
+    }
 }
 
 #[derive(Debug)]
