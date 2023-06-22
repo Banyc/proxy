@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -52,7 +53,7 @@ pub struct ProxyTable<A> {
 
 impl<A> ProxyTable<A>
 where
-    A: std::fmt::Debug + Clone + Send + Sync + 'static,
+    A: std::fmt::Debug + Display + Clone + Send + Sync + 'static,
 {
     pub fn new<T>(chains: Vec<WeightedProxyChain<A>>, tracer: Option<T>) -> Option<Self>
     where
@@ -157,7 +158,7 @@ struct GaugedProxyChain<A> {
 
 impl<A> GaugedProxyChain<A>
 where
-    A: std::fmt::Debug + Clone + Send + Sync + 'static,
+    A: std::fmt::Debug + Display + Clone + Send + Sync + 'static,
 {
     pub fn new<T>(weighted: WeightedProxyChain<A>, tracer: Option<Arc<T>>) -> Self
     where
@@ -198,8 +199,8 @@ where
                     let loss = (TRACES_PER_WAVE - rtt_count) as f64 / TRACES_PER_WAVE as f64;
 
                     // Store RTT
-                    let addresses = chain.iter().map(|c| c.address.clone()).collect::<Vec<_>>();
-                    info!(?addresses, ?rtt, ?loss, "Traced RTT");
+                    let addresses = DisplayChain(&chain);
+                    info!(%addresses, ?rtt, ?loss, "Traced RTT");
                     {
                         let mut rtt_clone = rtt_clone.write().unwrap();
                         *rtt_clone = Some(rtt);
@@ -244,6 +245,25 @@ impl<A> Drop for GaugedProxyChain<A> {
         if let Some(h) = self.task_handle.as_ref() {
             h.abort()
         }
+    }
+}
+
+pub struct DisplayChain<'chain, A>(&'chain [ProxyConfig<A>]);
+
+impl<'chain, A> Display for DisplayChain<'chain, A>
+where
+    A: Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[")?;
+        for (i, c) in self.0.iter().enumerate() {
+            write!(f, "{}", c.address)?;
+            if i + 1 != self.0.len() {
+                write!(f, ",")?;
+            }
+        }
+        write!(f, "]")?;
+        Ok(())
     }
 }
 
