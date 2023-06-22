@@ -13,7 +13,7 @@ duplicate = "1.0.0"
 futures-core = "0.3.28"
 quinn = "0.10.1"
 rand = "0.8.5"
-serde = { version = "1.0.163", features = ["derive",  "rc"] }
+serde = { version = "1.0.164", features = ["derive",  "rc"] }
 thiserror = "1.0.40"
 tokio = { version = "1.28.2", features = ["full"] }
 tokio-io-timeout = "1.2.0"
