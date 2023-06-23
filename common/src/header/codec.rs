@@ -14,23 +14,23 @@ use crate::crypto::XorCryptoCursor;
 pub const MAX_HEADER_LEN: usize = 1024;
 
 #[duplicate_item(
-    read_header         async   stream_bounds       add_await(code) ;
+    read_header         async   reader_bounds       add_await(code) ;
     [read_header]       []      [Read]              [code]          ;
     [read_header_async] [async] [AsyncRead + Unpin] [code.await]    ;
 )]
 #[instrument(skip_all)]
-pub async fn read_header<'crypto, S, H>(
-    stream: &mut S,
+pub async fn read_header<'crypto, R, H>(
+    reader: &mut R,
     crypto: &mut XorCryptoCursor,
 ) -> Result<H, CodecError>
 where
-    S: stream_bounds,
+    R: reader_bounds,
     H: for<'de> Deserialize<'de> + std::fmt::Debug,
 {
     // Decode header length
     let len = {
         let mut buf = [0; 4];
-        let res = stream.read_exact(&mut buf);
+        let res = reader.read_exact(&mut buf);
         add_await([res])?;
         crypto.xor(&mut buf);
         u32::from_be_bytes(buf) as usize
@@ -47,7 +47,7 @@ where
             )));
         }
         let hdr = &mut buf[..len];
-        let res = stream.read_exact(hdr);
+        let res = reader.read_exact(hdr);
         add_await([res])?;
         crypto.xor(hdr);
         bincode::deserialize(hdr)?
@@ -58,27 +58,27 @@ where
 }
 
 #[duplicate_item(
-    write_header         async   stream_bounds        add_await(code) ;
+    write_header         async   writer_bounds        add_await(code) ;
     [write_header]       []      [Write]              [code]          ;
     [write_header_async] [async] [AsyncWrite + Unpin] [code.await]    ;
 )]
 #[instrument(skip_all)]
-pub async fn write_header<'crypto, S, H>(
-    stream: &mut S,
+pub async fn write_header<'crypto, W, H>(
+    writer: &mut W,
     header: &H,
     crypto: &mut XorCryptoCursor,
 ) -> Result<(), CodecError>
 where
-    S: stream_bounds,
+    W: writer_bounds,
     H: Serialize + std::fmt::Debug,
 {
     let mut buf = [0; MAX_HEADER_LEN];
-    let mut writer = io::Cursor::new(&mut buf[..]);
+    let mut hdr_wtr = io::Cursor::new(&mut buf[..]);
 
     // Encode header
     let hdr = {
-        bincode::serialize_into(&mut writer, header)?;
-        let len = writer.position();
+        bincode::serialize_into(&mut hdr_wtr, header)?;
+        let len = hdr_wtr.position();
         let hdr = &mut buf[..len as usize];
         trace!(?header, ?len, "Encoded header");
         hdr
@@ -88,25 +88,25 @@ where
     let len = hdr.len() as u32;
     let mut len = len.to_be_bytes();
     crypto.xor(&mut len);
-    add_await([stream.write_all(&len)])?;
+    add_await([writer.write_all(&len)])?;
 
     // Write header
     crypto.xor(hdr);
-    add_await([stream.write_all(hdr)])?;
+    add_await([writer.write_all(hdr)])?;
 
     Ok(())
 }
 
-pub async fn timed_read_header_async<'crypto, S, H>(
-    stream: &mut S,
+pub async fn timed_read_header_async<'crypto, R, H>(
+    reader: &mut R,
     crypto: &mut XorCryptoCursor,
     timeout: Duration,
 ) -> Result<H, CodecError>
 where
-    S: AsyncRead + Unpin,
+    R: AsyncRead + Unpin,
     H: for<'de> Deserialize<'de> + std::fmt::Debug,
 {
-    let res = tokio::time::timeout(timeout, read_header_async(stream, crypto)).await;
+    let res = tokio::time::timeout(timeout, read_header_async(reader, crypto)).await;
     match res {
         Ok(res) => res,
         Err(_) => Err(CodecError::Io(io::Error::new(
@@ -116,17 +116,17 @@ where
     }
 }
 
-pub async fn timed_write_header_async<'crypto, S, H>(
-    stream: &mut S,
+pub async fn timed_write_header_async<'crypto, W, H>(
+    writer: &mut W,
     header: &H,
     crypto: &mut XorCryptoCursor,
     timeout: Duration,
 ) -> Result<(), CodecError>
 where
-    S: AsyncWrite + Unpin,
+    W: AsyncWrite + Unpin,
     H: Serialize + std::fmt::Debug,
 {
-    let res = tokio::time::timeout(timeout, write_header_async(stream, header, crypto)).await;
+    let res = tokio::time::timeout(timeout, write_header_async(writer, header, crypto)).await;
     match res {
         Ok(res) => res,
         Err(_) => Err(CodecError::Io(io::Error::new(
