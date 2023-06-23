@@ -140,6 +140,6 @@ where
 pub enum CodecError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
-    #[error("Bincode error: {0}")]
-    Bincode(#[from] bincode::Error),
+    #[error("Serialization error: {0}")]
+    Serialization(#[from] bincode::Error),
 }

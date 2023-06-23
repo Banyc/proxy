@@ -314,7 +314,7 @@ pub enum ProxyError {
 fn error_kind_from_header_error(e: CodecError) -> RouteErrorKind {
     match e {
         CodecError::Io(_) => RouteErrorKind::Io,
-        CodecError::Bincode(_) => RouteErrorKind::Codec,
+        CodecError::Serialization(_) => RouteErrorKind::Codec,
     }
 }
 fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
