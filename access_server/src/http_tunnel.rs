@@ -30,7 +30,7 @@ use tokio::{
 use tracing::{error, info, instrument, trace, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpProxyAccessBuilder {
+pub struct HttpAccessServerBuilder {
     listen_addr: Arc<str>,
     proxy_table: StreamProxyTableBuilder,
     trace_rtt: bool,
@@ -39,11 +39,11 @@ pub struct HttpProxyAccessBuilder {
 }
 
 #[async_trait]
-impl loading::Builder for HttpProxyAccessBuilder {
-    type Hook = HttpProxyAccess;
+impl loading::Builder for HttpAccessServerBuilder {
+    type Hook = HttpAccess;
     type Server = TcpServer<Self::Hook>;
 
-    async fn build_server(self) -> io::Result<TcpServer<HttpProxyAccess>> {
+    async fn build_server(self) -> io::Result<TcpServer<HttpAccess>> {
         let listen_addr = self.listen_addr.clone();
         let access = self.build_hook()?;
         let server = access.build(listen_addr.as_ref()).await?;
@@ -54,13 +54,13 @@ impl loading::Builder for HttpProxyAccessBuilder {
         &self.listen_addr
     }
 
-    fn build_hook(self) -> io::Result<HttpProxyAccess> {
+    fn build_hook(self) -> io::Result<HttpAccess> {
         let stream_pool = self.stream_pool.build();
         let tracer = match self.trace_rtt {
             true => Some(StreamTracer::new(stream_pool.clone())),
             false => None,
         };
-        let access = HttpProxyAccess::new(
+        let access = HttpAccess::new(
             self.proxy_table.build::<StreamTracer>(tracer),
             stream_pool,
             self.filter.build().map_err(|e| {
@@ -75,13 +75,13 @@ impl loading::Builder for HttpProxyAccessBuilder {
 }
 
 #[derive(Debug)]
-pub struct HttpProxyAccess {
+pub struct HttpAccess {
     proxy_table: Arc<StreamProxyTable>,
     stream_pool: Pool,
     filter: Filter,
 }
 
-impl HttpProxyAccess {
+impl HttpAccess {
     pub fn new(proxy_table: StreamProxyTable, stream_pool: Pool, filter: Filter) -> Self {
         Self {
             proxy_table: Arc::new(proxy_table),
@@ -323,10 +323,10 @@ pub enum TunnelError {
     Direct(#[source] io::Error),
 }
 
-impl loading::Hook for HttpProxyAccess {}
+impl loading::Hook for HttpAccess {}
 
 #[async_trait]
-impl StreamServerHook for HttpProxyAccess {
+impl StreamServerHook for HttpAccess {
     #[instrument(skip(self, stream))]
     async fn handle_stream<S>(&self, stream: S)
     where

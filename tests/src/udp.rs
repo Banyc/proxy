@@ -6,15 +6,15 @@ mod tests {
         addr::InternetAddr, header::route::RouteErrorKind, loading::Server,
         proxy_table::ProxyConfig, udp::proxy_table::UdpProxyConfig,
     };
-    use proxy_client::udp::{trace_rtt, RecvError, UdpProxySocket};
-    use proxy_server::udp::UdpProxyServer;
+    use proxy_client::udp::{trace_rtt, RecvError, UdpProxyClient};
+    use proxy_server::udp::UdpProxy;
     use tokio::net::UdpSocket;
 
     use crate::create_random_crypto;
 
     async fn spawn_proxy(addr: &str) -> UdpProxyConfig {
         let crypto = create_random_crypto();
-        let proxy = UdpProxyServer::new(crypto.clone());
+        let proxy = UdpProxy::new(crypto.clone());
         let server = proxy.build(addr).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         tokio::spawn(async move {
@@ -44,7 +44,7 @@ mod tests {
         greet_addr.into()
     }
 
-    async fn read_response(client: &mut UdpProxySocket, resp_msg: &[u8]) -> Result<(), RecvError> {
+    async fn read_response(client: &mut UdpProxyClient, resp_msg: &[u8]) -> Result<(), RecvError> {
         let mut buf = [0; 1024];
         let n = client.recv(&mut buf).await?;
         let msg_buf = &buf[..n];
@@ -68,7 +68,7 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut client = UdpProxySocket::establish(proxies.clone(), greet_addr)
+        let mut client = UdpProxyClient::establish(proxies.clone(), greet_addr)
             .await
             .unwrap();
 
@@ -107,7 +107,7 @@ mod tests {
             let greet_addr = greet_addr.clone();
             handles.spawn(async move {
                 // Connect to proxy server
-                let mut client = UdpProxySocket::establish(proxies, greet_addr)
+                let mut client = UdpProxyClient::establish(proxies, greet_addr)
                     .await
                     .unwrap();
 
@@ -150,7 +150,7 @@ mod tests {
                 for _ in 0..10 {
                     let greet_addr = greet_addr.clone();
                     // Connect to proxy server
-                    let mut client = UdpProxySocket::establish(proxies.clone(), greet_addr)
+                    let mut client = UdpProxyClient::establish(proxies.clone(), greet_addr)
                         .await
                         .unwrap();
 
@@ -183,7 +183,7 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut client = UdpProxySocket::establish(
+        let mut client = UdpProxyClient::establish(
             vec![proxy_1_config.clone(), proxy_2_config, proxy_3_config].into(),
             greet_addr,
         )
@@ -220,7 +220,7 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut client = UdpProxySocket::establish(vec![].into(), greet_addr)
+        let mut client = UdpProxyClient::establish(vec![].into(), greet_addr)
             .await
             .unwrap();
 

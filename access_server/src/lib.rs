@@ -1,10 +1,10 @@
 use std::io;
 
 use common::{error::AnyResult, loading};
-use http_tunnel::{HttpProxyAccess, HttpProxyAccessBuilder};
+use http_tunnel::{HttpAccess, HttpAccessServerBuilder};
 use serde::{Deserialize, Serialize};
-use tcp::{TcpProxyAccess, TcpProxyAccessBuilder};
-use udp::{UdpProxyAccess, UdpProxyAccessBuilder};
+use tcp::{TcpAccess, TcpAccessServerBuilder};
+use udp::{UdpAccess, UdpAccessServerBuilder};
 
 pub mod http_tunnel;
 pub mod tcp;
@@ -12,9 +12,9 @@ pub mod udp;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessServerConfig {
-    pub tcp_server: Option<Vec<TcpProxyAccessBuilder>>,
-    pub udp_server: Option<Vec<UdpProxyAccessBuilder>>,
-    pub http_server: Option<Vec<HttpProxyAccessBuilder>>,
+    pub tcp_server: Option<Vec<TcpAccessServerBuilder>>,
+    pub udp_server: Option<Vec<UdpAccessServerBuilder>>,
+    pub http_server: Option<Vec<HttpAccessServerBuilder>>,
 }
 
 impl AccessServerConfig {
@@ -51,9 +51,9 @@ impl Default for AccessServerConfig {
 }
 
 pub struct AccessServerLoader {
-    tcp_server: loading::Loader<TcpProxyAccess>,
-    udp_server: loading::Loader<UdpProxyAccess>,
-    http_server: loading::Loader<HttpProxyAccess>,
+    tcp_server: loading::Loader<TcpAccess>,
+    udp_server: loading::Loader<UdpAccess>,
+    http_server: loading::Loader<HttpAccess>,
 }
 
 impl AccessServerLoader {

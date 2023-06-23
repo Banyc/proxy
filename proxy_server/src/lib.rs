@@ -2,8 +2,8 @@ use std::io;
 
 use common::{error::AnyResult, loading};
 use serde::Deserialize;
-use stream::{kcp::KcpProxyServerBuilder, tcp::TcpProxyServerBuilder, StreamProxyServer};
-use udp::{UdpProxyServer, UdpProxyServerBuilder};
+use stream::{kcp::KcpProxyServerBuilder, tcp::TcpProxyServerBuilder, StreamProxy};
+use udp::{UdpProxy, UdpProxyServerBuilder};
 
 pub mod stream;
 pub mod udp;
@@ -49,9 +49,9 @@ impl Default for ProxyServerConfig {
 }
 
 pub struct ProxyServerLoader {
-    tcp_server: loading::Loader<StreamProxyServer>,
-    udp_server: loading::Loader<UdpProxyServer>,
-    kcp_server: loading::Loader<StreamProxyServer>,
+    tcp_server: loading::Loader<StreamProxy>,
+    udp_server: loading::Loader<UdpProxy>,
+    kcp_server: loading::Loader<StreamProxy>,
 }
 
 impl ProxyServerLoader {

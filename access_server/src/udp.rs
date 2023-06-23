@@ -11,14 +11,14 @@ use common::{
         BUFFER_LENGTH, LIVE_CHECK_INTERVAL, TIMEOUT,
     },
 };
-use proxy_client::udp::{EstablishError, RecvError, SendError, UdpProxySocket, UdpTracer};
+use proxy_client::udp::{EstablishError, RecvError, SendError, UdpProxyClient, UdpTracer};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tracing::{error, info, trace, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UdpProxyAccessBuilder {
+pub struct UdpAccessServerBuilder {
     listen_addr: Arc<str>,
     proxy_table: UdpProxyTableBuilder,
     trace_rtt: bool,
@@ -26,11 +26,11 @@ pub struct UdpProxyAccessBuilder {
 }
 
 #[async_trait]
-impl loading::Builder for UdpProxyAccessBuilder {
-    type Hook = UdpProxyAccess;
+impl loading::Builder for UdpAccessServerBuilder {
+    type Hook = UdpAccess;
     type Server = UdpServer<Self::Hook>;
 
-    async fn build_server(self) -> io::Result<UdpServer<UdpProxyAccess>> {
+    async fn build_server(self) -> io::Result<UdpServer<UdpAccess>> {
         let listen_addr = self.listen_addr.clone();
         let access = self.build_hook()?;
         let server = access.build(listen_addr.as_ref()).await?;
@@ -41,12 +41,12 @@ impl loading::Builder for UdpProxyAccessBuilder {
         &self.listen_addr
     }
 
-    fn build_hook(self) -> io::Result<UdpProxyAccess> {
+    fn build_hook(self) -> io::Result<UdpAccess> {
         let tracer = match self.trace_rtt {
             true => Some(UdpTracer::new()),
             false => None,
         };
-        Ok(UdpProxyAccess::new(
+        Ok(UdpAccess::new(
             self.proxy_table.build::<UdpTracer>(tracer),
             self.destination.into(),
         ))
@@ -54,14 +54,14 @@ impl loading::Builder for UdpProxyAccessBuilder {
 }
 
 #[derive(Debug)]
-pub struct UdpProxyAccess {
+pub struct UdpAccess {
     proxy_table: UdpProxyTable,
     destination: InternetAddr,
 }
 
-impl loading::Hook for UdpProxyAccess {}
+impl loading::Hook for UdpAccess {}
 
-impl UdpProxyAccess {
+impl UdpAccess {
     pub fn new(proxy_table: UdpProxyTable, destination: InternetAddr) -> Self {
         Self {
             proxy_table,
@@ -90,7 +90,7 @@ impl UdpProxyAccess {
         // Connect to upstream
         let proxy_chain = self.proxy_table.choose_chain();
         let mut upstream =
-            UdpProxySocket::establish(proxy_chain.chain.clone(), self.destination.clone()).await?;
+            UdpProxyClient::establish(proxy_chain.chain.clone(), self.destination.clone()).await?;
 
         // Periodic check if the flow is still alive
         let mut tick = tokio::time::interval(LIVE_CHECK_INTERVAL);
@@ -174,7 +174,7 @@ pub enum ProxyError {
 }
 
 #[async_trait]
-impl UdpServerHook for UdpProxyAccess {
+impl UdpServerHook for UdpAccess {
     async fn parse_upstream_addr<'buf>(
         &self,
         buf: &'buf [u8],

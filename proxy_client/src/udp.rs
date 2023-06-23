@@ -23,7 +23,7 @@ use tokio::net::UdpSocket;
 use tracing::{error, instrument, trace, warn};
 
 #[derive(Debug)]
-pub struct UdpProxySocket {
+pub struct UdpProxyClient {
     upstream: UdpSocket,
     headers_bytes: Arc<[u8]>,
     proxies: Arc<UdpProxyChain>,
@@ -31,12 +31,12 @@ pub struct UdpProxySocket {
     write_buf: Vec<u8>,
 }
 
-impl UdpProxySocket {
+impl UdpProxyClient {
     #[instrument(skip_all)]
     pub async fn establish(
         proxies: Arc<UdpProxyChain>,
         destination: InternetAddr,
-    ) -> Result<UdpProxySocket, EstablishError> {
+    ) -> Result<UdpProxyClient, EstablishError> {
         // If there are no proxy configs, just connect to the destination
         if proxies.is_empty() {
             let addr = destination.to_socket_addr().await.map_err(|e| {
@@ -57,7 +57,7 @@ impl UdpProxySocket {
                     addr: destination.clone(),
                     sock_addr: addr,
                 })?;
-            return Ok(UdpProxySocket {
+            return Ok(UdpProxyClient {
                 upstream,
                 headers_bytes: vec![].into(),
                 proxies,
@@ -102,7 +102,7 @@ impl UdpProxySocket {
         }
 
         // Return stream
-        Ok(UdpProxySocket {
+        Ok(UdpProxyClient {
             upstream,
             headers_bytes: buf.into(),
             proxies,
@@ -170,7 +170,7 @@ impl UdpProxySocket {
     }
 }
 
-impl Deref for UdpProxySocket {
+impl Deref for UdpProxyClient {
     type Target = UdpSocket;
 
     fn deref(&self) -> &Self::Target {

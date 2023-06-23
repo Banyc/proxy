@@ -34,19 +34,19 @@ pub struct UdpProxyServerBuilder {
 
 #[async_trait]
 impl loading::Builder for UdpProxyServerBuilder {
-    type Hook = UdpProxyServer;
+    type Hook = UdpProxy;
     type Server = UdpServer<Self::Hook>;
 
     async fn build_server(self) -> io::Result<Self::Server> {
         let header_crypto = XorCrypto::new(self.header_xor_key);
-        let tcp_proxy = UdpProxyServer::new(header_crypto);
+        let tcp_proxy = UdpProxy::new(header_crypto);
         let server = tcp_proxy.build(self.listen_addr.as_ref()).await?;
         Ok(server)
     }
 
     fn build_hook(self) -> io::Result<Self::Hook> {
         let header_crypto = XorCrypto::new(self.header_xor_key);
-        Ok(UdpProxyServer::new(header_crypto))
+        Ok(UdpProxy::new(header_crypto))
     }
 
     fn key(&self) -> &Arc<str> {
@@ -55,20 +55,20 @@ impl loading::Builder for UdpProxyServerBuilder {
 }
 
 impl UdpProxyServerBuilder {
-    pub async fn build(self) -> io::Result<UdpServer<UdpProxyServer>> {
+    pub async fn build(self) -> io::Result<UdpServer<UdpProxy>> {
         let header_crypto = XorCrypto::new(self.header_xor_key);
-        let tcp_proxy = UdpProxyServer::new(header_crypto);
+        let tcp_proxy = UdpProxy::new(header_crypto);
         let server = tcp_proxy.build(self.listen_addr.as_ref()).await?;
         Ok(server)
     }
 }
 
 #[derive(Debug)]
-pub struct UdpProxyServer {
+pub struct UdpProxy {
     header_crypto: XorCrypto,
 }
 
-impl UdpProxyServer {
+impl UdpProxy {
     pub fn new(header_crypto: XorCrypto) -> Self {
         Self { header_crypto }
     }
@@ -329,10 +329,10 @@ fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
     }
 }
 
-impl loading::Hook for UdpProxyServer {}
+impl loading::Hook for UdpProxy {}
 
 #[async_trait]
-impl UdpServerHook for UdpProxyServer {
+impl UdpServerHook for UdpProxy {
     async fn parse_upstream_addr<'buf>(
         &self,
         buf: &'buf [u8],

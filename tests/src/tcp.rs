@@ -12,7 +12,7 @@ mod tests {
         },
     };
     use proxy_client::stream::{establish, trace_rtt};
-    use proxy_server::stream::{tcp::build_tcp_proxy_server, StreamProxyServer};
+    use proxy_server::stream::{tcp::build_tcp_proxy_server, StreamProxy};
     use tokio::{
         io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -22,7 +22,7 @@ mod tests {
 
     async fn spawn_proxy(addr: &str) -> StreamProxyConfig {
         let crypto = create_random_crypto();
-        let proxy = StreamProxyServer::new(crypto.clone(), None, Pool::new());
+        let proxy = StreamProxy::new(crypto.clone(), None, Pool::new());
         let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         tokio::spawn(async move {

@@ -11,18 +11,18 @@ use tokio::net::ToSocketAddrs;
 use tokio_kcp::KcpListener;
 use tracing::error;
 
-use super::{StreamProxyServer, StreamProxyServerBuilder};
+use super::{StreamProxy, StreamProxyBuilder};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct KcpProxyServerBuilder {
     pub listen_addr: Arc<str>,
     #[serde(flatten)]
-    pub inner: StreamProxyServerBuilder,
+    pub inner: StreamProxyBuilder,
 }
 
 #[async_trait]
 impl loading::Builder for KcpProxyServerBuilder {
-    type Hook = StreamProxyServer;
+    type Hook = StreamProxy;
     type Server = KcpServer<Self::Hook>;
 
     async fn build_server(self) -> io::Result<Self::Server> {
@@ -42,7 +42,7 @@ impl loading::Builder for KcpProxyServerBuilder {
 }
 
 impl KcpProxyServerBuilder {
-    pub async fn build(self) -> Result<KcpServer<StreamProxyServer>, ListenerBindError> {
+    pub async fn build(self) -> Result<KcpServer<StreamProxy>, ListenerBindError> {
         let stream_proxy = self.inner.build();
         build_kcp_proxy_server(self.listen_addr.as_ref(), stream_proxy).await
     }
@@ -50,8 +50,8 @@ impl KcpProxyServerBuilder {
 
 pub async fn build_kcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
-    stream_proxy: StreamProxyServer,
-) -> Result<KcpServer<StreamProxyServer>, ListenerBindError> {
+    stream_proxy: StreamProxy,
+) -> Result<KcpServer<StreamProxy>, ListenerBindError> {
     let config = fast_kcp_config();
     let listener = KcpListener::bind(config, listen_addr)
         .await

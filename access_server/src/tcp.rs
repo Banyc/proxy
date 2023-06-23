@@ -19,7 +19,7 @@ use tokio::net::ToSocketAddrs;
 use tracing::{error, info, instrument, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TcpProxyAccessBuilder {
+pub struct TcpAccessServerBuilder {
     listen_addr: Arc<str>,
     proxy_table: StreamProxyTableBuilder,
     trace_rtt: bool,
@@ -28,11 +28,11 @@ pub struct TcpProxyAccessBuilder {
 }
 
 #[async_trait]
-impl loading::Builder for TcpProxyAccessBuilder {
-    type Hook = TcpProxyAccess;
+impl loading::Builder for TcpAccessServerBuilder {
+    type Hook = TcpAccess;
     type Server = TcpServer<Self::Hook>;
 
-    async fn build_server(self) -> io::Result<TcpServer<TcpProxyAccess>> {
+    async fn build_server(self) -> io::Result<TcpServer<TcpAccess>> {
         let listen_addr = self.listen_addr.clone();
         let access = self.build_hook()?;
         let server = access.build(listen_addr.as_ref()).await?;
@@ -49,7 +49,7 @@ impl loading::Builder for TcpProxyAccessBuilder {
             true => Some(StreamTracer::new(stream_pool.clone())),
             false => None,
         };
-        Ok(TcpProxyAccess::new(
+        Ok(TcpAccess::new(
             self.proxy_table.build::<StreamTracer>(tracer),
             self.destination.build(),
             stream_pool,
@@ -58,13 +58,13 @@ impl loading::Builder for TcpProxyAccessBuilder {
 }
 
 #[derive(Debug)]
-pub struct TcpProxyAccess {
+pub struct TcpAccess {
     proxy_table: StreamProxyTable,
     destination: StreamAddr,
     stream_pool: Pool,
 }
 
-impl TcpProxyAccess {
+impl TcpAccess {
     pub fn new(proxy_table: StreamProxyTable, destination: StreamAddr, stream_pool: Pool) -> Self {
         Self {
             proxy_table,
@@ -144,10 +144,10 @@ pub enum ProxyError {
     },
 }
 
-impl loading::Hook for TcpProxyAccess {}
+impl loading::Hook for TcpAccess {}
 
 #[async_trait]
-impl StreamServerHook for TcpProxyAccess {
+impl StreamServerHook for TcpAccess {
     #[instrument(skip(self, stream))]
     async fn handle_stream<S>(&self, stream: S)
     where

@@ -7,18 +7,18 @@ use thiserror::Error;
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tracing::error;
 
-use super::{StreamProxyServer, StreamProxyServerBuilder};
+use super::{StreamProxy, StreamProxyBuilder};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct TcpProxyServerBuilder {
     pub listen_addr: Arc<str>,
     #[serde(flatten)]
-    pub inner: StreamProxyServerBuilder,
+    pub inner: StreamProxyBuilder,
 }
 
 #[async_trait]
 impl loading::Builder for TcpProxyServerBuilder {
-    type Hook = StreamProxyServer;
+    type Hook = StreamProxy;
     type Server = TcpServer<Self::Hook>;
 
     async fn build_server(self) -> io::Result<Self::Server> {
@@ -39,8 +39,8 @@ impl loading::Builder for TcpProxyServerBuilder {
 
 pub async fn build_tcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
-    stream_proxy: StreamProxyServer,
-) -> Result<TcpServer<StreamProxyServer>, ListenerBindError> {
+    stream_proxy: StreamProxy,
+) -> Result<TcpServer<StreamProxy>, ListenerBindError> {
     let listener = TcpListener::bind(listen_addr).await?;
     let server = TcpServer::new(listener, stream_proxy);
     Ok(server)
@@ -76,7 +76,7 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy = StreamProxyServer::new(crypto.clone(), None, Pool::new());
+            let proxy = StreamProxy::new(crypto.clone(), None, Pool::new());
 
             let server = build_tcp_proxy_server("localhost:0", proxy).await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();

@@ -29,28 +29,28 @@ pub mod tcp;
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
-pub struct StreamProxyServerBuilder {
+pub struct StreamProxyBuilder {
     pub header_xor_key: Arc<[u8]>,
     pub payload_xor_key: Option<Arc<[u8]>>,
     pub stream_pool: PoolBuilder,
 }
 
-impl StreamProxyServerBuilder {
-    pub fn build(self) -> StreamProxyServer {
+impl StreamProxyBuilder {
+    pub fn build(self) -> StreamProxy {
         let header_crypto = XorCrypto::new(self.header_xor_key);
         let payload_crypto = self.payload_xor_key.map(XorCrypto::new);
         let stream_pool = self.stream_pool.build();
-        StreamProxyServer::new(header_crypto, payload_crypto, stream_pool)
+        StreamProxy::new(header_crypto, payload_crypto, stream_pool)
     }
 }
 
 #[derive(Debug)]
-pub struct StreamProxyServer {
+pub struct StreamProxy {
     acceptor: StreamProxyAcceptor,
     payload_crypto: Option<XorCrypto>,
 }
 
-impl StreamProxyServer {
+impl StreamProxy {
     pub fn new(
         header_crypto: XorCrypto,
         payload_crypto: Option<XorCrypto>,
@@ -139,10 +139,10 @@ impl StreamProxyServer {
     // }
 }
 
-impl loading::Hook for StreamProxyServer {}
+impl loading::Hook for StreamProxy {}
 
 #[async_trait]
-impl StreamServerHook for StreamProxyServer {
+impl StreamServerHook for StreamProxy {
     #[instrument(skip(self))]
     async fn handle_stream<S>(&self, stream: S)
     where
