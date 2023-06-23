@@ -1,4 +1,4 @@
-use std::{io, sync::Arc, time::Instant};
+use std::{collections::HashMap, io, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -8,7 +8,7 @@ use common::{
     stream::{
         addr::{StreamAddr, StreamType},
         copy_bidirectional_with_payload_crypto,
-        pool::{Pool, PoolBuilder},
+        pool::Pool,
         proxy_table::StreamProxyTable,
         streams::{tcp::TcpServer, xor::XorStream},
         tokio_io, FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamMetrics,
@@ -29,14 +29,46 @@ use tokio::{
 };
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::stream::proxy_table::StreamProxyTableBuilder;
+use crate::{stream::proxy_table::StreamProxyTableBuilder, SharableConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpAccessServerConfig {
+    listen_addr: Arc<str>,
+    proxy_table: SharableConfig<StreamProxyTableBuilder>,
+    filter: SharableConfig<FilterBuilder>,
+}
+
+impl HttpAccessServerConfig {
+    pub fn into_builder(
+        self,
+        stream_pool: Pool,
+        proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
+        filters: &HashMap<Arc<str>, Filter>,
+    ) -> HttpAccessServerBuilder {
+        let proxy_table = match self.proxy_table {
+            SharableConfig::SharingKey(key) => proxy_tables.get(&key).unwrap().clone(),
+            SharableConfig::Private(x) => x.build(&stream_pool),
+        };
+        let filter = match self.filter {
+            SharableConfig::SharingKey(key) => filters.get(&key).unwrap().clone(),
+            SharableConfig::Private(x) => x.build().unwrap(),
+        };
+
+        HttpAccessServerBuilder {
+            listen_addr: self.listen_addr,
+            proxy_table,
+            stream_pool,
+            filter,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct HttpAccessServerBuilder {
     listen_addr: Arc<str>,
-    proxy_table: StreamProxyTableBuilder,
-    stream_pool: PoolBuilder,
-    filter: FilterBuilder,
+    proxy_table: StreamProxyTable,
+    stream_pool: Pool,
+    filter: Filter,
 }
 
 #[async_trait]
@@ -56,17 +88,7 @@ impl loading::Builder for HttpAccessServerBuilder {
     }
 
     fn build_hook(self) -> io::Result<HttpAccess> {
-        let stream_pool = self.stream_pool.build();
-        let access = HttpAccess::new(
-            self.proxy_table.build(&stream_pool),
-            stream_pool,
-            self.filter.build().map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("Failed to build filter: {}", e),
-                )
-            })?,
-        );
+        let access = HttpAccess::new(self.proxy_table, self.stream_pool, self.filter);
         Ok(access)
     }
 }

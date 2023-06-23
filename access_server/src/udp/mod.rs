@@ -1,4 +1,4 @@
-use std::{io, net::Ipv4Addr, sync::Arc};
+use std::{collections::HashMap, io, net::Ipv4Addr, sync::Arc};
 
 use async_trait::async_trait;
 use common::{
@@ -16,15 +16,42 @@ use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tracing::{error, info, trace, warn};
 
+use crate::SharableConfig;
+
 use self::proxy_table::UdpProxyTableBuilder;
 
 pub mod proxy_table;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UdpAccessServerConfig {
+    listen_addr: Arc<str>,
+    destination: Arc<str>,
+    proxy_table: SharableConfig<UdpProxyTableBuilder>,
+}
+
+impl UdpAccessServerConfig {
+    pub fn into_builder(
+        self,
+        proxy_tables: &HashMap<Arc<str>, UdpProxyTable>,
+    ) -> UdpAccessServerBuilder {
+        let proxy_table = match self.proxy_table {
+            SharableConfig::SharingKey(key) => proxy_tables.get(&key).unwrap().clone(),
+            SharableConfig::Private(x) => x.build(),
+        };
+
+        UdpAccessServerBuilder {
+            listen_addr: self.listen_addr,
+            destination: self.destination,
+            proxy_table,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct UdpAccessServerBuilder {
     listen_addr: Arc<str>,
-    proxy_table: UdpProxyTableBuilder,
     destination: Arc<str>,
+    proxy_table: UdpProxyTable,
 }
 
 #[async_trait]
@@ -44,10 +71,7 @@ impl loading::Builder for UdpAccessServerBuilder {
     }
 
     fn build_hook(self) -> io::Result<UdpAccess> {
-        Ok(UdpAccess::new(
-            self.proxy_table.build(),
-            self.destination.into(),
-        ))
+        Ok(UdpAccess::new(self.proxy_table, self.destination.into()))
     }
 }
 

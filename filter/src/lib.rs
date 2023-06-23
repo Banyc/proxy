@@ -39,7 +39,7 @@ impl MatchActBuilder {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Filter {
     match_acts: Arc<[MatchAct]>,
 }

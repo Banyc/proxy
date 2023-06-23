@@ -1,7 +1,29 @@
+[access_server]
+# stream_pool = ["tcp://"]
+# [access_server.stream_proxy_tables]
+# "default" = { chains = [
+#     { weight = 1, chain = [
+#         { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
+#     ],                        payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
+# ], trace_rtt = false }
+# [access_server.udp_proxy_tables]
+# "default" = { chains = [
+#     { weight = 1, chain = [
+#         { address = "", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
+#     ] },
+# ], trace_rtt = false }
+# [access_server.filters]
+# "default" = [
+#     { match = "127\\.0\\.0\\.1:", action = "direct" },
+#     { match = "[::1]:", action = "direct" },
+#     { match = "localhost:", action = "direct" },
+#     # { match = "", action = "block" },
+# ]
+
 [[access_server.tcp_server]]
 listen_addr = ""
 destination = "tcp://"
-# stream_pool = ["tcp://"]
+# proxy_table = "default"
 proxy_table = { chains = [
     { weight = 1, chain = [
         { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
@@ -11,6 +33,7 @@ proxy_table = { chains = [
 [[access_server.udp_server]]
 listen_addr = ""
 destination = ""
+# proxy_table = "default"
 proxy_table = { chains = [
     { weight = 1, chain = [
         { address = "", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
@@ -19,12 +42,13 @@ proxy_table = { chains = [
 
 [[access_server.http_server]]
 listen_addr = ""
-# stream_pool = ["tcp://"]
+# proxy_table = "default"
 proxy_table = { chains = [
     { weight = 1, chain = [
         { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
     ],                        payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
 ], trace_rtt = false }
+# filter = "default"
 filter = [
     { match = "127\\.0\\.0\\.1:", action = "direct" },
     { match = "[::1]:", action = "direct" },

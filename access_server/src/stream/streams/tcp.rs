@@ -1,4 +1,4 @@
-use std::{io, sync::Arc};
+use std::{collections::HashMap, io, sync::Arc};
 
 use async_trait::async_trait;
 use common::{
@@ -6,7 +6,7 @@ use common::{
     stream::{
         addr::{StreamAddr, StreamAddrBuilder},
         copy_bidirectional_with_payload_crypto,
-        pool::{Pool, PoolBuilder},
+        pool::Pool,
         proxy_table::StreamProxyTable,
         streams::tcp::TcpServer,
         tokio_io, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
@@ -18,14 +18,41 @@ use thiserror::Error;
 use tokio::net::ToSocketAddrs;
 use tracing::{error, info, instrument, warn};
 
-use crate::stream::proxy_table::StreamProxyTableBuilder;
+use crate::{stream::proxy_table::StreamProxyTableBuilder, SharableConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TcpAccessServerConfig {
+    listen_addr: Arc<str>,
+    destination: StreamAddrBuilder,
+    proxy_table: SharableConfig<StreamProxyTableBuilder>,
+}
+
+impl TcpAccessServerConfig {
+    pub fn into_builder(
+        self,
+        stream_pool: Pool,
+        proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
+    ) -> TcpAccessServerBuilder {
+        let proxy_table = match self.proxy_table {
+            SharableConfig::SharingKey(key) => proxy_tables.get(&key).unwrap().clone(),
+            SharableConfig::Private(x) => x.build(&stream_pool),
+        };
+
+        TcpAccessServerBuilder {
+            listen_addr: self.listen_addr,
+            destination: self.destination,
+            proxy_table,
+            stream_pool,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct TcpAccessServerBuilder {
     listen_addr: Arc<str>,
-    proxy_table: StreamProxyTableBuilder,
     destination: StreamAddrBuilder,
-    stream_pool: PoolBuilder,
+    proxy_table: StreamProxyTable,
+    stream_pool: Pool,
 }
 
 #[async_trait]
@@ -45,11 +72,10 @@ impl loading::Builder for TcpAccessServerBuilder {
     }
 
     fn build_hook(self) -> io::Result<Self::Hook> {
-        let stream_pool = self.stream_pool.build();
         Ok(TcpAccess::new(
-            self.proxy_table.build(&stream_pool),
+            self.proxy_table,
             self.destination.build(),
-            stream_pool,
+            self.stream_pool,
         ))
     }
 }

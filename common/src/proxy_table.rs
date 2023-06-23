@@ -52,7 +52,7 @@ where
     pairs
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProxyTable<A> {
     chains: Arc<[GaugedProxyChain<A>]>,
     cum_weight: usize,
