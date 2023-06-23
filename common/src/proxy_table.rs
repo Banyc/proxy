@@ -26,6 +26,9 @@ pub struct ProxyConfig<A> {
     pub crypto: XorCrypto,
 }
 
+/// # Panic
+///
+/// `nodes` must not be empty.
 pub fn convert_proxies_to_header_crypto_pairs<A>(
     nodes: &ProxyChain<A>,
     destination: Option<A>,
