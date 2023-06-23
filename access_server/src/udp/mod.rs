@@ -10,7 +10,7 @@ use common::{
         UdpServerHook, UpstreamAddr, BUFFER_LENGTH, LIVE_CHECK_INTERVAL, TIMEOUT,
     },
 };
-use proxy_client::udp::{EstablishError, RecvError, SendError, UdpProxyClient, UdpTracer};
+use proxy_client::udp::{EstablishError, RecvError, SendError, UdpProxyClient};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
@@ -24,7 +24,6 @@ pub mod proxy_table;
 pub struct UdpAccessServerBuilder {
     listen_addr: Arc<str>,
     proxy_table: UdpProxyTableBuilder,
-    trace_rtt: bool,
     destination: Arc<str>,
 }
 
@@ -45,12 +44,8 @@ impl loading::Builder for UdpAccessServerBuilder {
     }
 
     fn build_hook(self) -> io::Result<UdpAccess> {
-        let tracer = match self.trace_rtt {
-            true => Some(UdpTracer::new()),
-            false => None,
-        };
         Ok(UdpAccess::new(
-            self.proxy_table.build::<UdpTracer>(tracer),
+            self.proxy_table.build(),
             self.destination.into(),
         ))
     }

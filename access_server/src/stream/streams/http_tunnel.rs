@@ -20,7 +20,7 @@ use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::{
     body::Incoming, http, service::service_fn, upgrade::Upgraded, Method, Request, Response,
 };
-use proxy_client::stream::{establish, StreamEstablishError, StreamTracer};
+use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
@@ -35,7 +35,6 @@ use crate::stream::proxy_table::StreamProxyTableBuilder;
 pub struct HttpAccessServerBuilder {
     listen_addr: Arc<str>,
     proxy_table: StreamProxyTableBuilder,
-    trace_rtt: bool,
     stream_pool: PoolBuilder,
     filter: FilterBuilder,
 }
@@ -58,12 +57,8 @@ impl loading::Builder for HttpAccessServerBuilder {
 
     fn build_hook(self) -> io::Result<HttpAccess> {
         let stream_pool = self.stream_pool.build();
-        let tracer = match self.trace_rtt {
-            true => Some(StreamTracer::new(stream_pool.clone())),
-            false => None,
-        };
         let access = HttpAccess::new(
-            self.proxy_table.build::<StreamTracer>(tracer),
+            self.proxy_table.build(&stream_pool),
             stream_pool,
             self.filter.build().map_err(|e| {
                 io::Error::new(

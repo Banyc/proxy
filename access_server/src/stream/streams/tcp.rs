@@ -12,7 +12,7 @@ use common::{
         tokio_io, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };
-use proxy_client::stream::{establish, StreamEstablishError, StreamTracer};
+use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::ToSocketAddrs;
@@ -24,7 +24,6 @@ use crate::stream::proxy_table::StreamProxyTableBuilder;
 pub struct TcpAccessServerBuilder {
     listen_addr: Arc<str>,
     proxy_table: StreamProxyTableBuilder,
-    trace_rtt: bool,
     destination: StreamAddrBuilder,
     stream_pool: PoolBuilder,
 }
@@ -47,12 +46,8 @@ impl loading::Builder for TcpAccessServerBuilder {
 
     fn build_hook(self) -> io::Result<Self::Hook> {
         let stream_pool = self.stream_pool.build();
-        let tracer = match self.trace_rtt {
-            true => Some(StreamTracer::new(stream_pool.clone())),
-            false => None,
-        };
         Ok(TcpAccess::new(
-            self.proxy_table.build::<StreamTracer>(tracer),
+            self.proxy_table.build(&stream_pool),
             self.destination.build(),
             stream_pool,
         ))
