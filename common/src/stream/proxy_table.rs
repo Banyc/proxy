@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     crypto::XorCrypto,
-    proxy_table::{ProxyConfig, ProxyTable, Tracer, WeightedProxyChain},
+    proxy_table::{ProxyConfig, ProxyTable, WeightedProxyChain},
 };
 
 use super::StreamAddr;
@@ -38,22 +38,6 @@ impl StreamWeightedProxyChainBuilder {
             chain: self.chain.into_iter().map(|c| c.build()).collect(),
             payload_crypto: self.payload_xor_key.map(XorCrypto::new),
         }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct StreamProxyTableBuilder {
-    pub chains: Vec<StreamWeightedProxyChainBuilder>,
-}
-
-impl StreamProxyTableBuilder {
-    pub fn build<T>(self, tracer: Option<T>) -> StreamProxyTable
-    where
-        T: Tracer<Address = StreamAddr> + Send + Sync + 'static,
-    {
-        let chains = self.chains.into_iter().map(|c| c.build()).collect();
-        ProxyTable::new(chains, tracer).expect("Proxy chain is invalid")
     }
 }
 

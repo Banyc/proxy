@@ -6,9 +6,8 @@ use common::{
     addr::InternetAddr,
     loading,
     udp::{
-        proxy_table::{UdpProxyTable, UdpProxyTableBuilder},
-        Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
-        BUFFER_LENGTH, LIVE_CHECK_INTERVAL, TIMEOUT,
+        proxy_table::UdpProxyTable, Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer,
+        UdpServerHook, UpstreamAddr, BUFFER_LENGTH, LIVE_CHECK_INTERVAL, TIMEOUT,
     },
 };
 use proxy_client::udp::{EstablishError, RecvError, SendError, UdpProxyClient, UdpTracer};
@@ -16,6 +15,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tracing::{error, info, trace, warn};
+
+use self::proxy_table::UdpProxyTableBuilder;
+
+pub mod proxy_table;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UdpAccessServerBuilder {

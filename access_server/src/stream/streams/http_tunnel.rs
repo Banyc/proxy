@@ -9,7 +9,7 @@ use common::{
         addr::{StreamAddr, StreamType},
         copy_bidirectional_with_payload_crypto,
         pool::{Pool, PoolBuilder},
-        proxy_table::{StreamProxyTable, StreamProxyTableBuilder},
+        proxy_table::StreamProxyTable,
         streams::{tcp::TcpServer, xor::XorStream},
         tokio_io, FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamMetrics,
         StreamServerHook, TunnelMetrics,
@@ -28,6 +28,8 @@ use tokio::{
     net::ToSocketAddrs,
 };
 use tracing::{error, info, instrument, trace, warn};
+
+use crate::stream::proxy_table::StreamProxyTableBuilder;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpAccessServerBuilder {

@@ -1,13 +1,14 @@
 use std::io;
 
 use common::{error::AnyResult, loading};
-use http_tunnel::{HttpAccess, HttpAccessServerBuilder};
 use serde::{Deserialize, Serialize};
-use tcp::{TcpAccess, TcpAccessServerBuilder};
+use stream::streams::{
+    http_tunnel::{HttpAccess, HttpAccessServerBuilder},
+    tcp::{TcpAccess, TcpAccessServerBuilder},
+};
 use udp::{UdpAccess, UdpAccessServerBuilder};
 
-pub mod http_tunnel;
-pub mod tcp;
+pub mod stream;
 pub mod udp;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
