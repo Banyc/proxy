@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use common::{
     addr::InternetAddr,
+    config::SharableConfig,
     filter::{self, Filter, FilterBuilder},
     loading,
     stream::{
@@ -14,7 +15,7 @@ use common::{
         streams::{tcp::TcpServer, xor::XorStream},
         tokio_io, FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamMetrics,
         StreamServerHook, TunnelMetrics,
-    }, config::SharableConfig,
+    },
 };
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::{
@@ -29,7 +30,7 @@ use tokio::{
 };
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::{stream::proxy_table::StreamProxyTableBuilder};
+use crate::stream::proxy_table::StreamProxyTableBuilder;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpAccessServerConfig {
@@ -51,7 +52,7 @@ impl HttpAccessServerConfig {
         };
         let filter = match self.filter {
             SharableConfig::SharingKey(key) => filters.get(&key).unwrap().clone(),
-            SharableConfig::Private(x) => x.build().unwrap(),
+            SharableConfig::Private(x) => x.build(filters).unwrap(),
         };
 
         HttpAccessServerBuilder {

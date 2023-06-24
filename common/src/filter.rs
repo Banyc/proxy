@@ -1,26 +1,74 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+use crate::config::SharableConfig;
+
+pub fn build_from_map(
+    builders: HashMap<Arc<str>, FilterBuilder>,
+) -> Result<HashMap<Arc<str>, Filter>, FilterBuildError> {
+    let mut rounds = 0;
+    let mut filters = HashMap::new();
+    while filters.len() < builders.len() {
+        if rounds >= builders.len() {
+            return Err(FilterBuildError::KeyNotFound);
+        }
+        rounds += 1;
+
+        for (k, v) in &builders {
+            let v = match v.clone().build(&filters) {
+                Ok(v) => v,
+                Err(FilterBuildError::KeyNotFound) => continue,
+                Err(e) => return Err(e),
+            };
+            filters.insert(k.clone(), v);
+        }
+    }
+    Ok(filters)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct FilterBuilder {
-    pub match_acts: Option<Vec<MatchActBuilder>>,
+    pub match_acts: Option<Vec<SharableConfig<MatchActBuilder>>>,
 }
 
 impl FilterBuilder {
-    pub fn build(self) -> Result<Filter, regex::Error> {
+    pub fn build(self, filters: &HashMap<Arc<str>, Filter>) -> Result<Filter, FilterBuildError> {
         let mut match_acts = Vec::new();
         if let Some(self_match_acts) = self.match_acts {
             for match_act in self_match_acts {
-                match_acts.push(match_act.build()?);
+                match match_act {
+                    SharableConfig::SharingKey(key) => {
+                        match_acts.extend(
+                            filters
+                                .get(&key)
+                                .ok_or(FilterBuildError::KeyNotFound)?
+                                .match_acts
+                                .iter()
+                                .cloned(),
+                        );
+                    }
+                    SharableConfig::Private(match_act) => {
+                        match_acts.push(match_act.build()?);
+                    }
+                }
             }
         }
         Ok(Filter {
             match_acts: match_acts.into(),
         })
     }
+}
+
+#[derive(Debug, Error)]
+pub enum FilterBuildError {
+    #[error("Regex error: {0}")]
+    Regex(#[from] regex::Error),
+    #[error("Key not found")]
+    KeyNotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,7 +92,7 @@ pub struct Filter {
     match_acts: Arc<[MatchAct]>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MatchAct {
     matcher: Regex,
     action: Action,

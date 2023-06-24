@@ -14,10 +14,13 @@
 # ], trace_rtt = false }
 # [access_server.filters]
 # "default" = [
+#     "localhost",
+#     # { match = "", action = "block" },
+# ]
+# "localhost" = [
 #     { match = "127\\.0\\.0\\.1:", action = "direct" },
 #     { match = "[::1]:", action = "direct" },
 #     { match = "localhost:", action = "direct" },
-#     # { match = "", action = "block" },
 # ]
 
 [[access_server.tcp_server]]

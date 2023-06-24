@@ -1,6 +1,11 @@
 use std::{collections::HashMap, io, sync::Arc};
 
-use common::{error::AnyResult, filter::FilterBuilder, loading, stream::pool::PoolBuilder};
+use common::{
+    error::AnyResult,
+    filter::{self, FilterBuilder},
+    loading,
+    stream::pool::PoolBuilder,
+};
 use serde::{Deserialize, Serialize};
 use stream::{
     proxy_table::StreamProxyTableBuilder,
@@ -55,11 +60,8 @@ impl AccessServerConfig {
             .into_iter()
             .map(|(k, v)| (k, v.build()))
             .collect::<HashMap<_, _>>();
-        let filters = self.filters.unwrap_or_default();
-        let filters = filters
-            .into_iter()
-            .map(|(k, v)| (k, v.build().unwrap()))
-            .collect::<HashMap<_, _>>();
+        let filters = filter::build_from_map(self.filters.unwrap_or_default())
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
         // TCP servers
         let tcp_server = self.tcp_server.unwrap_or_default();
