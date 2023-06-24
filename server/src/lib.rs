@@ -53,7 +53,10 @@ where
                     }
                 };
 
-                load(config, &mut join_set, &mut access_server_loader, &mut proxy_server_loader).await.map_err(ServeError::Load)?;
+                if let Err(e) = load(config, &mut join_set, &mut access_server_loader, &mut proxy_server_loader).await {
+                    warn!(?e, "Failed to load config");
+                    continue;
+                }
             }
         }
     }
