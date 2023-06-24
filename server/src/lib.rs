@@ -21,19 +21,13 @@ where
     let mut proxy_server_loader = ProxyServerLoader::new();
     let mut join_set = tokio::task::JoinSet::new();
 
-    let config = config_reader
-        .read_config()
-        .await
-        .map_err(ServeError::Config)?;
-
-    load(
-        config,
+    read_and_load_config(
+        &config_reader,
         &mut join_set,
         &mut access_server_loader,
         &mut proxy_server_loader,
     )
-    .await
-    .map_err(ServeError::Load)?;
+    .await?;
 
     loop {
         tokio::select! {
@@ -45,21 +39,36 @@ where
             _ = notify_rx.notified() => {
                 info!("Config file changed");
 
-                let config = match config_reader.read_config().await {
-                    Ok(config) => config,
-                    Err(e) => {
-                        warn!(?e, "Failed to read config file");
-                        continue;
-                    }
-                };
-
-                if let Err(e) = load(config, &mut join_set, &mut access_server_loader, &mut proxy_server_loader).await {
-                    warn!(?e, "Failed to load config");
-                    continue;
+                if let Err(e) = read_and_load_config(
+                    &config_reader,
+                    &mut join_set,
+                    &mut access_server_loader,
+                    &mut proxy_server_loader,
+                ).await {
+                    warn!(?e, "Failed to read and load config");
                 }
             }
         }
     }
+}
+
+async fn read_and_load_config<CR>(
+    config_reader: &CR,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+    access_server_loader: &mut AccessServerLoader,
+    proxy_server_loader: &mut ProxyServerLoader,
+) -> Result<(), ServeError>
+where
+    CR: ConfigReader<Config = ServerConfig>,
+{
+    let config = config_reader
+        .read_config()
+        .await
+        .map_err(ServeError::Config)?;
+    load(config, join_set, access_server_loader, proxy_server_loader)
+        .await
+        .map_err(ServeError::Load)?;
+    Ok(())
 }
 
 #[derive(Debug, Error)]
