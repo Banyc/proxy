@@ -11,16 +11,20 @@ pub fn build_from_map(
 ) -> Result<HashMap<Arc<str>, Filter>, FilterBuildError> {
     let mut rounds = 0;
     let mut filters = HashMap::new();
+    let mut last_key_not_found = None;
     while filters.len() < builders.len() {
         if rounds >= builders.len() {
-            return Err(FilterBuildError::KeyNotFound);
+            return Err(FilterBuildError::KeyNotFound(last_key_not_found.unwrap()));
         }
         rounds += 1;
 
         for (k, v) in &builders {
             let v = match v.clone().build(&filters) {
                 Ok(v) => v,
-                Err(FilterBuildError::KeyNotFound) => continue,
+                Err(FilterBuildError::KeyNotFound(key)) => {
+                    last_key_not_found = Some(key.clone());
+                    continue;
+                }
                 Err(e) => return Err(e),
             };
             filters.insert(k.clone(), v);
@@ -45,7 +49,7 @@ impl FilterBuilder {
                         match_acts.extend(
                             filters
                                 .get(&key)
-                                .ok_or(FilterBuildError::KeyNotFound)?
+                                .ok_or_else(|| FilterBuildError::KeyNotFound(key.clone()))?
                                 .match_acts
                                 .iter()
                                 .cloned(),
@@ -67,8 +71,8 @@ impl FilterBuilder {
 pub enum FilterBuildError {
     #[error("Regex error: {0}")]
     Regex(#[from] regex::Error),
-    #[error("Key not found")]
-    KeyNotFound,
+    #[error("Key not found: {0}")]
+    KeyNotFound(Arc<str>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

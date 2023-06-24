@@ -2,6 +2,7 @@ use std::{collections::HashMap, io, sync::Arc};
 
 use async_trait::async_trait;
 use common::{
+    config::SharableConfig,
     loading,
     stream::{
         addr::{StreamAddr, StreamAddrBuilder},
@@ -10,7 +11,7 @@ use common::{
         proxy_table::StreamProxyTable,
         streams::tcp::TcpServer,
         tokio_io, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
-    }, config::SharableConfig,
+    },
 };
 use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
@@ -18,7 +19,7 @@ use thiserror::Error;
 use tokio::net::ToSocketAddrs;
 use tracing::{error, info, instrument, warn};
 
-use crate::{stream::proxy_table::StreamProxyTableBuilder};
+use crate::stream::proxy_table::StreamProxyTableBuilder;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TcpAccessServerConfig {
@@ -32,19 +33,28 @@ impl TcpAccessServerConfig {
         self,
         stream_pool: Pool,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
-    ) -> TcpAccessServerBuilder {
+    ) -> Result<TcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
-            SharableConfig::SharingKey(key) => proxy_tables.get(&key).unwrap().clone(),
+            SharableConfig::SharingKey(key) => proxy_tables
+                .get(&key)
+                .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
+                .clone(),
             SharableConfig::Private(x) => x.build(&stream_pool),
         };
 
-        TcpAccessServerBuilder {
+        Ok(TcpAccessServerBuilder {
             listen_addr: self.listen_addr,
             destination: self.destination,
             proxy_table,
             stream_pool,
-        }
+        })
     }
+}
+
+#[derive(Debug, Error)]
+pub enum BuildError {
+    #[error("Proxy table key not found: {0}")]
+    ProxyTableKeyNotFound(Arc<str>),
 }
 
 #[derive(Debug, Clone)]

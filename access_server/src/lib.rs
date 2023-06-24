@@ -68,7 +68,8 @@ impl AccessServerConfig {
         let tcp_server = tcp_server
             .into_iter()
             .map(|c| c.into_builder(stream_pool.clone(), &stream_proxy_tables))
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         loader.tcp_server.load(join_set, tcp_server).await?;
 
         // UDP servers
@@ -76,7 +77,8 @@ impl AccessServerConfig {
         let udp_server = udp_server
             .into_iter()
             .map(|c| c.into_builder(&udp_proxy_tables))
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         loader.udp_server.load(join_set, udp_server).await?;
 
         // HTTP servers
@@ -84,7 +86,8 @@ impl AccessServerConfig {
         let http_server = http_server
             .into_iter()
             .map(|c| c.into_builder(stream_pool.clone(), &stream_proxy_tables, &filters))
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         loader.http_server.load(join_set, http_server).await?;
 
         Ok(())

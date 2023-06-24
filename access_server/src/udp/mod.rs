@@ -4,11 +4,12 @@ use async_trait::async_trait;
 use common::{
     addr::any_addr,
     addr::InternetAddr,
+    config::SharableConfig,
     loading,
     udp::{
         proxy_table::UdpProxyTable, Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer,
         UdpServerHook, UpstreamAddr, BUFFER_LENGTH, LIVE_CHECK_INTERVAL, TIMEOUT,
-    }, config::SharableConfig,
+    },
 };
 use proxy_client::udp::{EstablishError, RecvError, SendError, UdpProxyClient};
 use serde::{Deserialize, Serialize};
@@ -31,18 +32,27 @@ impl UdpAccessServerConfig {
     pub fn into_builder(
         self,
         proxy_tables: &HashMap<Arc<str>, UdpProxyTable>,
-    ) -> UdpAccessServerBuilder {
+    ) -> Result<UdpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
-            SharableConfig::SharingKey(key) => proxy_tables.get(&key).unwrap().clone(),
+            SharableConfig::SharingKey(key) => proxy_tables
+                .get(&key)
+                .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
+                .clone(),
             SharableConfig::Private(x) => x.build(),
         };
 
-        UdpAccessServerBuilder {
+        Ok(UdpAccessServerBuilder {
             listen_addr: self.listen_addr,
             destination: self.destination,
             proxy_table,
-        }
+        })
     }
+}
+
+#[derive(Debug, Error)]
+pub enum BuildError {
+    #[error("Proxy table key not found: {0}")]
+    ProxyTableKeyNotFound(Arc<str>),
 }
 
 #[derive(Debug, Clone)]

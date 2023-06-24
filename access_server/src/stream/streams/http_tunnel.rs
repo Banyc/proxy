@@ -45,23 +45,39 @@ impl HttpAccessServerConfig {
         stream_pool: Pool,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
         filters: &HashMap<Arc<str>, Filter>,
-    ) -> HttpAccessServerBuilder {
+    ) -> Result<HttpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
-            SharableConfig::SharingKey(key) => proxy_tables.get(&key).unwrap().clone(),
+            SharableConfig::SharingKey(key) => proxy_tables
+                .get(&key)
+                .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
+                .clone(),
             SharableConfig::Private(x) => x.build(&stream_pool),
         };
         let filter = match self.filter {
-            SharableConfig::SharingKey(key) => filters.get(&key).unwrap().clone(),
-            SharableConfig::Private(x) => x.build(filters).unwrap(),
+            SharableConfig::SharingKey(key) => filters
+                .get(&key)
+                .ok_or_else(|| BuildError::FilterKeyNotFound(key.clone()))?
+                .clone(),
+            SharableConfig::Private(x) => x.build(filters)?,
         };
 
-        HttpAccessServerBuilder {
+        Ok(HttpAccessServerBuilder {
             listen_addr: self.listen_addr,
             proxy_table,
             stream_pool,
             filter,
-        }
+        })
     }
+}
+
+#[derive(Debug, Error)]
+pub enum BuildError {
+    #[error("Proxy table key not found: {0}")]
+    ProxyTableKeyNotFound(Arc<str>),
+    #[error("Filter key not found: {0}")]
+    FilterKeyNotFound(Arc<str>),
+    #[error("Filter error: {0}")]
+    Filter(#[from] filter::FilterBuildError),
 }
 
 #[derive(Debug, Clone)]
