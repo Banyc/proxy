@@ -7,7 +7,7 @@ use tokio::{
     sync::mpsc,
 };
 use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
-use tracing::{error, info, instrument, trace, warn};
+use tracing::{error, info, instrument, trace};
 
 use crate::{
     addr::any_addr,
@@ -172,10 +172,7 @@ pub struct KcpConnector;
 impl ConnectStream for KcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
         let config = fast_kcp_config();
-        let stream = KcpStream::connect(&config, addr).await.map_err(|e| {
-            warn!(?e, ?addr, "Failed to connect to address");
-            e
-        })?;
+        let stream = KcpStream::connect(&config, addr).await?;
         let local_addr = any_addr(&addr.ip());
         let stream = AddressedKcpStream {
             stream,
