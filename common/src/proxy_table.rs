@@ -136,7 +136,7 @@ where
         let losses_hat = normalize(&losses);
 
         (0..self.chains.len())
-            .map(|i| (1. - losses_hat[i]).powi(2) * (1. - rtt_hat[i]).powi(2) * weights_hat[i])
+            .map(|i| (1. - losses_hat[i]).powi(3) * (1. - rtt_hat[i]).powi(2) * weights_hat[i])
             .collect::<Vec<_>>()
     }
 }
