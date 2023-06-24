@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "access_server",
     "common",
-    "filter",
     "proxy_client",
     "proxy_server",
     "server",

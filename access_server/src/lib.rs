@@ -1,7 +1,6 @@
 use std::{collections::HashMap, io, sync::Arc};
 
-use common::{error::AnyResult, loading, stream::pool::PoolBuilder};
-use filter::FilterBuilder;
+use common::{error::AnyResult, filter::FilterBuilder, loading, stream::pool::PoolBuilder};
 use serde::{Deserialize, Serialize};
 use stream::{
     proxy_table::StreamProxyTableBuilder,

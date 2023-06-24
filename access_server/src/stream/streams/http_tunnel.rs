@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use common::{
     addr::InternetAddr,
+    filter::{self, Filter, FilterBuilder},
     loading,
     stream::{
         addr::{StreamAddr, StreamType},
@@ -15,7 +16,6 @@ use common::{
         StreamServerHook, TunnelMetrics,
     },
 };
-use filter::{Filter, FilterBuilder};
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::{
     body::Incoming, http, service::service_fn, upgrade::Upgraded, Method, Request, Response,
