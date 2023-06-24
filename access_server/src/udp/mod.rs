@@ -8,15 +8,13 @@ use common::{
     udp::{
         proxy_table::UdpProxyTable, Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer,
         UdpServerHook, UpstreamAddr, BUFFER_LENGTH, LIVE_CHECK_INTERVAL, TIMEOUT,
-    },
+    }, config::SharableConfig,
 };
 use proxy_client::udp::{EstablishError, RecvError, SendError, UdpProxyClient};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tracing::{error, info, trace, warn};
-
-use crate::SharableConfig;
 
 use self::proxy_table::UdpProxyTableBuilder;
 

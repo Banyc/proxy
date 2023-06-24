@@ -10,7 +10,7 @@ use common::{
         proxy_table::StreamProxyTable,
         streams::tcp::TcpServer,
         tokio_io, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
-    },
+    }, config::SharableConfig,
 };
 use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,7 @@ use thiserror::Error;
 use tokio::net::ToSocketAddrs;
 use tracing::{error, info, instrument, warn};
 
-use crate::{stream::proxy_table::StreamProxyTableBuilder, SharableConfig};
+use crate::{stream::proxy_table::StreamProxyTableBuilder};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TcpAccessServerConfig {

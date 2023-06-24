@@ -14,7 +14,7 @@ use common::{
         streams::{tcp::TcpServer, xor::XorStream},
         tokio_io, FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamMetrics,
         StreamServerHook, TunnelMetrics,
-    },
+    }, config::SharableConfig,
 };
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::{
@@ -29,7 +29,7 @@ use tokio::{
 };
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::{stream::proxy_table::StreamProxyTableBuilder, SharableConfig};
+use crate::{stream::proxy_table::StreamProxyTableBuilder};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpAccessServerConfig {

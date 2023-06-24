@@ -15,13 +15,6 @@ pub mod stream;
 pub mod udp;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum SharableConfig<T> {
-    SharingKey(Arc<str>),
-    Private(T),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessServerConfig {
     pub tcp_server: Option<Vec<TcpAccessServerConfig>>,
     pub udp_server: Option<Vec<UdpAccessServerConfig>>,

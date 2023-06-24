@@ -1,5 +1,6 @@
 pub mod addr;
 pub mod cache_cell;
+pub mod config;
 pub mod crypto;
 pub mod error;
 pub mod filter;
