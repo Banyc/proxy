@@ -250,7 +250,11 @@ where
                     }
                 }
             }
-            let rtt = rtt_sum / (rtt_count as u32);
+            let rtt = if rtt_count == 0 {
+                None
+            } else {
+                Some(rtt_sum / (rtt_count as u32))
+            };
             let loss = (TRACES_PER_WAVE - rtt_count) as f64 / TRACES_PER_WAVE as f64;
 
             // Store RTT
@@ -258,7 +262,7 @@ where
             info!(%addresses, ?rtt, ?loss, "Traced RTT");
             {
                 let mut rtt_store = rtt_store.write().unwrap();
-                *rtt_store = Some(rtt);
+                *rtt_store = rtt;
             }
             {
                 let mut loss_store = loss_store.write().unwrap();
