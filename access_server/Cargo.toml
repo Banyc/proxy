@@ -5,6 +5,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-speed-limit = { git = "https://github.com/tikv/async-speed-limit.git", rev = "36d79e063144cf0cdfc258c9e127c84f10a53b57", features = ["tokio"] }
 async-trait = "0.1.68"
 bytes = "1.4.0"
 common = { path = "../common" }

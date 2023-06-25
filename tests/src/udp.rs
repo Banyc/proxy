@@ -6,7 +6,7 @@ mod tests {
         addr::InternetAddr, header::route::RouteErrorKind, loading::Server,
         proxy_table::ProxyConfig, udp::proxy_table::UdpProxyConfig,
     };
-    use proxy_client::udp::{trace_rtt, RecvError, UdpProxyClient};
+    use proxy_client::udp::{trace_rtt, RecvError, UdpProxyClient, UdpProxyClientReadHalf};
     use proxy_server::udp::UdpProxy;
     use tokio::net::UdpSocket;
 
@@ -44,7 +44,10 @@ mod tests {
         greet_addr.into()
     }
 
-    async fn read_response(client: &mut UdpProxyClient, resp_msg: &[u8]) -> Result<(), RecvError> {
+    async fn read_response(
+        client: &mut UdpProxyClientReadHalf,
+        resp_msg: &[u8],
+    ) -> Result<(), RecvError> {
         let mut buf = [0; 1024];
         let n = client.recv(&mut buf).await?;
         let msg_buf = &buf[..n];
@@ -68,15 +71,16 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut client = UdpProxyClient::establish(proxies.clone(), greet_addr)
+        let client = UdpProxyClient::establish(proxies.clone(), greet_addr)
             .await
             .unwrap();
+        let (mut client_read, mut client_write) = client.into_split();
 
         // Send message
-        client.send(req_msg).await.unwrap();
+        client_write.send(req_msg).await.unwrap();
 
         // Read response
-        read_response(&mut client, resp_msg).await.unwrap();
+        read_response(&mut client_read, resp_msg).await.unwrap();
 
         // Trace
         let rtt = trace_rtt(&proxies).await.unwrap();
@@ -107,15 +111,16 @@ mod tests {
             let greet_addr = greet_addr.clone();
             handles.spawn(async move {
                 // Connect to proxy server
-                let mut client = UdpProxyClient::establish(proxies, greet_addr)
+                let client = UdpProxyClient::establish(proxies, greet_addr)
                     .await
                     .unwrap();
+                let (mut client_read, mut client_write) = client.into_split();
 
                 // Send message
-                client.send(req_msg).await.unwrap();
+                client_write.send(req_msg).await.unwrap();
 
                 // Read response
-                read_response(&mut client, resp_msg).await.unwrap();
+                read_response(&mut client_read, resp_msg).await.unwrap();
             });
         }
 
@@ -150,15 +155,16 @@ mod tests {
                 for _ in 0..10 {
                     let greet_addr = greet_addr.clone();
                     // Connect to proxy server
-                    let mut client = UdpProxyClient::establish(proxies.clone(), greet_addr)
+                    let client = UdpProxyClient::establish(proxies.clone(), greet_addr)
                         .await
                         .unwrap();
+                    let (mut client_read, mut client_write) = client.into_split();
 
                     // Send message
-                    client.send(req_msg).await.unwrap();
+                    client_write.send(req_msg).await.unwrap();
 
                     // Read response
-                    read_response(&mut client, resp_msg).await.unwrap();
+                    read_response(&mut client_read, resp_msg).await.unwrap();
                 }
             });
         }
@@ -183,18 +189,19 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut client = UdpProxyClient::establish(
+        let client = UdpProxyClient::establish(
             vec![proxy_1_config.clone(), proxy_2_config, proxy_3_config].into(),
             greet_addr,
         )
         .await
         .unwrap();
+        let (mut client_read, mut client_write) = client.into_split();
 
         // Send message
-        client.send(req_msg).await.unwrap();
+        client_write.send(req_msg).await.unwrap();
 
         // Read response
-        let err = read_response(&mut client, resp_msg).await.unwrap_err();
+        let err = read_response(&mut client_read, resp_msg).await.unwrap_err();
 
         match err {
             RecvError::Response { err, addr } => {
@@ -220,14 +227,15 @@ mod tests {
         let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let mut client = UdpProxyClient::establish(vec![].into(), greet_addr)
+        let client = UdpProxyClient::establish(vec![].into(), greet_addr)
             .await
             .unwrap();
+        let (mut client_read, mut client_write) = client.into_split();
 
         // Send message
-        client.send(req_msg).await.unwrap();
+        client_write.send(req_msg).await.unwrap();
 
         // Read response
-        read_response(&mut client, resp_msg).await.unwrap();
+        read_response(&mut client_read, resp_msg).await.unwrap();
     }
 }

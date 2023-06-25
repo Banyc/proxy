@@ -1,5 +1,11 @@
-use std::{collections::HashMap, io, net::Ipv4Addr, sync::Arc};
+use std::{
+    collections::HashMap,
+    io,
+    net::Ipv4Addr,
+    sync::{Arc, RwLock},
+};
 
+use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use common::{
     addr::any_addr,
@@ -23,9 +29,10 @@ pub mod proxy_table;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UdpAccessServerConfig {
-    listen_addr: Arc<str>,
-    destination: Arc<str>,
-    proxy_table: SharableConfig<UdpProxyTableBuilder>,
+    pub listen_addr: Arc<str>,
+    pub destination: Arc<str>,
+    pub proxy_table: SharableConfig<UdpProxyTableBuilder>,
+    pub speed_limit: Option<f64>,
 }
 
 impl UdpAccessServerConfig {
@@ -45,6 +52,7 @@ impl UdpAccessServerConfig {
             listen_addr: self.listen_addr,
             destination: self.destination,
             proxy_table,
+            speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
         })
     }
 }
@@ -60,6 +68,7 @@ pub struct UdpAccessServerBuilder {
     listen_addr: Arc<str>,
     destination: Arc<str>,
     proxy_table: UdpProxyTable,
+    speed_limit: f64,
 }
 
 #[async_trait]
@@ -79,7 +88,11 @@ impl loading::Builder for UdpAccessServerBuilder {
     }
 
     fn build_hook(self) -> io::Result<UdpAccess> {
-        Ok(UdpAccess::new(self.proxy_table, self.destination.into()))
+        Ok(UdpAccess::new(
+            self.proxy_table,
+            self.destination.into(),
+            self.speed_limit,
+        ))
     }
 }
 
@@ -87,15 +100,17 @@ impl loading::Builder for UdpAccessServerBuilder {
 pub struct UdpAccess {
     proxy_table: UdpProxyTable,
     destination: InternetAddr,
+    speed_limit: f64,
 }
 
 impl loading::Hook for UdpAccess {}
 
 impl UdpAccess {
-    pub fn new(proxy_table: UdpProxyTable, destination: InternetAddr) -> Self {
+    pub fn new(proxy_table: UdpProxyTable, destination: InternetAddr, speed_limit: f64) -> Self {
         Self {
             proxy_table,
             destination,
+            speed_limit,
         }
     }
 
@@ -119,24 +134,32 @@ impl UdpAccess {
 
         // Connect to upstream
         let proxy_chain = self.proxy_table.choose_chain();
-        let mut upstream =
+        let upstream =
             UdpProxyClient::establish(proxy_chain.chain.clone(), self.destination.clone()).await?;
 
         // Periodic check if the flow is still alive
         let mut tick = tokio::time::interval(LIVE_CHECK_INTERVAL);
-        let mut last_packet = std::time::Instant::now();
+        let last_uplink_packet = Arc::new(RwLock::new(std::time::Instant::now()));
+        let last_downlink_packet = Arc::new(RwLock::new(std::time::Instant::now()));
 
-        let mut bytes_uplink = 0;
-        let mut bytes_downlink = 0;
-        let mut packets_uplink = 0;
-        let mut packets_downlink = 0;
+        let bytes_uplink = Arc::new(RwLock::new(0));
+        let bytes_downlink = Arc::new(RwLock::new(0));
+        let packets_uplink = Arc::new(RwLock::new(0));
+        let packets_downlink = Arc::new(RwLock::new(0));
 
-        // Forward packets
-        let mut downlink_buf = [0; BUFFER_LENGTH];
-        loop {
-            trace!("Waiting for packet");
-            tokio::select! {
-                res = rx.recv() => {
+        // Limit speed
+        let limiter = <Limiter>::new(self.speed_limit);
+
+        let (mut upstream_read, mut upstream_write) = upstream.into_split();
+        let mut join_set = tokio::task::JoinSet::<Result<(), ProxyError>>::new();
+        join_set.spawn({
+            let last_uplink_packet = Arc::clone(&last_uplink_packet);
+            let bytes_uplink = Arc::clone(&bytes_uplink);
+            let packets_uplink = Arc::clone(&packets_uplink);
+            let limiter = limiter.clone();
+            async move {
+                loop {
+                    let res = rx.recv().await;
                     trace!("Received packet from downstream");
                     let packet = match res {
                         Some(packet) => packet,
@@ -146,35 +169,84 @@ impl UdpAccess {
                         }
                     };
 
-                    // Send packet to upstream
-                    upstream.send(&packet.0).await?;
-                    bytes_uplink += packet.0.len() as u64;
-                    packets_uplink += 1;
+                    // Limit speed
+                    limiter.consume(packet.0.len()).await;
 
-                    last_packet = std::time::Instant::now();
+                    // Send packet to upstream
+                    upstream_write.send(&packet.0).await?;
+
+                    *bytes_uplink.write().unwrap() += packet.0.len() as u64;
+                    *packets_uplink.write().unwrap() += 1;
+                    *last_uplink_packet.write().unwrap() = std::time::Instant::now();
                 }
-                res = upstream.recv(&mut downlink_buf) => {
+                Ok(())
+            }
+        });
+        join_set.spawn({
+            let last_downlink_packet = Arc::clone(&last_downlink_packet);
+            let bytes_downlink = Arc::clone(&bytes_downlink);
+            let packets_downlink = Arc::clone(&packets_downlink);
+            let mut downlink_buf = [0; BUFFER_LENGTH];
+            async move {
+                loop {
+                    let res = upstream_read.recv(&mut downlink_buf).await;
                     trace!("Received packet from upstream");
                     let n = res?;
                     let pkt = &downlink_buf[..n];
 
-                    // Send packet to downstream
-                    downstream_writer.send(pkt).await.map_err(|e| ProxyError::SendDownstream { source: e, downstream: downstream_writer.clone() })?;
-                    bytes_downlink += pkt.len() as u64;
-                    packets_downlink += 1;
+                    // Limit speed
+                    limiter.consume(pkt.len()).await;
 
-                    last_packet = std::time::Instant::now();
+                    // Send packet to downstream
+                    downstream_writer
+                        .send(pkt)
+                        .await
+                        .map_err(|e| ProxyError::SendDownstream {
+                            source: e,
+                            downstream: downstream_writer.clone(),
+                        })?;
+
+                    *bytes_downlink.write().unwrap() += pkt.len() as u64;
+                    *packets_downlink.write().unwrap() += 1;
+                    *last_downlink_packet.write().unwrap() = std::time::Instant::now();
+                }
+            }
+        });
+
+        // Forward packets
+        loop {
+            trace!("Waiting for packet");
+            tokio::select! {
+                res = join_set.join_next() => {
+                    let res = match res {
+                        Some(res) => res.unwrap(),
+                        None => break,
+                    };
+                    res?;
                 }
                 _ = tick.tick() => {
                     trace!("Checking if flow is still alive");
-                    if last_packet.elapsed() > TIMEOUT {
+                    let now = std::time::Instant::now();
+                    let last_uplink_packet = *last_uplink_packet.read().unwrap();
+                    let last_downlink_packet = *last_downlink_packet.read().unwrap();
+
+                    if now.duration_since(last_uplink_packet) > TIMEOUT && now.duration_since(last_downlink_packet) > TIMEOUT {
                         trace!(?flow, "Flow timed out");
                         break;
                     }
                 }
             }
         }
+        join_set.abort_all();
 
+        let last_packet = std::time::Instant::max(
+            *last_downlink_packet.read().unwrap(),
+            *last_uplink_packet.read().unwrap(),
+        );
+        let bytes_uplink = *bytes_uplink.read().unwrap();
+        let bytes_downlink = *bytes_downlink.read().unwrap();
+        let packets_uplink = *packets_uplink.read().unwrap();
+        let packets_downlink = *packets_downlink.read().unwrap();
         Ok(FlowMetrics {
             flow,
             start,

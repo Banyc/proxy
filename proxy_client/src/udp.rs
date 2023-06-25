@@ -1,7 +1,6 @@
 use std::{
     io::{self, Write},
     net::SocketAddr,
-    ops::Deref,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -24,11 +23,8 @@ use tracing::{error, instrument, trace, warn};
 
 #[derive(Debug)]
 pub struct UdpProxyClient {
-    upstream: UdpSocket,
-    headers_bytes: Arc<[u8]>,
-    proxies: Arc<UdpProxyChain>,
-    read_buf: Vec<u8>,
-    write_buf: Vec<u8>,
+    write: UdpProxyClientWriteHalf,
+    read: UdpProxyClientReadHalf,
 }
 
 impl UdpProxyClient {
@@ -57,13 +53,11 @@ impl UdpProxyClient {
                     addr: destination.clone(),
                     sock_addr: addr,
                 })?;
-            return Ok(UdpProxyClient {
-                upstream,
-                headers_bytes: vec![].into(),
-                proxies,
-                read_buf: vec![],
-                write_buf: vec![],
-            });
+
+            let upstream = Arc::new(upstream);
+            let write = UdpProxyClientWriteHalf::new(upstream.clone(), Vec::new().into());
+            let read = UdpProxyClientReadHalf::new(upstream, Vec::new().into(), proxies);
+            return Ok(UdpProxyClient { write, read });
         }
 
         // Connect to upstream
@@ -102,13 +96,64 @@ impl UdpProxyClient {
         }
 
         // Return stream
-        Ok(UdpProxyClient {
+        let upstream = Arc::new(upstream);
+        let header_bytes: Arc<[_]> = buf.into();
+        let write = UdpProxyClientWriteHalf::new(upstream.clone(), header_bytes.clone());
+        let read = UdpProxyClientReadHalf::new(upstream, header_bytes, proxies);
+        Ok(UdpProxyClient { write, read })
+    }
+
+    pub fn into_split(self) -> (UdpProxyClientReadHalf, UdpProxyClientWriteHalf) {
+        (self.read, self.write)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum EstablishError {
+    #[error("Failed to resolve destination address")]
+    ResolveDestination {
+        #[source]
+        source: io::Error,
+        addr: InternetAddr,
+    },
+    #[error("Failed to created a client socket")]
+    ClientBindAny(#[source] io::Error),
+    #[error("Failed to connect to destination")]
+    ConnectDestination {
+        #[source]
+        source: io::Error,
+        addr: InternetAddr,
+        sock_addr: SocketAddr,
+    },
+    #[error("Failed to resolve first proxy address")]
+    ResolveFirstProxy {
+        #[source]
+        source: io::Error,
+        addr: InternetAddr,
+    },
+    #[error("Failed to connect to first proxy")]
+    ConnectFirstProxy {
+        #[source]
+        source: io::Error,
+        addr: InternetAddr,
+        sock_addr: SocketAddr,
+    },
+}
+
+#[derive(Debug)]
+pub struct UdpProxyClientWriteHalf {
+    upstream: Arc<UdpSocket>,
+    headers_bytes: Arc<[u8]>,
+    write_buf: Vec<u8>,
+}
+
+impl UdpProxyClientWriteHalf {
+    pub fn new(upstream: Arc<UdpSocket>, headers_bytes: Arc<[u8]>) -> Self {
+        Self {
             upstream,
-            headers_bytes: buf.into(),
-            proxies,
-            read_buf: vec![],
+            headers_bytes,
             write_buf: vec![],
-        })
+        }
     }
 
     #[instrument(skip_all)]
@@ -131,6 +176,41 @@ impl UdpProxyClient {
         })?;
 
         Ok(buf.len())
+    }
+
+    pub fn inner(&self) -> &Arc<UdpSocket> {
+        &self.upstream
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("Failed to send to upstream")]
+pub struct SendError {
+    #[source]
+    source: io::Error,
+    sock_addr: Option<SocketAddr>,
+}
+
+#[derive(Debug)]
+pub struct UdpProxyClientReadHalf {
+    upstream: Arc<UdpSocket>,
+    headers_bytes: Arc<[u8]>,
+    proxies: Arc<UdpProxyChain>,
+    read_buf: Vec<u8>,
+}
+
+impl UdpProxyClientReadHalf {
+    pub fn new(
+        upstream: Arc<UdpSocket>,
+        headers_bytes: Arc<[u8]>,
+        proxies: Arc<UdpProxyChain>,
+    ) -> Self {
+        Self {
+            upstream,
+            headers_bytes,
+            proxies,
+            read_buf: vec![],
+        }
     }
 
     #[instrument(skip_all)]
@@ -168,54 +248,10 @@ impl UdpProxyClient {
 
         Ok(payload_size)
     }
-}
 
-impl Deref for UdpProxyClient {
-    type Target = UdpSocket;
-
-    fn deref(&self) -> &Self::Target {
+    pub fn inner(&self) -> &Arc<UdpSocket> {
         &self.upstream
     }
-}
-
-#[derive(Debug, Error)]
-pub enum EstablishError {
-    #[error("Failed to resolve destination address")]
-    ResolveDestination {
-        #[source]
-        source: io::Error,
-        addr: InternetAddr,
-    },
-    #[error("Failed to created a client socket")]
-    ClientBindAny(#[source] io::Error),
-    #[error("Failed to connect to destination")]
-    ConnectDestination {
-        #[source]
-        source: io::Error,
-        addr: InternetAddr,
-        sock_addr: SocketAddr,
-    },
-    #[error("Failed to resolve first proxy address")]
-    ResolveFirstProxy {
-        #[source]
-        source: io::Error,
-        addr: InternetAddr,
-    },
-    #[error("Failed to connect to first proxy")]
-    ConnectFirstProxy {
-        #[source]
-        source: io::Error,
-        addr: InternetAddr,
-        sock_addr: SocketAddr,
-    },
-}
-
-#[derive(Debug, Error)]
-#[error("Failed to send to upstream")]
-pub struct SendError {
-    #[source]
-    source: io::Error,
-    sock_addr: Option<SocketAddr>,
 }
 
 #[derive(Debug, Error)]
