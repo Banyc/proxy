@@ -10,17 +10,20 @@ pub mod udp;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct ProxyServerConfig {
-    pub tcp_server: Option<Vec<TcpProxyServerBuilder>>,
-    pub udp_server: Option<Vec<UdpProxyServerBuilder>>,
-    pub kcp_server: Option<Vec<KcpProxyServerBuilder>>,
+    #[serde(default)]
+    pub tcp_server: Vec<TcpProxyServerBuilder>,
+    #[serde(default)]
+    pub udp_server: Vec<UdpProxyServerBuilder>,
+    #[serde(default)]
+    pub kcp_server: Vec<KcpProxyServerBuilder>,
 }
 
 impl ProxyServerConfig {
     pub fn new() -> Self {
         Self {
-            tcp_server: None,
-            udp_server: None,
-            kcp_server: None,
+            tcp_server: Default::default(),
+            udp_server: Default::default(),
+            kcp_server: Default::default(),
         }
     }
 
@@ -29,14 +32,11 @@ impl ProxyServerConfig {
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut ProxyServerLoader,
     ) -> io::Result<()> {
-        let tcp_server = self.tcp_server.unwrap_or_default();
-        loader.tcp_server.load(join_set, tcp_server).await?;
+        loader.tcp_server.load(join_set, self.tcp_server).await?;
 
-        let udp_server = self.udp_server.unwrap_or_default();
-        loader.udp_server.load(join_set, udp_server).await?;
+        loader.udp_server.load(join_set, self.udp_server).await?;
 
-        let kcp_server = self.kcp_server.unwrap_or_default();
-        loader.kcp_server.load(join_set, kcp_server).await?;
+        loader.kcp_server.load(join_set, self.kcp_server).await?;
 
         Ok(())
     }

@@ -21,25 +21,31 @@ pub mod udp;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessServerConfig {
-    pub tcp_server: Option<Vec<TcpAccessServerConfig>>,
-    pub udp_server: Option<Vec<UdpAccessServerConfig>>,
-    pub http_server: Option<Vec<HttpAccessServerConfig>>,
+    #[serde(default)]
+    pub tcp_server: Vec<TcpAccessServerConfig>,
+    #[serde(default)]
+    pub udp_server: Vec<UdpAccessServerConfig>,
+    #[serde(default)]
+    pub http_server: Vec<HttpAccessServerConfig>,
     pub stream_pool: PoolBuilder,
-    pub stream_proxy_tables: Option<HashMap<Arc<str>, StreamProxyTableBuilder>>,
-    pub udp_proxy_tables: Option<HashMap<Arc<str>, UdpProxyTableBuilder>>,
-    pub filters: Option<HashMap<Arc<str>, FilterBuilder>>,
+    #[serde(default)]
+    pub stream_proxy_tables: HashMap<Arc<str>, StreamProxyTableBuilder>,
+    #[serde(default)]
+    pub udp_proxy_tables: HashMap<Arc<str>, UdpProxyTableBuilder>,
+    #[serde(default)]
+    pub filters: HashMap<Arc<str>, FilterBuilder>,
 }
 
 impl AccessServerConfig {
     pub fn new() -> AccessServerConfig {
         AccessServerConfig {
-            tcp_server: None,
-            udp_server: None,
-            http_server: None,
+            tcp_server: Default::default(),
+            udp_server: Default::default(),
+            http_server: Default::default(),
             stream_pool: PoolBuilder(None),
-            stream_proxy_tables: None,
-            udp_proxy_tables: None,
-            filters: None,
+            stream_proxy_tables: Default::default(),
+            udp_proxy_tables: Default::default(),
+            filters: Default::default(),
         }
     }
 
@@ -50,22 +56,22 @@ impl AccessServerConfig {
     ) -> io::Result<()> {
         // Shared
         let stream_pool = self.stream_pool.build();
-        let stream_proxy_tables = self.stream_proxy_tables.unwrap_or_default();
-        let stream_proxy_tables = stream_proxy_tables
+        let stream_proxy_tables = self
+            .stream_proxy_tables
             .into_iter()
             .map(|(k, v)| (k, v.build(&stream_pool)))
             .collect::<HashMap<_, _>>();
-        let udp_proxy_tables = self.udp_proxy_tables.unwrap_or_default();
-        let udp_proxy_tables = udp_proxy_tables
+        let udp_proxy_tables = self
+            .udp_proxy_tables
             .into_iter()
             .map(|(k, v)| (k, v.build()))
             .collect::<HashMap<_, _>>();
-        let filters = filter::build_from_map(self.filters.unwrap_or_default())
+        let filters = filter::build_from_map(self.filters)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
         // TCP servers
-        let tcp_server = self.tcp_server.unwrap_or_default();
-        let tcp_server = tcp_server
+        let tcp_server = self
+            .tcp_server
             .into_iter()
             .map(|c| c.into_builder(stream_pool.clone(), &stream_proxy_tables))
             .collect::<Result<Vec<_>, _>>()
@@ -73,8 +79,8 @@ impl AccessServerConfig {
         loader.tcp_server.load(join_set, tcp_server).await?;
 
         // UDP servers
-        let udp_server = self.udp_server.unwrap_or_default();
-        let udp_server = udp_server
+        let udp_server = self
+            .udp_server
             .into_iter()
             .map(|c| c.into_builder(&udp_proxy_tables))
             .collect::<Result<Vec<_>, _>>()
@@ -82,8 +88,8 @@ impl AccessServerConfig {
         loader.udp_server.load(join_set, udp_server).await?;
 
         // HTTP servers
-        let http_server = self.http_server.unwrap_or_default();
-        let http_server = http_server
+        let http_server = self
+            .http_server
             .into_iter()
             .map(|c| c.into_builder(stream_pool.clone(), &stream_proxy_tables, &filters))
             .collect::<Result<Vec<_>, _>>()

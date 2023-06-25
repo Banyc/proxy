@@ -89,12 +89,12 @@ pub async fn load(
     access_server_loader: &mut AccessServerLoader,
     proxy_server_loader: &mut ProxyServerLoader,
 ) -> io::Result<()> {
-    let access_server = config.access_server.unwrap_or_default();
-    access_server
+    config
+        .access_server
         .spawn_and_kill(join_set, access_server_loader)
         .await?;
-    let proxy_server = config.proxy_server.unwrap_or_default();
-    proxy_server
+    config
+        .proxy_server
         .spawn_and_kill(join_set, proxy_server_loader)
         .await?;
     Ok(())
@@ -102,6 +102,8 @@ pub async fn load(
 
 #[derive(Debug, Deserialize)]
 pub struct ServerConfig {
-    pub access_server: Option<AccessServerConfig>,
-    pub proxy_server: Option<ProxyServerConfig>,
+    #[serde(default)]
+    pub access_server: AccessServerConfig,
+    #[serde(default)]
+    pub proxy_server: ProxyServerConfig,
 }

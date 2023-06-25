@@ -34,10 +34,10 @@ use crate::stream::proxy_table::StreamProxyTableBuilder;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpAccessServerConfig {
-    listen_addr: Arc<str>,
-    proxy_table: SharableConfig<StreamProxyTableBuilder>,
-    filter: SharableConfig<FilterBuilder>,
-    speed_limit: Option<f64>,
+    pub listen_addr: Arc<str>,
+    pub proxy_table: SharableConfig<StreamProxyTableBuilder>,
+    pub filter: SharableConfig<FilterBuilder>,
+    pub speed_limit: Option<f64>,
 }
 
 impl HttpAccessServerConfig {

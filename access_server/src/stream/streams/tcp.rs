@@ -23,10 +23,10 @@ use crate::stream::proxy_table::StreamProxyTableBuilder;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TcpAccessServerConfig {
-    listen_addr: Arc<str>,
-    destination: StreamAddrBuilder,
-    proxy_table: SharableConfig<StreamProxyTableBuilder>,
-    speed_limit: Option<f64>,
+    pub listen_addr: Arc<str>,
+    pub destination: StreamAddrBuilder,
+    pub proxy_table: SharableConfig<StreamProxyTableBuilder>,
+    pub speed_limit: Option<f64>,
 }
 
 impl TcpAccessServerConfig {
