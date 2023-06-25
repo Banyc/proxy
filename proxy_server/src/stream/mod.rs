@@ -92,6 +92,7 @@ impl StreamProxy {
             downstream,
             upstream,
             self.payload_crypto.as_ref(),
+            f64::INFINITY,
         )
         .await;
         let end = std::time::Instant::now();

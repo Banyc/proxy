@@ -333,17 +333,18 @@ pub async fn copy_bidirectional_with_payload_crypto<DS, US>(
     downstream: DS,
     upstream: US,
     payload_crypto: Option<&XorCrypto>,
+    speed_limit: f64,
 ) -> Result<(u64, u64), tokio_io::CopyBiError>
 where
-    US: AsyncRead + AsyncWrite + Unpin,
-    DS: AsyncRead + AsyncWrite + Unpin,
+    US: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    DS: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     match payload_crypto {
         Some(crypto) => {
             // Establish encrypted stream
             let xor_stream = XorStream::upgrade(upstream, crypto);
-            tokio_io::timed_copy_bidirectional(downstream, xor_stream).await
+            tokio_io::timed_copy_bidirectional(downstream, xor_stream, speed_limit).await
         }
-        None => tokio_io::timed_copy_bidirectional(downstream, upstream).await,
+        None => tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limit).await,
     }
 }

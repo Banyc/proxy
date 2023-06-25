@@ -26,6 +26,7 @@ pub struct TcpAccessServerConfig {
     listen_addr: Arc<str>,
     destination: StreamAddrBuilder,
     proxy_table: SharableConfig<StreamProxyTableBuilder>,
+    speed_limit: Option<f64>,
 }
 
 impl TcpAccessServerConfig {
@@ -47,6 +48,7 @@ impl TcpAccessServerConfig {
             destination: self.destination,
             proxy_table,
             stream_pool,
+            speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
         })
     }
 }
@@ -63,6 +65,7 @@ pub struct TcpAccessServerBuilder {
     destination: StreamAddrBuilder,
     proxy_table: StreamProxyTable,
     stream_pool: Pool,
+    speed_limit: f64,
 }
 
 #[async_trait]
@@ -86,6 +89,7 @@ impl loading::Builder for TcpAccessServerBuilder {
             self.proxy_table,
             self.destination.build(),
             self.stream_pool,
+            self.speed_limit,
         ))
     }
 }
@@ -95,14 +99,21 @@ pub struct TcpAccess {
     proxy_table: StreamProxyTable,
     destination: StreamAddr,
     stream_pool: Pool,
+    speed_limit: f64,
 }
 
 impl TcpAccess {
-    pub fn new(proxy_table: StreamProxyTable, destination: StreamAddr, stream_pool: Pool) -> Self {
+    pub fn new(
+        proxy_table: StreamProxyTable,
+        destination: StreamAddr,
+        stream_pool: Pool,
+        speed_limit: f64,
+    ) -> Self {
         Self {
             proxy_table,
             destination,
             stream_pool,
+            speed_limit,
         }
     }
 
@@ -136,6 +147,7 @@ impl TcpAccess {
             downstream,
             upstream,
             proxy_chain.payload_crypto.as_ref(),
+            self.speed_limit,
         )
         .await;
         let end = std::time::Instant::now();
