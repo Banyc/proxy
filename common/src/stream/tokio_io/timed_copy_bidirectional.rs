@@ -26,9 +26,8 @@ where
     b.set_read_timeout(Some(DOWNLINK_TIMEOUT));
     b.set_write_timeout(Some(UPLINK_TIMEOUT));
 
-    // STREAMS MUST BE `Unpin` BEFORE `io::split`
-    let a = Box::pin(a);
-    let b = Box::pin(b);
+    // let a = Box::pin(a);
+    // let b = Box::pin(b);
 
     // copy_bidirectional(&mut a, &mut b).await
 
