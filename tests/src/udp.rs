@@ -14,7 +14,7 @@ mod tests {
 
     async fn spawn_proxy(addr: &str) -> UdpProxyConfig {
         let crypto = create_random_crypto();
-        let proxy = UdpProxy::new(crypto.clone());
+        let proxy = UdpProxy::new(crypto.clone(), None);
         let server = proxy.build(addr).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         tokio::spawn(async move {

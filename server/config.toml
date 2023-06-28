@@ -41,7 +41,7 @@ destination = ""
 proxy_table = { chains = [
     { weight = 1, chain = [
         { address = "", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
-    ] },
+    ],                  payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
 ], trace_rtt = false }
 # speed_limit = 1024.0 # 1.0 KiB/s
 
@@ -77,3 +77,4 @@ header_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 [[proxy_server.udp_server]]
 listen_addr = ""
 header_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+# payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]

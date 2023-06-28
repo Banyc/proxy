@@ -27,6 +27,7 @@ impl UdpProxyConfigBuilder {
 pub struct UdpWeightedProxyChainBuilder {
     pub weight: usize,
     pub chain: Vec<UdpProxyConfigBuilder>,
+    pub payload_xor_key: Option<Arc<[u8]>>,
 }
 
 impl UdpWeightedProxyChainBuilder {
@@ -34,7 +35,7 @@ impl UdpWeightedProxyChainBuilder {
         WeightedProxyChain {
             weight: self.weight,
             chain: self.chain.into_iter().map(|c| c.build()).collect(),
-            payload_crypto: None,
+            payload_crypto: self.payload_xor_key.map(XorCrypto::new),
         }
     }
 }

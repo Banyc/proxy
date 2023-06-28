@@ -30,6 +30,7 @@ use tracing::{error, info, instrument, trace, warn};
 pub struct UdpProxyServerBuilder {
     pub listen_addr: Arc<str>,
     pub header_xor_key: Arc<[u8]>,
+    pub payload_xor_key: Option<Arc<[u8]>>,
 }
 
 #[async_trait]
@@ -38,15 +39,16 @@ impl loading::Builder for UdpProxyServerBuilder {
     type Server = UdpServer<Self::Hook>;
 
     async fn build_server(self) -> io::Result<Self::Server> {
-        let header_crypto = XorCrypto::new(self.header_xor_key);
-        let tcp_proxy = UdpProxy::new(header_crypto);
-        let server = tcp_proxy.build(self.listen_addr.as_ref()).await?;
+        let listen_addr = Arc::clone(&self.listen_addr);
+        let udp_proxy = self.build_hook()?;
+        let server = udp_proxy.build(listen_addr.as_ref()).await?;
         Ok(server)
     }
 
     fn build_hook(self) -> io::Result<Self::Hook> {
         let header_crypto = XorCrypto::new(self.header_xor_key);
-        Ok(UdpProxy::new(header_crypto))
+        let payload_crypto = self.payload_xor_key.map(XorCrypto::new);
+        Ok(UdpProxy::new(header_crypto, payload_crypto))
     }
 
     fn key(&self) -> &Arc<str> {
@@ -54,23 +56,18 @@ impl loading::Builder for UdpProxyServerBuilder {
     }
 }
 
-impl UdpProxyServerBuilder {
-    pub async fn build(self) -> io::Result<UdpServer<UdpProxy>> {
-        let header_crypto = XorCrypto::new(self.header_xor_key);
-        let tcp_proxy = UdpProxy::new(header_crypto);
-        let server = tcp_proxy.build(self.listen_addr.as_ref()).await?;
-        Ok(server)
-    }
-}
-
 #[derive(Debug)]
 pub struct UdpProxy {
     header_crypto: XorCrypto,
+    payload_crypto: Option<XorCrypto>,
 }
 
 impl UdpProxy {
-    pub fn new(header_crypto: XorCrypto) -> Self {
-        Self { header_crypto }
+    pub fn new(header_crypto: XorCrypto, payload_crypto: Option<XorCrypto>) -> Self {
+        Self {
+            header_crypto,
+            payload_crypto,
+        }
     }
 
     pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<UdpServer<Self>> {
@@ -159,13 +156,19 @@ impl UdpProxy {
             tokio::select! {
                 res = rx.recv() => {
                     trace!("Received packet from downstream");
-                    let packet = match res {
+                    let mut packet = match res {
                         Some(packet) => packet,
                         None => {
                             // Channel closed
                             break;
                         }
                     };
+
+                    // Xor payload
+                    if let Some(payload_crypto) = &self.payload_crypto {
+                        let mut crypto_cursor = XorCryptoCursor::new(payload_crypto);
+                        crypto_cursor.xor(&mut packet.0);
+                    }
 
                     // Send packet to upstream
                     upstream.send(&packet.0).await.map_err(|e| ProxyError::ForwardUpstream { source: e, addr: flow.upstream.0.clone(), sock_addr: resolved_upstream })?;
@@ -177,7 +180,7 @@ impl UdpProxy {
                 res = upstream.recv(&mut downlink_buf) => {
                     trace!("Received packet from upstream");
                     let n = res.map_err(|e| ProxyError::RecvUpstream { source: e, addr: flow.upstream.0.clone(), sock_addr: resolved_upstream })?;
-                    let pkt = &downlink_buf[..n];
+                    let pkt = &mut downlink_buf[..n];
 
                     // Set up protocol buffer writer
                     downlink_protocol_buf.clear();
@@ -189,6 +192,12 @@ impl UdpProxy {
                     };
                     let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
                     write_header(&mut writer, &header, &mut crypto_cursor).unwrap();
+
+                    // Xor payload
+                    if let Some(payload_crypto) = &self.payload_crypto {
+                        let mut crypto_cursor = XorCryptoCursor::new(payload_crypto);
+                        crypto_cursor.xor(pkt);
+                    }
 
                     // Write payload
                     writer.write_all(pkt).unwrap();

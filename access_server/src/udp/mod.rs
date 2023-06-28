@@ -11,6 +11,7 @@ use common::{
     addr::any_addr,
     addr::InternetAddr,
     config::SharableConfig,
+    crypto::XorCryptoCursor,
     loading,
     udp::{
         proxy_table::UdpProxyTable, Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer,
@@ -157,11 +158,12 @@ impl UdpAccess {
             let bytes_uplink = Arc::clone(&bytes_uplink);
             let packets_uplink = Arc::clone(&packets_uplink);
             let limiter = limiter.clone();
+            let payload_crypto = proxy_chain.payload_crypto.clone();
             async move {
                 loop {
                     let res = rx.recv().await;
                     trace!("Received packet from downstream");
-                    let packet = match res {
+                    let mut packet = match res {
                         Some(packet) => packet,
                         None => {
                             // Channel closed
@@ -171,6 +173,12 @@ impl UdpAccess {
 
                     // Limit speed
                     limiter.consume(packet.0.len()).await;
+
+                    // Xor payload
+                    if let Some(payload_crypto) = &payload_crypto {
+                        let mut crypto_cursor = XorCryptoCursor::new(payload_crypto);
+                        crypto_cursor.xor(&mut packet.0);
+                    }
 
                     // Send packet to upstream
                     upstream_write.send(&packet.0).await?;
@@ -186,16 +194,23 @@ impl UdpAccess {
             let last_downlink_packet = Arc::clone(&last_downlink_packet);
             let bytes_downlink = Arc::clone(&bytes_downlink);
             let packets_downlink = Arc::clone(&packets_downlink);
+            let payload_crypto = proxy_chain.payload_crypto.clone();
             let mut downlink_buf = [0; BUFFER_LENGTH];
             async move {
                 loop {
                     let res = upstream_read.recv(&mut downlink_buf).await;
                     trace!("Received packet from upstream");
                     let n = res?;
-                    let pkt = &downlink_buf[..n];
+                    let pkt = &mut downlink_buf[..n];
 
                     // Limit speed
                     limiter.consume(pkt.len()).await;
+
+                    // Xor payload
+                    if let Some(payload_crypto) = &payload_crypto {
+                        let mut crypto_cursor = XorCryptoCursor::new(payload_crypto);
+                        crypto_cursor.xor(pkt);
+                    }
 
                     // Send packet to downstream
                     downstream_writer
