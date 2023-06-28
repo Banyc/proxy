@@ -77,8 +77,7 @@ where
             .into_iter()
             .map(|c| GaugedProxyChain::new(c, tracer.clone()))
             .collect::<Arc<[_]>>();
-        let empty_scores = (0..chains.len()).map(|_| 0.).collect::<Arc<[_]>>();
-        let score_store = Arc::new(RwLock::new(ScoreStore::new(empty_scores, TRACE_INTERVAL)));
+        let score_store = Arc::new(RwLock::new(ScoreStore::new(None, TRACE_INTERVAL)));
         Some(Self {
             chains,
             cum_weight,

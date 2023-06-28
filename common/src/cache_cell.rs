@@ -2,13 +2,13 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub struct CacheCell<T> {
-    item: T,
+    item: Option<T>,
     last_update: Instant,
     lifetime: Duration,
 }
 
 impl<T> CacheCell<T> {
-    pub fn new(item: T, lifetime: Duration) -> Self {
+    pub fn new(item: Option<T>, lifetime: Duration) -> Self {
         Self {
             item,
             last_update: Instant::now(),
@@ -20,11 +20,11 @@ impl<T> CacheCell<T> {
         if self.last_update.elapsed() > self.lifetime {
             return None;
         }
-        Some(&self.item)
+        self.item.as_ref()
     }
 
     pub fn set(&mut self, item: T) {
-        self.item = item;
+        self.item = Some(item);
         self.last_update = Instant::now();
     }
 }
