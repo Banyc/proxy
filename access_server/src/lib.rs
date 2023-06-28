@@ -16,6 +16,7 @@ use stream::{
 };
 use udp::{proxy_table::UdpProxyTableBuilder, UdpAccess, UdpAccessServerConfig};
 
+pub mod socks5;
 pub mod stream;
 pub mod udp;
 
