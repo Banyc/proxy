@@ -15,7 +15,11 @@ use common::{
         route::{RouteError, RouteResponse},
     },
     proxy_table::{convert_proxies_to_header_crypto_pairs, Tracer},
-    udp::{proxy_table::UdpProxyChain, BUFFER_LENGTH},
+    udp::{
+        io_copy::{UdpRecv, UdpSend},
+        proxy_table::UdpProxyChain,
+        BUFFER_LENGTH,
+    },
 };
 use thiserror::Error;
 use tokio::net::UdpSocket;
@@ -147,6 +151,13 @@ pub struct UdpProxyClientWriteHalf {
     write_buf: Vec<u8>,
 }
 
+#[async_trait]
+impl UdpSend for UdpProxyClientWriteHalf {
+    async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
+        Self::send(self, buf).await.map_err(|e| e.into())
+    }
+}
+
 impl UdpProxyClientWriteHalf {
     pub fn new(upstream: Arc<UdpSocket>, headers_bytes: Arc<[u8]>) -> Self {
         Self {
@@ -197,6 +208,13 @@ pub struct UdpProxyClientReadHalf {
     headers_bytes: Arc<[u8]>,
     proxies: Arc<UdpProxyChain>,
     read_buf: Vec<u8>,
+}
+
+#[async_trait]
+impl UdpRecv for UdpProxyClientReadHalf {
+    async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
+        Self::recv(self, buf).await.map_err(|e| e.into())
+    }
 }
 
 impl UdpProxyClientReadHalf {

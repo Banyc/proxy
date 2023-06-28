@@ -14,8 +14,9 @@ use common::{
     },
     loading,
     udp::{
-        header::UdpRequestHeader, Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer,
-        UdpServerHook, UpstreamAddr, BUFFER_LENGTH, LIVE_CHECK_INTERVAL, TIMEOUT,
+        header::UdpRequestHeader,
+        io_copy::{copy_bidirectional, CopyBiError, DownstreamParts, UpstreamParts},
+        Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
 use serde::Deserialize;
@@ -102,12 +103,10 @@ impl UdpProxy {
     #[instrument(skip(self, rx, downstream_writer))]
     async fn proxy(
         &self,
-        mut rx: mpsc::Receiver<Packet>,
+        rx: mpsc::Receiver<Packet>,
         flow: Flow,
         downstream_writer: UdpDownstreamWriter,
     ) -> Result<FlowMetrics, ProxyError> {
-        let start = std::time::Instant::now();
-
         // Prevent connections to localhost
         let resolved_upstream =
             flow.upstream
@@ -138,98 +137,29 @@ impl UdpProxy {
                 addr: flow.upstream.0.clone(),
                 sock_addr: resolved_upstream,
             })?;
+        let upstream = Arc::new(upstream);
 
-        // Periodic check if the flow is still alive
-        let mut tick = tokio::time::interval(LIVE_CHECK_INTERVAL);
-        let mut last_packet = std::time::Instant::now();
-
-        let mut bytes_uplink = 0;
-        let mut bytes_downlink = 0;
-        let mut packets_uplink = 0;
-        let mut packets_downlink = 0;
-
-        // Forward packets
-        let mut downlink_buf = [0; BUFFER_LENGTH];
-        let mut downlink_protocol_buf = Vec::new();
-        loop {
-            trace!("Waiting for packet");
-            tokio::select! {
-                res = rx.recv() => {
-                    trace!("Received packet from downstream");
-                    let mut packet = match res {
-                        Some(packet) => packet,
-                        None => {
-                            // Channel closed
-                            break;
-                        }
-                    };
-
-                    // Xor payload
-                    if let Some(payload_crypto) = &self.payload_crypto {
-                        let mut crypto_cursor = XorCryptoCursor::new(payload_crypto);
-                        crypto_cursor.xor(&mut packet.0);
-                    }
-
-                    // Send packet to upstream
-                    upstream.send(&packet.0).await.map_err(|e| ProxyError::ForwardUpstream { source: e, addr: flow.upstream.0.clone(), sock_addr: resolved_upstream })?;
-                    bytes_uplink += packet.0.len() as u64;
-                    packets_uplink += 1;
-
-                    last_packet = std::time::Instant::now();
-                }
-                res = upstream.recv(&mut downlink_buf) => {
-                    trace!("Received packet from upstream");
-                    let n = res.map_err(|e| ProxyError::RecvUpstream { source: e, addr: flow.upstream.0.clone(), sock_addr: resolved_upstream })?;
-                    let pkt = &mut downlink_buf[..n];
-
-                    // Set up protocol buffer writer
-                    downlink_protocol_buf.clear();
-                    let mut writer = io::Cursor::new(&mut downlink_protocol_buf);
-
-                    // Write header
-                    let header = RouteResponse {
-                        result: Ok(()),
-                    };
-                    let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
-                    write_header(&mut writer, &header, &mut crypto_cursor).unwrap();
-
-                    // Xor payload
-                    if let Some(payload_crypto) = &self.payload_crypto {
-                        let mut crypto_cursor = XorCryptoCursor::new(payload_crypto);
-                        crypto_cursor.xor(pkt);
-                    }
-
-                    // Write payload
-                    writer.write_all(pkt).unwrap();
-
-                    // Send packet to downstream
-                    let pos = writer.position() as usize;
-                    let pkt = &downlink_protocol_buf[..pos];
-                    downstream_writer.send(pkt).await.map_err(|e| ProxyError::ForwardDownstream { source: e, downstream: downstream_writer.clone() })?;
-                    bytes_downlink += pkt.len() as u64;
-                    packets_downlink += 1;
-
-                    last_packet = std::time::Instant::now();
-                }
-                _ = tick.tick() => {
-                    trace!("Checking if flow is still alive");
-                    if last_packet.elapsed() > TIMEOUT {
-                        trace!(?flow, "Flow timed out");
-                        break;
-                    }
-                }
-            }
-        }
-
-        Ok(FlowMetrics {
-            flow,
-            start,
-            end: last_packet,
-            bytes_uplink,
-            bytes_downlink,
-            packets_uplink,
-            packets_downlink,
-        })
+        let metrics = copy_bidirectional(
+            flow.clone(),
+            UpstreamParts {
+                read: upstream.clone(),
+                write: upstream,
+            },
+            DownstreamParts {
+                rx,
+                write: downstream_writer,
+            },
+            f64::INFINITY,
+            self.payload_crypto.clone(),
+            Some(self.header_crypto.clone()),
+        )
+        .await
+        .map_err(|e| ProxyError::Copy {
+            source: e,
+            addr: flow.upstream.0,
+            sock_addr: resolved_upstream,
+        })?;
+        Ok(metrics)
     }
 
     async fn handle_proxy_result(
@@ -298,25 +228,12 @@ pub enum ProxyError {
         addr: InternetAddr,
         sock_addr: SocketAddr,
     },
-    #[error("Failed to forward packet from downstream to upstream")]
-    ForwardUpstream {
+    #[error("Failed to copy")]
+    Copy {
         #[source]
-        source: io::Error,
+        source: CopyBiError,
         addr: InternetAddr,
         sock_addr: SocketAddr,
-    },
-    #[error("Failed to recv from upstream")]
-    RecvUpstream {
-        #[source]
-        source: io::Error,
-        addr: InternetAddr,
-        sock_addr: SocketAddr,
-    },
-    #[error("Failed to forward packet from upstream to downstream")]
-    ForwardDownstream {
-        #[source]
-        source: io::Error,
-        downstream: UdpDownstreamWriter,
     },
 }
 
@@ -331,9 +248,7 @@ fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
         ProxyError::Resolve { .. }
         | ProxyError::ClientBindAny(_)
         | ProxyError::ConnectUpstream { .. }
-        | ProxyError::ForwardUpstream { .. }
-        | ProxyError::RecvUpstream { .. }
-        | ProxyError::ForwardDownstream { .. } => RouteErrorKind::Io,
+        | ProxyError::Copy { .. } => RouteErrorKind::Io,
         ProxyError::Loopback { .. } => RouteErrorKind::Loopback,
     }
 }
