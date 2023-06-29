@@ -4,6 +4,8 @@ use async_speed_limit::Limiter;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_io_timeout::TimeoutStream;
 
+use crate::tokio_io::ScopedJoinSet;
+
 use super::CopyBiError;
 
 const UPLINK_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 2);
@@ -38,7 +40,7 @@ where
     let mut a_r = limiter.clone().limit(a_r);
     let mut b_r = limiter.limit(b_r);
 
-    let mut join_set = tokio::task::JoinSet::new();
+    let mut join_set = ScopedJoinSet::new();
     join_set.spawn(async move {
         tokio::io::copy(&mut a_r, &mut b_w)
             .await
