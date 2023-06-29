@@ -1,0 +1,429 @@
+use std::{
+    io,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
+};
+
+use common::addr::InternetAddr;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
+const VERSION: u8 = 5;
+const NO_ACCEPTABLE_METHODS: u8 = 0xff;
+
+/// ```text
+/// +--------+
+/// | METHOD |
+/// +--------+
+/// |   1    |
+/// +--------+
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MethodIdentifier {
+    NoAuth,
+    Other(u8),
+}
+
+impl From<MethodIdentifier> for u8 {
+    fn from(value: MethodIdentifier) -> Self {
+        match value {
+            MethodIdentifier::NoAuth => 0x0,
+            MethodIdentifier::Other(code) => code,
+        }
+    }
+}
+
+impl From<u8> for MethodIdentifier {
+    fn from(code: u8) -> Self {
+        match code {
+            0x0 => MethodIdentifier::NoAuth,
+            _ => MethodIdentifier::Other(code),
+        }
+    }
+}
+
+/// ```text
+/// +----+----------+----------+
+/// |VER | NMETHODS | METHODS  |
+/// +----+----------+----------+
+/// | 1  |    1     | 1 to 255 |
+/// +----+----------+----------+
+/// ```
+#[derive(Debug, Clone)]
+pub struct NegotiationRequest {
+    pub methods: Vec<MethodIdentifier>,
+}
+
+impl NegotiationRequest {
+    pub async fn decode<R>(reader: &mut R) -> io::Result<Self>
+    where
+        R: AsyncRead + Unpin,
+    {
+        let version = reader.read_u8().await?;
+        map_version_error(version)?;
+        let method_count = reader.read_u8().await?;
+        let mut methods = Vec::with_capacity(method_count as usize);
+        for _ in 0..method_count {
+            methods.push(MethodIdentifier::from(reader.read_u8().await?));
+        }
+        Ok(Self { methods })
+    }
+
+    pub async fn encode<W>(&self, writer: &mut W) -> io::Result<()>
+    where
+        W: AsyncWrite + Unpin,
+    {
+        if self.methods.len() > u8::MAX as _ {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Too many methods",
+            ));
+        }
+        writer.write_u8(VERSION).await?;
+        writer.write_u8(self.methods.len() as u8).await?;
+        for method in &self.methods {
+            writer.write_u8((*method).into()).await?;
+        }
+        Ok(())
+    }
+}
+
+/// ```text
+/// +----+--------+
+/// |VER | METHOD |
+/// +----+--------+
+/// | 1  |   1    |
+/// +----+--------+
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NegotiationResponse {
+    pub method: Option<MethodIdentifier>,
+}
+
+impl NegotiationResponse {
+    pub async fn decode<R>(reader: &mut R) -> io::Result<Self>
+    where
+        R: AsyncRead + Unpin,
+    {
+        let version = reader.read_u8().await?;
+        map_version_error(version)?;
+        let method = reader.read_u8().await?;
+        match method {
+            NO_ACCEPTABLE_METHODS => Ok(Self { method: None }),
+            _ => Ok(Self {
+                method: Some(MethodIdentifier::from(method)),
+            }),
+        }
+    }
+
+    pub async fn encode<W>(&self, writer: &mut W) -> io::Result<()>
+    where
+        W: AsyncWrite + Unpin,
+    {
+        writer.write_u8(VERSION).await?;
+        match self.method {
+            Some(method) => writer.write_u8(method.into()).await?,
+            None => writer.write_u8(NO_ACCEPTABLE_METHODS).await?,
+        }
+        Ok(())
+    }
+}
+
+/// ```text
+/// +-----+
+/// | CMD |
+/// +-----+
+/// |  1  |
+/// +-----+
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    Connect,
+    Bind,
+    UdpAssociate,
+}
+
+impl From<Command> for u8 {
+    fn from(value: Command) -> Self {
+        match value {
+            Command::Connect => 1,
+            Command::Bind => 2,
+            Command::UdpAssociate => 3,
+        }
+    }
+}
+
+impl TryFrom<u8> for Command {
+    type Error = ();
+
+    fn try_from(code: u8) -> Result<Self, ()> {
+        match code {
+            1 => Ok(Command::Connect),
+            2 => Ok(Command::Bind),
+            3 => Ok(Command::UdpAssociate),
+            _ => Err(()),
+        }
+    }
+}
+
+/// ```text
+/// +------+
+/// | ATYP |
+/// +------+
+/// |  1   |
+/// +------+
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddressType {
+    Ipv4,
+    DomainName,
+    Ipv6,
+}
+
+impl From<AddressType> for u8 {
+    fn from(value: AddressType) -> Self {
+        match value {
+            AddressType::Ipv4 => 0x1,
+            AddressType::DomainName => 0x3,
+            AddressType::Ipv6 => 0x4,
+        }
+    }
+}
+
+impl TryFrom<u8> for AddressType {
+    type Error = ();
+
+    fn try_from(code: u8) -> Result<Self, ()> {
+        match code {
+            0x1 => Ok(AddressType::Ipv4),
+            0x3 => Ok(AddressType::DomainName),
+            0x4 => Ok(AddressType::Ipv6),
+            _ => Err(()),
+        }
+    }
+}
+
+pub async fn decode_address<R>(reader: &mut R) -> io::Result<InternetAddr>
+where
+    R: AsyncRead + Unpin,
+{
+    let address_type = AddressType::try_from(reader.read_u8().await?)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid address type"))?;
+    let address = match address_type {
+        AddressType::Ipv4 => {
+            let mut buf = [0; 4];
+            reader.read_exact(&mut buf).await?;
+            let ip = Ipv4Addr::from(buf);
+            let port = reader.read_u16().await?;
+            let addr = SocketAddr::V4(SocketAddrV4::new(ip, port));
+            InternetAddr::from(addr)
+        }
+        AddressType::Ipv6 => {
+            let mut buf = [0; 16];
+            reader.read_exact(&mut buf).await?;
+            let ip = Ipv6Addr::from(buf);
+            let port = reader.read_u16().await?;
+            let addr = SocketAddr::V6(SocketAddrV6::new(ip, port, 0, 0));
+            InternetAddr::from(addr)
+        }
+        AddressType::DomainName => {
+            let len = reader.read_u8().await?;
+            let mut buf = vec![0; len as usize];
+            reader.read_exact(&mut buf).await?;
+            let domain_name = String::from_utf8(buf)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            let port = reader.read_u16().await?;
+            InternetAddr::String(format!("{}:{}", domain_name, port).into())
+        }
+    };
+    Ok(address)
+}
+
+pub async fn encode_address<W>(addr: &InternetAddr, writer: &mut W) -> io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    match addr {
+        InternetAddr::SocketAddr(addr) => match addr {
+            SocketAddr::V4(addr) => {
+                writer.write_u8(AddressType::Ipv4.into()).await?;
+                writer.write_all(&addr.ip().octets()).await?;
+                writer.write_u16(addr.port()).await?;
+            }
+            SocketAddr::V6(addr) => {
+                writer.write_u8(AddressType::Ipv6.into()).await?;
+                writer.write_all(&addr.ip().octets()).await?;
+                writer.write_u16(addr.port()).await?;
+            }
+        },
+        InternetAddr::String(addr) => {
+            writer.write_u8(AddressType::DomainName.into()).await?;
+            let mut parts = addr.split(':');
+            let domain_name = parts.next().unwrap();
+            let port = parts.next().unwrap();
+            writer.write_all(domain_name.as_bytes()).await?;
+            writer.write_u16(port.parse().unwrap()).await?;
+        }
+    }
+    Ok(())
+}
+
+/// ```text
+/// +----+-----+-------+------+----------+----------+
+/// |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
+/// +----+-----+-------+------+----------+----------+
+/// | 1  |  1  | 0x00  |  1   | Variable |    2     |
+/// +----+-----+-------+------+----------+----------+
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayRequest {
+    pub command: Command,
+    pub destination: InternetAddr,
+}
+
+impl RelayRequest {
+    pub async fn decode<R>(reader: &mut R) -> io::Result<Self>
+    where
+        R: AsyncRead + Unpin,
+    {
+        let version = reader.read_u8().await?;
+        map_version_error(version)?;
+        let command = Command::try_from(reader.read_u8().await?)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid command"))?;
+        let _reserved = reader.read_u8().await?;
+        let destination = decode_address(reader).await?;
+        Ok(Self {
+            command,
+            destination,
+        })
+    }
+
+    pub async fn encode<W>(&self, writer: &mut W) -> io::Result<()>
+    where
+        W: AsyncWrite + Unpin,
+    {
+        writer.write_u8(VERSION).await?;
+        writer.write_u8(self.command.into()).await?;
+        writer.write_u8(0x00).await?;
+        encode_address(&self.destination, writer).await?;
+        Ok(())
+    }
+}
+
+/// ```text
+/// +-----+
+/// | REP |
+/// +-----+
+/// |  1  |
+/// +-----+
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reply {
+    Succeeded,
+    GeneralSocksServerFailure,
+    Other(u8),
+}
+
+impl From<Reply> for u8 {
+    fn from(value: Reply) -> Self {
+        match value {
+            Reply::Succeeded => 0x0,
+            Reply::GeneralSocksServerFailure => 0x1,
+            Reply::Other(code) => code,
+        }
+    }
+}
+
+impl From<u8> for Reply {
+    fn from(code: u8) -> Self {
+        match code {
+            0x0 => Reply::Succeeded,
+            0x1 => Reply::GeneralSocksServerFailure,
+            _ => Reply::Other(code),
+        }
+    }
+}
+
+/// ```text
+/// +----+-----+-------+------+----------+----------+
+/// |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
+/// +----+-----+-------+------+----------+----------+
+/// | 1  |  1  | 0x00  |  1   | Variable |    2     |
+/// +----+-----+-------+------+----------+----------+
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayResponse {
+    pub reply: Reply,
+    pub bind: InternetAddr,
+}
+
+impl RelayResponse {
+    pub async fn decode<R>(reader: &mut R) -> io::Result<Self>
+    where
+        R: AsyncRead + Unpin,
+    {
+        let version = reader.read_u8().await?;
+        map_version_error(version)?;
+        let reply = Reply::from(reader.read_u8().await?);
+        let _reserved = reader.read_u8().await?;
+        let bind = decode_address(reader).await?;
+        Ok(Self { reply, bind })
+    }
+
+    pub async fn encode<W>(&self, writer: &mut W) -> io::Result<()>
+    where
+        W: AsyncWrite + Unpin,
+    {
+        writer.write_u8(VERSION).await?;
+        writer.write_u8(self.reply.into()).await?;
+        writer.write_u8(0x00).await?;
+        encode_address(&self.bind, writer).await?;
+        Ok(())
+    }
+}
+
+/// ```text
+/// +----+------+------+----------+----------+----------+
+/// |RSV | FRAG | ATYP | DST.ADDR | DST.PORT |   DATA   |
+/// +----+------+------+----------+----------+----------+
+/// | 2  |  1   |  1   | Variable |    2     | Variable |
+/// +----+------+------+----------+----------+----------+
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UdpRequestHeader {
+    pub fragment: u8,
+    pub destination: InternetAddr,
+}
+
+impl UdpRequestHeader {
+    pub async fn decode<R>(reader: &mut R) -> io::Result<Self>
+    where
+        R: AsyncRead + Unpin,
+    {
+        let _reserved = reader.read_u16().await?;
+        let fragment = reader.read_u8().await?;
+        let destination = decode_address(reader).await?;
+        Ok(Self {
+            fragment,
+            destination,
+        })
+    }
+
+    pub async fn encode<W>(&self, writer: &mut W) -> io::Result<()>
+    where
+        W: AsyncWrite + Unpin,
+    {
+        writer.write_u16(0x0000).await?;
+        writer.write_u8(self.fragment).await?;
+        encode_address(&self.destination, writer).await?;
+        Ok(())
+    }
+}
+
+fn map_version_error(version: u8) -> io::Result<()> {
+    if version != VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid version",
+        ));
+    }
+    Ok(())
+}
