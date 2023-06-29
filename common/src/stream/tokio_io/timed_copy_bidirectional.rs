@@ -4,8 +4,6 @@ use async_speed_limit::Limiter;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_io_timeout::TimeoutStream;
 
-use crate::tokio_io::ScopedJoinSet;
-
 use super::{copy_bidirectional, CopyBiError};
 
 const UPLINK_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 2);
@@ -28,17 +26,34 @@ where
     b.set_read_timeout(Some(DOWNLINK_TIMEOUT));
     b.set_write_timeout(Some(UPLINK_TIMEOUT));
 
+    let limiter = <Limiter>::new(speed_limit);
+    let a = limiter.limit(a);
+
     let mut a = Box::pin(a);
     let mut b = Box::pin(b);
 
     copy_bidirectional(&mut a, &mut b).await
 
-    // let (mut a_r, mut a_w) = tokio::io::split(a);
-    // let (mut b_r, mut b_w) = tokio::io::split(b);
+    // let (a_r, a_w) = tokio::io::split(a);
+    // let (b_r, b_w) = tokio::io::split(b);
 
-    // // let limiter = <Limiter>::new(speed_limit);
-    // // let mut a_r = limiter.clone().limit(a_r);
-    // // let mut b_r = limiter.limit(b_r);
+    // let mut a_r = TimeoutReader::new(a_r);
+    // a_r.set_timeout(Some(UPLINK_TIMEOUT));
+    // let mut b_r = TimeoutReader::new(b_r);
+    // b_r.set_timeout(Some(DOWNLINK_TIMEOUT));
+    // let mut a_w = TimeoutWriter::new(a_w);
+    // a_w.set_timeout(Some(DOWNLINK_TIMEOUT));
+    // let mut b_w = TimeoutWriter::new(b_w);
+    // b_w.set_timeout(Some(UPLINK_TIMEOUT));
+
+    // let limiter = <Limiter>::new(speed_limit);
+    // let a_r = limiter.clone().limit(a_r);
+    // let b_r = limiter.limit(b_r);
+
+    // let mut a_r = Box::pin(a_r);
+    // let mut b_r = Box::pin(b_r);
+    // let mut a_w = Box::pin(a_w);
+    // let mut b_w = Box::pin(b_w);
 
     // let mut join_set = ScopedJoinSet::new();
     // join_set.spawn(async move {
@@ -70,10 +85,10 @@ where
     // Ok((a_to_b.unwrap(), b_to_a.unwrap()))
 }
 
-enum CopyResult {
-    AToB(u64),
-    BToA(u64),
-}
+// enum CopyResult {
+//     AToB(u64),
+//     BToA(u64),
+// }
 
 #[cfg(test)]
 mod tests {
