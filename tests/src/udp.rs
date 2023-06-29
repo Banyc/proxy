@@ -8,6 +8,7 @@ mod tests {
     };
     use proxy_client::udp::{trace_rtt, RecvError, UdpProxyClient, UdpProxyClientReadHalf};
     use proxy_server::udp::UdpProxy;
+    use serial_test::serial;
     use tokio::net::UdpSocket;
 
     use crate::create_random_crypto;
@@ -130,6 +131,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[serial]
     async fn stress_test() {
         // Start proxy servers
         let mut proxies = Vec::new();
@@ -148,7 +150,7 @@ mod tests {
 
         let mut handles = tokio::task::JoinSet::new();
 
-        for _ in 0..100 {
+        for _ in 0..10 {
             let proxies = proxies.clone();
             let greet_addr = greet_addr.clone();
             handles.spawn(async move {

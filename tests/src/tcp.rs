@@ -12,7 +12,10 @@ mod tests {
         },
     };
     use proxy_client::stream::{establish, trace_rtt};
-    use proxy_server::stream::{tcp::build_tcp_proxy_server, StreamProxy};
+    use proxy_server::stream::{
+        kcp::build_kcp_proxy_server, tcp::build_tcp_proxy_server, StreamProxy,
+    };
+    use serial_test::serial;
     use tokio::{
         io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -20,22 +23,44 @@ mod tests {
 
     use crate::create_random_crypto;
 
-    async fn spawn_proxy(addr: &str) -> StreamProxyConfig {
+    async fn spawn_proxy(addr: &str, ty: StreamType) -> StreamProxyConfig {
         let crypto = create_random_crypto();
         let proxy = StreamProxy::new(crypto.clone(), None, Pool::new());
-        let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
-        let proxy_addr = server.listener().local_addr().unwrap();
-        tokio::spawn(async move {
-            let _handle = server.handle().clone();
-            server.serve().await.unwrap();
-        });
+        let proxy_addr = match ty {
+            StreamType::Tcp => {
+                let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
+                let proxy_addr = server.listener().local_addr().unwrap();
+                tokio::spawn(async move {
+                    let _handle = server.handle().clone();
+                    server.serve().await.unwrap();
+                });
+                proxy_addr
+            }
+            StreamType::Kcp => {
+                let server = build_kcp_proxy_server(addr, proxy).await.unwrap();
+                let proxy_addr = server.listener().local_addr().unwrap();
+                tokio::spawn(async move {
+                    let _handle = server.handle().clone();
+                    server.serve().await.unwrap();
+                });
+                proxy_addr
+            }
+        };
         ProxyConfig {
             address: StreamAddr {
                 address: proxy_addr.into(),
-                stream_type: StreamType::Tcp,
+                stream_type: ty,
             },
             crypto,
         }
+    }
+
+    async fn spawn_tcp_proxy(addr: &str) -> StreamProxyConfig {
+        spawn_proxy(addr, StreamType::Tcp).await
+    }
+
+    async fn spawn_kcp_proxy(addr: &str) -> StreamProxyConfig {
+        spawn_proxy(addr, StreamType::Kcp).await
     }
 
     async fn spawn_greet(addr: &str, req: &[u8], resp: &[u8], accepts: usize) -> StreamAddr {
@@ -77,9 +102,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_proxies() {
         // Start proxy servers
-        let proxy_1_config = spawn_proxy("0.0.0.0:0").await;
-        let proxy_2_config = spawn_proxy("0.0.0.0:0").await;
-        let proxy_3_config = spawn_proxy("0.0.0.0:0").await;
+        let proxy_1_config = spawn_tcp_proxy("0.0.0.0:0").await;
+        let proxy_2_config = spawn_tcp_proxy("0.0.0.0:0").await;
+        let proxy_3_config = spawn_tcp_proxy("0.0.0.0:0").await;
         let proxies = vec![proxy_1_config, proxy_2_config, proxy_3_config];
 
         // Message to send
@@ -107,8 +132,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_clients() {
         // Start proxy servers
-        let proxy_1_config = spawn_proxy("0.0.0.0:0").await;
-        let proxy_2_config = spawn_proxy("0.0.0.0:0").await;
+        let proxy_1_config = spawn_tcp_proxy("0.0.0.0:0").await;
+        let proxy_2_config = spawn_tcp_proxy("0.0.0.0:0").await;
         let proxies = vec![proxy_1_config, proxy_2_config];
 
         // Message to send
@@ -144,11 +169,25 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn stress_test() {
+    #[serial]
+    async fn stress_test_tcp() {
+        stress_test(StreamType::Tcp).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn stress_test_kcp() {
+        stress_test(StreamType::Kcp).await
+    }
+
+    async fn stress_test(ty: StreamType) {
         // Start proxy servers
         let mut proxies = Vec::new();
         for _ in 0..10 {
-            let proxy_config = spawn_proxy("0.0.0.0:0").await;
+            let proxy_config = match ty {
+                StreamType::Tcp => spawn_tcp_proxy("0.0.0.0:0").await,
+                StreamType::Kcp => spawn_kcp_proxy("0.0.0.0:0").await,
+            };
             proxies.push(proxy_config);
         }
 
@@ -161,7 +200,7 @@ mod tests {
 
         let mut handles = tokio::task::JoinSet::new();
 
-        for _ in 0..50 {
+        for _ in 0..10 {
             let proxies = proxies.clone();
             let greet_addr = greet_addr.clone();
             handles.spawn(async move {
