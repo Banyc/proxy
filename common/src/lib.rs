@@ -8,5 +8,4 @@ pub mod header;
 pub mod loading;
 pub mod proxy_table;
 pub mod stream;
-pub mod tokio_io;
 pub mod udp;
