@@ -48,7 +48,7 @@ where
             // Spawn server
             let key = server.key().to_owned();
             let server = server.build_server().await?;
-            self.handles.insert(key, server.handle().clone());
+            self.handles.insert(key, server.handle());
             join_set.spawn(async move {
                 server.serve().await?;
                 Ok(())
