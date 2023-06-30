@@ -47,7 +47,7 @@ impl From<u8> for MethodIdentifier {
 /// | 1  |    1     | 1 to 255 |
 /// +----+----------+----------+
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegotiationRequest {
     pub methods: Vec<MethodIdentifier>,
 }
@@ -259,6 +259,9 @@ where
             let mut parts = addr.split(':');
             let domain_name = parts.next().unwrap();
             let port = parts.next().unwrap();
+            let len = u8::try_from(domain_name.as_bytes().len())
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            writer.write_u8(len).await?;
             writer.write_all(domain_name.as_bytes()).await?;
             writer.write_u16(port.parse().unwrap()).await?;
         }
@@ -426,4 +429,181 @@ fn map_version_error(version: u8) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn negotiation_request() {
+        let expected = NegotiationRequest {
+            methods: vec![MethodIdentifier::NoAuth, MethodIdentifier::Other(0x1)],
+        };
+        let mut wtr = io::Cursor::new(Vec::new());
+        expected.encode(&mut wtr).await.unwrap();
+        assert_eq!(
+            wtr.get_ref(),
+            &[VERSION, 0x2, MethodIdentifier::NoAuth.into(), 0x1]
+        );
+        let mut rdr = io::Cursor::new(wtr.into_inner());
+        let actual = NegotiationRequest::decode(&mut rdr).await.unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn negotiation_response_some() {
+        let expected = NegotiationResponse {
+            method: Some(MethodIdentifier::NoAuth),
+        };
+        let mut wtr = io::Cursor::new(Vec::new());
+        expected.encode(&mut wtr).await.unwrap();
+        assert_eq!(wtr.get_ref(), &[VERSION, MethodIdentifier::NoAuth.into()]);
+        let mut rdr = io::Cursor::new(wtr.into_inner());
+        let actual = NegotiationResponse::decode(&mut rdr).await.unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn negotiation_response_none() {
+        let expected = NegotiationResponse { method: None };
+        let mut wtr = io::Cursor::new(Vec::new());
+        expected.encode(&mut wtr).await.unwrap();
+        assert_eq!(wtr.get_ref(), &[VERSION, NO_ACCEPTABLE_METHODS]);
+        let mut rdr = io::Cursor::new(wtr.into_inner());
+        let actual = NegotiationResponse::decode(&mut rdr).await.unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn address_ipv4() {
+        let expected = InternetAddr::from("1.2.3.4:5".parse::<SocketAddr>().unwrap());
+        let mut wtr = io::Cursor::new(Vec::new());
+        encode_address(&expected, &mut wtr).await.unwrap();
+        assert_eq!(wtr.get_ref(), &[AddressType::Ipv4.into(), 1, 2, 3, 4, 0, 5]);
+        let mut rdr = io::Cursor::new(wtr.into_inner());
+        let actual = decode_address(&mut rdr).await.unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn address_ipv6() {
+        let expected = InternetAddr::from("[::1.2.3.4]:5".parse::<SocketAddr>().unwrap());
+        let mut wtr = io::Cursor::new(Vec::new());
+        encode_address(&expected, &mut wtr).await.unwrap();
+        assert_eq!(
+            wtr.get_ref(),
+            &[
+                AddressType::Ipv6.into(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                2,
+                3,
+                4,
+                0,
+                5
+            ]
+        );
+        let mut rdr = io::Cursor::new(wtr.into_inner());
+        let actual = decode_address(&mut rdr).await.unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn address_domain_name() {
+        let expected = InternetAddr::String("a:5".into());
+        let mut wtr = io::Cursor::new(Vec::new());
+        encode_address(&expected, &mut wtr).await.unwrap();
+        assert_eq!(
+            wtr.get_ref(),
+            &[AddressType::DomainName.into(), 0x1, b'a', 0, 5]
+        );
+        let mut rdr = io::Cursor::new(wtr.into_inner());
+        let actual = decode_address(&mut rdr).await.unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn relay_request() {
+        let expected = RelayRequest {
+            command: Command::Connect,
+            destination: InternetAddr::SocketAddr("1.2.3.4:5".parse().unwrap()),
+        };
+        let mut wtr = io::Cursor::new(Vec::new());
+        expected.encode(&mut wtr).await.unwrap();
+        assert_eq!(
+            wtr.get_ref(),
+            &[
+                VERSION,
+                Command::Connect.into(),
+                0x0,
+                AddressType::Ipv4.into(),
+                1,
+                2,
+                3,
+                4,
+                0,
+                5
+            ]
+        );
+        let mut rdr = io::Cursor::new(wtr.into_inner());
+        let actual = RelayRequest::decode(&mut rdr).await.unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn relay_response() {
+        let expected = RelayResponse {
+            reply: Reply::GeneralSocksServerFailure,
+            bind: InternetAddr::SocketAddr("1.2.3.4:5".parse().unwrap()),
+        };
+        let mut wtr = io::Cursor::new(Vec::new());
+        expected.encode(&mut wtr).await.unwrap();
+        assert_eq!(
+            wtr.get_ref(),
+            &[
+                VERSION,
+                Reply::GeneralSocksServerFailure.into(),
+                0x0,
+                AddressType::Ipv4.into(),
+                1,
+                2,
+                3,
+                4,
+                0,
+                5
+            ]
+        );
+        let mut rdr = io::Cursor::new(wtr.into_inner());
+        let actual = RelayResponse::decode(&mut rdr).await.unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn udp_request_header() {
+        let expected = UdpRequestHeader {
+            fragment: 1,
+            destination: InternetAddr::SocketAddr("1.2.3.4:5".parse().unwrap()),
+        };
+        let mut wtr = io::Cursor::new(Vec::new());
+        expected.encode(&mut wtr).await.unwrap();
+        assert_eq!(
+            wtr.get_ref(),
+            &[0x0, 0x0, 0x1, AddressType::Ipv4.into(), 1, 2, 3, 4, 0, 5]
+        );
+        let mut rdr = io::Cursor::new(wtr.into_inner());
+        let actual = UdpRequestHeader::decode(&mut rdr).await.unwrap();
+        assert_eq!(expected, actual);
+    }
 }
