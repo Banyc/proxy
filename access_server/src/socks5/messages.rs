@@ -322,6 +322,8 @@ impl RelayRequest {
 pub enum Reply {
     Succeeded,
     GeneralSocksServerFailure,
+    ConnectionNotAllowedByRuleset,
+    CommandNotSupported,
     Other(u8),
 }
 
@@ -330,6 +332,8 @@ impl From<Reply> for u8 {
         match value {
             Reply::Succeeded => 0x0,
             Reply::GeneralSocksServerFailure => 0x1,
+            Reply::ConnectionNotAllowedByRuleset => 0x2,
+            Reply::CommandNotSupported => 0x7,
             Reply::Other(code) => code,
         }
     }
@@ -340,6 +344,8 @@ impl From<u8> for Reply {
         match code {
             0x0 => Reply::Succeeded,
             0x1 => Reply::GeneralSocksServerFailure,
+            0x2 => Reply::ConnectionNotAllowedByRuleset,
+            0x7 => Reply::CommandNotSupported,
             _ => Reply::Other(code),
         }
     }
