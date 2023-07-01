@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
@@ -25,6 +25,7 @@ use common::{
 use proxy_client::stream::StreamEstablishError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::io::AsyncReadExt;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -137,6 +138,7 @@ pub struct Socks5ServerTcpAccess {
     filter: Filter,
     speed_limit: f64,
     udp_listen_addr: Option<InternetAddr>,
+    udp_associate_streams: Arc<Mutex<tokio::task::JoinSet<()>>>,
 }
 
 impl Hook for Socks5ServerTcpAccess {}
@@ -175,6 +177,7 @@ impl Socks5ServerTcpAccess {
             filter,
             speed_limit,
             udp_listen_addr,
+            udp_associate_streams: Default::default(),
         }
     }
 
@@ -284,6 +287,14 @@ impl Socks5ServerTcpAccess {
                         bind: addr.clone(),
                     };
                     relay_response.encode(&mut stream).await?;
+                    self.udp_associate_streams
+                        .lock()
+                        .unwrap()
+                        .spawn(async move {
+                            // Prevent the UDP association from terminating
+                            let mut buf = [0; 1];
+                            let _ = stream.read_exact(&mut buf).await;
+                        });
                     return Ok(EstablishResult::Udp);
                 }
                 None => {
