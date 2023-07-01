@@ -7,6 +7,7 @@ use common::{
     stream::pool::PoolBuilder,
 };
 use serde::{Deserialize, Serialize};
+use socks5::server::tcp::{Socks5ServerTcpAccess, Socks5ServerTcpAccessServerConfig};
 use stream::{
     proxy_table::StreamProxyTableBuilder,
     streams::{
@@ -28,6 +29,8 @@ pub struct AccessServerConfig {
     pub udp_server: Vec<UdpAccessServerConfig>,
     #[serde(default)]
     pub http_server: Vec<HttpAccessServerConfig>,
+    #[serde(default)]
+    pub socks5_tcp_server: Vec<Socks5ServerTcpAccessServerConfig>,
     pub stream_pool: PoolBuilder,
     #[serde(default)]
     pub stream_proxy_tables: HashMap<Arc<str>, StreamProxyTableBuilder>,
@@ -43,6 +46,7 @@ impl AccessServerConfig {
             tcp_server: Default::default(),
             udp_server: Default::default(),
             http_server: Default::default(),
+            socks5_tcp_server: Default::default(),
             stream_pool: PoolBuilder(None),
             stream_proxy_tables: Default::default(),
             udp_proxy_tables: Default::default(),
@@ -97,6 +101,18 @@ impl AccessServerConfig {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         loader.http_server.load(join_set, http_server).await?;
 
+        // SOCKS5 TCP servers
+        let socks5_tcp_server = self
+            .socks5_tcp_server
+            .into_iter()
+            .map(|c| c.into_builder(stream_pool.clone(), &stream_proxy_tables, &filters))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        loader
+            .socks5_tcp_server
+            .load(join_set, socks5_tcp_server)
+            .await?;
+
         Ok(())
     }
 }
@@ -111,6 +127,7 @@ pub struct AccessServerLoader {
     tcp_server: loading::Loader<TcpAccess>,
     udp_server: loading::Loader<UdpAccess>,
     http_server: loading::Loader<HttpAccess>,
+    socks5_tcp_server: loading::Loader<Socks5ServerTcpAccess>,
 }
 
 impl AccessServerLoader {
@@ -119,6 +136,7 @@ impl AccessServerLoader {
             tcp_server: loading::Loader::new(),
             udp_server: loading::Loader::new(),
             http_server: loading::Loader::new(),
+            socks5_tcp_server: loading::Loader::new(),
         }
     }
 }

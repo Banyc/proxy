@@ -1,32 +1,136 @@
 use std::{
+    collections::HashMap,
     io,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    sync::Arc,
 };
 
 use async_trait::async_trait;
 use common::{
     addr::InternetAddr,
+    config::SharableConfig,
     crypto::XorCrypto,
-    filter::{self, Filter},
-    loading::Hook,
+    filter::{self, Filter, FilterBuilder},
+    loading::{self, Hook},
     stream::{
         addr::{StreamAddr, StreamType},
         copy_bidirectional_with_payload_crypto,
         pool::Pool,
         proxy_table::StreamProxyTable,
+        streams::tcp::TcpServer,
         tokio_io, CreatedStream, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics,
         StreamServerHook,
     },
 };
 use proxy_client::stream::StreamEstablishError;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
-use crate::socks5::messages::{
-    Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,
-    RelayResponse, Reply,
+use crate::{
+    socks5::messages::{
+        Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,
+        RelayResponse, Reply,
+    },
+    stream::proxy_table::StreamProxyTableBuilder,
 };
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Socks5ServerTcpAccessServerConfig {
+    pub listen_addr: Arc<str>,
+    pub proxy_table: SharableConfig<StreamProxyTableBuilder>,
+    pub filter: SharableConfig<FilterBuilder>,
+    pub speed_limit: Option<f64>,
+    pub udp_server_addr: Option<Arc<str>>,
+}
+
+impl Socks5ServerTcpAccessServerConfig {
+    pub fn into_builder(
+        self,
+        stream_pool: Pool,
+        proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
+        filters: &HashMap<Arc<str>, Filter>,
+    ) -> Result<Socks5ServerTcpAccessServerBuilder, BuildError> {
+        let proxy_table = match self.proxy_table {
+            SharableConfig::SharingKey(key) => proxy_tables
+                .get(&key)
+                .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
+                .clone(),
+            SharableConfig::Private(x) => x.build(&stream_pool),
+        };
+        let filter = match self.filter {
+            SharableConfig::SharingKey(key) => filters
+                .get(&key)
+                .ok_or_else(|| BuildError::FilterKeyNotFound(key.clone()))?
+                .clone(),
+            SharableConfig::Private(x) => x.build(filters)?,
+        };
+
+        Ok(Socks5ServerTcpAccessServerBuilder {
+            listen_addr: self.listen_addr,
+            proxy_table,
+            stream_pool,
+            filter,
+            speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
+            udp_server_addr: self.udp_server_addr,
+        })
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum BuildError {
+    #[error("Proxy table key not found: {0}")]
+    ProxyTableKeyNotFound(Arc<str>),
+    #[error("Filter key not found: {0}")]
+    FilterKeyNotFound(Arc<str>),
+    #[error("Filter error: {0}")]
+    Filter(#[from] filter::FilterBuildError),
+}
+
+#[derive(Debug, Clone)]
+pub struct Socks5ServerTcpAccessServerBuilder {
+    listen_addr: Arc<str>,
+    proxy_table: StreamProxyTable,
+    stream_pool: Pool,
+    filter: Filter,
+    speed_limit: f64,
+    udp_server_addr: Option<Arc<str>>,
+}
+
+#[async_trait]
+impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
+    type Hook = Socks5ServerTcpAccess;
+    type Server = TcpServer<Self::Hook>;
+
+    async fn build_server(self) -> io::Result<TcpServer<Socks5ServerTcpAccess>> {
+        let listen_addr = self.listen_addr.clone();
+        let access = self.build_hook()?;
+        let tcp_listener = tokio::net::TcpListener::bind(listen_addr.as_ref())
+            .await
+            .map_err(|e| {
+                error!(?e, "Failed to bind to listen address");
+                e
+            })?;
+        Ok(TcpServer::new(tcp_listener, access))
+    }
+
+    fn key(&self) -> &Arc<str> {
+        &self.listen_addr
+    }
+
+    fn build_hook(self) -> io::Result<Socks5ServerTcpAccess> {
+        let access = Socks5ServerTcpAccess::new(
+            self.proxy_table,
+            self.stream_pool,
+            self.filter,
+            self.speed_limit,
+            self.udp_server_addr.map(Into::into),
+        );
+        Ok(access)
+    }
+}
+
+#[derive(Debug)]
 pub struct Socks5ServerTcpAccess {
     proxy_table: StreamProxyTable,
     stream_pool: Pool,
@@ -58,6 +162,22 @@ impl StreamServerHook for Socks5ServerTcpAccess {
 }
 
 impl Socks5ServerTcpAccess {
+    pub fn new(
+        proxy_table: StreamProxyTable,
+        stream_pool: Pool,
+        filter: Filter,
+        speed_limit: f64,
+        udp_listen_addr: Option<InternetAddr>,
+    ) -> Self {
+        Self {
+            proxy_table,
+            stream_pool,
+            filter,
+            speed_limit,
+            udp_listen_addr,
+        }
+    }
+
     async fn proxy<S>(&self, downstream: S) -> Result<Option<StreamMetrics>, ProxyError>
     where
         S: IoStream + IoAddr + std::fmt::Debug,
