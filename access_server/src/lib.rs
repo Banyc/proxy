@@ -7,7 +7,10 @@ use common::{
     stream::pool::PoolBuilder,
 };
 use serde::{Deserialize, Serialize};
-use socks5::server::tcp::{Socks5ServerTcpAccess, Socks5ServerTcpAccessServerConfig};
+use socks5::server::{
+    tcp::{Socks5ServerTcpAccess, Socks5ServerTcpAccessServerConfig},
+    udp::{Socks5ServerUdpAccess, Socks5ServerUdpAccessServerConfig},
+};
 use stream::{
     proxy_table::StreamProxyTableBuilder,
     streams::{
@@ -31,6 +34,8 @@ pub struct AccessServerConfig {
     pub http_server: Vec<HttpAccessServerConfig>,
     #[serde(default)]
     pub socks5_tcp_server: Vec<Socks5ServerTcpAccessServerConfig>,
+    #[serde(default)]
+    pub socks5_udp_server: Vec<Socks5ServerUdpAccessServerConfig>,
     pub stream_pool: PoolBuilder,
     #[serde(default)]
     pub stream_proxy_tables: HashMap<Arc<str>, StreamProxyTableBuilder>,
@@ -47,6 +52,7 @@ impl AccessServerConfig {
             udp_server: Default::default(),
             http_server: Default::default(),
             socks5_tcp_server: Default::default(),
+            socks5_udp_server: Default::default(),
             stream_pool: PoolBuilder(None),
             stream_proxy_tables: Default::default(),
             udp_proxy_tables: Default::default(),
@@ -113,6 +119,18 @@ impl AccessServerConfig {
             .load(join_set, socks5_tcp_server)
             .await?;
 
+        // SOCKS5 UDP servers
+        let socks5_udp_server = self
+            .socks5_udp_server
+            .into_iter()
+            .map(|c| c.into_builder(&udp_proxy_tables))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        loader
+            .socks5_udp_server
+            .load(join_set, socks5_udp_server)
+            .await?;
+
         Ok(())
     }
 }
@@ -128,6 +146,7 @@ pub struct AccessServerLoader {
     udp_server: loading::Loader<UdpAccess>,
     http_server: loading::Loader<HttpAccess>,
     socks5_tcp_server: loading::Loader<Socks5ServerTcpAccess>,
+    socks5_udp_server: loading::Loader<Socks5ServerUdpAccess>,
 }
 
 impl AccessServerLoader {
@@ -137,6 +156,7 @@ impl AccessServerLoader {
             udp_server: loading::Loader::new(),
             http_server: loading::Loader::new(),
             socks5_tcp_server: loading::Loader::new(),
+            socks5_udp_server: loading::Loader::new(),
         }
     }
 }
