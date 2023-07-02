@@ -1,5 +1,5 @@
 use common::{
-    proxy_table::{ProxyTable},
+    proxy_table::ProxyTable,
     stream::{
         pool::Pool,
         proxy_table::{StreamProxyTable, StreamWeightedProxyChainBuilder},

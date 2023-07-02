@@ -1,5 +1,5 @@
 use common::{
-    proxy_table::{ProxyTable},
+    proxy_table::ProxyTable,
     udp::proxy_table::{UdpProxyTable, UdpWeightedProxyChainBuilder},
 };
 use proxy_client::udp::UdpTracer;
