@@ -1,5 +1,6 @@
 use std::{collections::HashMap, io, sync::Arc};
 
+use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use common::{
     config::SharableConfig,
@@ -99,7 +100,7 @@ pub struct TcpAccess {
     proxy_table: StreamProxyTable,
     destination: StreamAddr,
     stream_pool: Pool,
-    speed_limit: f64,
+    speed_limiter: Limiter,
 }
 
 impl TcpAccess {
@@ -113,7 +114,7 @@ impl TcpAccess {
             proxy_table,
             destination,
             stream_pool,
-            speed_limit,
+            speed_limiter: Limiter::new(speed_limit),
         }
     }
 
@@ -147,7 +148,7 @@ impl TcpAccess {
             downstream,
             upstream,
             proxy_chain.payload_crypto.as_ref(),
-            self.speed_limit,
+            self.speed_limiter.clone(),
         )
         .await;
         let end = std::time::Instant::now();

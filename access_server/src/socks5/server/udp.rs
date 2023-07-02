@@ -1,5 +1,6 @@
 use std::{collections::HashMap, io, sync::Arc};
 
+use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use common::{
     config::SharableConfig,
@@ -86,7 +87,7 @@ impl loading::Builder for Socks5ServerUdpAccessServerBuilder {
 #[derive(Debug)]
 pub struct Socks5ServerUdpAccess {
     proxy_table: UdpProxyTable,
-    speed_limit: f64,
+    speed_limiter: Limiter,
 }
 
 impl loading::Hook for Socks5ServerUdpAccess {}
@@ -95,7 +96,7 @@ impl Socks5ServerUdpAccess {
     pub fn new(proxy_table: UdpProxyTable, speed_limit: f64) -> Self {
         Self {
             proxy_table,
-            speed_limit,
+            speed_limiter: Limiter::new(speed_limit),
         }
     }
 
@@ -132,7 +133,7 @@ impl Socks5ServerUdpAccess {
                 rx,
                 write: downstream_writer,
             },
-            self.speed_limit,
+            self.speed_limiter.clone(),
             proxy_chain.payload_crypto.clone(),
             None,
         )

@@ -1,5 +1,6 @@
 use std::{collections::HashMap, io, sync::Arc, time::Instant};
 
+use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use bytes::Bytes;
 use common::{
@@ -123,7 +124,7 @@ pub struct HttpAccess {
     proxy_table: Arc<StreamProxyTable>,
     stream_pool: Pool,
     filter: Filter,
-    speed_limit: f64,
+    speed_limiter: Limiter,
 }
 
 impl HttpAccess {
@@ -137,7 +138,7 @@ impl HttpAccess {
             proxy_table: Arc::new(proxy_table),
             stream_pool,
             filter,
-            speed_limit,
+            speed_limiter: Limiter::new(speed_limit),
         }
     }
 
@@ -273,7 +274,7 @@ impl HttpAccess {
             filter::Action::Proxy => Some(HttpConnect::new(
                 Arc::clone(&self.proxy_table),
                 self.stream_pool.clone(),
-                self.speed_limit,
+                self.speed_limiter.clone(),
             )),
             filter::Action::Block => {
                 trace!(?addr, "Blocked CONNECT");
@@ -282,9 +283,9 @@ impl HttpAccess {
             filter::Action::Direct => None,
         };
 
-        let speed_limit = self.speed_limit;
+        let speed_limiter = self.speed_limiter.clone();
         tokio::task::spawn(async move {
-            upgrade(req, addr, http_connect, speed_limit).await;
+            upgrade(req, addr, http_connect, speed_limiter).await;
         });
 
         // Return STATUS_OK
@@ -327,7 +328,7 @@ async fn upgrade(
     req: Request<Incoming>,
     addr: Arc<str>,
     http_connect: Option<HttpConnect>,
-    speed_limit: f64,
+    speed_limiter: Limiter,
 ) {
     let upgraded = match hyper::upgrade::on(req).await {
         Ok(upgraded) => upgraded,
@@ -359,7 +360,7 @@ async fn upgrade(
             return;
         }
     };
-    match tokio_io::timed_copy_bidirectional(upgraded, upstream, speed_limit).await {
+    match tokio_io::timed_copy_bidirectional(upgraded, upstream, speed_limiter).await {
         Ok(metrics) => {
             info!(?addr, ?metrics, "Direct CONNECT finished");
         }
@@ -400,15 +401,19 @@ impl StreamServerHook for HttpAccess {
 struct HttpConnect {
     proxy_table: Arc<StreamProxyTable>,
     stream_pool: Pool,
-    speed_limit: f64,
+    speed_limiter: Limiter,
 }
 
 impl HttpConnect {
-    pub fn new(proxy_table: Arc<StreamProxyTable>, stream_pool: Pool, speed_limit: f64) -> Self {
+    pub fn new(
+        proxy_table: Arc<StreamProxyTable>,
+        stream_pool: Pool,
+        speed_limiter: Limiter,
+    ) -> Self {
         Self {
             proxy_table,
             stream_pool,
-            speed_limit,
+            speed_limiter,
         }
     }
 
@@ -436,7 +441,7 @@ impl HttpConnect {
             upgraded,
             upstream,
             proxy_chain.payload_crypto.as_ref(),
-            self.speed_limit,
+            self.speed_limiter.clone(),
         )
         .await;
         let end = Instant::now();

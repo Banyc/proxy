@@ -1,5 +1,6 @@
 use std::{fmt::Display, io, net::SocketAddr, ops::DerefMut, pin::Pin, time::Duration};
 
+use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use bytesize::ByteSize;
 use thiserror::Error;
@@ -333,7 +334,7 @@ pub async fn copy_bidirectional_with_payload_crypto<DS, US>(
     downstream: DS,
     upstream: US,
     payload_crypto: Option<&XorCrypto>,
-    speed_limit: f64,
+    speed_limiter: Limiter,
 ) -> Result<(u64, u64), tokio_io::CopyBiError>
 where
     US: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -343,8 +344,8 @@ where
         Some(crypto) => {
             // Establish encrypted stream
             let xor_stream = XorStream::upgrade(upstream, crypto);
-            tokio_io::timed_copy_bidirectional(downstream, xor_stream, speed_limit).await
+            tokio_io::timed_copy_bidirectional(downstream, xor_stream, speed_limiter).await
         }
-        None => tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limit).await,
+        None => tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await,
     }
 }

@@ -1,5 +1,6 @@
 use std::{collections::HashMap, io, net::Ipv4Addr, sync::Arc};
 
+use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use common::{
     addr::any_addr,
@@ -95,7 +96,7 @@ impl loading::Builder for UdpAccessServerBuilder {
 pub struct UdpAccess {
     proxy_table: UdpProxyTable,
     destination: InternetAddr,
-    speed_limit: f64,
+    speed_limiter: Limiter,
 }
 
 impl loading::Hook for UdpAccess {}
@@ -105,7 +106,7 @@ impl UdpAccess {
         Self {
             proxy_table,
             destination,
-            speed_limit,
+            speed_limiter: Limiter::new(speed_limit),
         }
     }
 
@@ -142,7 +143,7 @@ impl UdpAccess {
                 rx,
                 write: downstream_writer,
             },
-            self.speed_limit,
+            self.speed_limiter.clone(),
             proxy_chain.payload_crypto.clone(),
             None,
         )

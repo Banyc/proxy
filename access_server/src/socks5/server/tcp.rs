@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use common::{
     addr::InternetAddr,
@@ -136,7 +137,7 @@ pub struct Socks5ServerTcpAccess {
     proxy_table: StreamProxyTable,
     stream_pool: Pool,
     filter: Filter,
-    speed_limit: f64,
+    speed_limiter: Limiter,
     udp_listen_addr: Option<InternetAddr>,
     udp_associate_streams: Arc<Mutex<tokio::task::JoinSet<()>>>,
 }
@@ -175,7 +176,7 @@ impl Socks5ServerTcpAccess {
             proxy_table,
             stream_pool,
             filter,
-            speed_limit,
+            speed_limiter: Limiter::new(speed_limit),
             udp_listen_addr,
             udp_associate_streams: Default::default(),
         }
@@ -197,8 +198,12 @@ impl Socks5ServerTcpAccess {
                 upstream,
                 upstream_addr,
             } => {
-                match tokio_io::timed_copy_bidirectional(downstream, upstream, self.speed_limit)
-                    .await
+                match tokio_io::timed_copy_bidirectional(
+                    downstream,
+                    upstream,
+                    self.speed_limiter.clone(),
+                )
+                .await
                 {
                     Ok(metrics) => {
                         info!(%upstream_addr, ?metrics, "Direct finished");
@@ -221,7 +226,7 @@ impl Socks5ServerTcpAccess {
             downstream,
             upstream,
             payload_crypto.as_ref(),
-            self.speed_limit,
+            self.speed_limiter.clone(),
         )
         .await;
         let end = std::time::Instant::now();

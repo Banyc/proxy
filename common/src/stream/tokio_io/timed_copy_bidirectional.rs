@@ -12,7 +12,7 @@ const DOWNLINK_TIMEOUT: Duration = Duration::from_secs(60);
 pub async fn timed_copy_bidirectional<A, B>(
     a: A,
     b: B,
-    speed_limit: f64,
+    speed_limiter: Limiter,
 ) -> Result<(u64, u64), CopyBiError>
 where
     A: AsyncRead + AsyncWrite + Send + 'static,
@@ -26,8 +26,7 @@ where
     b.set_read_timeout(Some(DOWNLINK_TIMEOUT));
     b.set_write_timeout(Some(UPLINK_TIMEOUT));
 
-    let limiter = <Limiter>::new(speed_limit);
-    let a = limiter.limit(a);
+    let a = speed_limiter.limit(a);
 
     let mut a = Box::pin(a);
     let mut b = Box::pin(b);
@@ -176,9 +175,10 @@ Morbi vitae eleifend dui. Vestibulum lobortis commodo pellentesque. Suspendisse 
                         }
                     }
                 });
-                let (_a_to_b, _b_to_a) = timed_copy_bidirectional(a_2, b_2, f64::INFINITY)
-                    .await
-                    .unwrap();
+                let (_a_to_b, _b_to_a) =
+                    timed_copy_bidirectional(a_2, b_2, Limiter::new(f64::INFINITY))
+                        .await
+                        .unwrap();
                 while let Some(res) = join_set.join_next().await {
                     res.unwrap();
                 }

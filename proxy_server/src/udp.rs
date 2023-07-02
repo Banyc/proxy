@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use common::{
     addr::{any_addr, InternetAddr},
@@ -149,7 +150,7 @@ impl UdpProxy {
                 rx,
                 write: downstream_writer,
             },
-            f64::INFINITY,
+            Limiter::new(f64::INFINITY),
             self.payload_crypto.clone(),
             Some(self.header_crypto.clone()),
         )

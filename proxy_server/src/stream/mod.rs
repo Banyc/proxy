@@ -1,5 +1,6 @@
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
+use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use common::{
     crypto::{XorCrypto, XorCryptoCursor},
@@ -92,7 +93,7 @@ impl StreamProxy {
             downstream,
             upstream,
             self.payload_crypto.as_ref(),
-            f64::INFINITY,
+            Limiter::new(f64::INFINITY),
         )
         .await;
         let end = std::time::Instant::now();

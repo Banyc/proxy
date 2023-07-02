@@ -42,7 +42,7 @@ pub async fn copy_bidirectional<R, W>(
     flow: Flow,
     mut upstream: UpstreamParts<R, W>,
     mut downstream: DownstreamParts,
-    speed_limit: f64,
+    speed_limiter: Limiter,
     payload_crypto: Option<XorCrypto>,
     header_crypto: Option<XorCrypto>,
 ) -> Result<FlowMetrics, CopyBiError>
@@ -62,15 +62,12 @@ where
     let packets_uplink = Arc::new(RwLock::new(0));
     let packets_downlink = Arc::new(RwLock::new(0));
 
-    // Limit speed
-    let limiter = <Limiter>::new(speed_limit);
-
     let mut join_set = tokio::task::JoinSet::<Result<(), CopyBiError>>::new();
     join_set.spawn({
         let last_uplink_packet = Arc::clone(&last_uplink_packet);
         let bytes_uplink = Arc::clone(&bytes_uplink);
         let packets_uplink = Arc::clone(&packets_uplink);
-        let limiter = limiter.clone();
+        let speed_limiter = speed_limiter.clone();
         let payload_crypto = payload_crypto.clone();
         async move {
             loop {
@@ -85,7 +82,7 @@ where
                 };
 
                 // Limit speed
-                limiter.consume(packet.0.len()).await;
+                speed_limiter.consume(packet.0.len()).await;
 
                 // Xor payload
                 if let Some(payload_crypto) = &payload_crypto {
@@ -122,7 +119,7 @@ where
                 let pkt = &mut downlink_buf[..n];
 
                 // Limit speed
-                limiter.consume(pkt.len()).await;
+                speed_limiter.consume(pkt.len()).await;
 
                 // Xor payload
                 if let Some(payload_crypto) = &payload_crypto {
