@@ -10,7 +10,7 @@ use server::{
 #[derive(Debug, Parser)]
 struct Args {
     /// Paths to the configuration files.
-    config_files: Vec<Arc<str>>,
+    config_file_paths: Vec<Arc<str>>,
 }
 
 #[tokio::main]
@@ -18,7 +18,7 @@ async fn main() -> AnyResult {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
 
-    let notify_rx = spawn_watch_tasks(&args.config_files);
-    let config_reader = MultiFileConfigReader::new(args.config_files.into());
+    let notify_rx = spawn_watch_tasks(&args.config_file_paths);
+    let config_reader = MultiFileConfigReader::new(args.config_file_paths.into());
     serve(notify_rx, config_reader).await.map_err(|e| e.into())
 }
