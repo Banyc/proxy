@@ -140,6 +140,15 @@ impl UdpProxy {
             })?;
         let upstream = Arc::new(upstream);
 
+        let response_header = {
+            // Write header
+            let mut wtr = Vec::new();
+            let header = RouteResponse { result: Ok(()) };
+            let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
+            write_header(&mut wtr, &header, &mut crypto_cursor).unwrap();
+            wtr.into()
+        };
+
         let metrics = copy_bidirectional(
             flow.clone(),
             UpstreamParts {
@@ -152,7 +161,7 @@ impl UdpProxy {
             },
             Limiter::new(f64::INFINITY),
             self.payload_crypto.clone(),
-            Some(self.header_crypto.clone()),
+            Some(response_header),
         )
         .await
         .map_err(|e| ProxyError::Copy {

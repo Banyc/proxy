@@ -12,7 +12,6 @@ use tracing::trace;
 use crate::{
     crypto::{XorCrypto, XorCryptoCursor},
     error::AnyError,
-    header::{codec::write_header, route::RouteResponse},
     udp::TIMEOUT,
 };
 
@@ -44,7 +43,7 @@ pub async fn copy_bidirectional<R, W>(
     mut downstream: DownstreamParts,
     speed_limiter: Limiter,
     payload_crypto: Option<XorCrypto>,
-    header_crypto: Option<XorCrypto>,
+    response_header: Option<Arc<[u8]>>,
 ) -> Result<FlowMetrics, CopyBiError>
 where
     R: UdpRecv + Send + 'static,
@@ -127,14 +126,14 @@ where
                     crypto_cursor.xor(pkt);
                 }
 
-                let pkt = if let Some(header_crypto) = &header_crypto {
+                let pkt = if let Some(response_header) = &response_header {
                     // Set up protocol buffer writer
                     downlink_protocol_buf.clear();
 
                     // Write header
-                    let header = RouteResponse { result: Ok(()) };
-                    let mut crypto_cursor = XorCryptoCursor::new(header_crypto);
-                    write_header(&mut downlink_protocol_buf, &header, &mut crypto_cursor).unwrap();
+                    downlink_protocol_buf
+                        .write_all(response_header.as_ref())
+                        .unwrap();
 
                     // Write payload
                     downlink_protocol_buf.write_all(pkt).unwrap();

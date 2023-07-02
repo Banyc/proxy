@@ -123,6 +123,16 @@ impl Socks5ServerUdpAccess {
 
         let (upstream_read, upstream_write) = upstream.into_split();
 
+        let response_header = {
+            let mut wtr = Vec::new();
+            let udp_request_header = UdpRequestHeader {
+                fragment: 0,
+                destination: flow.upstream.0.clone(),
+            };
+            udp_request_header.encode(&mut wtr).await.unwrap();
+            wtr.into()
+        };
+
         let metrics = copy_bidirectional(
             flow,
             UpstreamParts {
@@ -135,7 +145,7 @@ impl Socks5ServerUdpAccess {
             },
             self.speed_limiter.clone(),
             proxy_chain.payload_crypto.clone(),
-            None,
+            Some(response_header),
         )
         .await?;
         Ok(metrics)
