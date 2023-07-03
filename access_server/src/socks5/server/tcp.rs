@@ -22,7 +22,7 @@ use proxy_client::stream::StreamEstablishError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
-use tracing::{error, info, warn};
+use tracing::{error, info, trace, warn};
 
 use crate::{
     socks5::messages::{
@@ -186,6 +186,10 @@ impl Socks5ServerTcpAccess {
         let res = self.establish(downstream).await?;
         let (downstream, (upstream, upstream_addr, upstream_sock_addr), payload_crypto) = match res
         {
+            EstablishResult::Blocked { destination } => {
+                trace!(?destination, "Blocked");
+                return Ok(None);
+            }
             EstablishResult::Direct {
                 downstream,
                 upstream,
@@ -266,7 +270,9 @@ impl Socks5ServerTcpAccess {
                 bind: InternetAddr::zero_ipv4_addr(),
             };
             relay_response.encode(&mut stream).await?;
-            return Err(EstablishError::BlockedByFilter(relay_request.destination));
+            return Ok(EstablishResult::Blocked {
+                destination: relay_request.destination,
+            });
         }
 
         match relay_request.command {
@@ -357,6 +363,9 @@ impl Socks5ServerTcpAccess {
 }
 
 pub enum EstablishResult<S> {
+    Blocked {
+        destination: InternetAddr,
+    },
     Direct {
         downstream: S,
         upstream: tokio::net::TcpStream,
@@ -378,8 +387,6 @@ pub enum EstablishError {
     Io(#[from] io::Error),
     #[error("Failed to establish proxy chain")]
     EstablishProxyChain(#[from] StreamEstablishError),
-    #[error("Blocked by filter")]
-    BlockedByFilter(InternetAddr),
     #[error("Command BIND not supported")]
     CmdBindNotSupported,
     #[error("No UDP server available")]
