@@ -271,7 +271,7 @@ impl Socks5ServerTcpAccess {
                 bind: InternetAddr::SocketAddr(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into()),
             };
             relay_response.encode(&mut stream).await?;
-            return Err(io::Error::new(io::ErrorKind::Other, "Blocked by filter").into());
+            return Err(EstablishError::BlockedByFilter(relay_request.destination));
         }
 
         match relay_request.command {
@@ -284,9 +284,7 @@ impl Socks5ServerTcpAccess {
                     ),
                 };
                 relay_response.encode(&mut stream).await?;
-                return Err(
-                    io::Error::new(io::ErrorKind::Other, "Command BIND not supported").into(),
-                );
+                return Err(EstablishError::CmdBindNotSupported);
             }
             Command::UdpAssociate => match &self.udp_listen_addr {
                 Some(addr) => {
@@ -305,11 +303,7 @@ impl Socks5ServerTcpAccess {
                         ),
                     };
                     relay_response.encode(&mut stream).await?;
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "Command UDP ASSOCIATE not supported",
-                    )
-                    .into());
+                    return Err(EstablishError::NoUdpServerAvailable);
                 }
             },
         }
@@ -395,6 +389,12 @@ pub enum EstablishError {
     Io(#[from] io::Error),
     #[error("Failed to establish proxy chain")]
     EstablishProxyChain(#[from] StreamEstablishError),
+    #[error("Blocked by filter")]
+    BlockedByFilter(InternetAddr),
+    #[error("Command BIND not supported")]
+    CmdBindNotSupported,
+    #[error("No UDP server available")]
+    NoUdpServerAvailable,
 }
 
 #[derive(Debug, Error)]
