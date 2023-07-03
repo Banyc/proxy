@@ -1,7 +1,7 @@
 use std::{
     fmt::Display,
     io,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4},
     sync::Arc,
 };
 
@@ -47,6 +47,10 @@ impl From<Arc<str>> for InternetAddr {
 }
 
 impl InternetAddr {
+    pub fn zero_ipv4_addr() -> Self {
+        Self::SocketAddr(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into())
+    }
+
     pub async fn to_socket_addr(&self) -> io::Result<SocketAddr> {
         match self {
             Self::SocketAddr(addr) => Ok(*addr),

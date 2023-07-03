@@ -1,9 +1,4 @@
-use std::{
-    collections::HashMap,
-    io,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
-    sync::Arc,
-};
+use std::{collections::HashMap, io, net::SocketAddr, sync::Arc};
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
@@ -268,7 +263,7 @@ impl Socks5ServerTcpAccess {
         if matches!(action, filter::Action::Block) {
             let relay_response = RelayResponse {
                 reply: Reply::ConnectionNotAllowedByRuleset,
-                bind: InternetAddr::SocketAddr(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into()),
+                bind: InternetAddr::zero_ipv4_addr(),
             };
             relay_response.encode(&mut stream).await?;
             return Err(EstablishError::BlockedByFilter(relay_request.destination));
@@ -279,9 +274,7 @@ impl Socks5ServerTcpAccess {
             Command::Bind => {
                 let relay_response = RelayResponse {
                     reply: Reply::CommandNotSupported,
-                    bind: InternetAddr::SocketAddr(
-                        SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into(),
-                    ),
+                    bind: InternetAddr::zero_ipv4_addr(),
                 };
                 relay_response.encode(&mut stream).await?;
                 return Err(EstablishError::CmdBindNotSupported);
@@ -298,9 +291,7 @@ impl Socks5ServerTcpAccess {
                 None => {
                     let relay_response = RelayResponse {
                         reply: Reply::CommandNotSupported,
-                        bind: InternetAddr::SocketAddr(
-                            SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into(),
-                        ),
+                        bind: InternetAddr::zero_ipv4_addr(),
                     };
                     relay_response.encode(&mut stream).await?;
                     return Err(EstablishError::NoUdpServerAvailable);
@@ -312,7 +303,7 @@ impl Socks5ServerTcpAccess {
             let upstream = tokio::net::TcpStream::connect(&destination_str).await?;
             let relay_response = RelayResponse {
                 reply: Reply::Succeeded,
-                bind: InternetAddr::SocketAddr(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into()),
+                bind: InternetAddr::zero_ipv4_addr(),
             };
             relay_response.encode(&mut stream).await?;
             return Ok(EstablishResult::Direct {
@@ -328,9 +319,7 @@ impl Socks5ServerTcpAccess {
                 Err(e) => {
                     let relay_response = RelayResponse {
                         reply: Reply::GeneralSocksServerFailure,
-                        bind: InternetAddr::SocketAddr(
-                            SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into(),
-                        ),
+                        bind: InternetAddr::zero_ipv4_addr(),
                     };
                     relay_response.encode(&mut stream).await?;
                     return Err(e.into());
@@ -338,7 +327,7 @@ impl Socks5ServerTcpAccess {
             };
         let relay_response = RelayResponse {
             reply: Reply::Succeeded,
-            bind: InternetAddr::SocketAddr(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into()),
+            bind: InternetAddr::zero_ipv4_addr(),
         };
         relay_response.encode(&mut stream).await?;
         Ok(EstablishResult::Proxy {
