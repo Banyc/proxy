@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use async_speed_limit::Limiter;
@@ -139,7 +139,6 @@ pub struct Socks5ServerTcpAccess {
     filter: Filter,
     speed_limiter: Limiter,
     udp_listen_addr: Option<InternetAddr>,
-    udp_associate_streams: Arc<Mutex<tokio::task::JoinSet<()>>>,
 }
 
 impl Hook for Socks5ServerTcpAccess {}
@@ -178,7 +177,6 @@ impl Socks5ServerTcpAccess {
             filter,
             speed_limiter: Limiter::new(speed_limit),
             udp_listen_addr,
-            udp_associate_streams: Default::default(),
         }
     }
 
@@ -214,7 +212,12 @@ impl Socks5ServerTcpAccess {
                 }
                 return Ok(None);
             }
-            EstablishResult::Udp => return Ok(None),
+            EstablishResult::Udp { mut downstream } => {
+                // Prevent the UDP association from terminating
+                let mut buf = [0; 1];
+                let _ = downstream.read_exact(&mut buf).await;
+                return Ok(None);
+            }
             EstablishResult::Proxy {
                 downstream,
                 upstream,
@@ -292,15 +295,7 @@ impl Socks5ServerTcpAccess {
                         bind: addr.clone(),
                     };
                     relay_response.encode(&mut stream).await?;
-                    self.udp_associate_streams
-                        .lock()
-                        .unwrap()
-                        .spawn(async move {
-                            // Prevent the UDP association from terminating
-                            let mut buf = [0; 1];
-                            let _ = stream.read_exact(&mut buf).await;
-                        });
-                    return Ok(EstablishResult::Udp);
+                    return Ok(EstablishResult::Udp { downstream: stream });
                 }
                 None => {
                     let relay_response = RelayResponse {
@@ -384,7 +379,9 @@ pub enum EstablishResult<S> {
         upstream: tokio::net::TcpStream,
         upstream_addr: InternetAddr,
     },
-    Udp,
+    Udp {
+        downstream: S,
+    },
     Proxy {
         downstream: S,
         upstream: (CreatedStream, StreamAddr, SocketAddr),
