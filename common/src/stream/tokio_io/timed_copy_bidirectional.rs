@@ -2,12 +2,10 @@ use std::time::Duration;
 
 use async_speed_limit::Limiter;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_io_timeout::TimeoutStream;
 
-use super::{copy_bidirectional, CopyBiError};
+use super::{copy_bidirectional, CopyBiError, TimeoutStreamShared};
 
-const UPLINK_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 2);
-const DOWNLINK_TIMEOUT: Duration = Duration::from_secs(60);
+const TIMEOUT: Duration = Duration::from_secs(60);
 
 pub async fn timed_copy_bidirectional<A, B>(
     a: A,
@@ -18,13 +16,11 @@ where
     A: AsyncRead + AsyncWrite + Send + 'static,
     B: AsyncRead + AsyncWrite + Send + 'static,
 {
-    let mut a = TimeoutStream::new(a);
-    let mut b = TimeoutStream::new(b);
+    let mut a = TimeoutStreamShared::new(a);
+    let mut b = TimeoutStreamShared::new(b);
 
-    a.set_read_timeout(Some(UPLINK_TIMEOUT));
-    a.set_write_timeout(Some(DOWNLINK_TIMEOUT));
-    b.set_read_timeout(Some(DOWNLINK_TIMEOUT));
-    b.set_write_timeout(Some(UPLINK_TIMEOUT));
+    a.set_timeout(Some(TIMEOUT));
+    b.set_timeout(Some(TIMEOUT));
 
     let a = speed_limiter.limit(a);
 
