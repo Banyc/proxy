@@ -7,7 +7,7 @@ use tokio::{
     sync::mpsc,
 };
 use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
-use tracing::{error, info, instrument, trace};
+use tracing::{error, info, instrument, trace, warn};
 
 use crate::{
     addr::any_addr,
@@ -76,7 +76,14 @@ where
             trace!("Waiting for connection");
             tokio::select! {
                 res = self.listener.accept() => {
-                    let (stream, peer_addr) = res.map_err(|e| ServeError::Accept { source: e.into(), addr })?;
+                    // let (stream, peer_addr) = res.map_err(|e| ServeError::Accept { source: e.into(), addr })?;
+                    let (stream, peer_addr) = match res {
+                        Ok(res) => res,
+                        Err(e) => {
+                            warn!(?e, ?addr, "Accept error");
+                            continue;
+                        }
+                    };
                     let stream = AddressedKcpStream {
                         stream,
                         local_addr: addr,

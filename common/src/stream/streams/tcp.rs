@@ -6,7 +6,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::mpsc,
 };
-use tracing::{info, instrument, trace};
+use tracing::{info, instrument, trace, warn};
 
 use crate::{
     error::AnyResult,
@@ -74,7 +74,14 @@ where
             trace!("Waiting for connection");
             tokio::select! {
                 res = self.listener.accept() => {
-                    let (stream, _) = res.map_err(|e| ServeError::Accept { source: e, addr })?;
+                    // let (stream, _) = res.map_err(|e| ServeError::Accept { source: e, addr })?;
+                    let (stream, _) = match res {
+                        Ok(res) => res,
+                        Err(e) => {
+                            warn!(?e, ?addr, "Accept error");
+                            continue;
+                        }
+                    };
                     // Arc hook
                     let hook = Arc::clone(&hook);
                     tokio::spawn(async move {
