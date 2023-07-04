@@ -118,11 +118,18 @@ impl NegotiationResponse {
     where
         W: AsyncWrite + Unpin,
     {
-        writer.write_u8(VERSION).await?;
+        let mut buf = [0u8; 2];
+        let mut internal_writer = io::Cursor::new(buf.as_mut_slice());
+        internal_writer.write_u8(VERSION).await.unwrap();
         match self.method {
-            Some(method) => writer.write_u8(method.into()).await?,
-            None => writer.write_u8(NO_ACCEPTABLE_METHODS).await?,
+            Some(method) => internal_writer.write_u8(method.into()).await.unwrap(),
+            None => internal_writer
+                .write_u8(NO_ACCEPTABLE_METHODS)
+                .await
+                .unwrap(),
         }
+        writer.write_all(&buf).await?;
+        writer.flush().await?;
         Ok(())
     }
 }
@@ -381,10 +388,15 @@ impl RelayResponse {
     where
         W: AsyncWrite + Unpin,
     {
-        writer.write_u8(VERSION).await?;
-        writer.write_u8(self.reply.into()).await?;
-        writer.write_u8(0x00).await?;
-        encode_address(&self.bind, writer).await?;
+        let mut buf = [0u8; 1 + 1 + 1 + 1 + 1 + 0xff + 2];
+        let mut internal_writer = io::Cursor::new(buf.as_mut_slice());
+        internal_writer.write_u8(VERSION).await.unwrap();
+        internal_writer.write_u8(self.reply.into()).await.unwrap();
+        internal_writer.write_u8(0x00).await.unwrap();
+        encode_address(&self.bind, &mut internal_writer).await?;
+        let pos = internal_writer.position() as usize;
+        writer.write_all(&buf[..pos]).await?;
+        writer.flush().await?;
         Ok(())
     }
 }
