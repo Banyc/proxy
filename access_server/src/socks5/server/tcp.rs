@@ -259,7 +259,7 @@ impl Socks5ServerTcpAccess {
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
-        let (mut stream, relay_request) = steer(stream).await?;
+        let (mut stream, relay_request) = steer(stream).await.map_err(EstablishError::Negotiate)?;
 
         // Filter
         let destination_str = relay_request.destination.to_string();
@@ -383,6 +383,8 @@ pub enum EstablishResult<S> {
 
 #[derive(Debug, Error)]
 pub enum EstablishError {
+    #[error("Failed to negotiate")]
+    Negotiate(#[source] io::Error),
     #[error("IO error")]
     Io(#[from] io::Error),
     #[error("Failed to establish proxy chain")]
