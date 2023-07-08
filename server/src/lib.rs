@@ -21,6 +21,13 @@ where
     let mut proxy_server_loader = ProxyServerLoader::new();
     let mut join_set = tokio::task::JoinSet::new();
 
+    // Make sure there is always `Some(res)` from `join_next`
+    join_set.spawn(async move {
+        let (_tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
+        rx.recv().await.unwrap();
+        unreachable!()
+    });
+
     read_and_load_config(
         &config_reader,
         &mut join_set,
@@ -32,7 +39,7 @@ where
     loop {
         tokio::select! {
             res = join_set.join_next() => {
-                let res = res.ok_or(ServeError::NoServersRunning)?;
+                let res = res.expect("Always `Some(res)` from `join_next`");
                 let res = res.unwrap();
                 res.map_err(ServeError::ServerTask)?;
             }
@@ -77,8 +84,6 @@ pub enum ServeError {
     Config(AnyError),
     #[error("Failed to load config")]
     Load(io::Error),
-    #[error("No servers running")]
-    NoServersRunning,
     #[error("Server task failed")]
     ServerTask(AnyError),
 }
