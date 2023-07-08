@@ -46,6 +46,9 @@ where
             _ = notify_rx.notified() => {
                 info!("Config file changed");
 
+                // Wait for file change to settle
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
                 if let Err(e) = read_and_load_config(
                     &config_reader,
                     &mut join_set,
