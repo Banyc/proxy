@@ -19,7 +19,7 @@
 # ]
 # "localhost" = [
 #     { match = "127\\.0\\.0\\.1:", action = "direct" },
-#     { match = "[::1]:", action = "direct" },
+#     { match = "\\[::1\\]:", action = "direct" },
 #     { match = "localhost:", action = "direct" },
 # ]
 
@@ -56,7 +56,7 @@ proxy_table = { chains = [
 # filter = "default"
 filter = [
     { match = "127\\.0\\.0\\.1:", action = "direct" },
-    { match = "[::1]:", action = "direct" },
+    { match = "\\[::1\\]:", action = "direct" },
     { match = "localhost:", action = "direct" },
     # { match = "", action = "block" },
 ]
@@ -74,7 +74,7 @@ proxy_table = { chains = [
 # filter = "default"
 filter = [
     { match = "127\\.0\\.0\\.1:", action = "direct" },
-    { match = "[::1]:", action = "direct" },
+    { match = "\\[::1\\]:", action = "direct" },
     { match = "localhost:", action = "direct" },
     # { match = "", action = "block" },
 ]

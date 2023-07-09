@@ -306,7 +306,12 @@ impl Socks5ServerTcpAccess {
         }
 
         if matches!(action, filter::Action::Direct) {
-            let upstream = tokio::net::TcpStream::connect(&destination_str).await?;
+            let upstream = tokio::net::TcpStream::connect(&destination_str)
+                .await
+                .map_err(|e| EstablishError::DirectConnect {
+                    source: e,
+                    destination: relay_request.destination.clone(),
+                })?;
             let relay_response = RelayResponse {
                 reply: Reply::Succeeded,
                 bind: InternetAddr::zero_ipv4_addr(),
@@ -385,6 +390,12 @@ pub enum EstablishResult<S> {
 pub enum EstablishError {
     #[error("Failed to negotiate")]
     Negotiate(#[source] io::Error),
+    #[error("Failed to connect directly")]
+    DirectConnect {
+        #[source]
+        source: io::Error,
+        destination: InternetAddr,
+    },
     #[error("IO error")]
     Io(#[from] io::Error),
     #[error("Failed to establish proxy chain")]
