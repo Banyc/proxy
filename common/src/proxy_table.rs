@@ -1,5 +1,6 @@
 use std::{
     fmt::Display,
+    num::NonZeroUsize,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -55,7 +56,7 @@ where
 #[derive(Debug, Clone)]
 pub struct ProxyTable<A> {
     chains: Arc<[GaugedProxyChain<A>]>,
-    cum_weight: usize,
+    cum_weight: NonZeroUsize,
     score_store: Arc<RwLock<ScoreStore>>,
 }
 
@@ -71,6 +72,7 @@ where
         if cum_weight == 0 {
             return None;
         }
+        let cum_weight = NonZeroUsize::new(cum_weight).unwrap();
 
         let tracer = tracer.map(Arc::new);
         let chains = chains
@@ -121,7 +123,7 @@ where
         let weights_hat = self
             .chains
             .iter()
-            .map(|c| c.weighted().weight as f64 / self.cum_weight as f64)
+            .map(|c| c.weighted().weight as f64 / self.cum_weight.get() as f64)
             .collect::<Vec<_>>();
 
         let rtt = self
