@@ -120,6 +120,7 @@ where
         info!(?addr, "Listening");
         let mut buf = [0; BUFFER_LENGTH];
         let mut hook = Arc::new(self.hook);
+        let mut warned = false;
         loop {
             trace!("Waiting for packet");
             tokio::select! {
@@ -128,10 +129,14 @@ where
                         Ok((n, addr)) => (n, addr),
                         Err(e) => {
                             // Ref: https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-recvfrom
-                            warn!(?e, ?addr, "Failed to receive packet");
+                            if !warned {
+                                warn!(?e, ?addr, "Failed to receive packet");
+                            }
+                            warned = true;
                             continue;
                         }
                     };
+                    warned = false;
 
                     let downstream_writer =
                         UdpDownstreamWriter::new(Arc::clone(&downstream_listener), downstream_addr);
