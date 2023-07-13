@@ -15,9 +15,10 @@ use crate::{
 };
 
 const TRACE_INTERVAL: Duration = Duration::from_secs(30);
-const TRACE_DEAD_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const TRACE_DEAD_INTERVAL: Duration = Duration::from_secs(60 * 2);
 const TRACES_PER_WAVE: usize = 60;
 const TRACE_BURST_GAP: Duration = Duration::from_millis(10);
+const RTT_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub type ProxyChain<A> = [ProxyConfig<A>];
 
@@ -260,7 +261,9 @@ where
             for _ in 0..TRACES_PER_WAVE {
                 let chain = chain.clone();
                 let tracer = tracer.clone();
-                wave.spawn(async move { tracer.trace_rtt(&chain).await });
+                wave.spawn(
+                    async move { tokio::time::timeout(RTT_TIMEOUT, tracer.trace_rtt(&chain)).await },
+                );
                 tokio::time::sleep(TRACE_BURST_GAP).await;
             }
 
@@ -268,7 +271,14 @@ where
             let mut rtt_sum = Duration::from_secs(0);
             let mut rtt_count: usize = 0;
             while let Some(res) = wave.join_next().await {
-                match res.unwrap() {
+                let res = match res.unwrap() {
+                    Ok(res) => res,
+                    Err(_) => {
+                        trace!("Trace timeout");
+                        continue;
+                    }
+                };
+                match res {
                     Ok(rtt) => {
                         rtt_sum += rtt;
                         rtt_count += 1;
