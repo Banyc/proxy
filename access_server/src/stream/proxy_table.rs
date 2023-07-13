@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use common::{
     proxy_table::ProxyTable,
     stream::{
@@ -12,6 +14,7 @@ use serde::{Deserialize, Serialize};
 pub struct StreamProxyTableBuilder {
     pub chains: Vec<StreamWeightedProxyChainBuilder>,
     pub trace_rtt: bool,
+    pub active_chains: Option<NonZeroUsize>,
 }
 
 impl StreamProxyTableBuilder {
@@ -21,6 +24,6 @@ impl StreamProxyTableBuilder {
             true => Some(StreamTracer::new(stream_pool.clone())),
             false => None,
         };
-        ProxyTable::new(chains, tracer).expect("Proxy chain is invalid")
+        ProxyTable::new(chains, tracer, self.active_chains).expect("Proxy chain is invalid")
     }
 }

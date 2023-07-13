@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use common::{
     proxy_table::ProxyTable,
     udp::proxy_table::{UdpProxyTable, UdpWeightedProxyChainBuilder},
@@ -9,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub struct UdpProxyTableBuilder {
     pub chains: Vec<UdpWeightedProxyChainBuilder>,
     pub trace_rtt: bool,
+    pub active_chains: Option<NonZeroUsize>,
 }
 
 impl UdpProxyTableBuilder {
@@ -18,6 +21,6 @@ impl UdpProxyTableBuilder {
             true => Some(UdpTracer::new()),
             false => None,
         };
-        ProxyTable::new(chains, tracer).expect("Proxy chain is invalid")
+        ProxyTable::new(chains, tracer, self.active_chains).expect("Proxy chain is invalid")
     }
 }

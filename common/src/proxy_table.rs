@@ -58,13 +58,18 @@ pub struct ProxyTable<A> {
     chains: Arc<[GaugedProxyChain<A>]>,
     cum_weight: NonZeroUsize,
     score_store: Arc<RwLock<ScoreStore>>,
+    active_chains: NonZeroUsize,
 }
 
 impl<A> ProxyTable<A>
 where
     A: std::fmt::Debug + Display + Clone + Send + Sync + 'static,
 {
-    pub fn new<T>(chains: Vec<WeightedProxyChain<A>>, tracer: Option<T>) -> Option<Self>
+    pub fn new<T>(
+        chains: Vec<WeightedProxyChain<A>>,
+        tracer: Option<T>,
+        active_chains: Option<NonZeroUsize>,
+    ) -> Option<Self>
     where
         T: Tracer<Address = A> + Send + Sync + 'static,
     {
@@ -73,6 +78,16 @@ where
             return None;
         }
         let cum_weight = NonZeroUsize::new(cum_weight).unwrap();
+
+        let active_chains = match active_chains {
+            Some(active_chains) => {
+                if active_chains.get() > chains.len() {
+                    return None;
+                }
+                active_chains
+            }
+            None => NonZeroUsize::new(chains.len()).unwrap(),
+        };
 
         let tracer = tracer.map(Arc::new);
         let chains = chains
@@ -84,6 +99,7 @@ where
             chains,
             cum_weight,
             score_store,
+            active_chains,
         })
     }
 
@@ -96,30 +112,31 @@ where
         let scores = match scores {
             Some(scores) => scores,
             None => {
-                let scores: Arc<[f64]> = self.scores().into();
+                let scores: Arc<[_]> = self.scores().into();
                 info!(?scores, "Calculated scores");
-                self.score_store.write().unwrap().set(Arc::clone(&scores));
+                let sum = scores.iter().map(|(_, s)| *s).sum::<f64>();
+                let scores = Scores { scores, sum };
+                self.score_store.write().unwrap().set(scores.clone());
                 scores
             }
         };
 
         let mut rng = rand::thread_rng();
-        let sum_scores = scores.iter().sum::<f64>();
-        if sum_scores == 0. {
+        if scores.sum == 0. {
             let i = rng.gen_range(0..self.chains.len());
             return self.chains[i].weighted();
         }
-        let mut rand_score = rng.gen_range(0. ..sum_scores);
-        for (score, chain) in scores.iter().zip(self.chains.iter()) {
-            if rand_score < *score {
-                return chain.weighted();
+        let mut rand_score = rng.gen_range(0. ..scores.sum);
+        for &(i, score) in scores.scores.iter() {
+            if rand_score < score {
+                return self.chains[i].weighted();
             }
             rand_score -= score;
         }
         unreachable!();
     }
 
-    fn scores(&self) -> Vec<f64> {
+    fn scores(&self) -> Vec<(usize, f64)> {
         let weights_hat = self
             .chains
             .iter()
@@ -136,9 +153,13 @@ where
         let losses = self.chains.iter().map(|c| c.loss()).collect::<Vec<_>>();
         let losses_hat = normalize(&losses);
 
-        (0..self.chains.len())
+        let mut scores = (0..self.chains.len())
             .map(|i| (1. - losses_hat[i]).powi(3) * (1. - rtt_hat[i]).powi(2) * weights_hat[i])
-            .collect::<Vec<_>>()
+            .enumerate()
+            .collect::<Vec<_>>();
+
+        scores.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap());
+        scores[..self.active_chains.get()].to_vec()
     }
 }
 
@@ -166,7 +187,13 @@ fn normalize(list: &[Option<f64>]) -> Vec<f64> {
     hat
 }
 
-type ScoreStore = CacheCell<Arc<[f64]>>;
+type ScoreStore = CacheCell<Scores>;
+
+#[derive(Debug, Clone)]
+struct Scores {
+    scores: Arc<[(usize, f64)]>,
+    sum: f64,
+}
 
 #[derive(Debug)]
 pub struct WeightedProxyChain<A> {
