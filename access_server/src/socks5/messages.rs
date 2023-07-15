@@ -443,7 +443,7 @@ fn map_version_error(version: u8) -> io::Result<()> {
     if version != VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "Invalid version",
+            format!("Invalid version: {}", version),
         ));
     }
     Ok(())
