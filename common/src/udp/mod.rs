@@ -137,6 +137,10 @@ where
                         }
                     };
                     warned = false;
+                    if n == buf.len() {
+                        warn!(?addr, ?n, "Received packet of size may be too large");
+                        continue;
+                    }
 
                     let downstream_writer =
                         UdpDownstreamWriter::new(Arc::clone(&downstream_listener), downstream_addr);
