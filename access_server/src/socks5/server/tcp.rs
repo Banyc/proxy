@@ -26,6 +26,9 @@ use tracing::{error, info, trace, warn};
 
 use crate::{
     socks5::messages::{
+        sub_negotiations::{
+            UsernamePasswordRequest, UsernamePasswordResponse, UsernamePasswordStatus,
+        },
         Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,
         RelayResponse, Reply,
     },
@@ -39,6 +42,8 @@ pub struct Socks5ServerTcpAccessServerConfig {
     pub filter: SharableConfig<FilterBuilder>,
     pub speed_limit: Option<f64>,
     pub udp_server_addr: Option<Arc<str>>,
+    #[serde(default)]
+    pub users: Vec<User>,
 }
 
 impl Socks5ServerTcpAccessServerConfig {
@@ -62,6 +67,11 @@ impl Socks5ServerTcpAccessServerConfig {
                 .clone(),
             SharableConfig::Private(x) => x.build(filters)?,
         };
+        let users = self
+            .users
+            .into_iter()
+            .map(|u| (u.username.as_bytes().into(), u.password.as_bytes().into()))
+            .collect();
 
         Ok(Socks5ServerTcpAccessServerBuilder {
             listen_addr: self.listen_addr,
@@ -70,8 +80,15 @@ impl Socks5ServerTcpAccessServerConfig {
             filter,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
             udp_server_addr: self.udp_server_addr,
+            users,
         })
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Debug, Error)]
@@ -92,6 +109,7 @@ pub struct Socks5ServerTcpAccessServerBuilder {
     filter: Filter,
     speed_limit: f64,
     udp_server_addr: Option<Arc<str>>,
+    users: HashMap<Arc<[u8]>, Arc<[u8]>>,
 }
 
 #[async_trait]
@@ -122,6 +140,7 @@ impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
             self.filter,
             self.speed_limit,
             self.udp_server_addr.map(Into::into),
+            self.users,
         );
         Ok(access)
     }
@@ -134,6 +153,7 @@ pub struct Socks5ServerTcpAccess {
     filter: Filter,
     speed_limiter: Limiter,
     udp_listen_addr: Option<InternetAddr>,
+    users: HashMap<Arc<[u8]>, Arc<[u8]>>,
 }
 
 impl Hook for Socks5ServerTcpAccess {}
@@ -165,6 +185,7 @@ impl Socks5ServerTcpAccess {
         filter: Filter,
         speed_limit: f64,
         udp_listen_addr: Option<InternetAddr>,
+        users: HashMap<Arc<[u8]>, Arc<[u8]>>,
     ) -> Self {
         Self {
             proxy_table,
@@ -172,6 +193,7 @@ impl Socks5ServerTcpAccess {
             filter,
             speed_limiter: Limiter::new(speed_limit),
             udp_listen_addr,
+            users,
         }
     }
 
@@ -259,7 +281,10 @@ impl Socks5ServerTcpAccess {
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
-        let (mut stream, relay_request) = steer(stream).await.map_err(EstablishError::Negotiate)?;
+        let (mut stream, relay_request) = self
+            .steer(stream)
+            .await
+            .map_err(EstablishError::Negotiate)?;
 
         // Filter
         let destination_str = relay_request.destination.to_string();
@@ -348,6 +373,102 @@ impl Socks5ServerTcpAccess {
         })
     }
 
+    async fn steer<S>(&self, stream: S) -> io::Result<(S, RelayRequest)>
+    where
+        S: IoStream + IoAddr + std::fmt::Debug,
+    {
+        let mut stream = self.negotiate(stream).await?;
+
+        let relay_request = RelayRequest::decode(&mut stream).await?;
+
+        Ok((stream, relay_request))
+    }
+
+    async fn negotiate<S>(&self, mut stream: S) -> io::Result<S>
+    where
+        S: IoStream + IoAddr + std::fmt::Debug,
+    {
+        let negotiation_request = NegotiationRequest::decode(&mut stream).await?;
+
+        // Username/password authentication
+        if !self.users.is_empty()
+            && negotiation_request
+                .methods
+                .contains(&MethodIdentifier::UsernamePassword)
+        {
+            let negotiation_response = NegotiationResponse {
+                method: Some(MethodIdentifier::UsernamePassword),
+            };
+            negotiation_response.encode(&mut stream).await?;
+
+            let stream = self.username_password(stream).await?;
+            return Ok(stream);
+        }
+
+        // No authentication
+        let allow_no_auth = self.users.is_empty();
+        if !allow_no_auth
+            || !negotiation_request
+                .methods
+                .contains(&MethodIdentifier::NoAuth)
+        {
+            let negotiation_response = NegotiationResponse { method: None };
+            negotiation_response.encode(&mut stream).await?;
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "No auth method supported",
+            ));
+        }
+        let negotiation_response = NegotiationResponse {
+            method: Some(MethodIdentifier::NoAuth),
+        };
+        negotiation_response.encode(&mut stream).await?;
+
+        Ok(stream)
+    }
+
+    async fn username_password<S>(&self, mut stream: S) -> io::Result<S>
+    where
+        S: IoStream + IoAddr + std::fmt::Debug,
+    {
+        let request = UsernamePasswordRequest::decode(&mut stream).await?;
+        let password = match self.users.get(request.username()) {
+            Some(password) => password,
+            None => {
+                let response = UsernamePasswordResponse {
+                    status: UsernamePasswordStatus::Failure(1),
+                };
+                response.encode(&mut stream).await?;
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!(
+                        "Username not found: {}",
+                        String::from_utf8_lossy(request.username())
+                    ),
+                ));
+            }
+        };
+        if request.password() != password.as_ref() {
+            let response = UsernamePasswordResponse {
+                status: UsernamePasswordStatus::Failure(2),
+            };
+            response.encode(&mut stream).await?;
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!(
+                    "Password incorrect: {{ username: {}, password: {} }}",
+                    String::from_utf8_lossy(request.username()),
+                    String::from_utf8_lossy(request.password()),
+                ),
+            ));
+        }
+        let response = UsernamePasswordResponse {
+            status: UsernamePasswordStatus::Success,
+        };
+        response.encode(&mut stream).await?;
+        Ok(stream)
+    }
+
     async fn establish_proxy_chain(
         &self,
         destination: InternetAddr,
@@ -418,30 +539,4 @@ pub enum ProxyError {
         source: tokio_io::CopyBiError,
         metrics: FailedStreamMetrics,
     },
-}
-
-async fn steer<S>(mut stream: S) -> io::Result<(S, RelayRequest)>
-where
-    S: IoStream + IoAddr + std::fmt::Debug,
-{
-    let negotiation_request = NegotiationRequest::decode(&mut stream).await?;
-    if !negotiation_request
-        .methods
-        .contains(&MethodIdentifier::NoAuth)
-    {
-        let negotiation_response = NegotiationResponse { method: None };
-        negotiation_response.encode(&mut stream).await?;
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "No auth method supported",
-        ));
-    }
-    let negotiation_response = NegotiationResponse {
-        method: Some(MethodIdentifier::NoAuth),
-    };
-    negotiation_response.encode(&mut stream).await?;
-
-    let relay_request = RelayRequest::decode(&mut stream).await?;
-
-    Ok((stream, relay_request))
 }

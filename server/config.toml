@@ -79,6 +79,9 @@ filter = [
     # { match = "", action = "block" },
 ]
 # speed_limit = 1024.0 # 1.0 KiB/s
+# users = [
+#     { username = "", password = "" },
+# ]
 
 [[access_server.socks5_udp_server]]
 listen_addr = ""
