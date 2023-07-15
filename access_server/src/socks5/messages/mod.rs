@@ -6,6 +6,8 @@ use std::{
 use common::addr::InternetAddr;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+pub mod sub_negotiations;
+
 const VERSION: u8 = 5;
 const NO_ACCEPTABLE_METHODS: u8 = 0xff;
 
@@ -19,6 +21,7 @@ const NO_ACCEPTABLE_METHODS: u8 = 0xff;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MethodIdentifier {
     NoAuth,
+    UsernamePassword,
     Other(u8),
 }
 
@@ -26,6 +29,7 @@ impl From<MethodIdentifier> for u8 {
     fn from(value: MethodIdentifier) -> Self {
         match value {
             MethodIdentifier::NoAuth => 0x0,
+            MethodIdentifier::UsernamePassword => 0x2,
             MethodIdentifier::Other(code) => code,
         }
     }
@@ -35,6 +39,7 @@ impl From<u8> for MethodIdentifier {
     fn from(code: u8) -> Self {
         match code {
             0x0 => MethodIdentifier::NoAuth,
+            0x2 => MethodIdentifier::UsernamePassword,
             _ => MethodIdentifier::Other(code),
         }
     }
