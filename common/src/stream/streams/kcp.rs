@@ -13,7 +13,7 @@ use crate::{
     addr::any_addr,
     error::AnyResult,
     loading,
-    stream::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook},
+    stream::{connect::StreamConnect, CreatedStream, IoAddr, IoStream, StreamServerHook},
 };
 
 #[derive(Debug)]
@@ -176,7 +176,7 @@ impl AsyncWrite for AddressedKcpStream {
 pub struct KcpConnector;
 
 #[async_trait]
-impl ConnectStream for KcpConnector {
+impl StreamConnect for KcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
         let config = fast_kcp_config();
         let stream = KcpStream::connect(&config, addr).await?;

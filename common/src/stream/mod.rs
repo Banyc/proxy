@@ -1,29 +1,22 @@
-use std::{fmt::Display, io, net::SocketAddr, ops::DerefMut, pin::Pin, time::Duration};
+use std::{fmt::Display, io, net::SocketAddr, ops::DerefMut, pin::Pin};
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use bytesize::ByteSize;
-use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
-use tracing::error;
 
 use crate::{addr::InternetAddr, crypto::XorCrypto, loading};
 
 use self::{
-    addr::{StreamAddr, StreamType},
-    pool::Pool,
-    streams::{
-        kcp::{AddressedKcpStream, KcpConnector},
-        quic::QuicIoStream,
-        tcp::TcpConnector,
-        xor::XorStream,
-    },
+    addr::StreamAddr,
+    streams::{kcp::AddressedKcpStream, quic::QuicIoStream, xor::XorStream},
 };
 
 pub mod addr;
+pub mod connect;
 pub mod header;
 pub mod pool;
 pub mod proxy_table;
@@ -35,121 +28,6 @@ pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
 pub trait IoAddr {
     fn peer_addr(&self) -> io::Result<SocketAddr>;
     fn local_addr(&self) -> io::Result<SocketAddr>;
-}
-
-#[async_trait]
-pub trait ConnectStream {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream>;
-    async fn timed_connect(
-        &self,
-        addr: SocketAddr,
-        timeout: Duration,
-    ) -> io::Result<CreatedStream> {
-        let res = tokio::time::timeout(timeout, self.connect(addr)).await;
-        match res {
-            Ok(res) => res,
-            Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "Timed out")),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum StreamConnector {
-    Tcp(TcpConnector),
-    Kcp(KcpConnector),
-}
-
-impl StreamConnector {
-    pub fn new() -> Self {
-        Self::Tcp(TcpConnector)
-    }
-}
-
-impl Default for StreamConnector {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl ConnectStream for StreamConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
-        match self {
-            StreamConnector::Tcp(x) => x.connect(addr).await,
-            StreamConnector::Kcp(x) => x.connect(addr).await,
-        }
-    }
-}
-
-impl From<StreamType> for StreamConnector {
-    fn from(value: StreamType) -> Self {
-        match value {
-            StreamType::Tcp => StreamConnector::Tcp(TcpConnector),
-            StreamType::Kcp => StreamConnector::Kcp(KcpConnector),
-        }
-    }
-}
-
-pub async fn connect_with_pool(
-    addr: &StreamAddr,
-    stream_pool: &Pool,
-    allow_loopback: bool,
-    timeout: Duration,
-) -> Result<(CreatedStream, SocketAddr), ConnectError> {
-    let stream = stream_pool.open_stream(addr).await;
-    let ret = match stream {
-        Some((stream, sock_addr)) => (stream, sock_addr),
-        None => {
-            let connector: StreamConnector = addr.stream_type.into();
-            let sock_addr =
-                addr.address
-                    .to_socket_addr()
-                    .await
-                    .map_err(|e| ConnectError::ResolveAddr {
-                        source: e,
-                        addr: addr.clone(),
-                    })?;
-            if !allow_loopback && sock_addr.ip().is_loopback() {
-                // Prevent connections to localhost
-                return Err(ConnectError::Loopback {
-                    addr: addr.clone(),
-                    sock_addr,
-                });
-            }
-            let stream = connector
-                .timed_connect(sock_addr, timeout)
-                .await
-                .map_err(|e| ConnectError::ConnectAddr {
-                    source: e,
-                    addr: addr.clone(),
-                    sock_addr,
-                })?;
-            (stream, sock_addr)
-        }
-    };
-    Ok(ret)
-}
-
-#[derive(Debug, Error)]
-pub enum ConnectError {
-    #[error("Failed to resolve address")]
-    ResolveAddr {
-        #[source]
-        source: io::Error,
-        addr: StreamAddr,
-    },
-    #[error("Refused to connect to loopback address")]
-    Loopback {
-        addr: StreamAddr,
-        sock_addr: SocketAddr,
-    },
-    #[error("Failed to connect to address")]
-    ConnectAddr {
-        #[source]
-        source: io::Error,
-        addr: StreamAddr,
-        sock_addr: SocketAddr,
-    },
 }
 
 #[async_trait]

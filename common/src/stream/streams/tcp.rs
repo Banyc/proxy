@@ -11,7 +11,7 @@ use tracing::{info, instrument, trace, warn};
 use crate::{
     error::AnyResult,
     loading,
-    stream::{ConnectStream, CreatedStream, IoAddr, IoStream, StreamServerHook},
+    stream::{connect::StreamConnect, CreatedStream, IoAddr, IoStream, StreamServerHook},
 };
 
 #[derive(Debug)]
@@ -128,7 +128,7 @@ impl IoAddr for TcpStream {
 pub struct TcpConnector;
 
 #[async_trait]
-impl ConnectStream for TcpConnector {
+impl StreamConnect for TcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
         let stream = TcpStream::connect(addr).await?;
         Ok(CreatedStream::Tcp(stream))

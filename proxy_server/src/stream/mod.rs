@@ -12,11 +12,12 @@ use common::{
     loading,
     stream::{
         addr::StreamAddr,
-        connect_with_pool, copy_bidirectional_with_payload_crypto,
+        connect::{connect_with_pool, ConnectError},
+        copy_bidirectional_with_payload_crypto,
         header::StreamRequestHeader,
         pool::{Pool, PoolBuilder},
-        tokio_io, ConnectError, CreatedStream, FailedStreamMetrics, IoAddr, IoStream,
-        StreamMetrics, StreamServerHook,
+        tokio_io, CreatedStream, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics,
+        StreamServerHook,
     },
 };
 use serde::Deserialize;

@@ -14,8 +14,11 @@ use common::{
     },
     proxy_table::{convert_proxies_to_header_crypto_pairs, Tracer},
     stream::{
-        addr::StreamAddr, connect_with_pool, pool::Pool, proxy_table::StreamProxyChain,
-        ConnectError, CreatedStream,
+        addr::StreamAddr,
+        connect::{connect_with_pool, ConnectError},
+        pool::Pool,
+        proxy_table::StreamProxyChain,
+        CreatedStream,
     },
 };
 use thiserror::Error;

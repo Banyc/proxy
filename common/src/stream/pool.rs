@@ -17,7 +17,11 @@ use crate::{
     stream::CreatedStream,
 };
 
-use super::{addr::StreamAddrBuilder, ConnectStream, IoAddr, StreamAddr, StreamConnector};
+use super::{
+    addr::StreamAddrBuilder,
+    connect::{ArcStreamConnect, STREAM_CONNECTOR_TABLE},
+    IoAddr, StreamAddr,
+};
 
 const QUEUE_LEN: usize = 16;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
@@ -45,7 +49,7 @@ struct SocketCell {
 
 impl SocketCell {
     pub async fn create(
-        connector: &StreamConnector,
+        connector: &ArcStreamConnect,
         addr: &InternetAddr,
         heartbeat_interval: Duration,
     ) -> io::Result<Self> {
@@ -120,7 +124,7 @@ impl SocketQueue {
 
     async fn insert(
         queue: Arc<RwLock<VecDeque<SocketCell>>>,
-        connector: &StreamConnector,
+        connector: &ArcStreamConnect,
         addr: &InternetAddr,
         heartbeat_interval: Duration,
     ) -> io::Result<()> {
@@ -132,7 +136,7 @@ impl SocketQueue {
 
     pub fn spawn_insert(
         &mut self,
-        connector: Arc<StreamConnector>,
+        connector: ArcStreamConnect,
         addr: InternetAddr,
         heartbeat_interval: Duration,
     ) {
@@ -153,7 +157,7 @@ impl SocketQueue {
 
     pub fn try_swap(
         &mut self,
-        connector: Arc<StreamConnector>,
+        connector: ArcStreamConnect,
         addr: &InternetAddr,
         heartbeat_interval: Duration,
     ) -> Option<CreatedStream> {
@@ -206,8 +210,8 @@ impl Pool {
     pub fn add_queue(&self, addr: StreamAddr) {
         let mut queue = SocketQueue::new();
         let connector = {
-            let connector = addr.stream_type.into();
-            Arc::new(connector)
+            let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type).unwrap();
+            Arc::clone(connector)
         };
         for _ in 0..QUEUE_LEN {
             queue.spawn_insert(
@@ -230,8 +234,8 @@ impl Pool {
                 None => return None,
             };
             let connector = {
-                let connector = addr.stream_type.into();
-                Arc::new(connector)
+                let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type).unwrap();
+                Arc::clone(connector)
             };
             queue.try_swap(connector, &addr.address, HEARTBEAT_INTERVAL)
         };
@@ -257,7 +261,7 @@ impl Default for Pool {
 mod tests {
     use tokio::{io::AsyncReadExt, net::TcpListener, task::JoinSet};
 
-    use crate::stream::StreamType;
+    use crate::stream::addr::StreamType;
 
     use super::*;
 
