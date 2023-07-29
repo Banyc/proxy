@@ -3,9 +3,25 @@ use std::{
     sync::Arc,
 };
 
+use base64::prelude::*;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 type Key = Arc<[u8]>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub struct XorCryptoBuilder(pub String);
+
+impl XorCryptoBuilder {
+    pub fn build(&self) -> Result<XorCrypto, XorCryptoBuildError> {
+        let key = BASE64_STANDARD_NO_PAD.decode(&self.0)?;
+        Ok(XorCrypto::new(key.into()))
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub struct XorCryptoBuildError(#[from] pub base64::DecodeError);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct XorCrypto {

@@ -31,7 +31,7 @@ use tokio::{
 };
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::stream::proxy_table::StreamProxyTableBuilder;
+use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpAccessServerConfig {
@@ -53,7 +53,7 @@ impl HttpAccessServerConfig {
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(&stream_pool),
+            SharableConfig::Private(x) => x.build(&stream_pool)?,
         };
         let filter = match self.filter {
             SharableConfig::SharingKey(key) => filters
@@ -81,6 +81,8 @@ pub enum BuildError {
     FilterKeyNotFound(Arc<str>),
     #[error("Filter error: {0}")]
     Filter(#[from] filter::FilterBuildError),
+    #[error("{0}")]
+    ProxyTable(#[from] StreamProxyTableBuildError),
 }
 
 #[derive(Debug, Clone)]

@@ -3,13 +3,13 @@
 # [access_server.stream_proxy_tables]
 # "default" = { chains = [
 #     { weight = 1, chain = [
-#         { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
-#     ],                        payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
+#         { address = "tcp://", xor_key = "base64" },
+#     ],                        payload_xor_key = "base64" },
 # ], trace_rtt = false }
 # [access_server.udp_proxy_tables]
 # "default" = { chains = [
 #     { weight = 1, chain = [
-#         { address = "", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
+#         { address = "", xor_key = "base64" },
 #     ] },
 # ], trace_rtt = false }
 # [access_server.filters]
@@ -29,8 +29,8 @@ destination = "tcp://"
 # proxy_table = "default"
 proxy_table = { chains = [
     { weight = 1, chain = [
-        { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
-    ],                        payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
+        { address = "tcp://", xor_key = "base64" },
+    ],                        payload_xor_key = "base64" },
 ], trace_rtt = false }
 # speed_limit = 1024.0 # 1.0 KiB/s
 
@@ -40,8 +40,8 @@ destination = ""
 # proxy_table = "default"
 proxy_table = { chains = [
     { weight = 1, chain = [
-        { address = "", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
-    ],                  payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
+        { address = "", xor_key = "base64" },
+    ],                  payload_xor_key = "base64" },
 ], trace_rtt = false }
 # speed_limit = 1024.0 # 1.0 KiB/s
 
@@ -50,8 +50,8 @@ listen_addr = ""
 # proxy_table = "default"
 proxy_table = { chains = [
     { weight = 1, chain = [
-        { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
-    ],                        payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
+        { address = "tcp://", xor_key = "base64" },
+    ],                        payload_xor_key = "base64" },
 ], trace_rtt = false }
 # filter = "default"
 filter = [
@@ -68,8 +68,8 @@ udp_server_addr = ""
 # proxy_table = "default"
 proxy_table = { chains = [
     { weight = 1, chain = [
-        { address = "tcp://", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
-    ],                        payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
+        { address = "tcp://", xor_key = "base64" },
+    ],                        payload_xor_key = "base64" },
 ], trace_rtt = false }
 # filter = "default"
 filter = [
@@ -88,24 +88,24 @@ listen_addr = ""
 # proxy_table = "default"
 proxy_table = { chains = [
     { weight = 1, chain = [
-        { address = "", xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
-    ],                  payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] },
+        { address = "", xor_key = "base64" },
+    ],                  payload_xor_key = "base64" },
 ], trace_rtt = false }
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[proxy_server.tcp_server]]
 listen_addr = ""
-header_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-# payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+header_xor_key = "base64"
+# payload_xor_key = "base64"
 # stream_pool = ["tcp://"]
 
 [[proxy_server.kcp_server]]
 listen_addr = ""
-header_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-# payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+header_xor_key = "base64"
+# payload_xor_key = "base64"
 # stream_pool = ["tcp://"]
 
 [[proxy_server.udp_server]]
 listen_addr = ""
-header_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-# payload_xor_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+header_xor_key = "base64"
+# payload_xor_key = "base64"

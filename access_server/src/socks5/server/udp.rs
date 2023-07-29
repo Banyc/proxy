@@ -17,7 +17,10 @@ use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tracing::{error, info, warn};
 
-use crate::{socks5::messages::UdpRequestHeader, udp::proxy_table::UdpProxyTableBuilder};
+use crate::{
+    socks5::messages::UdpRequestHeader,
+    udp::proxy_table::{UdpProxyTableBuildError, UdpProxyTableBuilder},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Socks5ServerUdpAccessServerConfig {
@@ -36,7 +39,7 @@ impl Socks5ServerUdpAccessServerConfig {
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(),
+            SharableConfig::Private(x) => x.build()?,
         };
 
         Ok(Socks5ServerUdpAccessServerBuilder {
@@ -51,6 +54,8 @@ impl Socks5ServerUdpAccessServerConfig {
 pub enum BuildError {
     #[error("Proxy table key not found: {0}")]
     ProxyTableKeyNotFound(Arc<str>),
+    #[error("{0}")]
+    ProxyTable(#[from] UdpProxyTableBuildError),
 }
 
 #[derive(Debug, Clone)]

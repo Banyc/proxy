@@ -32,7 +32,7 @@ use crate::{
         Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,
         RelayResponse, Reply,
     },
-    stream::proxy_table::StreamProxyTableBuilder,
+    stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,7 +58,7 @@ impl Socks5ServerTcpAccessServerConfig {
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(&stream_pool),
+            SharableConfig::Private(x) => x.build(&stream_pool)?,
         };
         let filter = match self.filter {
             SharableConfig::SharingKey(key) => filters
@@ -99,6 +99,8 @@ pub enum BuildError {
     FilterKeyNotFound(Arc<str>),
     #[error("Filter error: {0}")]
     Filter(#[from] filter::FilterBuildError),
+    #[error("{0}")]
+    ProxyTable(#[from] StreamProxyTableBuildError),
 }
 
 #[derive(Debug, Clone)]

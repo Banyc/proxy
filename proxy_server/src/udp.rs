@@ -8,7 +8,7 @@ use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use common::{
     addr::{any_addr, InternetAddr},
-    crypto::{XorCrypto, XorCryptoCursor},
+    crypto::{XorCrypto, XorCryptoBuildError, XorCryptoBuilder, XorCryptoCursor},
     header::{
         codec::{read_header, write_header, CodecError},
         route::{RouteError, RouteErrorKind, RouteResponse},
@@ -31,8 +31,8 @@ use tracing::{error, info, instrument, trace, warn};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct UdpProxyServerBuilder {
     pub listen_addr: Arc<str>,
-    pub header_xor_key: Arc<[u8]>,
-    pub payload_xor_key: Option<Arc<[u8]>>,
+    pub header_xor_key: XorCryptoBuilder,
+    pub payload_xor_key: Option<XorCryptoBuilder>,
 }
 
 #[async_trait]
@@ -48,14 +48,35 @@ impl loading::Builder for UdpProxyServerBuilder {
     }
 
     fn build_hook(self) -> io::Result<Self::Hook> {
-        let header_crypto = XorCrypto::new(self.header_xor_key);
-        let payload_crypto = self.payload_xor_key.map(XorCrypto::new);
+        let header_crypto = self.header_xor_key.build().map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                UdpProxyBuildError::HeaderCrypto(e),
+            )
+        })?;
+        let payload_crypto = match self.payload_xor_key {
+            Some(payload_crypto) => Some(payload_crypto.build().map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    UdpProxyBuildError::HeaderCrypto(e),
+                )
+            })?),
+            None => None,
+        };
         Ok(UdpProxy::new(header_crypto, payload_crypto))
     }
 
     fn key(&self) -> &Arc<str> {
         &self.listen_addr
     }
+}
+
+#[derive(Debug, Error)]
+pub enum UdpProxyBuildError {
+    #[error("HeaderCrypto: {0}")]
+    HeaderCrypto(#[source] XorCryptoBuildError),
+    #[error("PayloadCrypto: {0}")]
+    PayloadCrypto(#[source] XorCryptoBuildError),
 }
 
 #[derive(Debug)]

@@ -22,14 +22,17 @@ impl loading::Builder for TcpProxyServerBuilder {
     type Server = TcpServer<Self::Hook>;
 
     async fn build_server(self) -> io::Result<Self::Server> {
-        let stream_proxy = self.inner.build();
-        build_tcp_proxy_server(self.listen_addr.as_ref(), stream_proxy)
+        let listen_addr = self.listen_addr.clone();
+        let stream_proxy = self.build_hook()?;
+        build_tcp_proxy_server(listen_addr.as_ref(), stream_proxy)
             .await
             .map_err(|e| e.0)
     }
 
     fn build_hook(self) -> io::Result<Self::Hook> {
-        Ok(self.inner.build())
+        self.inner
+            .build()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
     }
 
     fn key(&self) -> &Arc<str> {

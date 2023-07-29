@@ -20,7 +20,7 @@ use thiserror::Error;
 use tokio::net::ToSocketAddrs;
 use tracing::{error, info, instrument, warn};
 
-use crate::stream::proxy_table::StreamProxyTableBuilder;
+use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TcpAccessServerConfig {
@@ -41,7 +41,7 @@ impl TcpAccessServerConfig {
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(&stream_pool),
+            SharableConfig::Private(x) => x.build(&stream_pool)?,
         };
 
         Ok(TcpAccessServerBuilder {
@@ -58,6 +58,8 @@ impl TcpAccessServerConfig {
 pub enum BuildError {
     #[error("Proxy table key not found: {0}")]
     ProxyTableKeyNotFound(Arc<str>),
+    #[error("{0}")]
+    ProxyTable(#[from] StreamProxyTableBuildError),
 }
 
 #[derive(Debug, Clone)]

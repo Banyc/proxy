@@ -70,13 +70,21 @@ impl AccessServerConfig {
         let stream_proxy_tables = self
             .stream_proxy_tables
             .into_iter()
-            .map(|(k, v)| (k, v.build(&stream_pool)))
-            .collect::<HashMap<_, _>>();
+            .map(|(k, v)| match v.build(&stream_pool) {
+                Ok(v) => Ok((k, v)),
+                Err(e) => Err(e),
+            })
+            .collect::<Result<HashMap<_, _>, _>>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         let udp_proxy_tables = self
             .udp_proxy_tables
             .into_iter()
-            .map(|(k, v)| (k, v.build()))
-            .collect::<HashMap<_, _>>();
+            .map(|(k, v)| match v.build() {
+                Ok(v) => Ok((k, v)),
+                Err(e) => Err(e),
+            })
+            .collect::<Result<HashMap<_, _>, _>>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         let filters = filter::build_from_map(self.filters)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 

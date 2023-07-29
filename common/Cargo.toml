@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 async-speed-limit = { git = "https://github.com/tikv/async-speed-limit.git", rev = "36d79e063144cf0cdfc258c9e127c84f10a53b57", features = ["tokio"] }
 async-trait = "0.1.71"
+base64 = "0.21.2"
 bincode = "1.3.3"
 bytesize = "1.2.0"
 duplicate = "1.0.0"

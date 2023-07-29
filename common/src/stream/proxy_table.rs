@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    crypto::XorCrypto,
+    crypto::{XorCryptoBuildError, XorCryptoBuilder},
     proxy_table::{ProxyConfig, ProxyTable, WeightedProxyChain},
 };
 
@@ -12,15 +12,16 @@ use super::StreamAddr;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamProxyConfigBuilder {
     pub address: Arc<str>,
-    pub xor_key: Arc<[u8]>,
+    pub xor_key: XorCryptoBuilder,
 }
 
 impl StreamProxyConfigBuilder {
-    pub fn build(self) -> StreamProxyConfig {
-        ProxyConfig {
+    pub fn build(self) -> Result<StreamProxyConfig, XorCryptoBuildError> {
+        let crypto = self.xor_key.build()?;
+        Ok(ProxyConfig {
             address: self.address.as_ref().into(),
-            crypto: XorCrypto::new(self.xor_key),
-        }
+            crypto,
+        })
     }
 }
 
@@ -28,16 +29,25 @@ impl StreamProxyConfigBuilder {
 pub struct StreamWeightedProxyChainBuilder {
     pub weight: usize,
     pub chain: Vec<StreamProxyConfigBuilder>,
-    pub payload_xor_key: Option<Arc<[u8]>>,
+    pub payload_xor_key: Option<XorCryptoBuilder>,
 }
 
 impl StreamWeightedProxyChainBuilder {
-    pub fn build(self) -> StreamWeightedProxyChain {
-        WeightedProxyChain {
+    pub fn build(self) -> Result<StreamWeightedProxyChain, XorCryptoBuildError> {
+        let payload_crypto = match self.payload_xor_key {
+            Some(c) => Some(c.build()?),
+            None => None,
+        };
+        let chain = self
+            .chain
+            .into_iter()
+            .map(|c| c.build())
+            .collect::<Result<_, _>>()?;
+        Ok(WeightedProxyChain {
             weight: self.weight,
-            chain: self.chain.into_iter().map(|c| c.build()).collect(),
-            payload_crypto: self.payload_xor_key.map(XorCrypto::new),
-        }
+            chain,
+            payload_crypto,
+        })
     }
 }
 

@@ -8,6 +8,7 @@ use std::{
 use async_trait::async_trait;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tracing::{info, trace};
 
 use crate::{
@@ -70,20 +71,20 @@ where
         chains: Vec<WeightedProxyChain<A>>,
         tracer: Option<T>,
         active_chains: Option<NonZeroUsize>,
-    ) -> Option<Self>
+    ) -> Result<Self, ProxyTableError>
     where
         T: Tracer<Address = A> + Send + Sync + 'static,
     {
         let cum_weight = chains.iter().map(|c| c.weight).sum();
         if cum_weight == 0 {
-            return None;
+            return Err(ProxyTableError::ZeroAccumulatedWeight);
         }
         let cum_weight = NonZeroUsize::new(cum_weight).unwrap();
 
         let active_chains = match active_chains {
             Some(active_chains) => {
                 if active_chains.get() > chains.len() {
-                    return None;
+                    return Err(ProxyTableError::TooManyActiveChains);
                 }
                 active_chains
             }
@@ -96,7 +97,7 @@ where
             .map(|c| GaugedProxyChain::new(c, tracer.clone()))
             .collect::<Arc<[_]>>();
         let score_store = Arc::new(RwLock::new(ScoreStore::new(None, TRACE_INTERVAL)));
-        Some(Self {
+        Ok(Self {
             chains,
             cum_weight,
             score_store,
@@ -162,6 +163,14 @@ where
         scores.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap());
         scores[..self.active_chains.get()].to_vec()
     }
+}
+
+#[derive(Debug, Error)]
+pub enum ProxyTableError {
+    #[error("Zero accumulated weight with chains")]
+    ZeroAccumulatedWeight,
+    #[error("The number of active chains is more than the number of chains")]
+    TooManyActiveChains,
 }
 
 fn normalize(list: &[Option<f64>]) -> Vec<f64> {
@@ -261,9 +270,9 @@ where
             for _ in 0..TRACES_PER_WAVE {
                 let chain = chain.clone();
                 let tracer = tracer.clone();
-                wave.spawn(
-                    async move { tokio::time::timeout(RTT_TIMEOUT, tracer.trace_rtt(&chain)).await },
-                );
+                wave.spawn(async move {
+                    tokio::time::timeout(RTT_TIMEOUT, tracer.trace_rtt(&chain)).await
+                });
                 tokio::time::sleep(TRACE_BURST_GAP).await;
             }
 

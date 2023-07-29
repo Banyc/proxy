@@ -19,7 +19,7 @@ use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tracing::{error, info, warn};
 
-use self::proxy_table::UdpProxyTableBuilder;
+use self::proxy_table::{UdpProxyTableBuildError, UdpProxyTableBuilder};
 
 pub mod proxy_table;
 
@@ -41,7 +41,7 @@ impl UdpAccessServerConfig {
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(),
+            SharableConfig::Private(x) => x.build()?,
         };
 
         Ok(UdpAccessServerBuilder {
@@ -57,6 +57,8 @@ impl UdpAccessServerConfig {
 pub enum BuildError {
     #[error("Proxy table key not found: {0}")]
     ProxyTableKeyNotFound(Arc<str>),
+    #[error("{0}")]
+    ProxyTable(#[from] UdpProxyTableBuildError),
 }
 
 #[derive(Debug, Clone)]

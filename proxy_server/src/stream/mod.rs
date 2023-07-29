@@ -1,9 +1,9 @@
-use std::{io, net::SocketAddr, sync::Arc, time::Duration};
+use std::{io, net::SocketAddr, time::Duration};
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use common::{
-    crypto::{XorCrypto, XorCryptoCursor},
+    crypto::{XorCrypto, XorCryptoBuildError, XorCryptoBuilder, XorCryptoCursor},
     header::{
         codec::{timed_read_header_async, timed_write_header_async, CodecError},
         heartbeat::{self, HeartbeatError},
@@ -32,18 +32,32 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct StreamProxyBuilder {
-    pub header_xor_key: Arc<[u8]>,
-    pub payload_xor_key: Option<Arc<[u8]>>,
+    pub header_xor_key: XorCryptoBuilder,
+    pub payload_xor_key: Option<XorCryptoBuilder>,
     pub stream_pool: PoolBuilder,
 }
 
 impl StreamProxyBuilder {
-    pub fn build(self) -> StreamProxy {
-        let header_crypto = XorCrypto::new(self.header_xor_key);
-        let payload_crypto = self.payload_xor_key.map(XorCrypto::new);
+    pub fn build(self) -> Result<StreamProxy, StreamProxyBuildError> {
+        let header_crypto = self
+            .header_xor_key
+            .build()
+            .map_err(StreamProxyBuildError::HeaderCrypto)?;
+        let payload_crypto = match self.payload_xor_key {
+            Some(key) => Some(key.build().map_err(StreamProxyBuildError::PayloadCrypto)?),
+            None => None,
+        };
         let stream_pool = self.stream_pool.build();
-        StreamProxy::new(header_crypto, payload_crypto, stream_pool)
+        Ok(StreamProxy::new(header_crypto, payload_crypto, stream_pool))
     }
+}
+
+#[derive(Debug, Error)]
+pub enum StreamProxyBuildError {
+    #[error("HeaderCrypto: {0}")]
+    HeaderCrypto(#[source] XorCryptoBuildError),
+    #[error("PayloadCrypto: {0}")]
+    PayloadCrypto(#[source] XorCryptoBuildError),
 }
 
 #[derive(Debug)]

@@ -26,25 +26,21 @@ impl loading::Builder for KcpProxyServerBuilder {
     type Server = KcpServer<Self::Hook>;
 
     async fn build_server(self) -> io::Result<Self::Server> {
-        let stream_proxy = self.inner.build();
-        build_kcp_proxy_server(self.listen_addr.as_ref(), stream_proxy)
+        let listen_addr = self.listen_addr.clone();
+        let stream_proxy = self.build_hook()?;
+        build_kcp_proxy_server(listen_addr.as_ref(), stream_proxy)
             .await
             .map_err(|e| e.0)
     }
 
     fn build_hook(self) -> io::Result<Self::Hook> {
-        Ok(self.inner.build())
+        self.inner
+            .build()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
     }
 
     fn key(&self) -> &Arc<str> {
         &self.listen_addr
-    }
-}
-
-impl KcpProxyServerBuilder {
-    pub async fn build(self) -> Result<KcpServer<StreamProxy>, ListenerBindError> {
-        let stream_proxy = self.inner.build();
-        build_kcp_proxy_server(self.listen_addr.as_ref(), stream_proxy).await
     }
 }
 
