@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StreamProxyTableBuilder {
     pub chains: Vec<StreamWeightedProxyChainBuilder>,
     pub trace_rtt: bool,

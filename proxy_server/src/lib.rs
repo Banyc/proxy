@@ -9,6 +9,7 @@ pub mod stream;
 pub mod udp;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProxyServerConfig {
     #[serde(default)]
     pub tcp_server: Vec<TcpProxyServerBuilder>,

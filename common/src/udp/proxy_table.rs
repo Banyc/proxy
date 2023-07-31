@@ -9,6 +9,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UdpProxyConfigBuilder {
     pub address: Arc<str>,
     pub xor_key: XorCryptoBuilder,
@@ -25,6 +26,7 @@ impl UdpProxyConfigBuilder {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UdpWeightedProxyChainBuilder {
     pub weight: usize,
     pub chain: Vec<UdpProxyConfigBuilder>,

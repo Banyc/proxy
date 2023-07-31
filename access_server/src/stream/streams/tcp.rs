@@ -23,6 +23,7 @@ use tracing::{error, info, instrument, warn};
 use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TcpAccessServerConfig {
     pub listen_addr: Arc<str>,
     pub destination: StreamAddrBuilder,

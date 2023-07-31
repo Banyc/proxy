@@ -29,6 +29,7 @@ use tokio::{
 use tracing::{error, info, instrument, trace, warn};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UdpProxyServerBuilder {
     pub listen_addr: Arc<str>,
     pub header_xor_key: XorCryptoBuilder,

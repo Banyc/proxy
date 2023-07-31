@@ -10,6 +10,7 @@ use crate::{
 use super::StreamAddr;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StreamProxyConfigBuilder {
     pub address: Arc<str>,
     pub xor_key: XorCryptoBuilder,
@@ -26,6 +27,7 @@ impl StreamProxyConfigBuilder {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StreamWeightedProxyChainBuilder {
     pub weight: usize,
     pub chain: Vec<StreamProxyConfigBuilder>,

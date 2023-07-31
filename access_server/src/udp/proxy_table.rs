@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UdpProxyTableBuilder {
     pub chains: Vec<UdpWeightedProxyChainBuilder>,
     pub trace_rtt: bool,

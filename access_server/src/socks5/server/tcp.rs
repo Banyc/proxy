@@ -36,6 +36,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Socks5ServerTcpAccessServerConfig {
     pub listen_addr: Arc<str>,
     pub proxy_table: SharableConfig<StreamProxyTableBuilder>,
@@ -86,6 +87,7 @@ impl Socks5ServerTcpAccessServerConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct User {
     pub username: String,
     pub password: String,

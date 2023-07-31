@@ -31,6 +31,7 @@ pub mod tcp;
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StreamProxyBuilder {
     pub header_xor_key: XorCryptoBuilder,
     pub payload_xor_key: Option<XorCryptoBuilder>,

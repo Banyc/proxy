@@ -14,6 +14,7 @@ use tracing::error;
 use super::{StreamProxy, StreamProxyBuilder};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KcpProxyServerBuilder {
     pub listen_addr: Arc<str>,
     #[serde(flatten)]

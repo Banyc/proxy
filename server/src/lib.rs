@@ -109,6 +109,7 @@ pub async fn load(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     #[serde(default)]
     pub access_server: AccessServerConfig,

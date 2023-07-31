@@ -34,6 +34,7 @@ use tracing::{error, info, instrument, trace, warn};
 use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpAccessServerConfig {
     pub listen_addr: Arc<str>,
     pub proxy_table: SharableConfig<StreamProxyTableBuilder>,

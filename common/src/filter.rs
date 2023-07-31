@@ -34,6 +34,7 @@ pub fn build_from_map(
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[serde(transparent)]
 pub struct FilterBuilder {
     pub match_acts: Option<Vec<SharableConfig<MatchActBuilder>>>,
@@ -76,6 +77,7 @@ pub enum FilterBuildError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MatchActBuilder {
     #[serde(rename = "match")]
     pub match_pattern: Arc<str>,

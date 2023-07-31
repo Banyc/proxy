@@ -25,6 +25,7 @@ pub mod stream;
 pub mod udp;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AccessServerConfig {
     #[serde(default)]
     pub tcp_server: Vec<TcpAccessServerConfig>,

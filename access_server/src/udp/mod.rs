@@ -24,6 +24,7 @@ use self::proxy_table::{UdpProxyTableBuildError, UdpProxyTableBuilder};
 pub mod proxy_table;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UdpAccessServerConfig {
     pub listen_addr: Arc<str>,
     pub destination: Arc<str>,
