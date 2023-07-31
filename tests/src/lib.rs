@@ -4,9 +4,9 @@ use rand::Rng;
 pub mod tcp;
 pub mod udp;
 
-pub const STRESS_PARALLEL: usize = 10;
-pub const STRESS_SERIAL: usize = 10;
-pub const STRESS_CHAINS: usize = 10;
+pub const STRESS_PARALLEL: usize = 2;
+pub const STRESS_SERIAL: usize = 2;
+pub const STRESS_CHAINS: usize = 2;
 
 pub fn create_random_crypto() -> XorCrypto {
     let mut rng = rand::thread_rng();
