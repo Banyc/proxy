@@ -186,7 +186,8 @@ impl HttpAccess {
         let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
         let port = req.uri().port_u16().unwrap_or(80);
         let addr = format!("{}:{}", host, port);
-        let addr = Arc::from(addr.as_str());
+        let addr: Arc<str> = addr.into();
+        let addr: InternetAddr = addr.into();
 
         let action = self.filter.filter(&addr);
         match action {
@@ -196,7 +197,8 @@ impl HttpAccess {
                 return Ok(respond_with_rejection());
             }
             filter::Action::Direct => {
-                let upstream = tokio::net::TcpStream::connect(addr.as_ref())
+                let addr = addr.to_socket_addr().await.map_err(TunnelError::Direct)?;
+                let upstream = tokio::net::TcpStream::connect(addr)
                     .await
                     .map_err(TunnelError::Direct)?;
                 let res = tls_http(upstream, req).await;
@@ -210,7 +212,7 @@ impl HttpAccess {
         let (upstream, upstream_addr, upstream_sock_addr) = establish(
             &proxy_chain.chain,
             StreamAddr {
-                address: addr.clone().into(),
+                address: addr.clone(),
                 stream_type: StreamType::Tcp,
             },
             &self.stream_pool,
@@ -236,7 +238,7 @@ impl HttpAccess {
                 upstream_sock_addr,
                 downstream_addr: None,
             },
-            destination: addr.into(),
+            destination: addr,
         };
         info!(%metrics, "{} finished", method);
 
@@ -271,7 +273,8 @@ impl HttpAccess {
                 return Ok(resp);
             }
         };
-        let addr = Arc::from(addr.as_str());
+        let addr: Arc<str> = addr.into();
+        let addr: InternetAddr = addr.into();
         let action = self.filter.filter(&addr);
         let http_connect = match action {
             filter::Action::Proxy => Some(HttpConnect::new(
@@ -329,7 +332,7 @@ where
 
 async fn upgrade(
     req: Request<Incoming>,
-    addr: Arc<str>,
+    addr: InternetAddr,
     http_connect: Option<HttpConnect>,
     speed_limiter: Limiter,
 ) {
@@ -343,7 +346,7 @@ async fn upgrade(
 
     // Proxy
     if let Some(http_connect) = http_connect {
-        match http_connect.proxy(upgraded, addr.into()).await {
+        match http_connect.proxy(upgraded, addr).await {
             Ok(metrics) => {
                 info!(%metrics, "CONNECT finished");
             }
@@ -356,19 +359,31 @@ async fn upgrade(
     }
 
     // Direct
-    let upstream = match tokio::net::TcpStream::connect(addr.as_ref()).await {
+    let sock_addr = match addr.to_socket_addr().await {
+        Ok(sock_addr) => sock_addr,
+        Err(e) => {
+            warn!(?e, ?addr, "Failed to resolve address");
+            return;
+        }
+    };
+    let upstream = match tokio::net::TcpStream::connect(sock_addr).await {
         Ok(upstream) => upstream,
         Err(e) => {
-            warn!(?e, ?addr, "Failed to connect to upstream directly");
+            warn!(
+                ?e,
+                ?addr,
+                ?sock_addr,
+                "Failed to connect to upstream directly"
+            );
             return;
         }
     };
     match tokio_io::timed_copy_bidirectional(upgraded, upstream, speed_limiter).await {
         Ok(metrics) => {
-            info!(?addr, ?metrics, "Direct CONNECT finished");
+            info!(?addr, ?sock_addr, ?metrics, "Direct CONNECT finished");
         }
         Err(e) => {
-            info!(?e, ?addr, "Direct CONNECT error");
+            info!(?e, ?addr, ?sock_addr, "Direct CONNECT error");
         }
     }
 }

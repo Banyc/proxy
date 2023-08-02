@@ -12,16 +12,19 @@
 #         { address = "", xor_key = "base64" },
 #     ] },
 # ], trace_rtt = false }
-# [access_server.filters]
-# "default" = [
-#     "localhost",
-#     # { match = "", action = "block" },
-# ]
-# "localhost" = [
-#     { match = "127\\.0\\.0\\.1:", action = "direct" },
-#     { match = "\\[::1\\]:", action = "direct" },
-#     { match = "localhost:", action = "direct" },
-# ]
+[access_server.filters]
+"default" = [
+    "localhost",
+    # { matcher = { port = 443 }, action = "proxy" },
+    # { matcher = { }, action = "block" }, # Block all
+]
+"localhost" = [
+    { matcher = [
+        { addr = "127.0.0.1" },
+        { addr = "::1" },
+        { addr = "localhost" },
+    ], action = "direct" },
+]
 
 [[access_server.tcp_server]]
 listen_addr = ""
@@ -53,13 +56,7 @@ proxy_table = { chains = [
         { address = "tcp://", xor_key = "base64" },
     ],                        payload_xor_key = "base64" },
 ], trace_rtt = false }
-# filter = "default"
-filter = [
-    { match = "127\\.0\\.0\\.1:", action = "direct" },
-    { match = "\\[::1\\]:", action = "direct" },
-    { match = "localhost:", action = "direct" },
-    # { match = "", action = "block" },
-]
+filter = "default"
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[access_server.socks5_tcp_server]]
@@ -71,13 +68,7 @@ proxy_table = { chains = [
         { address = "tcp://", xor_key = "base64" },
     ],                        payload_xor_key = "base64" },
 ], trace_rtt = false }
-# filter = "default"
-filter = [
-    { match = "127\\.0\\.0\\.1:", action = "direct" },
-    { match = "\\[::1\\]:", action = "direct" },
-    { match = "localhost:", action = "direct" },
-    # { match = "", action = "block" },
-]
+filter = "default"
 # speed_limit = 1024.0 # 1.0 KiB/s
 # users = [
 #     { username = "", password = "" },

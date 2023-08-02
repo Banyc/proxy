@@ -291,8 +291,7 @@ impl Socks5ServerTcpAccess {
             .map_err(EstablishError::Negotiate)?;
 
         // Filter
-        let destination_str = relay_request.destination.to_string();
-        let action = self.filter.filter(&destination_str);
+        let action = self.filter.filter(&relay_request.destination);
         if matches!(action, filter::Action::Block) {
             let relay_response = RelayResponse {
                 reply: Reply::ConnectionNotAllowedByRuleset,
@@ -335,7 +334,15 @@ impl Socks5ServerTcpAccess {
         }
 
         if matches!(action, filter::Action::Direct) {
-            let upstream = tokio::net::TcpStream::connect(&destination_str)
+            let sock_addr = relay_request
+                .destination
+                .to_socket_addr()
+                .await
+                .map_err(|e| EstablishError::DirectConnect {
+                    source: e,
+                    destination: relay_request.destination.clone(),
+                })?;
+            let upstream = tokio::net::TcpStream::connect(sock_addr)
                 .await
                 .map_err(|e| EstablishError::DirectConnect {
                     source: e,
