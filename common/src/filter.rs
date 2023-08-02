@@ -147,10 +147,10 @@ enum MatcherBuilder {
     Single {
         #[serde(rename = "addr")]
         #[serde(default)]
-        addr_matcher: AddrMatcherBuilder,
+        addr_matcher: AddrListMatcherBuilder,
         #[serde(rename = "port")]
         #[serde(default)]
-        port_matcher: PortMatcherBuilder,
+        port_matcher: PortListMatcherBuilder,
     },
     Many(Vec<MatcherBuilder>),
 }
@@ -178,8 +178,8 @@ impl MatcherBuilder {
 #[derive(Debug, Clone)]
 enum Matcher {
     Single {
-        addr_matcher: AddrMatcher,
-        port_matcher: PortMatcher,
+        addr_matcher: AddrListMatcher,
+        port_matcher: PortListMatcher,
     },
     Many(Arc<[Matcher]>),
 }
@@ -221,70 +221,133 @@ impl Matcher {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
-enum AddrMatcherBuilder {
-    Ipv4(Ipv4Addr),
-    Ipv6(Ipv6Addr),
-    DomainName(String),
-    Ipv4Range(RangeInclusive<Ipv4Addr>),
-    Ipv6Range(RangeInclusive<Ipv6Addr>),
-    Ipv4Ranges(Arc<[RangeInclusive<Ipv4Addr>]>),
-    Ipv6Ranges(Arc<[RangeInclusive<Ipv6Addr>]>),
+enum AddrListMatcherBuilder {
+    Many(Vec<AddrMatcherBuilder>),
+    Single(AddrMatcherBuilder),
     Any,
 }
 
-impl AddrMatcherBuilder {
-    pub fn build(self) -> Result<AddrMatcher, regex::Error> {
+impl AddrListMatcherBuilder {
+    pub fn build(self) -> Result<AddrListMatcher, regex::Error> {
         Ok(match self {
-            AddrMatcherBuilder::Ipv4(addr) => AddrMatcher::Ipv4(vec![addr..=addr].into()),
-            AddrMatcherBuilder::Ipv6(addr) => AddrMatcher::Ipv6(vec![addr..=addr].into()),
-            AddrMatcherBuilder::DomainName(domain_name) => {
-                AddrMatcher::DomainName(Regex::new(&domain_name)?)
-            }
-            AddrMatcherBuilder::Ipv4Range(range) => AddrMatcher::Ipv4(vec![range].into()),
-            AddrMatcherBuilder::Ipv6Range(range) => AddrMatcher::Ipv6(vec![range].into()),
-            AddrMatcherBuilder::Ipv4Ranges(ranges) => AddrMatcher::Ipv4(ranges),
-            AddrMatcherBuilder::Ipv6Ranges(ranges) => AddrMatcher::Ipv6(ranges),
-            AddrMatcherBuilder::Any => AddrMatcher::Any,
+            Self::Many(matchers) => AddrListMatcher::Some(
+                matchers
+                    .into_iter()
+                    .map(|matcher| matcher.build())
+                    .collect::<Result<_, _>>()?,
+            ),
+            Self::Single(matcher) => AddrListMatcher::Some(vec![matcher.build()?].into()),
+            Self::Any => AddrListMatcher::Any,
         })
     }
 }
 
-impl Default for AddrMatcherBuilder {
+impl Default for AddrListMatcherBuilder {
     fn default() -> Self {
         Self::Any
     }
 }
 
 #[derive(Debug, Clone)]
+enum AddrListMatcher {
+    Some(Arc<[AddrMatcher]>),
+    Any,
+}
+
+impl AddrListMatcher {
+    pub fn is_match_domain_name(&self, addr: &str) -> bool {
+        match self {
+            Self::Some(matchers) => matchers
+                .iter()
+                .any(|matcher| matcher.is_match_domain_name(addr)),
+            Self::Any => true,
+        }
+    }
+
+    pub fn is_match_ip(&self, addr: IpAddr) -> bool {
+        match self {
+            Self::Some(matchers) => matchers.iter().any(|matcher| matcher.is_match_ip(addr)),
+            Self::Any => true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(untagged)]
+enum AddrMatcherBuilder {
+    Ipv4(Ipv4Addr),
+    Ipv6(Ipv6Addr),
+    DomainName(String),
+    Ipv4Range(RangeInclusive<Ipv4Addr>),
+    Ipv6Range(RangeInclusive<Ipv6Addr>),
+}
+
+impl AddrMatcherBuilder {
+    pub fn build(self) -> Result<AddrMatcher, regex::Error> {
+        Ok(match self {
+            Self::Ipv4(addr) => AddrMatcher::Ipv4(addr..=addr),
+            Self::Ipv6(addr) => AddrMatcher::Ipv6(addr..=addr),
+            Self::DomainName(domain_name) => AddrMatcher::DomainName(Regex::new(&domain_name)?),
+            Self::Ipv4Range(range) => AddrMatcher::Ipv4(range),
+            Self::Ipv6Range(range) => AddrMatcher::Ipv6(range),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 enum AddrMatcher {
     DomainName(Regex),
-    Ipv4(Arc<[RangeInclusive<Ipv4Addr>]>),
-    Ipv6(Arc<[RangeInclusive<Ipv6Addr>]>),
-    Any,
+    Ipv4(RangeInclusive<Ipv4Addr>),
+    Ipv6(RangeInclusive<Ipv6Addr>),
 }
 
 impl AddrMatcher {
     pub fn is_match_domain_name(&self, addr: &str) -> bool {
         match self {
-            AddrMatcher::DomainName(regex) => regex.is_match(addr),
-            AddrMatcher::Ipv4(_) => false,
-            AddrMatcher::Ipv6(_) => false,
-            AddrMatcher::Any => true,
+            Self::DomainName(regex) => regex.is_match(addr),
+            Self::Ipv4(_) => false,
+            Self::Ipv6(_) => false,
         }
     }
 
     pub fn is_match_ip(&self, addr: IpAddr) -> bool {
         match (self, addr) {
-            (AddrMatcher::DomainName(_), _) => false,
-            (AddrMatcher::Ipv4(ranges), IpAddr::V4(addr)) => {
-                ranges.iter().any(|range| range.contains(&addr))
-            }
-            (AddrMatcher::Ipv6(ranges), IpAddr::V6(addr)) => {
-                ranges.iter().any(|range| range.contains(&addr))
-            }
-            (AddrMatcher::Any, _) => true,
+            (Self::DomainName(_), _) => false,
+            (Self::Ipv4(range), IpAddr::V4(addr)) => range.contains(&addr),
+            (Self::Ipv6(range), IpAddr::V6(addr)) => range.contains(&addr),
             _ => false,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(untagged)]
+enum PortListMatcherBuilder {
+    Many(Vec<PortMatcherBuilder>),
+    Single(PortMatcherBuilder),
+    Any,
+}
+
+impl PortListMatcherBuilder {
+    pub fn build(self) -> PortListMatcher {
+        match self {
+            Self::Many(matchers) => PortListMatcher::Some(
+                matchers
+                    .into_iter()
+                    .map(|matcher| matcher.build())
+                    .collect::<_>(),
+            ),
+            Self::Single(matcher) => PortListMatcher::Some(vec![matcher.build()].into()),
+            Self::Any => PortListMatcher::Any,
+        }
+    }
+}
+
+impl Default for PortListMatcherBuilder {
+    fn default() -> Self {
+        Self::Any
     }
 }
 
@@ -295,38 +358,39 @@ enum PortMatcherBuilder {
     Single(u16),
     Range(RangeInclusive<u16>),
     Ranges(Arc<[RangeInclusive<u16>]>),
+}
+
+#[derive(Debug, Clone)]
+enum PortListMatcher {
+    Some(Arc<[PortMatcher]>),
     Any,
+}
+
+impl PortListMatcher {
+    pub fn is_match(&self, port: u16) -> bool {
+        match self {
+            Self::Some(matcher) => matcher.iter().any(|range| range.is_match(port)),
+            Self::Any => true,
+        }
+    }
 }
 
 impl PortMatcherBuilder {
     pub fn build(self) -> PortMatcher {
         match self {
-            PortMatcherBuilder::Single(port) => PortMatcher::Ranges(vec![port..=port].into()),
-            PortMatcherBuilder::Range(range) => PortMatcher::Ranges(vec![range].into()),
-            PortMatcherBuilder::Ranges(ranges) => PortMatcher::Ranges(ranges),
-            PortMatcherBuilder::Any => PortMatcher::Any,
+            Self::Single(port) => PortMatcher(vec![port..=port].into()),
+            Self::Range(range) => PortMatcher(vec![range].into()),
+            Self::Ranges(ranges) => PortMatcher(ranges),
         }
-    }
-}
-
-impl Default for PortMatcherBuilder {
-    fn default() -> Self {
-        Self::Any
     }
 }
 
 #[derive(Debug, Clone)]
-enum PortMatcher {
-    Ranges(Arc<[RangeInclusive<u16>]>),
-    Any,
-}
+struct PortMatcher(Arc<[RangeInclusive<u16>]>);
 
 impl PortMatcher {
     pub fn is_match(&self, port: u16) -> bool {
-        match self {
-            PortMatcher::Ranges(ranges) => ranges.iter().any(|range| range.contains(&port)),
-            PortMatcher::Any => true,
-        }
+        self.0.iter().any(|range| range.contains(&port))
     }
 }
 
