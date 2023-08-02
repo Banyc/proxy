@@ -66,7 +66,7 @@ impl Socks5ServerTcpAccessServerConfig {
                 .get(&key)
                 .ok_or_else(|| BuildError::FilterKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(filters)?,
+            SharableConfig::Private(x) => x.build(filters, &Default::default())?,
         };
         let users = self
             .users

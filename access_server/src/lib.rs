@@ -2,7 +2,7 @@ use std::{collections::HashMap, io, sync::Arc};
 
 use common::{
     error::AnyResult,
-    filter::{self, FilterBuilder},
+    filter::{self, FilterBuilder, MatcherBuilder},
     loading,
     stream::pool::PoolBuilder,
 };
@@ -43,6 +43,8 @@ pub struct AccessServerConfig {
     #[serde(default)]
     pub udp_proxy_tables: HashMap<Arc<str>, UdpProxyTableBuilder>,
     #[serde(default)]
+    pub matchers: HashMap<Arc<str>, MatcherBuilder>,
+    #[serde(default)]
     pub filters: HashMap<Arc<str>, FilterBuilder>,
 }
 
@@ -57,6 +59,7 @@ impl AccessServerConfig {
             stream_pool: PoolBuilder(None),
             stream_proxy_tables: Default::default(),
             udp_proxy_tables: Default::default(),
+            matchers: Default::default(),
             filters: Default::default(),
         }
     }
@@ -86,7 +89,7 @@ impl AccessServerConfig {
             })
             .collect::<Result<HashMap<_, _>, _>>()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        let filters = filter::build_from_map(self.filters)
+        let filters = filter::build_from_map(self.matchers, self.filters)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
         // TCP servers

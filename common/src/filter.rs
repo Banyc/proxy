@@ -12,8 +12,18 @@ use thiserror::Error;
 use crate::{addr::InternetAddr, config::SharableConfig};
 
 pub fn build_from_map(
+    matchers: HashMap<Arc<str>, MatcherBuilder>,
     builders: HashMap<Arc<str>, FilterBuilder>,
 ) -> Result<HashMap<Arc<str>, Filter>, FilterBuildError> {
+    let matchers = {
+        let mut built = HashMap::new();
+        for (k, v) in matchers {
+            let v = v.build()?;
+            built.insert(k, v);
+        }
+        built
+    };
+
     let mut rounds = 0;
     let mut filters = HashMap::new();
     let mut last_key_not_found = None;
@@ -24,7 +34,7 @@ pub fn build_from_map(
         rounds += 1;
 
         for (k, v) in &builders {
-            let v = match v.clone().build(&filters) {
+            let v = match v.clone().build(&filters, &matchers) {
                 Ok(v) => v,
                 Err(FilterBuildError::KeyNotFound(key)) => {
                     last_key_not_found = Some(key.clone());
@@ -46,13 +56,17 @@ pub struct FilterBuilder {
 }
 
 impl FilterBuilder {
-    pub fn build(self, filters: &HashMap<Arc<str>, Filter>) -> Result<Filter, FilterBuildError> {
-        let mut match_acts = Vec::new();
+    pub fn build(
+        self,
+        filters: &HashMap<Arc<str>, Filter>,
+        matchers: &HashMap<Arc<str>, Matcher>,
+    ) -> Result<Filter, FilterBuildError> {
+        let mut rules = Vec::new();
         if let Some(self_match_acts) = self.rules {
-            for match_act in self_match_acts {
-                match match_act {
+            for rule in self_match_acts {
+                match rule {
                     SharableConfig::SharingKey(key) => {
-                        match_acts.extend(
+                        rules.extend(
                             filters
                                 .get(&key)
                                 .ok_or_else(|| FilterBuildError::KeyNotFound(key.clone()))?
@@ -61,14 +75,14 @@ impl FilterBuilder {
                                 .cloned(),
                         );
                     }
-                    SharableConfig::Private(match_act) => {
-                        match_acts.push(match_act.build()?);
+                    SharableConfig::Private(rule) => {
+                        rules.push(rule.build(matchers)?);
                     }
                 }
             }
         }
         Ok(Filter {
-            rules: match_acts.into(),
+            rules: rules.into(),
         })
     }
 }
@@ -100,7 +114,7 @@ impl Filter {
 
     pub fn filter_domain_name(&self, domain_name: &str, port: u16) -> Action {
         for match_act in self.rules.as_ref() {
-            if match_act.matcher.is_match_domain_name(domain_name, port) {
+            if match_act.matcher.0.is_match_domain_name(domain_name, port) {
                 return match_act.action;
             }
         }
@@ -109,7 +123,7 @@ impl Filter {
 
     pub fn filter_ip(&self, addr: SocketAddr) -> Action {
         for match_act in self.rules.as_ref() {
-            if match_act.matcher.is_match_ip(addr) {
+            if match_act.matcher.0.is_match_ip(addr) {
                 return match_act.action;
             }
         }
@@ -120,14 +134,21 @@ impl Filter {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuleBuilder {
-    matcher: MatcherBuilder,
+    matcher: SharableConfig<MatcherBuilder>,
     action: Action,
 }
 
 impl RuleBuilder {
-    pub fn build(self) -> Result<Rule, regex::Error> {
+    pub fn build(self, matchers: &HashMap<Arc<str>, Matcher>) -> Result<Rule, FilterBuildError> {
+        let matcher = match self.matcher {
+            SharableConfig::SharingKey(k) => matchers
+                .get(&k)
+                .ok_or_else(|| FilterBuildError::KeyNotFound(Arc::clone(&k)))?
+                .clone(),
+            SharableConfig::Private(matcher) => matcher.build()?,
+        };
         Ok(Rule {
-            matcher: self.matcher.build()?,
+            matcher,
             action: self.action,
         })
     }
@@ -141,9 +162,18 @@ pub struct Rule {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-// #[serde(rename_all = "snake_case")]
+pub struct MatcherBuilder(MatcherBuilderKind);
+
+impl MatcherBuilder {
+    pub fn build(self) -> Result<Matcher, regex::Error> {
+        self.0.build()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[serde(untagged)]
-enum MatcherBuilder {
+enum MatcherBuilderKind {
     Single {
         #[serde(rename = "addr")]
         #[serde(default)]
@@ -152,42 +182,45 @@ enum MatcherBuilder {
         #[serde(default)]
         port_matcher: PortListMatcherBuilder,
     },
-    Many(Vec<MatcherBuilder>),
+    Many(Vec<MatcherBuilderKind>),
 }
 
-impl MatcherBuilder {
+impl MatcherBuilderKind {
     pub fn build(self) -> Result<Matcher, regex::Error> {
         Ok(match self {
-            MatcherBuilder::Single {
+            Self::Single {
                 addr_matcher,
                 port_matcher,
-            } => Matcher::Single {
+            } => Matcher(MatcherKind::Single {
                 addr_matcher: addr_matcher.build()?,
                 port_matcher: port_matcher.build(),
-            },
-            MatcherBuilder::Many(matchers) => Matcher::Many(
+            }),
+            Self::Many(matchers) => Matcher(MatcherKind::Many(
                 matchers
                     .into_iter()
-                    .map(|matcher| matcher.build())
+                    .map(|matcher| matcher.build().map(|m| m.0))
                     .collect::<Result<_, _>>()?,
-            ),
+            )),
         })
     }
 }
 
 #[derive(Debug, Clone)]
-enum Matcher {
+pub struct Matcher(MatcherKind);
+
+#[derive(Debug, Clone)]
+enum MatcherKind {
     Single {
         addr_matcher: AddrListMatcher,
         port_matcher: PortListMatcher,
     },
-    Many(Arc<[Matcher]>),
+    Many(Arc<[MatcherKind]>),
 }
 
-impl Matcher {
+impl MatcherKind {
     pub fn is_match_domain_name(&self, addr: &str, port: u16) -> bool {
         match self {
-            Matcher::Single {
+            MatcherKind::Single {
                 addr_matcher,
                 port_matcher,
             } => {
@@ -196,7 +229,7 @@ impl Matcher {
                 }
                 addr_matcher.is_match_domain_name(addr)
             }
-            Matcher::Many(matchers) => matchers
+            MatcherKind::Many(matchers) => matchers
                 .iter()
                 .any(|matcher| matcher.is_match_domain_name(addr, port)),
         }
@@ -204,7 +237,7 @@ impl Matcher {
 
     pub fn is_match_ip(&self, addr: SocketAddr) -> bool {
         match self {
-            Matcher::Single {
+            MatcherKind::Single {
                 addr_matcher,
                 port_matcher,
             } => {
@@ -213,7 +246,7 @@ impl Matcher {
                 }
                 addr_matcher.is_match_ip(addr.ip())
             }
-            Matcher::Many(matchers) => matchers.iter().any(|matcher| matcher.is_match_ip(addr)),
+            MatcherKind::Many(matchers) => matchers.iter().any(|matcher| matcher.is_match_ip(addr)),
         }
     }
 }
