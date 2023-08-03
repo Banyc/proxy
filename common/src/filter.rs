@@ -390,7 +390,6 @@ impl Default for PortListMatcherBuilder {
 enum PortMatcherBuilder {
     Single(u16),
     Range(RangeInclusive<u16>),
-    Ranges(Arc<[RangeInclusive<u16>]>),
 }
 
 #[derive(Debug, Clone)]
@@ -411,19 +410,18 @@ impl PortListMatcher {
 impl PortMatcherBuilder {
     pub fn build(self) -> PortMatcher {
         match self {
-            Self::Single(port) => PortMatcher(vec![port..=port].into()),
-            Self::Range(range) => PortMatcher(vec![range].into()),
-            Self::Ranges(ranges) => PortMatcher(ranges),
+            Self::Single(port) => PortMatcher(port..=port),
+            Self::Range(range) => PortMatcher(range),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-struct PortMatcher(Arc<[RangeInclusive<u16>]>);
+struct PortMatcher(RangeInclusive<u16>);
 
 impl PortMatcher {
     pub fn is_match(&self, port: u16) -> bool {
-        self.0.iter().any(|range| range.contains(&port))
+        self.0.contains(&port)
     }
 }
 
