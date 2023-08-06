@@ -62,7 +62,8 @@ where
         let mut inner_buf = {
             let mut inner_buf = self.buf.take().unwrap();
             if inner_buf.is_empty() {
-                self.write_crypto.xor_to(buf, &mut inner_buf)?;
+                inner_buf.extend(buf);
+                self.write_crypto.xor(&mut inner_buf);
             }
             inner_buf
         };

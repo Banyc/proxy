@@ -4,6 +4,7 @@ use std::{
 };
 
 use base64::prelude::*;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -54,14 +55,15 @@ impl XorCryptoCursor {
         if self.key.is_empty() {
             return;
         }
-        for (i, b) in buf.iter_mut().enumerate() {
+        buf.par_iter_mut().enumerate().for_each(|(i, b)| {
             let i = i + self.pos;
             let xor_b = *b ^ self.key[i % self.key.len()];
             *b = xor_b;
-        }
+        });
         self.pos = (self.pos + buf.len()) % self.key.len();
     }
 
+    /// Slow.
     pub fn xor_to<W>(&mut self, buf: &[u8], to: &mut W) -> io::Result<()>
     where
         W: Write,
