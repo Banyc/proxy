@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -230,7 +231,7 @@ impl MatcherKind {
                 addr_matcher.is_match_domain_name(addr)
             }
             MatcherKind::Many(matchers) => matchers
-                .iter()
+                .par_iter()
                 .any(|matcher| matcher.is_match_domain_name(addr, port)),
         }
     }
@@ -246,7 +247,9 @@ impl MatcherKind {
                 }
                 addr_matcher.is_match_ip(addr.ip())
             }
-            MatcherKind::Many(matchers) => matchers.iter().any(|matcher| matcher.is_match_ip(addr)),
+            MatcherKind::Many(matchers) => {
+                matchers.par_iter().any(|matcher| matcher.is_match_ip(addr))
+            }
         }
     }
 }
@@ -291,7 +294,7 @@ impl AddrListMatcher {
     pub fn is_match_domain_name(&self, addr: &str) -> bool {
         match self {
             Self::Some(matchers) => matchers
-                .iter()
+                .par_iter()
                 .any(|matcher| matcher.is_match_domain_name(addr)),
             Self::Any => true,
         }
@@ -299,7 +302,7 @@ impl AddrListMatcher {
 
     pub fn is_match_ip(&self, addr: IpAddr) -> bool {
         match self {
-            Self::Some(matchers) => matchers.iter().any(|matcher| matcher.is_match_ip(addr)),
+            Self::Some(matchers) => matchers.par_iter().any(|matcher| matcher.is_match_ip(addr)),
             Self::Any => true,
         }
     }
@@ -401,7 +404,7 @@ enum PortListMatcher {
 impl PortListMatcher {
     pub fn is_match(&self, port: u16) -> bool {
         match self {
-            Self::Some(matcher) => matcher.iter().any(|range| range.is_match(port)),
+            Self::Some(matcher) => matcher.par_iter().any(|range| range.is_match(port)),
             Self::Any => true,
         }
     }
