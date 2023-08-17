@@ -2,11 +2,19 @@ use std::{
     fmt::Display,
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4},
-    sync::Arc,
+    num::NonZeroUsize,
+    sync::{Arc, Mutex},
 };
 
+use lazy_static::lazy_static;
+use lru::LruCache;
 use serde::{Deserialize, Serialize};
 use tokio::net::lookup_host;
+
+lazy_static! {
+    static ref RESOLVED_SOCKET_ADDR: Arc<Mutex<LruCache<Arc<str>, SocketAddr>>> =
+        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())));
+}
 
 pub fn any_addr(ip_version: &IpAddr) -> SocketAddr {
     let any_ip = match ip_version {
@@ -54,10 +62,27 @@ impl InternetAddr {
     pub async fn to_socket_addr(&self) -> io::Result<SocketAddr> {
         match self {
             Self::SocketAddr(addr) => Ok(*addr),
-            Self::String(host) => lookup_host(host.as_ref())
-                .await?
-                .next()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No address")),
+            Self::String(host) => {
+                let res = lookup_host(host.as_ref())
+                    .await?
+                    .next()
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No address"));
+
+                match &res {
+                    Ok(addr) => {
+                        if let Ok(mut store) = RESOLVED_SOCKET_ADDR.try_lock() {
+                            store.put(host.clone(), *addr);
+                        }
+                    }
+                    Err(_) => {
+                        let mut store = RESOLVED_SOCKET_ADDR.lock().unwrap();
+                        if let Some(addr) = store.get(host) {
+                            return Ok(*addr);
+                        }
+                    }
+                }
+                res
+            }
         }
     }
 }
