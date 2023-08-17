@@ -32,9 +32,9 @@ where
 
 #[derive(Debug, Error)]
 pub enum HeartbeatError {
-    #[error("Failed to read/write header")]
+    #[error("Failed to read/write header: {0}")]
     Header(#[from] CodecError),
-    #[error("Timeout")]
+    #[error("Timeout: {0:?}")]
     Timeout(Duration),
 }
 

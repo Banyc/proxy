@@ -96,17 +96,17 @@ pub async fn establish(
 
 #[derive(Debug, Error)]
 pub enum StreamEstablishError {
-    #[error("Failed to connect to destination")]
+    #[error("Failed to connect to destination: {0}")]
     ConnectDestination(#[source] ConnectError),
-    #[error("Failed to connect to first proxy server")]
+    #[error("Failed to connect to first proxy server: {0}")]
     ConnectFirstProxyServer(#[source] ConnectError),
-    #[error("Failed to write heartbeat upgrade to upstream")]
+    #[error("Failed to write heartbeat upgrade to upstream: {source}, {upstream_addr}")]
     WriteHeartbeatUpgrade {
         #[source]
         source: HeartbeatError,
         upstream_addr: StreamAddr,
     },
-    #[error("Failed to read stream request header to upstream")]
+    #[error("Failed to read stream request header to upstream: {source}, {upstream_addr}")]
     WriteStreamRequestHeader {
         #[source]
         source: CodecError,
@@ -179,12 +179,12 @@ pub async fn trace_rtt(
 
 #[derive(Debug, Error)]
 pub enum TraceError {
-    #[error("Connect error")]
+    #[error("Connect error: {0}")]
     ConnectError(#[from] ConnectError),
-    #[error("Heartbeat error")]
+    #[error("Heartbeat error: {0}")]
     HeartbeatError(#[from] HeartbeatError),
-    #[error("Codec error")]
+    #[error("Codec error: {0}")]
     Header(#[from] CodecError),
-    #[error("Upstream responded with an error")]
+    #[error("Upstream responded with an error: {err}")]
     Response { err: RouteError },
 }

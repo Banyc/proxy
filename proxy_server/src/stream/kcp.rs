@@ -58,5 +58,5 @@ pub async fn build_kcp_proxy_server(
 }
 
 #[derive(Debug, Error)]
-#[error("Failed to bind to listen address")]
+#[error("Failed to bind to listen address: {0}")]
 pub struct ListenerBindError(#[source] io::Error);

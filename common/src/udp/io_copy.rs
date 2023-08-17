@@ -207,11 +207,11 @@ where
 
 #[derive(Debug, Error)]
 pub enum CopyBiError {
-    #[error("Failed to send to upstream")]
+    #[error("Failed to send to upstream: {0}")]
     SendUpstream(#[source] AnyError),
-    #[error("Failed to recv from upstream")]
+    #[error("Failed to recv from upstream: {0}")]
     RecvUpstream(#[source] AnyError),
-    #[error("Failed to send to downstream")]
+    #[error("Failed to send to downstream: {source}, {downstream:?}")]
     SendDownstream {
         #[source]
         source: io::Error,

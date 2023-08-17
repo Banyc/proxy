@@ -240,27 +240,27 @@ impl UdpProxy {
 
 #[derive(Debug, Error)]
 pub enum ProxyError {
-    #[error("Failed to resolve upstream address")]
+    #[error("Failed to resolve upstream address: {source}, {addr}")]
     Resolve {
         #[source]
         source: io::Error,
         addr: InternetAddr,
     },
-    #[error("Refused to connect to a loopback address")]
+    #[error("Refused to connect to a loopback address: {addr}, {sock_addr}")]
     Loopback {
         addr: InternetAddr,
         sock_addr: SocketAddr,
     },
-    #[error("Failed to created a client socket")]
+    #[error("Failed to created a client socket: {0}")]
     ClientBindAny(#[source] io::Error),
-    #[error("Failed to connect to upstream")]
+    #[error("Failed to connect to upstream: {source}, {addr}, {sock_addr}")]
     ConnectUpstream {
         #[source]
         source: io::Error,
         addr: InternetAddr,
         sock_addr: SocketAddr,
     },
-    #[error("Failed to copy")]
+    #[error("Failed to copy: {source}, {addr}, {sock_addr}")]
     Copy {
         #[source]
         source: CopyBiError,

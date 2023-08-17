@@ -168,9 +168,9 @@ where
 
 #[derive(Debug, Error)]
 pub enum ServeError {
-    #[error("Failed to get local address")]
+    #[error("Failed to get local address: {0}")]
     LocalAddr(#[source] io::Error),
-    #[error("Failed to receive packet from downstream")]
+    #[error("Failed to receive packet from downstream: {source}, {addr}")]
     RecvFrom {
         #[source]
         source: io::Error,

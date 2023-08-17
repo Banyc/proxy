@@ -51,7 +51,7 @@ pub async fn build_tcp_proxy_server(
 }
 
 #[derive(Debug, Error)]
-#[error("Failed to bind to listen address")]
+#[error("Failed to bind to listen address: {0}")]
 pub struct ListenerBindError(#[from] io::Error);
 
 #[cfg(test)]

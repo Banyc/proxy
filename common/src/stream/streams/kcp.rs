@@ -111,9 +111,9 @@ where
 
 #[derive(Debug, Error)]
 pub enum ServeError {
-    #[error("Failed to get local address")]
+    #[error("Failed to get local address: {0}")]
     LocalAddr(#[source] io::Error),
-    #[error("Failed to accept connection")]
+    #[error("Failed to accept connection: {source}, {addr}")]
     Accept {
         #[source]
         source: io::Error,

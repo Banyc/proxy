@@ -114,28 +114,28 @@ impl UdpProxyClient {
 
 #[derive(Debug, Error)]
 pub enum EstablishError {
-    #[error("Failed to resolve destination address")]
+    #[error("Failed to resolve destination address: {source}, {addr}")]
     ResolveDestination {
         #[source]
         source: io::Error,
         addr: InternetAddr,
     },
-    #[error("Failed to created a client socket")]
+    #[error("Failed to created a client socket: {0}")]
     ClientBindAny(#[source] io::Error),
-    #[error("Failed to connect to destination")]
+    #[error("Failed to connect to destination: {source}, {addr}, {sock_addr}")]
     ConnectDestination {
         #[source]
         source: io::Error,
         addr: InternetAddr,
         sock_addr: SocketAddr,
     },
-    #[error("Failed to resolve first proxy address")]
+    #[error("Failed to resolve first proxy address: {source}, {addr}")]
     ResolveFirstProxy {
         #[source]
         source: io::Error,
         addr: InternetAddr,
     },
-    #[error("Failed to connect to first proxy")]
+    #[error("Failed to connect to first proxy: {source}, {addr}, {sock_addr}")]
     ConnectFirstProxy {
         #[source]
         source: io::Error,
@@ -195,7 +195,7 @@ impl UdpProxyClientWriteHalf {
 }
 
 #[derive(Debug, Error)]
-#[error("Failed to send to upstream")]
+#[error("Failed to send to upstream: {source}, {sock_addr:?}")]
 pub struct SendError {
     #[source]
     source: io::Error,
@@ -274,15 +274,15 @@ impl UdpProxyClientReadHalf {
 
 #[derive(Debug, Error)]
 pub enum RecvError {
-    #[error("Failed to recv from upstream")]
+    #[error("Failed to recv from upstream: {source}, {sock_addr:?}")]
     RecvUpstream {
         #[source]
         source: io::Error,
         sock_addr: Option<SocketAddr>,
     },
-    #[error("Failed to read response from upstream")]
+    #[error("Failed to read response from upstream: {0}")]
     Header(#[from] CodecError),
-    #[error("Upstream responded with an error")]
+    #[error("Upstream responded with an error: {err}, {addr}")]
     Response { err: RouteError, addr: InternetAddr },
 }
 
@@ -364,10 +364,10 @@ pub async fn trace_rtt(proxies: &UdpProxyChain) -> Result<Duration, TraceError> 
 
 #[derive(Debug, Error)]
 pub enum TraceError {
-    #[error("IO error")]
+    #[error("IO error: {0}")]
     Io(#[from] io::Error),
-    #[error("Failed to read response from upstream")]
+    #[error("Failed to read response from upstream: {0}")]
     Header(#[from] CodecError),
-    #[error("Upstream responded with an error")]
+    #[error("Upstream responded with an error: {err}, {addr}")]
     Response { err: RouteError, addr: InternetAddr },
 }

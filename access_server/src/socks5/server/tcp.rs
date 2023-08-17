@@ -538,17 +538,17 @@ pub enum EstablishResult<S> {
 
 #[derive(Debug, Error)]
 pub enum EstablishError {
-    #[error("Failed to negotiate")]
+    #[error("Failed to negotiate: {0}")]
     Negotiate(#[source] io::Error),
-    #[error("Failed to connect directly")]
+    #[error("Failed to connect directly: {source}, {destination}")]
     DirectConnect {
         #[source]
         source: io::Error,
         destination: InternetAddr,
     },
-    #[error("IO error")]
+    #[error("IO error: {0}")]
     Io(#[from] io::Error),
-    #[error("Failed to establish proxy chain")]
+    #[error("Failed to establish proxy chain: {0}")]
     EstablishProxyChain(#[from] StreamEstablishError),
     #[error("Command BIND not supported")]
     CmdBindNotSupported,
@@ -558,11 +558,11 @@ pub enum EstablishError {
 
 #[derive(Debug, Error)]
 pub enum ProxyError {
-    #[error("Failed to establish connection")]
+    #[error("Failed to establish connection: {0}")]
     Establish(#[from] EstablishError),
-    #[error("Failed to get downstream address")]
+    #[error("Failed to get downstream address: {0}")]
     DownstreamAddr(#[source] io::Error),
-    #[error("Failed to copy data between streams")]
+    #[error("Failed to copy data between streams: {source}, {metrics}")]
     IoCopy {
         #[source]
         source: tokio_io::CopyBiErrorKind,

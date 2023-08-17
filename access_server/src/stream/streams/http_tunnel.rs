@@ -405,13 +405,13 @@ async fn upgrade(
 
 #[derive(Debug, Error)]
 pub enum TunnelError {
-    #[error("Failed to establish proxy chain")]
+    #[error("Failed to establish proxy chain: {0}")]
     EstablishProxyChain(#[from] StreamEstablishError),
-    #[error("Hyper error")]
+    #[error("Hyper error: {0}")]
     HyperError(#[from] hyper::Error),
     #[error("No host in HTTP request")]
     HttpNoHost,
-    #[error("Direct connection error")]
+    #[error("Direct connection error: {0}")]
     Direct(#[source] io::Error),
 }
 

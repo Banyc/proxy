@@ -290,11 +290,11 @@ impl StreamProxyAcceptor {
 
 #[derive(Debug, Error)]
 pub enum StreamProxyServerError {
-    #[error("Failed to get downstream address")]
+    #[error("Failed to get downstream address: {0}")]
     DownstreamAddr(#[source] io::Error),
-    #[error("Failed to establish proxy chain")]
+    #[error("Failed to establish proxy chain: {0}")]
     EstablishProxyChain(#[from] StreamProxyAcceptorError),
-    #[error("Failed to copy data between streams")]
+    #[error("Failed to copy data between streams: {source}, {metrics}")]
     IoCopy {
         #[source]
         source: tokio_io::CopyBiErrorKind,
@@ -304,25 +304,25 @@ pub enum StreamProxyServerError {
 
 #[derive(Debug, Error)]
 pub enum StreamProxyAcceptorError {
-    #[error("Failed to read heartbeat header from downstream")]
+    #[error("Failed to read heartbeat header from downstream: {source}, {downstream_addr:?}")]
     ReadHeartbeatUpgrade {
         #[source]
         source: HeartbeatError,
         downstream_addr: Option<SocketAddr>,
     },
-    #[error("Failed to read stream request header from downstream")]
+    #[error("Failed to read stream request header from downstream: {source}, {downstream_addr:?}")]
     ReadStreamRequestHeader {
         #[source]
         source: CodecError,
         downstream_addr: Option<SocketAddr>,
     },
-    #[error("Failed to write echo response to downstream")]
+    #[error("Failed to write echo response to downstream: {source}, {downstream_addr:?}")]
     WriteEchoResponse {
         #[source]
         source: CodecError,
         downstream_addr: Option<SocketAddr>,
     },
-    #[error("Failed to connect to upstream")]
+    #[error("Failed to connect to upstream: {source}, {downstream_addr:?}")]
     ConnectUpstream {
         #[source]
         source: ConnectError,

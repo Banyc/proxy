@@ -171,11 +171,11 @@ impl TcpAccess {
 
 #[derive(Debug, Error)]
 pub enum ProxyError {
-    #[error("Failed to get downstream address")]
+    #[error("Failed to get downstream address: {0}")]
     DownstreamAddr(#[source] io::Error),
-    #[error("Failed to establish proxy chain")]
+    #[error("Failed to establish proxy chain: {0}")]
     EstablishProxyChain(#[from] StreamEstablishError),
-    #[error("Failed to copy data between streams")]
+    #[error("Failed to copy data between streams: {source}, {metrics}")]
     IoCopy {
         #[source]
         source: tokio_io::CopyBiErrorKind,

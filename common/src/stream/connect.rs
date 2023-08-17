@@ -99,18 +99,18 @@ pub async fn connect_with_pool(
 
 #[derive(Debug, Error)]
 pub enum ConnectError {
-    #[error("Failed to resolve address")]
+    #[error("Failed to resolve address: {source}, {addr}")]
     ResolveAddr {
         #[source]
         source: io::Error,
         addr: StreamAddr,
     },
-    #[error("Refused to connect to loopback address")]
+    #[error("Refused to connect to loopback address: {addr}, {sock_addr}")]
     Loopback {
         addr: StreamAddr,
         sock_addr: SocketAddr,
     },
-    #[error("Failed to connect to address")]
+    #[error("Failed to connect to address: {source}, {addr}, {sock_addr}")]
     ConnectAddr {
         #[source]
         source: io::Error,

@@ -157,9 +157,9 @@ impl UdpAccess {
 
 #[derive(Debug, Error)]
 pub enum AccessProxyError {
-    #[error("Failed to establish proxy chain")]
+    #[error("Failed to establish proxy chain: {0}")]
     Establish(#[from] EstablishError),
-    #[error("Failed to copy")]
+    #[error("Failed to copy: {0}")]
     Copy(#[from] CopyBiError),
 }
 

@@ -11,7 +11,8 @@ pub struct RouteResponse {
     pub result: Result<(), RouteError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Error, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[error("{kind}")]
 pub struct RouteError {
     pub kind: RouteErrorKind,
 }

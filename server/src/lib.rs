@@ -83,11 +83,11 @@ where
 
 #[derive(Debug, Error)]
 pub enum ServeError {
-    #[error("Failed to read config file")]
+    #[error("Failed to read config file: {0}")]
     Config(AnyError),
-    #[error("Failed to load config")]
+    #[error("Failed to load config: {0}")]
     Load(io::Error),
-    #[error("Server task failed")]
+    #[error("Server task failed: {0}")]
     ServerTask(AnyError),
 }
 
