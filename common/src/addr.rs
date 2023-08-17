@@ -63,10 +63,10 @@ impl InternetAddr {
         match self {
             Self::SocketAddr(addr) => Ok(*addr),
             Self::String(host) => {
-                let res = lookup_host(host.as_ref())
-                    .await?
-                    .next()
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No address"));
+                let res = lookup_host(host.as_ref()).await.and_then(|mut res| {
+                    res.next()
+                        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No address"))
+                });
 
                 match &res {
                     Ok(addr) => {
@@ -76,7 +76,7 @@ impl InternetAddr {
                     }
                     Err(_) => {
                         let mut store = RESOLVED_SOCKET_ADDR.lock().unwrap();
-                        if let Some(addr) = store.get(host) {
+                        if let Some(addr) = store.get(host.as_ref()) {
                             return Ok(*addr);
                         }
                     }
