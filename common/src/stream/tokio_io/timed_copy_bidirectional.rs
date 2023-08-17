@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    io,
+    time::{Duration, Instant},
+};
 
 use async_speed_limit::Limiter;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -36,11 +39,21 @@ where
             io_result: Ok(()),
             end,
         },
-        Err(e) => TimedCopyBidirectionalResult {
-            amounts: e.amounts,
-            io_result: Err(e.kind),
-            end,
-        },
+        Err(e) => {
+            let io_error = match &e.kind {
+                CopyBiErrorKind::FromAToB(e) => e,
+                CopyBiErrorKind::FromBToA(e) => e,
+            };
+            let end = match io_error.kind() {
+                io::ErrorKind::TimedOut => end - TIMEOUT,
+                _ => end,
+            };
+            TimedCopyBidirectionalResult {
+                amounts: e.amounts,
+                io_result: Err(e.kind),
+                end,
+            }
+        }
     }
 }
 
