@@ -10,7 +10,7 @@ use common::{
     loading,
     stream::{
         addr::{StreamAddr, StreamType},
-        copy_bidirectional_with_payload_crypto,
+        copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         pool::Pool,
         proxy_table::StreamProxyTable,
         streams::{tcp::TcpServer, xor::XorStream},
@@ -31,10 +31,7 @@ use tokio::{
 };
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::stream::{
-    get_metrics_from_copy_result,
-    proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder},
-};
+use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -347,6 +344,8 @@ async fn upgrade(
         }
     };
 
+    let start = Instant::now();
+
     // Proxy
     if let Some(http_connect) = http_connect {
         match http_connect.proxy(upgraded, addr).await {
@@ -381,12 +380,25 @@ async fn upgrade(
             return;
         }
     };
-    match tokio_io::timed_copy_bidirectional(upgraded, upstream, speed_limiter).await {
-        Ok(metrics) => {
-            info!(?addr, ?sock_addr, ?metrics, "Direct CONNECT finished");
+    let res = tokio_io::timed_copy_bidirectional(upgraded, upstream, speed_limiter).await;
+
+    let (metrics, res) = get_metrics_from_copy_result(
+        start,
+        StreamAddr {
+            stream_type: StreamType::Tcp,
+            address: addr,
+        },
+        sock_addr,
+        None,
+        res,
+    );
+
+    match res {
+        Ok(()) => {
+            info!(%metrics, "Direct CONNECT finished");
         }
         Err(e) => {
-            info!(?e, ?addr, ?sock_addr, "Direct CONNECT error");
+            info!(?e, %metrics, "Direct CONNECT error");
         }
     }
 }

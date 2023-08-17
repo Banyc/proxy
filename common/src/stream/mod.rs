@@ -1,4 +1,4 @@
-use std::{fmt::Display, io, net::SocketAddr, ops::DerefMut, pin::Pin};
+use std::{fmt::Display, io, net::SocketAddr, ops::DerefMut, pin::Pin, time::Instant};
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
@@ -213,7 +213,7 @@ pub async fn copy_bidirectional_with_payload_crypto<DS, US>(
     upstream: US,
     payload_crypto: Option<&XorCrypto>,
     speed_limiter: Limiter,
-) -> Result<(u64, u64), tokio_io::CopyBiError>
+) -> tokio_io::TimedCopyBidirectionalResult
 where
     US: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     DS: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -226,4 +226,26 @@ where
         }
         None => tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await,
     }
+}
+
+pub fn get_metrics_from_copy_result(
+    start: Instant,
+    upstream_addr: StreamAddr,
+    upstream_sock_addr: SocketAddr,
+    downstream_addr: Option<SocketAddr>,
+    result: tokio_io::TimedCopyBidirectionalResult,
+) -> (StreamMetrics, Result<(), tokio_io::CopyBiErrorKind>) {
+    let (bytes_uplink, bytes_downlink) = result.amounts;
+
+    let metrics = StreamMetrics {
+        start,
+        end: result.end,
+        bytes_uplink,
+        bytes_downlink,
+        upstream_addr,
+        upstream_sock_addr,
+        downstream_addr,
+    };
+
+    (metrics, result.io_result)
 }

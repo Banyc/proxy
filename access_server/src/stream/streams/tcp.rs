@@ -7,7 +7,7 @@ use common::{
     loading,
     stream::{
         addr::{StreamAddr, StreamAddrBuilder},
-        copy_bidirectional_with_payload_crypto,
+        copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         pool::Pool,
         proxy_table::StreamProxyTable,
         streams::tcp::TcpServer,
@@ -20,10 +20,7 @@ use thiserror::Error;
 use tokio::net::ToSocketAddrs;
 use tracing::{error, info, instrument, warn};
 
-use crate::stream::{
-    get_metrics_from_copy_result,
-    proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder},
-};
+use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -1,9 +1,9 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_speed_limit::Limiter;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::{copy_bidirectional, CopyBiError, TimeoutStreamShared};
+use super::{copy_bidirectional, CopyBiErrorKind, TimeoutStreamShared};
 
 const TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -11,7 +11,7 @@ pub async fn timed_copy_bidirectional<A, B>(
     a: A,
     b: B,
     speed_limiter: Limiter,
-) -> Result<(u64, u64), CopyBiError>
+) -> TimedCopyBidirectionalResult
 where
     A: AsyncRead + AsyncWrite + Send + 'static,
     B: AsyncRead + AsyncWrite + Send + 'static,
@@ -27,7 +27,27 @@ where
     let mut a = Box::pin(a);
     let mut b = Box::pin(b);
 
-    copy_bidirectional(&mut a, &mut b).await
+    let res = copy_bidirectional(&mut a, &mut b).await;
+
+    let end = Instant::now();
+    match res {
+        Ok(amounts) => TimedCopyBidirectionalResult {
+            amounts,
+            io_result: Ok(()),
+            end,
+        },
+        Err(e) => TimedCopyBidirectionalResult {
+            amounts: e.amounts,
+            io_result: Err(e.kind),
+            end,
+        },
+    }
+}
+
+pub struct TimedCopyBidirectionalResult {
+    pub amounts: (u64, u64),
+    pub io_result: Result<(), CopyBiErrorKind>,
+    pub end: Instant,
 }
 
 #[cfg(test)]
@@ -116,10 +136,10 @@ Morbi vitae eleifend dui. Vestibulum lobortis commodo pellentesque. Suspendisse 
                         }
                     }
                 });
-                let (_a_to_b, _b_to_a) =
-                    timed_copy_bidirectional(a_2, b_2, Limiter::new(f64::INFINITY))
-                        .await
-                        .unwrap();
+                timed_copy_bidirectional(a_2, b_2, Limiter::new(f64::INFINITY))
+                    .await
+                    .io_result
+                    .unwrap();
                 while let Some(res) = join_set.join_next().await {
                     res.unwrap();
                 }

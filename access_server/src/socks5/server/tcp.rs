@@ -10,7 +10,7 @@ use common::{
     loading::{self, Hook},
     stream::{
         addr::{StreamAddr, StreamType},
-        copy_bidirectional_with_payload_crypto,
+        copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         pool::Pool,
         proxy_table::StreamProxyTable,
         streams::tcp::TcpServer,
@@ -31,10 +31,7 @@ use crate::{
         Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,
         RelayResponse, Reply,
     },
-    stream::{
-        get_metrics_from_copy_result,
-        proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder},
-    },
+    stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,19 +219,32 @@ impl Socks5ServerTcpAccess {
                 downstream,
                 upstream,
                 upstream_addr,
+                upstream_sock_addr,
             } => {
-                match tokio_io::timed_copy_bidirectional(
+                let res = tokio_io::timed_copy_bidirectional(
                     downstream,
                     upstream,
                     self.speed_limiter.clone(),
                 )
-                .await
-                {
-                    Ok(metrics) => {
-                        info!(%upstream_addr, ?metrics, "Direct finished");
+                .await;
+
+                let (metrics, res) = get_metrics_from_copy_result(
+                    start,
+                    StreamAddr {
+                        stream_type: StreamType::Tcp,
+                        address: upstream_addr,
+                    },
+                    upstream_sock_addr,
+                    None,
+                    res,
+                );
+
+                match res {
+                    Ok(()) => {
+                        info!(%metrics, "Direct finished");
                     }
                     Err(e) => {
-                        info!(?e, %upstream_addr, "Direct error");
+                        info!(?e, %metrics, "Direct error");
                     }
                 }
                 return Ok(None);
@@ -349,6 +359,7 @@ impl Socks5ServerTcpAccess {
                 downstream: stream,
                 upstream,
                 upstream_addr: relay_request.destination,
+                upstream_sock_addr: sock_addr,
             });
         }
 
@@ -499,6 +510,7 @@ pub enum EstablishResult<S> {
         downstream: S,
         upstream: tokio::net::TcpStream,
         upstream_addr: InternetAddr,
+        upstream_sock_addr: SocketAddr,
     },
     Udp {
         downstream: S,

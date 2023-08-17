@@ -13,11 +13,10 @@ use common::{
     stream::{
         addr::StreamAddr,
         connect::{connect_with_pool, ConnectError},
-        copy_bidirectional_with_payload_crypto,
+        copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         header::StreamRequestHeader,
         pool::{Pool, PoolBuilder},
-        tokio_io, CreatedStream, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics,
-        StreamServerHook,
+        tokio_io, CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };
 use serde::Deserialize;
@@ -112,28 +111,18 @@ impl StreamProxy {
             Limiter::new(f64::INFINITY),
         )
         .await;
-        let end = std::time::Instant::now();
-        let (bytes_uplink, bytes_downlink) = res.map_err(|e| StreamProxyServerError::IoCopy {
-            source: e,
-            metrics: FailedStreamMetrics {
-                start,
-                end,
-                upstream_addr: upstream_addr.clone(),
-                upstream_sock_addr,
-                downstream_addr: Some(downstream_addr),
-            },
-        })?;
 
-        let metrics = StreamMetrics {
+        let (metrics, res) = get_metrics_from_copy_result(
             start,
-            end,
-            bytes_uplink,
-            bytes_downlink,
             upstream_addr,
             upstream_sock_addr,
-            downstream_addr: Some(downstream_addr),
-        };
-        Ok(Some(metrics))
+            Some(downstream_addr),
+            res,
+        );
+        match res {
+            Ok(()) => Ok(Some(metrics)),
+            Err(e) => Err(StreamProxyServerError::IoCopy { source: e, metrics }),
+        }
     }
 
     // #[instrument(skip(self, e))]
@@ -308,8 +297,8 @@ pub enum StreamProxyServerError {
     #[error("Failed to copy data between streams")]
     IoCopy {
         #[source]
-        source: tokio_io::CopyBiError,
-        metrics: FailedStreamMetrics,
+        source: tokio_io::CopyBiErrorKind,
+        metrics: StreamMetrics,
     },
 }
 
