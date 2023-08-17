@@ -11,7 +11,7 @@ use common::{
         pool::Pool,
         proxy_table::StreamProxyTable,
         streams::tcp::TcpServer,
-        tokio_io, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics, StreamServerHook,
+        tokio_io, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };
 use proxy_client::stream::{establish, StreamEstablishError};
@@ -20,7 +20,10 @@ use thiserror::Error;
 use tokio::net::ToSocketAddrs;
 use tracing::{error, info, instrument, warn};
 
-use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder};
+use crate::stream::{
+    get_metrics_from_copy_result,
+    proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -154,28 +157,18 @@ impl TcpAccess {
             self.speed_limiter.clone(),
         )
         .await;
-        let end = std::time::Instant::now();
-        let (bytes_uplink, bytes_downlink) = res.map_err(|e| ProxyError::IoCopy {
-            source: e,
-            metrics: FailedStreamMetrics {
-                start,
-                end,
-                upstream_addr: upstream_addr.clone(),
-                upstream_sock_addr,
-                downstream_addr: Some(downstream_addr),
-            },
-        })?;
 
-        let metrics = StreamMetrics {
+        let (metrics, res) = get_metrics_from_copy_result(
             start,
-            end,
-            bytes_uplink,
-            bytes_downlink,
             upstream_addr,
             upstream_sock_addr,
-            downstream_addr: Some(downstream_addr),
-        };
-        Ok(metrics)
+            Some(downstream_addr),
+            res,
+        );
+        match res {
+            Ok(()) => Ok(metrics),
+            Err(e) => Err(ProxyError::IoCopy { source: e, metrics }),
+        }
     }
 }
 
@@ -188,8 +181,8 @@ pub enum ProxyError {
     #[error("Failed to copy data between streams")]
     IoCopy {
         #[source]
-        source: tokio_io::CopyBiError,
-        metrics: FailedStreamMetrics,
+        source: tokio_io::CopyBiErrorKind,
+        metrics: StreamMetrics,
     },
 }
 

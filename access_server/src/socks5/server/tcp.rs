@@ -14,8 +14,7 @@ use common::{
         pool::Pool,
         proxy_table::StreamProxyTable,
         streams::tcp::TcpServer,
-        tokio_io, CreatedStream, FailedStreamMetrics, IoAddr, IoStream, StreamMetrics,
-        StreamServerHook,
+        tokio_io, CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };
 use proxy_client::stream::StreamEstablishError;
@@ -32,7 +31,10 @@ use crate::{
         Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,
         RelayResponse, Reply,
     },
-    stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder},
+    stream::{
+        get_metrics_from_copy_result,
+        proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder},
+    },
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -257,28 +259,18 @@ impl Socks5ServerTcpAccess {
             self.speed_limiter.clone(),
         )
         .await;
-        let end = std::time::Instant::now();
-        let (bytes_uplink, bytes_downlink) = res.map_err(|e| ProxyError::IoCopy {
-            source: e,
-            metrics: FailedStreamMetrics {
-                start,
-                end,
-                upstream_addr: upstream_addr.clone(),
-                upstream_sock_addr,
-                downstream_addr: Some(downstream_addr),
-            },
-        })?;
 
-        let metrics = StreamMetrics {
+        let (metrics, res) = get_metrics_from_copy_result(
             start,
-            end,
-            bytes_uplink,
-            bytes_downlink,
             upstream_addr,
             upstream_sock_addr,
-            downstream_addr: Some(downstream_addr),
-        };
-        Ok(Some(metrics))
+            Some(downstream_addr),
+            res,
+        );
+        match res {
+            Ok(()) => Ok(Some(metrics)),
+            Err(e) => Err(ProxyError::IoCopy { source: e, metrics }),
+        }
     }
 
     async fn establish<S>(&self, stream: S) -> Result<EstablishResult<S>, EstablishError>
@@ -547,7 +539,7 @@ pub enum ProxyError {
     #[error("Failed to copy data between streams")]
     IoCopy {
         #[source]
-        source: tokio_io::CopyBiError,
-        metrics: FailedStreamMetrics,
+        source: tokio_io::CopyBiErrorKind,
+        metrics: StreamMetrics,
     },
 }

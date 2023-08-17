@@ -14,8 +14,8 @@ use common::{
         pool::Pool,
         proxy_table::StreamProxyTable,
         streams::{tcp::TcpServer, xor::XorStream},
-        tokio_io, FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamMetrics,
-        StreamServerHook, TunnelMetrics,
+        tokio_io, FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamServerHook,
+        TunnelMetrics,
     },
 };
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
@@ -31,7 +31,10 @@ use tokio::{
 };
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder};
+use crate::stream::{
+    get_metrics_from_copy_result,
+    proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -462,34 +465,17 @@ impl HttpConnect {
             self.speed_limiter.clone(),
         )
         .await;
-        let end = Instant::now();
-        let (from_client, from_server) = res.map_err(|e| HttpConnectError::IoCopy {
-            source: e,
-            metrics: FailedTunnelMetrics {
-                stream: FailedStreamMetrics {
-                    start,
-                    end,
-                    upstream_addr: upstream_addr.clone(),
-                    upstream_sock_addr,
-                    downstream_addr: None,
-                },
-                destination: address.clone(),
-            },
-        })?;
 
+        let (metrics, res) =
+            get_metrics_from_copy_result(start, upstream_addr, upstream_sock_addr, None, res);
         let metrics = TunnelMetrics {
-            stream: StreamMetrics {
-                start,
-                end,
-                bytes_uplink: from_client,
-                bytes_downlink: from_server,
-                upstream_addr,
-                upstream_sock_addr,
-                downstream_addr: None,
-            },
+            stream: metrics,
             destination: address,
         };
-        Ok(metrics)
+        match res {
+            Ok(()) => Ok(metrics),
+            Err(e) => Err(HttpConnectError::IoCopy { source: e, metrics }),
+        }
     }
 }
 
@@ -500,8 +486,8 @@ pub enum HttpConnectError {
     #[error("Failed to copy data between streams")]
     IoCopy {
         #[source]
-        source: tokio_io::CopyBiError,
-        metrics: FailedTunnelMetrics,
+        source: tokio_io::CopyBiErrorKind,
+        metrics: TunnelMetrics,
     },
 }
 
