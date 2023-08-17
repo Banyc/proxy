@@ -14,8 +14,8 @@ use common::{
         pool::Pool,
         proxy_table::StreamProxyTable,
         streams::{tcp::TcpServer, xor::XorStream},
-        tokio_io, FailedStreamMetrics, FailedTunnelMetrics, IoStream, StreamServerHook,
-        TunnelMetrics,
+        tokio_io, IoStream, SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics,
+        StreamProxyMetrics, StreamServerHook,
     },
 };
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
@@ -230,8 +230,8 @@ impl HttpAccess {
         };
 
         let end = std::time::Instant::now();
-        let metrics = FailedTunnelMetrics {
-            stream: FailedStreamMetrics {
+        let metrics = SimplifiedStreamProxyMetrics {
+            stream: SimplifiedStreamMetrics {
                 start,
                 end,
                 upstream_addr,
@@ -457,7 +457,7 @@ impl HttpConnect {
         &self,
         upgraded: Upgraded,
         address: InternetAddr,
-    ) -> Result<TunnelMetrics, HttpConnectError> {
+    ) -> Result<StreamProxyMetrics, HttpConnectError> {
         let start = Instant::now();
 
         // Establish proxy chain
@@ -480,7 +480,7 @@ impl HttpConnect {
 
         let (metrics, res) =
             get_metrics_from_copy_result(start, upstream_addr, upstream_sock_addr, None, res);
-        let metrics = TunnelMetrics {
+        let metrics = StreamProxyMetrics {
             stream: metrics,
             destination: address,
         };
@@ -499,7 +499,7 @@ pub enum HttpConnectError {
     IoCopy {
         #[source]
         source: tokio_io::CopyBiErrorKind,
-        metrics: TunnelMetrics,
+        metrics: StreamProxyMetrics,
     },
 }
 

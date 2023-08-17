@@ -49,7 +49,7 @@ pub struct StreamMetrics {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FailedStreamMetrics {
+pub struct SimplifiedStreamMetrics {
     pub start: std::time::Instant,
     pub end: std::time::Instant,
     pub upstream_addr: StreamAddr,
@@ -58,14 +58,14 @@ pub struct FailedStreamMetrics {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TunnelMetrics {
+pub struct StreamProxyMetrics {
     pub stream: StreamMetrics,
     pub destination: InternetAddr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FailedTunnelMetrics {
-    pub stream: FailedStreamMetrics,
+pub struct SimplifiedStreamProxyMetrics {
+    pub stream: SimplifiedStreamMetrics,
     pub destination: InternetAddr,
 }
 
@@ -98,7 +98,7 @@ impl Display for StreamMetrics {
     }
 }
 
-impl Display for FailedStreamMetrics {
+impl Display for SimplifiedStreamMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let duration = self.end - self.start;
         let duration = duration.as_secs_f64();
@@ -116,7 +116,7 @@ impl Display for FailedStreamMetrics {
     }
 }
 
-impl Display for TunnelMetrics {
+impl Display for StreamProxyMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.stream.to_string())?;
         write!(f, ",dt:{}", self.destination)?;
@@ -124,7 +124,7 @@ impl Display for TunnelMetrics {
     }
 }
 
-impl Display for FailedTunnelMetrics {
+impl Display for SimplifiedStreamProxyMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.stream.to_string())?;
         write!(f, ",dt:{}", self.destination)?;

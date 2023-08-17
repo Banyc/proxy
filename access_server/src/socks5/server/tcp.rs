@@ -14,7 +14,7 @@ use common::{
         pool::Pool,
         proxy_table::StreamProxyTable,
         streams::tcp::TcpServer,
-        tokio_io, CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook,
+        tokio_io, CreatedStream, IoAddr, IoStream, StreamProxyMetrics, StreamServerHook,
     },
 };
 use proxy_client::stream::StreamEstablishError;
@@ -200,7 +200,7 @@ impl Socks5ServerTcpAccess {
         }
     }
 
-    async fn proxy<S>(&self, downstream: S) -> Result<Option<StreamMetrics>, ProxyError>
+    async fn proxy<S>(&self, downstream: S) -> Result<Option<StreamProxyMetrics>, ProxyError>
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
@@ -209,8 +209,12 @@ impl Socks5ServerTcpAccess {
         let downstream_addr = downstream.peer_addr().map_err(ProxyError::DownstreamAddr)?;
 
         let res = self.establish(downstream).await?;
-        let (downstream, (upstream, upstream_addr, upstream_sock_addr), payload_crypto) = match res
-        {
+        let (
+            destination,
+            downstream,
+            (upstream, upstream_addr, upstream_sock_addr),
+            payload_crypto,
+        ) = match res {
             EstablishResult::Blocked { destination } => {
                 trace!(?destination, "Blocked");
                 return Ok(None);
@@ -256,10 +260,11 @@ impl Socks5ServerTcpAccess {
                 return Ok(None);
             }
             EstablishResult::Proxy {
+                destination,
                 downstream,
                 upstream,
                 payload_crypto,
-            } => (downstream, upstream, payload_crypto),
+            } => (destination, downstream, upstream, payload_crypto),
         };
 
         let res = copy_bidirectional_with_payload_crypto(
@@ -277,6 +282,11 @@ impl Socks5ServerTcpAccess {
             Some(downstream_addr),
             res,
         );
+        let metrics = StreamProxyMetrics {
+            stream: metrics,
+            destination,
+        };
+
         match res {
             Ok(()) => Ok(Some(metrics)),
             Err(e) => Err(ProxyError::IoCopy { source: e, metrics }),
@@ -363,24 +373,27 @@ impl Socks5ServerTcpAccess {
             });
         }
 
-        let (upstream, payload_crypto) =
-            match self.establish_proxy_chain(relay_request.destination).await {
-                Ok(res) => res,
-                Err(e) => {
-                    let relay_response = RelayResponse {
-                        reply: Reply::GeneralSocksServerFailure,
-                        bind: InternetAddr::zero_ipv4_addr(),
-                    };
-                    relay_response.encode(&mut stream).await?;
-                    return Err(e.into());
-                }
-            };
+        let (upstream, payload_crypto) = match self
+            .establish_proxy_chain(relay_request.destination.clone())
+            .await
+        {
+            Ok(res) => res,
+            Err(e) => {
+                let relay_response = RelayResponse {
+                    reply: Reply::GeneralSocksServerFailure,
+                    bind: InternetAddr::zero_ipv4_addr(),
+                };
+                relay_response.encode(&mut stream).await?;
+                return Err(e.into());
+            }
+        };
         let relay_response = RelayResponse {
             reply: Reply::Succeeded,
             bind: InternetAddr::zero_ipv4_addr(),
         };
         relay_response.encode(&mut stream).await?;
         Ok(EstablishResult::Proxy {
+            destination: relay_request.destination,
             downstream: stream,
             upstream,
             payload_crypto,
@@ -516,6 +529,7 @@ pub enum EstablishResult<S> {
         downstream: S,
     },
     Proxy {
+        destination: InternetAddr,
         downstream: S,
         upstream: (CreatedStream, StreamAddr, SocketAddr),
         payload_crypto: Option<XorCrypto>,
@@ -552,6 +566,6 @@ pub enum ProxyError {
     IoCopy {
         #[source]
         source: tokio_io::CopyBiErrorKind,
-        metrics: StreamMetrics,
+        metrics: StreamProxyMetrics,
     },
 }
