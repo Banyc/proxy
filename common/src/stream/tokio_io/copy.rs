@@ -114,6 +114,10 @@ impl CopyBuffer {
             }
         }
     }
+
+    pub(super) fn amt(&self) -> u64 {
+        self.amt
+    }
 }
 
 /// A future that asynchronously copies the entire contents of a reader into a

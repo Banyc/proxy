@@ -83,15 +83,39 @@ where
             b_to_a,
         } = &mut *self;
 
-        let a_to_b =
-            transfer_one_direction(cx, a_to_b, &mut *a, &mut *b).map_err(CopyBiError::FromAToB)?;
-        let b_to_a =
-            transfer_one_direction(cx, b_to_a, &mut *b, &mut *a).map_err(CopyBiError::FromBToA)?;
+        let get_amounts = |a_to_b: &TransferState, b_to_a: &TransferState| -> (u64, u64) {
+            let a_to_b = match a_to_b {
+                TransferState::Running(state) => state.amt(),
+                TransferState::ShuttingDown(amt) => *amt,
+                TransferState::Done(amt) => *amt,
+            };
+            let b_to_a = match b_to_a {
+                TransferState::Running(state) => state.amt(),
+                TransferState::ShuttingDown(amt) => *amt,
+                TransferState::Done(amt) => *amt,
+            };
+            (a_to_b, b_to_a)
+        };
+
+        let a_to_b_poll = transfer_one_direction(cx, a_to_b, &mut *a, &mut *b).map_err(|e| {
+            let amounts = get_amounts(a_to_b, b_to_a);
+            CopyBiError {
+                kind: CopyBiErrorKind::FromAToB(e),
+                amounts,
+            }
+        })?;
+        let b_to_a_poll = transfer_one_direction(cx, b_to_a, &mut *b, &mut *a).map_err(|e| {
+            let amounts = get_amounts(a_to_b, b_to_a);
+            CopyBiError {
+                kind: CopyBiErrorKind::FromBToA(e),
+                amounts,
+            }
+        })?;
 
         // It is not a problem if ready! returns early because transfer_one_direction for the
         // other direction will keep returning TransferState::Done(count) in future calls to poll
-        let a_to_b = ready!(a_to_b);
-        let b_to_a = ready!(b_to_a);
+        let a_to_b = ready!(a_to_b_poll);
+        let b_to_a = ready!(b_to_a_poll);
 
         Poll::Ready(Ok((a_to_b, b_to_a)))
     }
@@ -139,9 +163,16 @@ where
 }
 
 #[derive(Debug, Error)]
-pub enum CopyBiError {
-    #[error("error copying from A to B")]
+#[error("{}", kind)]
+pub struct CopyBiError {
+    pub kind: CopyBiErrorKind,
+    pub amounts: (u64, u64),
+}
+
+#[derive(Debug, Error)]
+pub enum CopyBiErrorKind {
+    #[error("error copying from A to B: {0}")]
     FromAToB(std::io::Error),
-    #[error("error copying from B to A")]
+    #[error("error copying from B to A: {0}")]
     FromBToA(std::io::Error),
 }
