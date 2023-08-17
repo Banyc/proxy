@@ -7,5 +7,6 @@ pub mod filter;
 pub mod header;
 pub mod loading;
 pub mod proxy_table;
+pub mod sampling;
 pub mod stream;
 pub mod udp;
