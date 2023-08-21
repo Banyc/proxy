@@ -7,7 +7,7 @@ use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::{
     crypto::{XorCrypto, XorCryptoCursor},
@@ -104,6 +104,7 @@ where
         }
     });
     join_set.spawn({
+        let flow = flow.clone();
         let last_downlink_packet = Arc::clone(&last_downlink_packet);
         let bytes_downlink = Arc::clone(&bytes_downlink);
         let packets_downlink = Arc::clone(&packets_downlink);
@@ -119,6 +120,15 @@ where
 
                 // Limit speed
                 speed_limiter.consume(pkt.len()).await;
+
+                if n == BUFFER_LENGTH {
+                    warn!(
+                        ?flow,
+                        ?n,
+                        "Received downlink packet of size may be too large"
+                    );
+                    continue;
+                }
 
                 // Xor payload
                 if let Some(payload_crypto) = &payload_crypto {

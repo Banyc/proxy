@@ -138,7 +138,7 @@ where
                     };
                     warned = false;
                     if n == buf.len() {
-                        warn!(?addr, ?n, "Received packet of size may be too large");
+                        warn!(?addr, ?n, "Received uplink packet of size may be too large");
                         continue;
                     }
 
