@@ -8,13 +8,13 @@ edition = "2021"
 [dependencies]
 access_server = { path = "../access_server" }
 async-trait = "0.1.73"
-clap = { version = "4.3.21", features = ["derive"] }
+clap = { version = "4.4.2", features = ["derive"] }
 common = { path = "../common" }
 file_watcher_tokio = "0.2.0"
-notify = "6.0.1"
+notify = "6.1.1"
 proxy_server = { path = "../proxy_server" }
-serde = { version = "1.0.183", features = ["derive"] }
-thiserror = "1.0.47"
+serde = { version = "1.0.188", features = ["derive"] }
+thiserror = "1.0.48"
 tokio = { version = "1.32.0", features = ["full"] }
 toml = "0.7.6"
 tracing = "0.1.37"
