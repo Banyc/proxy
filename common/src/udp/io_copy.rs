@@ -189,12 +189,12 @@ where
 
                 if now.duration_since(last_uplink_packet) > TIMEOUT && now.duration_since(last_downlink_packet) > TIMEOUT {
                     trace!(?flow, "Flow timed out");
+                    join_set.abort_all();
                     break;
                 }
             }
         }
     }
-    join_set.abort_all();
 
     let last_packet = std::time::Instant::max(
         *last_downlink_packet.read().unwrap(),
