@@ -38,17 +38,19 @@ pub fn convert_proxies_to_header_crypto_pairs<A>(
     destination: Option<A>,
 ) -> Vec<(RouteRequest<A>, &XorCrypto)>
 where
-    A: Clone,
+    A: Clone + Sync + Send,
 {
-    let mut pairs = Vec::new();
-    for i in 0..nodes.len() - 1 {
-        let node = &nodes[i];
-        let next_node = &nodes[i + 1];
-        let route_req = RouteRequest {
-            upstream: Some(next_node.address.clone()),
-        };
-        pairs.push((route_req, &node.crypto));
-    }
+    let mut pairs = (0..nodes.len() - 1)
+        .into_par_iter()
+        .map(|i| {
+            let node = &nodes[i];
+            let next_node = &nodes[i + 1];
+            let route_req = RouteRequest {
+                upstream: Some(next_node.address.clone()),
+            };
+            (route_req, &node.crypto)
+        })
+        .collect::<Vec<_>>();
     let route_req = RouteRequest {
         upstream: destination,
     };
