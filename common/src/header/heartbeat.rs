@@ -6,13 +6,15 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::crypto::{XorCrypto, XorCryptoCursor};
 
-use super::codec::{read_header_async, write_header_async, CodecError};
+use super::codec::{read_header_async, write_header_async, CodecError, Header};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HeartbeatRequest {
     Noop,
     Upgrade,
 }
+
+impl Header for HeartbeatRequest {}
 
 pub async fn send_noop<S>(stream: &mut S, timeout: Duration) -> Result<(), HeartbeatError>
 where

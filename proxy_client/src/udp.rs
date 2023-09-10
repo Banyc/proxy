@@ -96,7 +96,7 @@ impl UdpProxyClient {
         for (header, crypto) in &pairs {
             trace!(?header, "Writing header to buffer");
             let mut crypto_cursor = XorCryptoCursor::new(crypto);
-            write_header(&mut writer, &header, &mut crypto_cursor).unwrap();
+            write_header(&mut writer, header, &mut crypto_cursor).unwrap();
         }
 
         // Return stream
@@ -330,7 +330,7 @@ pub async fn trace_rtt(proxies: &UdpProxyChain) -> Result<Duration, TraceError> 
     let mut writer = io::Cursor::new(&mut buf);
     for (header, crypto) in &pairs {
         let mut crypto_cursor = XorCryptoCursor::new(crypto);
-        write_header(&mut writer, &header, &mut crypto_cursor).unwrap();
+        write_header(&mut writer, header, &mut crypto_cursor).unwrap();
     }
 
     let start = Instant::now();

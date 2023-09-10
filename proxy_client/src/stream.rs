@@ -62,7 +62,7 @@ pub async fn establish(
                 upstream_addr: addr.clone(),
             })?;
         let mut crypto_cursor = XorCryptoCursor::new(crypto);
-        timed_write_header_async(&mut stream, &header, &mut crypto_cursor, IO_TIMEOUT)
+        timed_write_header_async(&mut stream, header, &mut crypto_cursor, IO_TIMEOUT)
             .await
             .map_err(|e| StreamEstablishError::WriteStreamRequestHeader {
                 source: e,
@@ -161,7 +161,7 @@ pub async fn trace_rtt(
     for (header, crypto) in &pairs {
         heartbeat::send_upgrade(&mut stream, IO_TIMEOUT).await?;
         let mut crypto_cursor = XorCryptoCursor::new(crypto);
-        timed_write_header_async(&mut stream, &header, &mut crypto_cursor, IO_TIMEOUT).await?;
+        timed_write_header_async(&mut stream, header, &mut crypto_cursor, IO_TIMEOUT).await?;
     }
 
     // Read response

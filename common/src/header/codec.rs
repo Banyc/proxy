@@ -13,6 +13,8 @@ use crate::crypto::XorCryptoCursor;
 
 pub const MAX_HEADER_LEN: usize = 1024;
 
+pub trait Header {}
+
 #[duplicate_item(
     read_header         async   reader_bounds       add_await(code) ;
     [read_header]       []      [Read]              [code]          ;
@@ -25,7 +27,7 @@ pub async fn read_header<'crypto, R, H>(
 ) -> Result<H, CodecError>
 where
     R: reader_bounds,
-    H: for<'de> Deserialize<'de> + std::fmt::Debug,
+    H: for<'de> Deserialize<'de> + std::fmt::Debug + Header,
 {
     // Decode header length
     let len = {
@@ -70,7 +72,7 @@ pub async fn write_header<'crypto, W, H>(
 ) -> Result<(), CodecError>
 where
     W: writer_bounds,
-    H: Serialize + std::fmt::Debug,
+    H: Serialize + std::fmt::Debug + Header,
 {
     let mut buf = [0; MAX_HEADER_LEN];
     let mut hdr_wtr = io::Cursor::new(&mut buf[..]);
@@ -104,7 +106,7 @@ pub async fn timed_read_header_async<'crypto, R, H>(
 ) -> Result<H, CodecError>
 where
     R: AsyncRead + Unpin,
-    H: for<'de> Deserialize<'de> + std::fmt::Debug,
+    H: for<'de> Deserialize<'de> + std::fmt::Debug + Header,
 {
     let res = tokio::time::timeout(timeout, read_header_async(reader, crypto)).await;
     match res {
@@ -124,7 +126,7 @@ pub async fn timed_write_header_async<'crypto, W, H>(
 ) -> Result<(), CodecError>
 where
     W: AsyncWrite + Unpin,
-    H: Serialize + std::fmt::Debug,
+    H: Serialize + std::fmt::Debug + Header,
 {
     let res = tokio::time::timeout(timeout, write_header_async(writer, header, crypto)).await;
     match res {
