@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, num::NonZeroU8};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -140,14 +140,14 @@ impl UsernamePasswordResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsernamePasswordStatus {
     Success,
-    Failure(u8),
+    Failure(NonZeroU8),
 }
 
 impl From<u8> for UsernamePasswordStatus {
     fn from(status: u8) -> Self {
         match status {
             0x0 => UsernamePasswordStatus::Success,
-            _ => UsernamePasswordStatus::Failure(status),
+            _ => UsernamePasswordStatus::Failure(NonZeroU8::new(status).unwrap()),
         }
     }
 }
@@ -156,7 +156,7 @@ impl From<UsernamePasswordStatus> for u8 {
     fn from(status: UsernamePasswordStatus) -> Self {
         match status {
             UsernamePasswordStatus::Success => 0x0,
-            UsernamePasswordStatus::Failure(status) => status,
+            UsernamePasswordStatus::Failure(status) => status.get(),
         }
     }
 }
@@ -211,7 +211,7 @@ mod tests {
     #[tokio::test]
     async fn username_password_response_failure() {
         let expected = UsernamePasswordResponse {
-            status: UsernamePasswordStatus::Failure(1),
+            status: UsernamePasswordStatus::Failure(NonZeroU8::new(1).unwrap()),
         };
         let mut wtr = io::Cursor::new(Vec::new());
         expected.encode(&mut wtr).await.unwrap();
@@ -219,7 +219,7 @@ mod tests {
             wtr.get_ref(),
             &[
                 USERNAME_PASSWORD_VERSION,
-                UsernamePasswordStatus::Failure(1).into(),
+                UsernamePasswordStatus::Failure(NonZeroU8::new(1).unwrap()).into(),
             ]
         );
         let mut rdr = io::Cursor::new(wtr.into_inner());

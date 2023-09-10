@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, io, net::SocketAddr, num::NonZeroU8, sync::Arc};
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
@@ -463,7 +463,7 @@ impl Socks5ServerTcpAccess {
             Some(password) => password,
             None => {
                 let response = UsernamePasswordResponse {
-                    status: UsernamePasswordStatus::Failure(1),
+                    status: UsernamePasswordStatus::Failure(NonZeroU8::new(1).unwrap()),
                 };
                 response.encode(&mut stream).await?;
                 return Err(io::Error::new(
@@ -477,7 +477,7 @@ impl Socks5ServerTcpAccess {
         };
         if request.password() != password.as_ref() {
             let response = UsernamePasswordResponse {
-                status: UsernamePasswordStatus::Failure(2),
+                status: UsernamePasswordStatus::Failure(NonZeroU8::new(2).unwrap()),
             };
             response.encode(&mut stream).await?;
             return Err(io::Error::new(
