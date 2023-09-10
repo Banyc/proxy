@@ -3,6 +3,7 @@ use std::{io, net::SocketAddr, time::Duration};
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use common::{
+    addr::ParseInternetAddrError,
     crypto::{XorCrypto, XorCryptoBuildError, XorCryptoBuilder, XorCryptoCursor},
     header::{
         codec::{timed_read_header_async, timed_write_header_async, CodecError},
@@ -47,7 +48,7 @@ impl StreamProxyBuilder {
             Some(key) => Some(key.build().map_err(StreamProxyBuildError::PayloadCrypto)?),
             None => None,
         };
-        let stream_pool = self.stream_pool.build();
+        let stream_pool = self.stream_pool.build()?;
         Ok(StreamProxy::new(header_crypto, payload_crypto, stream_pool))
     }
 }
@@ -58,6 +59,8 @@ pub enum StreamProxyBuildError {
     HeaderCrypto(#[source] XorCryptoBuildError),
     #[error("PayloadCrypto: {0}")]
     PayloadCrypto(#[source] XorCryptoBuildError),
+    #[error("Stream pool: {0}")]
+    StreamPool(#[from] ParseInternetAddrError),
 }
 
 #[derive(Debug)]

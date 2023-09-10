@@ -12,7 +12,7 @@ use tokio::sync::RwLock as TokioRwLock;
 use tracing::warn;
 
 use crate::{
-    addr::InternetAddr,
+    addr::{InternetAddr, ParseInternetAddrError},
     header::heartbeat::{send_noop, HeartbeatError},
     stream::CreatedStream,
 };
@@ -33,12 +33,16 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 pub struct PoolBuilder(pub Option<Vec<StreamAddrBuilder>>);
 
 impl PoolBuilder {
-    pub fn build(self) -> Pool {
+    pub fn build(self) -> Result<Pool, ParseInternetAddrError> {
         let pool = Pool::new();
         if let Some(addrs) = self.0 {
-            pool.add_many_queues(addrs.into_iter().map(|v| v.build()));
+            let addresses = addrs
+                .into_iter()
+                .map(|v| v.build())
+                .collect::<Result<Vec<_>, _>>()?;
+            pool.add_many_queues(addresses.into_iter());
         }
-        pool
+        Ok(pool)
     }
 }
 

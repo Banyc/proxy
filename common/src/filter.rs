@@ -105,11 +105,7 @@ impl Filter {
     pub fn filter(&self, addr: &InternetAddr) -> Action {
         match addr {
             InternetAddr::SocketAddr(addr) => self.filter_ip(*addr),
-            InternetAddr::String(addr) => {
-                let (domain_name, port) = addr.split_once(':').unwrap();
-                let port = port.parse::<u16>().unwrap();
-                self.filter_domain_name(domain_name, port)
-            }
+            InternetAddr::DomainName { addr, port } => self.filter_domain_name(addr, *port),
         }
     }
 

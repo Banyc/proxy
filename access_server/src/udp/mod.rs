@@ -89,7 +89,9 @@ impl loading::Builder for UdpAccessServerBuilder {
     fn build_hook(self) -> io::Result<UdpAccess> {
         Ok(UdpAccess::new(
             self.proxy_table,
-            self.destination.into(),
+            self.destination
+                .parse()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
             self.speed_limit,
         ))
     }

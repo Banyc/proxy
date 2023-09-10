@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::{
     addr::InternetAddr,
@@ -16,13 +17,22 @@ pub struct UdpProxyConfigBuilder {
 }
 
 impl UdpProxyConfigBuilder {
-    pub fn build(self) -> Result<UdpProxyConfig, XorCryptoBuildError> {
+    pub fn build(self) -> Result<UdpProxyConfig, UdpProxyConfigBuildError> {
         let crypto = self.xor_key.build()?;
-        Ok(ProxyConfig {
-            address: self.address.into(),
-            crypto,
-        })
+        let address = self
+            .address
+            .parse()
+            .map_err(|_| UdpProxyConfigBuildError::Address)?;
+        Ok(ProxyConfig { address, crypto })
     }
+}
+
+#[derive(Debug, Error)]
+pub enum UdpProxyConfigBuildError {
+    #[error("Address error")]
+    Address,
+    #[error("{0}")]
+    XorCrypto(#[from] XorCryptoBuildError),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,7 +44,7 @@ pub struct UdpWeightedProxyChainBuilder {
 }
 
 impl UdpWeightedProxyChainBuilder {
-    pub fn build(self) -> Result<UdpWeightedProxyChain, XorCryptoBuildError> {
+    pub fn build(self) -> Result<UdpWeightedProxyChain, UdpProxyConfigBuildError> {
         let payload_crypto = match self.payload_xor_key {
             Some(c) => Some(c.build()?),
             None => None,

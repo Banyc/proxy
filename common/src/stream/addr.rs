@@ -1,8 +1,8 @@
-use std::{fmt::Display, sync::Arc};
+use std::{fmt::Display, str::FromStr, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 
-use crate::addr::InternetAddr;
+use crate::addr::{InternetAddr, ParseInternetAddrError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,12 +20,14 @@ impl Display for StreamType {
     }
 }
 
-impl From<&str> for StreamType {
-    fn from(s: &str) -> Self {
+impl FromStr for StreamType {
+    type Err = ParseInternetAddrError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "tcp" => StreamType::Tcp,
-            "kcp" => StreamType::Kcp,
-            _ => panic!("invalid stream type"),
+            "tcp" => Ok(Self::Tcp),
+            "kcp" => Ok(Self::Kcp),
+            _ => Err(ParseInternetAddrError),
         }
     }
 }
@@ -37,8 +39,8 @@ pub struct StreamAddrBuilder {
 }
 
 impl StreamAddrBuilder {
-    pub fn build(self) -> StreamAddr {
-        self.address.as_ref().into()
+    pub fn build(self) -> Result<StreamAddr, ParseInternetAddrError> {
+        self.address.as_ref().parse()
     }
 }
 
@@ -55,16 +57,20 @@ impl Display for StreamAddr {
     }
 }
 
-impl From<&str> for StreamAddr {
-    fn from(s: &str) -> Self {
+impl FromStr for StreamAddr {
+    type Err = ParseInternetAddrError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut parts = s.split("://");
-        let stream_type: StreamType = parts.next().unwrap().into();
-        let address: Arc<str> = Arc::from(parts.next().unwrap());
-        assert!(parts.next().is_none());
-        StreamAddr {
-            address: address.into(),
-            stream_type,
+        let stream_type: StreamType = parts.next().ok_or(ParseInternetAddrError)?.parse()?;
+        let address = parts.next().ok_or(ParseInternetAddrError)?.parse()?;
+        if parts.next().is_some() {
+            return Err(ParseInternetAddrError);
         }
+        Ok(StreamAddr {
+            address,
+            stream_type,
+        })
     }
 }
 
@@ -76,7 +82,7 @@ mod tests {
 
     #[test]
     fn from_str_to_stream_addr() {
-        let addr: StreamAddr = "tcp://0.0.0.0:0".into();
+        let addr: StreamAddr = "tcp://0.0.0.0:0".parse().unwrap();
         assert_eq!(
             addr,
             StreamAddr {

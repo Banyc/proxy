@@ -243,7 +243,10 @@ where
             let domain_name = String::from_utf8(buf)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             let port = reader.read_u16().await?;
-            InternetAddr::String(format!("{}:{}", domain_name, port).into())
+            InternetAddr::DomainName {
+                addr: domain_name.into(),
+                port,
+            }
         }
     };
     Ok(address)
@@ -266,16 +269,13 @@ where
                 writer.write_u16(addr.port()).await?;
             }
         },
-        InternetAddr::String(addr) => {
+        InternetAddr::DomainName { addr, port } => {
             writer.write_u8(AddressType::DomainName.into()).await?;
-            let mut parts = addr.split(':');
-            let domain_name = parts.next().unwrap();
-            let port = parts.next().unwrap();
-            let len = u8::try_from(domain_name.as_bytes().len())
+            let len = u8::try_from(addr.as_bytes().len())
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             writer.write_u8(len).await?;
-            writer.write_all(domain_name.as_bytes()).await?;
-            writer.write_u16(port.parse().unwrap()).await?;
+            writer.write_all(addr.as_bytes()).await?;
+            writer.write_u16(*port).await?;
         }
     }
     Ok(())
@@ -545,7 +545,10 @@ mod tests {
 
     #[tokio::test]
     async fn address_domain_name() {
-        let expected = InternetAddr::String("a:5".into());
+        let expected = InternetAddr::DomainName {
+            addr: "a".into(),
+            port: 5,
+        };
         let mut wtr = io::Cursor::new(Vec::new());
         encode_address(&expected, &mut wtr).await.unwrap();
         assert_eq!(

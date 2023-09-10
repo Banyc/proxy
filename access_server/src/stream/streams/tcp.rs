@@ -91,7 +91,9 @@ impl loading::Builder for TcpAccessServerBuilder {
     fn build_hook(self) -> io::Result<Self::Hook> {
         Ok(TcpAccess::new(
             self.proxy_table,
-            self.destination.build(),
+            self.destination
+                .build()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
             self.stream_pool,
             self.speed_limit,
         ))

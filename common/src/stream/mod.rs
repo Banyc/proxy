@@ -77,7 +77,7 @@ impl Display for StreamMetrics {
         let downlink_speed = self.bytes_downlink as f64 / duration;
         let upstream_addrs = match &self.upstream_addr.address {
             InternetAddr::SocketAddr(_) => self.upstream_addr.to_string(),
-            InternetAddr::String(_) => {
+            InternetAddr::DomainName { .. } => {
                 format!("{},{}", self.upstream_addr, self.upstream_sock_addr.ip())
             }
         };
@@ -104,7 +104,7 @@ impl Display for SimplifiedStreamMetrics {
         let duration = duration.as_secs_f64();
         let upstream_addrs = match &self.upstream_addr.address {
             InternetAddr::SocketAddr(_) => self.upstream_addr.to_string(),
-            InternetAddr::String(_) => {
+            InternetAddr::DomainName { .. } => {
                 format!("{},{}", self.upstream_addr, self.upstream_sock_addr.ip())
             }
         };

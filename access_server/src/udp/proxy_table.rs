@@ -1,9 +1,8 @@
 use std::num::NonZeroUsize;
 
 use common::{
-    crypto::XorCryptoBuildError,
     proxy_table::{ProxyTable, ProxyTableError},
-    udp::proxy_table::{UdpProxyTable, UdpWeightedProxyChainBuilder},
+    udp::proxy_table::{UdpProxyConfigBuildError, UdpProxyTable, UdpWeightedProxyChainBuilder},
 };
 use proxy_client::udp::UdpTracer;
 use serde::{Deserialize, Serialize};
@@ -36,7 +35,7 @@ impl UdpProxyTableBuilder {
 #[derive(Debug, Error)]
 pub enum UdpProxyTableBuildError {
     #[error("Chain config is invalid: {0}")]
-    ChainConfig(#[source] XorCryptoBuildError),
+    ChainConfig(#[source] UdpProxyConfigBuildError),
     #[error("{0}")]
     ProxyTable(#[from] ProxyTableError),
 }

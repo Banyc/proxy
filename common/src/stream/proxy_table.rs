@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::{
     crypto::{XorCryptoBuildError, XorCryptoBuilder},
@@ -17,13 +18,23 @@ pub struct StreamProxyConfigBuilder {
 }
 
 impl StreamProxyConfigBuilder {
-    pub fn build(self) -> Result<StreamProxyConfig, XorCryptoBuildError> {
+    pub fn build(self) -> Result<StreamProxyConfig, StreamProxyConfigBuildError> {
         let crypto = self.xor_key.build()?;
-        Ok(ProxyConfig {
-            address: self.address.as_ref().into(),
-            crypto,
-        })
+        let address = self
+            .address
+            .as_ref()
+            .parse()
+            .map_err(|_| StreamProxyConfigBuildError::Address)?;
+        Ok(ProxyConfig { address, crypto })
     }
+}
+
+#[derive(Debug, Error)]
+pub enum StreamProxyConfigBuildError {
+    #[error("Address error")]
+    Address,
+    #[error("{0}")]
+    XorCrypto(#[from] XorCryptoBuildError),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,7 +46,7 @@ pub struct StreamWeightedProxyChainBuilder {
 }
 
 impl StreamWeightedProxyChainBuilder {
-    pub fn build(self) -> Result<StreamWeightedProxyChain, XorCryptoBuildError> {
+    pub fn build(self) -> Result<StreamWeightedProxyChain, StreamProxyConfigBuildError> {
         let payload_crypto = match self.payload_xor_key {
             Some(c) => Some(c.build()?),
             None => None,

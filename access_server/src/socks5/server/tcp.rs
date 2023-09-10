@@ -137,12 +137,21 @@ impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
     }
 
     fn build_hook(self) -> io::Result<Socks5ServerTcpAccess> {
+        let udp_server_addr = match self.udp_server_addr {
+            Some(addr) => {
+                let addr = addr
+                    .parse()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+                Some(addr)
+            }
+            None => None,
+        };
         let access = Socks5ServerTcpAccess::new(
             self.proxy_table,
             self.stream_pool,
             self.filter,
             self.speed_limit,
-            self.udp_server_addr.map(Into::into),
+            udp_server_addr,
             self.users,
         );
         Ok(access)

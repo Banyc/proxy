@@ -3,16 +3,18 @@ use std::{
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4},
     num::NonZeroUsize,
+    str::FromStr,
     sync::{Arc, Mutex},
 };
 
 use lazy_static::lazy_static;
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tokio::net::lookup_host;
 
 lazy_static! {
-    static ref RESOLVED_SOCKET_ADDR: Arc<Mutex<LruCache<Arc<str>, SocketAddr>>> =
+    static ref RESOLVED_SOCKET_ADDR: Arc<Mutex<LruCache<Arc<str>, IpAddr>>> =
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())));
 }
 
@@ -27,14 +29,14 @@ pub fn any_addr(ip_version: &IpAddr) -> SocketAddr {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum InternetAddr {
     SocketAddr(SocketAddr),
-    String(Arc<str>),
+    DomainName { addr: Arc<str>, port: u16 },
 }
 
 impl Display for InternetAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SocketAddr(addr) => write!(f, "{}", addr),
-            Self::String(string) => write!(f, "{}", string),
+            Self::DomainName { addr, port } => write!(f, "{addr}:{port}",),
         }
     }
 }
@@ -45,39 +47,62 @@ impl From<SocketAddr> for InternetAddr {
     }
 }
 
-impl From<Arc<str>> for InternetAddr {
-    fn from(string: Arc<str>) -> Self {
-        match string.parse::<SocketAddr>() {
-            Ok(addr) => Self::SocketAddr(addr),
-            Err(_) => Self::String(string),
+impl FromStr for InternetAddr {
+    type Err = ParseInternetAddrError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(addr) = s.parse::<SocketAddr>() {
+            return Ok(Self::SocketAddr(addr));
         }
+
+        let mut parts = s.split(':');
+        let addr = parts.next().ok_or(ParseInternetAddrError)?.into();
+        let port = parts.next().ok_or(ParseInternetAddrError)?;
+        let port = port.parse().map_err(|_| ParseInternetAddrError)?;
+        if parts.next().is_some() {
+            return Err(ParseInternetAddrError);
+        }
+        Ok(Self::DomainName { addr, port })
     }
 }
+
+#[derive(Debug, Error, Clone, Copy)]
+#[error("Failed to parse Internet address")]
+pub struct ParseInternetAddrError;
 
 impl InternetAddr {
     pub fn zero_ipv4_addr() -> Self {
         Self::SocketAddr(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into())
     }
 
+    pub fn port(&self) -> u16 {
+        match self {
+            InternetAddr::SocketAddr(s) => s.port(),
+            InternetAddr::DomainName { port, .. } => *port,
+        }
+    }
+
     pub async fn to_socket_addr(&self) -> io::Result<SocketAddr> {
         match self {
             Self::SocketAddr(addr) => Ok(*addr),
-            Self::String(host) => {
-                let res = lookup_host(host.as_ref()).await.and_then(|mut res| {
-                    res.next()
-                        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No address"))
-                });
+            Self::DomainName { addr, port } => {
+                let res = lookup_host((addr.as_ref(), *port))
+                    .await
+                    .and_then(|mut res| {
+                        res.next()
+                            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No address"))
+                    });
 
                 match &res {
-                    Ok(addr) => {
+                    Ok(resolved_addr) => {
                         if let Ok(mut store) = RESOLVED_SOCKET_ADDR.try_lock() {
-                            store.put(host.clone(), *addr);
+                            store.put(addr.clone(), resolved_addr.ip());
                         }
                     }
                     Err(_) => {
                         let mut store = RESOLVED_SOCKET_ADDR.lock().unwrap();
-                        if let Some(addr) = store.get(host.as_ref()) {
-                            return Ok(*addr);
+                        if let Some(ip) = store.get(addr.as_ref()) {
+                            return Ok(SocketAddr::new(*ip, *port));
                         }
                     }
                 }

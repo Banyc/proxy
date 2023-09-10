@@ -70,7 +70,10 @@ impl AccessServerConfig {
         loader: &mut AccessServerLoader,
     ) -> io::Result<()> {
         // Shared
-        let stream_pool = self.stream_pool.build();
+        let stream_pool = self
+            .stream_pool
+            .build()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         let stream_proxy_tables = self
             .stream_proxy_tables
             .into_iter()

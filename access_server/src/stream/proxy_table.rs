@@ -1,11 +1,12 @@
 use std::num::NonZeroUsize;
 
 use common::{
-    crypto::XorCryptoBuildError,
     proxy_table::{ProxyTable, ProxyTableError},
     stream::{
         pool::Pool,
-        proxy_table::{StreamProxyTable, StreamWeightedProxyChainBuilder},
+        proxy_table::{
+            StreamProxyConfigBuildError, StreamProxyTable, StreamWeightedProxyChainBuilder,
+        },
     },
 };
 use proxy_client::stream::StreamTracer;
@@ -39,7 +40,7 @@ impl StreamProxyTableBuilder {
 #[derive(Debug, Error)]
 pub enum StreamProxyTableBuildError {
     #[error("Chain config is invalid: {0}")]
-    ChainConfig(#[source] XorCryptoBuildError),
+    ChainConfig(#[source] StreamProxyConfigBuildError),
     #[error("{0}")]
     ProxyTable(#[from] ProxyTableError),
 }

@@ -4,7 +4,7 @@ use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use bytes::Bytes;
 use common::{
-    addr::InternetAddr,
+    addr::{InternetAddr, ParseInternetAddrError},
     config::SharableConfig,
     filter::{self, Filter, FilterBuilder},
     loading,
@@ -186,8 +186,7 @@ impl HttpAccess {
         let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
         let port = req.uri().port_u16().unwrap_or(80);
         let addr = format!("{}:{}", host, port);
-        let addr: Arc<str> = addr.into();
-        let addr: InternetAddr = addr.into();
+        let addr = addr.parse()?;
 
         let action = self.filter.filter(&addr);
         match action {
@@ -273,8 +272,7 @@ impl HttpAccess {
                 return Ok(resp);
             }
         };
-        let addr: Arc<str> = addr.into();
-        let addr: InternetAddr = addr.into();
+        let addr = addr.parse()?;
         let action = self.filter.filter(&addr);
         let http_connect = match action {
             filter::Action::Proxy => Some(HttpConnect::new(
@@ -413,6 +411,8 @@ pub enum TunnelError {
     HttpNoHost,
     #[error("Direct connection error: {0}")]
     Direct(#[source] io::Error),
+    #[error("Invalid address: {0}")]
+    Address(#[from] ParseInternetAddrError),
 }
 
 impl loading::Hook for HttpAccess {}
