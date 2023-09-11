@@ -9,7 +9,7 @@ use std::{
 
 use lazy_static::lazy_static;
 use lru::LruCache;
-use serde::{Deserialize, Serialize};
+use serde::{de::Visitor, Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::lookup_host;
 
@@ -109,5 +109,75 @@ impl InternetAddr {
                 res
             }
         }
+    }
+}
+
+pub struct InternetAddrStr(pub InternetAddr);
+
+impl Serialize for InternetAddrStr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for InternetAddrStr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(InternetAddrStrVisitor)
+    }
+}
+
+struct InternetAddrStrVisitor;
+
+impl<'de> Visitor<'de> for InternetAddrStrVisitor {
+    type Value = InternetAddrStr;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("Internet address")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        let v: InternetAddr = v.parse().map_err(|e| serde::de::Error::custom(e))?;
+        Ok(InternetAddrStr(v))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serde_socket_address() {
+        let s = "\"127.0.0.1:1\"";
+        let v: InternetAddrStr = serde_json::from_str(s).unwrap();
+        assert_eq!(
+            v.0,
+            InternetAddr::SocketAddr("127.0.0.1:1".parse().unwrap())
+        );
+        let new_s = serde_json::to_string(&v).unwrap();
+        assert_eq!(s, new_s);
+    }
+
+    #[test]
+    fn serde_domain_name() {
+        let s = "\"example.website:1\"";
+        let v: InternetAddrStr = serde_json::from_str(s).unwrap();
+        assert_eq!(
+            v.0,
+            InternetAddr::DomainName {
+                addr: "example.website".into(),
+                port: 1
+            }
+        );
+        let new_s = serde_json::to_string(&v).unwrap();
+        assert_eq!(s, new_s);
     }
 }

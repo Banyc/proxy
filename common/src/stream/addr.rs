@@ -1,6 +1,6 @@
 use std::{fmt::Display, str::FromStr, sync::Arc};
 
-use serde::{Deserialize, Serialize};
+use serde::{de::Visitor, Deserialize, Serialize};
 
 use crate::addr::{InternetAddr, ParseInternetAddrError};
 
@@ -74,6 +74,44 @@ impl FromStr for StreamAddr {
     }
 }
 
+pub struct StreamAddrStr(pub StreamAddr);
+
+impl Serialize for StreamAddrStr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for StreamAddrStr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(StreamAddrStrVisitor)
+    }
+}
+
+struct StreamAddrStrVisitor;
+
+impl<'de> Visitor<'de> for StreamAddrStrVisitor {
+    type Value = StreamAddrStr;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("Stream address")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        let v: StreamAddr = v.parse().map_err(|e| serde::de::Error::custom(e))?;
+        Ok(StreamAddrStr(v))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
@@ -90,5 +128,18 @@ mod tests {
                 stream_type: StreamType::Tcp,
             }
         );
+    }
+
+    #[test]
+    fn serde() {
+        let s = "\"tcp://127.0.0.1:1\"";
+        let v: StreamAddrStr = serde_json::from_str(s).unwrap();
+        assert_eq!(
+            v.0.address,
+            InternetAddr::SocketAddr("127.0.0.1:1".parse().unwrap())
+        );
+        assert_eq!(v.0.stream_type, StreamType::Tcp);
+        let new_s = serde_json::to_string(&v).unwrap();
+        assert_eq!(s, new_s);
     }
 }
