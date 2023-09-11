@@ -3,7 +3,7 @@ use std::{collections::HashMap, io, net::SocketAddr, num::NonZeroU8, sync::Arc};
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use common::{
-    addr::InternetAddr,
+    addr::{InternetAddr, InternetAddrStr},
     config::SharableConfig,
     crypto::XorCrypto,
     filter::{self, Filter, FilterBuilder},
@@ -41,7 +41,7 @@ pub struct Socks5ServerTcpAccessServerConfig {
     pub proxy_table: SharableConfig<StreamProxyTableBuilder>,
     pub filter: SharableConfig<FilterBuilder>,
     pub speed_limit: Option<f64>,
-    pub udp_server_addr: Option<Arc<str>>,
+    pub udp_server_addr: Option<InternetAddrStr>,
     #[serde(default)]
     pub users: Vec<User>,
 }
@@ -79,7 +79,7 @@ impl Socks5ServerTcpAccessServerConfig {
             stream_pool,
             filter,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
-            udp_server_addr: self.udp_server_addr,
+            udp_server_addr: self.udp_server_addr.map(|a| a.0),
             users,
         })
     }
@@ -111,7 +111,7 @@ pub struct Socks5ServerTcpAccessServerBuilder {
     stream_pool: Pool,
     filter: Filter,
     speed_limit: f64,
-    udp_server_addr: Option<Arc<str>>,
+    udp_server_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
 }
 
@@ -137,21 +137,12 @@ impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
     }
 
     fn build_hook(self) -> io::Result<Socks5ServerTcpAccess> {
-        let udp_server_addr = match self.udp_server_addr {
-            Some(addr) => {
-                let addr = addr
-                    .parse()
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-                Some(addr)
-            }
-            None => None,
-        };
         let access = Socks5ServerTcpAccess::new(
             self.proxy_table,
             self.stream_pool,
             self.filter,
             self.speed_limit,
-            udp_server_addr,
+            self.udp_server_addr,
             self.users,
         );
         Ok(access)

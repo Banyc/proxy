@@ -3,8 +3,8 @@ use std::{collections::HashMap, io, net::Ipv4Addr, sync::Arc};
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use common::{
-    addr::any_addr,
     addr::InternetAddr,
+    addr::{any_addr, InternetAddrStr},
     config::SharableConfig,
     loading,
     udp::{
@@ -27,7 +27,7 @@ pub mod proxy_table;
 #[serde(deny_unknown_fields)]
 pub struct UdpAccessServerConfig {
     pub listen_addr: Arc<str>,
-    pub destination: Arc<str>,
+    pub destination: InternetAddrStr,
     pub proxy_table: SharableConfig<UdpProxyTableBuilder>,
     pub speed_limit: Option<f64>,
 }
@@ -65,7 +65,7 @@ pub enum BuildError {
 #[derive(Debug, Clone)]
 pub struct UdpAccessServerBuilder {
     listen_addr: Arc<str>,
-    destination: Arc<str>,
+    destination: InternetAddrStr,
     proxy_table: UdpProxyTable,
     speed_limit: f64,
 }
@@ -89,9 +89,7 @@ impl loading::Builder for UdpAccessServerBuilder {
     fn build_hook(self) -> io::Result<UdpAccess> {
         Ok(UdpAccess::new(
             self.proxy_table,
-            self.destination
-                .parse()
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
+            self.destination.0,
             self.speed_limit,
         ))
     }

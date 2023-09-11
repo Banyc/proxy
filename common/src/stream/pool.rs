@@ -18,7 +18,7 @@ use crate::{
 };
 
 use super::{
-    addr::StreamAddrBuilder,
+    addr::StreamAddrStr,
     connect::{ArcStreamConnect, STREAM_CONNECTOR_TABLE},
     IoAddr, StreamAddr,
 };
@@ -27,20 +27,16 @@ const QUEUE_LEN: usize = 16;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(transparent)]
-pub struct PoolBuilder(pub Option<Vec<StreamAddrBuilder>>);
+pub struct PoolBuilder(pub Option<Vec<StreamAddrStr>>);
 
 impl PoolBuilder {
     pub fn build(self) -> Result<Pool, ParseInternetAddrError> {
         let pool = Pool::new();
         if let Some(addrs) = self.0 {
-            let addresses = addrs
-                .into_iter()
-                .map(|v| v.build())
-                .collect::<Result<Vec<_>, _>>()?;
-            pool.add_many_queues(addresses.into_iter());
+            pool.add_many_queues(addrs.into_iter().map(|a| a.0));
         }
         Ok(pool)
     }

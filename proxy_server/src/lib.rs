@@ -8,7 +8,7 @@ use udp::{UdpProxy, UdpProxyServerBuilder};
 pub mod stream;
 pub mod udp;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyServerConfig {
     #[serde(default)]

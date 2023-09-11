@@ -74,6 +74,7 @@ impl FromStr for StreamAddr {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct StreamAddrStr(pub StreamAddr);
 
 impl Serialize for StreamAddrStr {

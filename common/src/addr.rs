@@ -112,6 +112,7 @@ impl InternetAddr {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct InternetAddrStr(pub InternetAddr);
 
 impl Serialize for InternetAddrStr {

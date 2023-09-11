@@ -6,7 +6,7 @@ use common::{
     config::SharableConfig,
     loading,
     stream::{
-        addr::{StreamAddr, StreamAddrBuilder},
+        addr::{StreamAddr, StreamAddrStr},
         copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         pool::Pool,
         proxy_table::StreamProxyTable,
@@ -26,7 +26,7 @@ use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBui
 #[serde(deny_unknown_fields)]
 pub struct TcpAccessServerConfig {
     pub listen_addr: Arc<str>,
-    pub destination: StreamAddrBuilder,
+    pub destination: StreamAddrStr,
     pub proxy_table: SharableConfig<StreamProxyTableBuilder>,
     pub speed_limit: Option<f64>,
 }
@@ -66,7 +66,7 @@ pub enum BuildError {
 #[derive(Debug, Clone)]
 pub struct TcpAccessServerBuilder {
     listen_addr: Arc<str>,
-    destination: StreamAddrBuilder,
+    destination: StreamAddrStr,
     proxy_table: StreamProxyTable,
     stream_pool: Pool,
     speed_limit: f64,
@@ -91,9 +91,7 @@ impl loading::Builder for TcpAccessServerBuilder {
     fn build_hook(self) -> io::Result<Self::Hook> {
         Ok(TcpAccess::new(
             self.proxy_table,
-            self.destination
-                .build()
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
+            self.destination.0,
             self.stream_pool,
             self.speed_limit,
         ))
