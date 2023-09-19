@@ -10,7 +10,7 @@
 # "default" = { chains = [
 #     { weight = 1, chain = [
 #         { address = "", xor_key = "base64" },
-#     ] },
+#     ]                   payload_xor_key = "base64" },
 # ], trace_rtt = false }
 [access_server.filters]
 "default" = [
