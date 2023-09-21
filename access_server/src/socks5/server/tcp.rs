@@ -239,7 +239,7 @@ impl Socks5ServerTcpAccess {
                         address: upstream_addr,
                     },
                     upstream_sock_addr,
-                    None,
+                    Some(downstream_addr),
                     res,
                 );
 
