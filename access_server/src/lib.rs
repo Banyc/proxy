@@ -56,7 +56,7 @@ impl AccessServerConfig {
             http_server: Default::default(),
             socks5_tcp_server: Default::default(),
             socks5_udp_server: Default::default(),
-            stream_pool: PoolBuilder(None),
+            stream_pool: Default::default(),
             stream_proxy_tables: Default::default(),
             udp_proxy_tables: Default::default(),
             matchers: Default::default(),

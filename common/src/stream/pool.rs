@@ -29,16 +29,23 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[serde(transparent)]
-pub struct PoolBuilder(pub Option<Vec<StreamAddrStr>>);
+pub struct PoolBuilder(#[serde(default)] pub Vec<StreamAddrStr>);
 
 impl PoolBuilder {
+    pub fn new() -> Self {
+        Self(vec![])
+    }
+
     pub fn build(self) -> Result<Pool, ParseInternetAddrError> {
         let pool = Pool::new();
-        if let Some(addrs) = self.0 {
-            pool.add_many_queues(addrs.into_iter().map(|a| a.0));
-        }
+        pool.add_many_queues(self.0.into_iter().map(|a| a.0));
         Ok(pool)
+    }
+}
+
+impl Default for PoolBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -203,9 +210,7 @@ impl Pool {
     where
         I: Iterator<Item = StreamAddr>,
     {
-        for addr in addrs {
-            self.add_queue(addr);
-        }
+        addrs.for_each(|addr| self.add_queue(addr));
     }
 
     pub fn add_queue(&self, addr: StreamAddr) {
