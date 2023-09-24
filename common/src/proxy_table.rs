@@ -40,6 +40,7 @@ pub fn convert_proxies_to_header_crypto_pairs<A>(
 where
     A: Clone + Sync + Send,
 {
+    assert!(!nodes.is_empty());
     let mut pairs = (0..nodes.len() - 1)
         .into_par_iter()
         .map(|i| {
