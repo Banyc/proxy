@@ -79,7 +79,8 @@ impl SocketCell {
                     match send_noop(stream, HEARTBEAT_INTERVAL).await {
                         Ok(()) => (),
                         Err(e) => {
-                            warn!(?e, ?stream, "Stream pool failed to send noop heartbeat");
+                            let peer_addr = stream.peer_addr().ok();
+                            warn!(?e, ?peer_addr, "Stream pool failed to send noop heartbeat");
                             // Drop the stream
                             cell.take();
                             return Err(e);
