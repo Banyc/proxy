@@ -56,15 +56,7 @@ where
         }
 
         // Remove servers
-        let mut remove_setters = Vec::new();
-        self.handles.iter().for_each(|(cur_key, _)| {
-            if !keys.contains(cur_key) {
-                remove_setters.push(cur_key.clone());
-            }
-        });
-        for cur_key in remove_setters {
-            self.handles.remove(&cur_key);
-        }
+        self.handles.retain(|cur_key, _| keys.contains(cur_key));
         Ok(())
     }
 }

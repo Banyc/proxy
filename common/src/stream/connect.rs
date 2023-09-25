@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
+use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use lazy_static::lazy_static;
@@ -19,19 +19,20 @@ lazy_static! {
 
 #[derive(Debug)]
 pub struct StreamConnectorTable {
-    inner: HashMap<StreamType, ArcStreamConnect>,
+    inner: enum_map::EnumMap<StreamType, ArcStreamConnect>,
 }
 
 impl StreamConnectorTable {
     fn new() -> Self {
-        let mut inner = HashMap::new();
-        inner.insert(StreamType::Tcp, Arc::new(TcpConnector) as _);
-        inner.insert(StreamType::Kcp, Arc::new(KcpConnector) as _);
+        let inner = enum_map::enum_map! {
+            StreamType::Tcp => Arc::new(TcpConnector) as _,
+            StreamType::Kcp => Arc::new(KcpConnector) as _,
+        };
         Self { inner }
     }
 
-    pub fn get(&self, stream_type: StreamType) -> Option<&ArcStreamConnect> {
-        self.inner.get(&stream_type)
+    pub fn get(&self, stream_type: StreamType) -> &ArcStreamConnect {
+        &self.inner[stream_type]
     }
 }
 
@@ -67,7 +68,7 @@ pub async fn connect_with_pool(
     let ret = match stream {
         Some((stream, sock_addr)) => (stream, sock_addr),
         None => {
-            let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type).unwrap();
+            let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type);
             let sock_addr =
                 addr.address
                     .to_socket_addr()

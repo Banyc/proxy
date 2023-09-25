@@ -23,8 +23,8 @@ where
 
     // Make sure there is always `Some(res)` from `join_next`
     join_set.spawn(async move {
-        let (_tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
-        rx.recv().await.unwrap();
+        let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+        rx.await.unwrap();
         unreachable!()
     });
 

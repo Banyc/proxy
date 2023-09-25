@@ -217,7 +217,7 @@ impl Pool {
     pub fn add_queue(&self, addr: StreamAddr) {
         let mut queue = SocketQueue::new();
         let connector = {
-            let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type).unwrap();
+            let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type);
             Arc::clone(connector)
         };
         for _ in 0..QUEUE_LEN {
@@ -241,7 +241,7 @@ impl Pool {
                 None => return None,
             };
             let connector = {
-                let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type).unwrap();
+                let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type);
                 Arc::clone(connector)
             };
             queue.try_swap(connector, &addr.address, HEARTBEAT_INTERVAL)

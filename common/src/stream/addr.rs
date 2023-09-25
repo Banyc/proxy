@@ -4,7 +4,7 @@ use serde::{de::Visitor, Deserialize, Serialize};
 
 use crate::addr::{InternetAddr, ParseInternetAddrError};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, enum_map::Enum)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamType {
     Tcp,
