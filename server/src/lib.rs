@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use access_server::{AccessServerConfig, AccessServerLoader};
-use common::error::{AnyError, AnyResult};
+use common::{
+    error::{AnyError, AnyResult},
+    stream::pool::PoolBuilder,
+};
 use config::ConfigReader;
 use proxy_server::{ProxyServerConfig, ProxyServerLoader};
 use serde::Deserialize;
@@ -97,13 +100,14 @@ pub async fn load(
     access_server_loader: &mut AccessServerLoader,
     proxy_server_loader: &mut ProxyServerLoader,
 ) -> AnyResult {
+    let stream_pool = config.stream_pool.build()?;
     config
         .access_server
-        .spawn_and_kill(join_set, access_server_loader)
+        .spawn_and_kill(join_set, access_server_loader, &stream_pool)
         .await?;
     config
         .proxy_server
-        .spawn_and_kill(join_set, proxy_server_loader)
+        .spawn_and_kill(join_set, proxy_server_loader, &stream_pool)
         .await?;
     Ok(())
 }
@@ -115,4 +119,5 @@ pub struct ServerConfig {
     pub access_server: AccessServerConfig,
     #[serde(default)]
     pub proxy_server: ProxyServerConfig,
+    pub stream_pool: PoolBuilder,
 }

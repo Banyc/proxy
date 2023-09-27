@@ -16,7 +16,7 @@ use common::{
         connect::{connect_with_pool, ConnectError},
         copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         header::StreamRequestHeader,
-        pool::{Pool, PoolBuilder},
+        pool::Pool,
         tokio_io, CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };
@@ -34,10 +34,26 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct StreamProxyConfig {
+    pub header_xor_key: XorCryptoBuilder,
+    pub payload_xor_key: Option<XorCryptoBuilder>,
+}
+
+impl StreamProxyConfig {
+    pub fn into_builder(self, stream_pool: Pool) -> StreamProxyBuilder {
+        StreamProxyBuilder {
+            header_xor_key: self.header_xor_key,
+            payload_xor_key: self.payload_xor_key,
+            stream_pool,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct StreamProxyBuilder {
     pub header_xor_key: XorCryptoBuilder,
     pub payload_xor_key: Option<XorCryptoBuilder>,
-    pub stream_pool: PoolBuilder,
+    pub stream_pool: Pool,
 }
 
 impl StreamProxyBuilder {
@@ -50,8 +66,11 @@ impl StreamProxyBuilder {
             Some(key) => Some(key.build().map_err(StreamProxyBuildError::PayloadCrypto)?),
             None => None,
         };
-        let stream_pool = self.stream_pool.build()?;
-        Ok(StreamProxy::new(header_crypto, payload_crypto, stream_pool))
+        Ok(StreamProxy::new(
+            header_crypto,
+            payload_crypto,
+            self.stream_pool,
+        ))
     }
 }
 

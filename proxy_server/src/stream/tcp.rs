@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use common::{loading, stream::streams::tcp::TcpServer};
+use common::{
+    loading,
+    stream::{pool::Pool, streams::tcp::TcpServer},
+};
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::net::{TcpListener, ToSocketAddrs};
@@ -9,13 +12,29 @@ use tracing::error;
 
 use crate::ListenerBindError;
 
-use super::{StreamProxy, StreamProxyBuildError, StreamProxyBuilder};
+use super::{StreamProxy, StreamProxyBuildError, StreamProxyBuilder, StreamProxyConfig};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TcpProxyServerBuilder {
+pub struct TcpProxyServerConfig {
     pub listen_addr: Arc<str>,
     #[serde(flatten)]
+    pub inner: StreamProxyConfig,
+}
+
+impl TcpProxyServerConfig {
+    pub fn into_builder(self, stream_pool: Pool) -> TcpProxyServerBuilder {
+        let inner = self.inner.into_builder(stream_pool);
+        TcpProxyServerBuilder {
+            listen_addr: self.listen_addr,
+            inner,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TcpProxyServerBuilder {
+    pub listen_addr: Arc<str>,
     pub inner: StreamProxyBuilder,
 }
 

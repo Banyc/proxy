@@ -1,5 +1,5 @@
-[access_server]
 stream_pool = ["tcp://"]
+
 [access_server.stream_proxy_tables]
 "default" = { chains = [
     { weight = 1, chain = [
@@ -91,13 +91,11 @@ proxy_table = "default"
 listen_addr = ""
 header_xor_key = "base64"
 # payload_xor_key = "base64"
-# stream_pool = ["tcp://"]
 
 [[proxy_server.kcp_server]]
 listen_addr = ""
 header_xor_key = "base64"
 # payload_xor_key = "base64"
-# stream_pool = ["tcp://"]
 
 [[proxy_server.udp_server]]
 listen_addr = ""

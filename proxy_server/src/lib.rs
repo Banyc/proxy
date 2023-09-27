@@ -1,8 +1,8 @@
 use std::io;
 
-use common::{error::AnyResult, loading};
+use common::{error::AnyResult, loading, stream::pool::Pool};
 use serde::Deserialize;
-use stream::{kcp::KcpProxyServerBuilder, tcp::TcpProxyServerBuilder, StreamProxy};
+use stream::{kcp::KcpProxyServerConfig, tcp::TcpProxyServerConfig, StreamProxy};
 use thiserror::Error;
 use udp::{UdpProxy, UdpProxyServerBuilder};
 
@@ -13,11 +13,11 @@ pub mod udp;
 #[serde(deny_unknown_fields)]
 pub struct ProxyServerConfig {
     #[serde(default)]
-    pub tcp_server: Vec<TcpProxyServerBuilder>,
+    pub tcp_server: Vec<TcpProxyServerConfig>,
     #[serde(default)]
     pub udp_server: Vec<UdpProxyServerBuilder>,
     #[serde(default)]
-    pub kcp_server: Vec<KcpProxyServerBuilder>,
+    pub kcp_server: Vec<KcpProxyServerConfig>,
 }
 
 impl ProxyServerConfig {
@@ -33,12 +33,31 @@ impl ProxyServerConfig {
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut ProxyServerLoader,
+        stream_pool: &Pool,
     ) -> AnyResult {
-        loader.tcp_server.load(join_set, self.tcp_server).await?;
+        loader
+            .tcp_server
+            .load(
+                join_set,
+                self.tcp_server
+                    .into_iter()
+                    .map(|s| s.into_builder(stream_pool.clone()))
+                    .collect(),
+            )
+            .await?;
 
         loader.udp_server.load(join_set, self.udp_server).await?;
 
-        loader.kcp_server.load(join_set, self.kcp_server).await?;
+        loader
+            .kcp_server
+            .load(
+                join_set,
+                self.kcp_server
+                    .into_iter()
+                    .map(|s| s.into_builder(stream_pool.clone()))
+                    .collect(),
+            )
+            .await?;
 
         Ok(())
     }

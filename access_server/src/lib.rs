@@ -4,7 +4,7 @@ use common::{
     error::AnyResult,
     filter::{self, FilterBuilder, MatcherBuilder},
     loading,
-    stream::pool::PoolBuilder,
+    stream::pool::Pool,
 };
 use serde::{Deserialize, Serialize};
 use socks5::server::{
@@ -37,7 +37,6 @@ pub struct AccessServerConfig {
     pub socks5_tcp_server: Vec<Socks5ServerTcpAccessServerConfig>,
     #[serde(default)]
     pub socks5_udp_server: Vec<Socks5ServerUdpAccessServerConfig>,
-    pub stream_pool: PoolBuilder,
     #[serde(default)]
     pub stream_proxy_tables: HashMap<Arc<str>, StreamProxyTableBuilder>,
     #[serde(default)]
@@ -56,7 +55,6 @@ impl AccessServerConfig {
             http_server: Default::default(),
             socks5_tcp_server: Default::default(),
             socks5_udp_server: Default::default(),
-            stream_pool: Default::default(),
             stream_proxy_tables: Default::default(),
             udp_proxy_tables: Default::default(),
             matchers: Default::default(),
@@ -68,13 +66,13 @@ impl AccessServerConfig {
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut AccessServerLoader,
+        stream_pool: &Pool,
     ) -> AnyResult {
         // Shared
-        let stream_pool = self.stream_pool.build()?;
         let stream_proxy_tables = self
             .stream_proxy_tables
             .into_iter()
-            .map(|(k, v)| match v.build(&stream_pool) {
+            .map(|(k, v)| match v.build(stream_pool) {
                 Ok(v) => Ok((k, v)),
                 Err(e) => Err(e),
             })

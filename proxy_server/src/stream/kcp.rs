@@ -3,7 +3,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use common::{
     loading,
-    stream::streams::kcp::{fast_kcp_config, KcpServer},
+    stream::{
+        pool::Pool,
+        streams::kcp::{fast_kcp_config, KcpServer},
+    },
 };
 use serde::Deserialize;
 use tokio::net::ToSocketAddrs;
@@ -11,13 +14,29 @@ use tokio_kcp::KcpListener;
 
 use crate::ListenerBindError;
 
-use super::{StreamProxy, StreamProxyBuilder, StreamProxyServerBuildError};
+use super::{StreamProxy, StreamProxyBuilder, StreamProxyConfig, StreamProxyServerBuildError};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct KcpProxyServerBuilder {
+pub struct KcpProxyServerConfig {
     pub listen_addr: Arc<str>,
     #[serde(flatten)]
+    pub inner: StreamProxyConfig,
+}
+
+impl KcpProxyServerConfig {
+    pub fn into_builder(self, stream_pool: Pool) -> KcpProxyServerBuilder {
+        let inner = self.inner.into_builder(stream_pool);
+        KcpProxyServerBuilder {
+            listen_addr: self.listen_addr,
+            inner,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct KcpProxyServerBuilder {
+    pub listen_addr: Arc<str>,
     pub inner: StreamProxyBuilder,
 }
 
