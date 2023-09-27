@@ -100,7 +100,7 @@ pub async fn load(
     access_server_loader: &mut AccessServerLoader,
     proxy_server_loader: &mut ProxyServerLoader,
 ) -> AnyResult {
-    let stream_pool = config.stream_pool.build()?;
+    let stream_pool = config.global.stream_pool.build()?;
     config
         .access_server
         .spawn_and_kill(join_set, access_server_loader, &stream_pool)
@@ -119,5 +119,12 @@ pub struct ServerConfig {
     pub access_server: AccessServerConfig,
     #[serde(default)]
     pub proxy_server: ProxyServerConfig,
+    #[serde(default)]
+    pub global: Global,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Global {
     pub stream_pool: PoolBuilder,
 }

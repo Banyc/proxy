@@ -1,3 +1,4 @@
+[global]
 stream_pool = ["tcp://"]
 
 [access_server.stream_proxy_tables]
