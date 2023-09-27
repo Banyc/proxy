@@ -1,4 +1,4 @@
-use std::{io, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use common::{
@@ -6,12 +6,12 @@ use common::{
     stream::streams::kcp::{fast_kcp_config, KcpServer},
 };
 use serde::Deserialize;
-use thiserror::Error;
 use tokio::net::ToSocketAddrs;
 use tokio_kcp::KcpListener;
-use tracing::error;
 
-use super::{StreamProxy, StreamProxyBuilder};
+use crate::ListenerBindError;
+
+use super::{StreamProxy, StreamProxyBuilder, StreamProxyServerBuildError};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -25,19 +25,18 @@ pub struct KcpProxyServerBuilder {
 impl loading::Builder for KcpProxyServerBuilder {
     type Hook = StreamProxy;
     type Server = KcpServer<Self::Hook>;
+    type Err = StreamProxyServerBuildError;
 
-    async fn build_server(self) -> io::Result<Self::Server> {
+    async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let stream_proxy = self.build_hook()?;
         build_kcp_proxy_server(listen_addr.as_ref(), stream_proxy)
             .await
-            .map_err(|e| e.0)
+            .map_err(|e| e.into())
     }
 
-    fn build_hook(self) -> io::Result<Self::Hook> {
-        self.inner
-            .build()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+    fn build_hook(self) -> Result<Self::Hook, Self::Err> {
+        self.inner.build().map_err(|e| e.into())
     }
 
     fn key(&self) -> &Arc<str> {
@@ -56,7 +55,3 @@ pub async fn build_kcp_proxy_server(
     let server = KcpServer::new(listener, stream_proxy);
     Ok(server)
 }
-
-#[derive(Debug, Error)]
-#[error("Failed to bind to listen address: {0}")]
-pub struct ListenerBindError(#[source] io::Error);

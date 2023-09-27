@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    io,
+    fmt::Debug,
     sync::Arc,
 };
 
@@ -28,7 +28,7 @@ where
         &mut self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         builders: Vec<B>,
-    ) -> io::Result<()>
+    ) -> AnyResult
     where
         S: Server<Hook = H> + Send + 'static,
         B: Builder<Hook = H, Server = S>,
@@ -76,8 +76,9 @@ pub trait Hook {}
 pub trait Builder {
     type Hook: Hook;
     type Server: Server<Hook = Self::Hook>;
-    async fn build_server(self) -> io::Result<Self::Server>;
-    fn build_hook(self) -> io::Result<Self::Hook>;
+    type Err: std::error::Error + Send + Sync + 'static;
+    async fn build_server(self) -> Result<Self::Server, Self::Err>;
+    fn build_hook(self) -> Result<Self::Hook, Self::Err>;
     fn key(&self) -> &Arc<str>;
 }
 

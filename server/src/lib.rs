@@ -1,4 +1,4 @@
-use std::{io, sync::Arc};
+use std::sync::Arc;
 
 use access_server::{AccessServerConfig, AccessServerLoader};
 use common::error::{AnyError, AnyResult};
@@ -84,11 +84,11 @@ where
 #[derive(Debug, Error)]
 pub enum ServeError {
     #[error("Failed to read config file: {0}")]
-    Config(AnyError),
+    Config(#[source] AnyError),
     #[error("Failed to load config: {0}")]
-    Load(io::Error),
+    Load(#[source] AnyError),
     #[error("Server task failed: {0}")]
-    ServerTask(AnyError),
+    ServerTask(#[source] AnyError),
 }
 
 pub async fn load(
@@ -96,7 +96,7 @@ pub async fn load(
     join_set: &mut tokio::task::JoinSet<AnyResult>,
     access_server_loader: &mut AccessServerLoader,
     proxy_server_loader: &mut ProxyServerLoader,
-) -> io::Result<()> {
+) -> AnyResult {
     config
         .access_server
         .spawn_and_kill(join_set, access_server_loader)

@@ -70,8 +70,9 @@ pub struct Socks5ServerUdpAccessServerBuilder {
 impl loading::Builder for Socks5ServerUdpAccessServerBuilder {
     type Hook = Socks5ServerUdpAccess;
     type Server = UdpServer<Self::Hook>;
+    type Err = io::Error;
 
-    async fn build_server(self) -> io::Result<UdpServer<Socks5ServerUdpAccess>> {
+    async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let access = self.build_hook()?;
         let server = access.build(listen_addr.as_ref()).await?;
@@ -82,7 +83,7 @@ impl loading::Builder for Socks5ServerUdpAccessServerBuilder {
         &self.listen_addr
     }
 
-    fn build_hook(self) -> io::Result<Socks5ServerUdpAccess> {
+    fn build_hook(self) -> Result<Self::Hook, Self::Err> {
         Ok(Socks5ServerUdpAccess::new(
             self.proxy_table,
             self.speed_limit,
@@ -107,12 +108,7 @@ impl Socks5ServerUdpAccess {
     }
 
     pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<UdpServer<Self>> {
-        let listener = tokio::net::UdpSocket::bind(listen_addr)
-            .await
-            .map_err(|e| {
-                error!(?e, "Failed to bind to listen address");
-                e
-            })?;
+        let listener = tokio::net::UdpSocket::bind(listen_addr).await?;
         Ok(UdpServer::new(listener, self))
     }
 

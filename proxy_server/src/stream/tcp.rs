@@ -1,4 +1,4 @@
-use std::{io, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use common::{loading, stream::streams::tcp::TcpServer};
@@ -7,7 +7,9 @@ use thiserror::Error;
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tracing::error;
 
-use super::{StreamProxy, StreamProxyBuilder};
+use crate::ListenerBindError;
+
+use super::{StreamProxy, StreamProxyBuildError, StreamProxyBuilder};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -21,19 +23,18 @@ pub struct TcpProxyServerBuilder {
 impl loading::Builder for TcpProxyServerBuilder {
     type Hook = StreamProxy;
     type Server = TcpServer<Self::Hook>;
+    type Err = TcpProxyServerBuildError;
 
-    async fn build_server(self) -> io::Result<Self::Server> {
+    async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let stream_proxy = self.build_hook()?;
         build_tcp_proxy_server(listen_addr.as_ref(), stream_proxy)
             .await
-            .map_err(|e| e.0)
+            .map_err(|e| e.into())
     }
 
-    fn build_hook(self) -> io::Result<Self::Hook> {
-        self.inner
-            .build()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+    fn build_hook(self) -> Result<Self::Hook, Self::Err> {
+        self.inner.build().map_err(|e| e.into())
     }
 
     fn key(&self) -> &Arc<str> {
@@ -41,18 +42,24 @@ impl loading::Builder for TcpProxyServerBuilder {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum TcpProxyServerBuildError {
+    #[error("{0}")]
+    Hook(#[from] StreamProxyBuildError),
+    #[error("{0}")]
+    Server(#[from] ListenerBindError),
+}
+
 pub async fn build_tcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxy,
 ) -> Result<TcpServer<StreamProxy>, ListenerBindError> {
-    let listener = TcpListener::bind(listen_addr).await?;
+    let listener = TcpListener::bind(listen_addr)
+        .await
+        .map_err(ListenerBindError)?;
     let server = TcpServer::new(listener, stream_proxy);
     Ok(server)
 }
-
-#[derive(Debug, Error)]
-#[error("Failed to bind to listen address: {0}")]
-pub struct ListenerBindError(#[from] io::Error);
 
 #[cfg(test)]
 mod tests {

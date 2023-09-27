@@ -3,6 +3,7 @@ use std::io;
 use common::{error::AnyResult, loading};
 use serde::Deserialize;
 use stream::{kcp::KcpProxyServerBuilder, tcp::TcpProxyServerBuilder, StreamProxy};
+use thiserror::Error;
 use udp::{UdpProxy, UdpProxyServerBuilder};
 
 pub mod stream;
@@ -32,7 +33,7 @@ impl ProxyServerConfig {
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut ProxyServerLoader,
-    ) -> io::Result<()> {
+    ) -> AnyResult {
         loader.tcp_server.load(join_set, self.tcp_server).await?;
 
         loader.udp_server.load(join_set, self.udp_server).await?;
@@ -70,3 +71,7 @@ impl Default for ProxyServerLoader {
         Self::new()
     }
 }
+
+#[derive(Debug, Error)]
+#[error("Failed to bind to listen address: {0}")]
+pub struct ListenerBindError(#[source] io::Error);

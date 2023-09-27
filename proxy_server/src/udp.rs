@@ -28,6 +28,8 @@ use tokio::{
 };
 use tracing::{error, info, instrument, trace, warn};
 
+use crate::ListenerBindError;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UdpProxyServerBuilder {
@@ -40,28 +42,26 @@ pub struct UdpProxyServerBuilder {
 impl loading::Builder for UdpProxyServerBuilder {
     type Hook = UdpProxy;
     type Server = UdpServer<Self::Hook>;
+    type Err = UdpProxyServerBuildError;
 
-    async fn build_server(self) -> io::Result<Self::Server> {
+    async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = Arc::clone(&self.listen_addr);
         let udp_proxy = self.build_hook()?;
         let server = udp_proxy.build(listen_addr.as_ref()).await?;
         Ok(server)
     }
 
-    fn build_hook(self) -> io::Result<Self::Hook> {
-        let header_crypto = self.header_xor_key.build().map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                UdpProxyBuildError::HeaderCrypto(e),
-            )
-        })?;
+    fn build_hook(self) -> Result<Self::Hook, Self::Err> {
+        let header_crypto = self
+            .header_xor_key
+            .build()
+            .map_err(UdpProxyBuildError::HeaderCrypto)?;
         let payload_crypto = match self.payload_xor_key {
-            Some(payload_crypto) => Some(payload_crypto.build().map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    UdpProxyBuildError::HeaderCrypto(e),
-                )
-            })?),
+            Some(payload_crypto) => Some(
+                payload_crypto
+                    .build()
+                    .map_err(UdpProxyBuildError::HeaderCrypto)?,
+            ),
             None => None,
         };
         Ok(UdpProxy::new(header_crypto, payload_crypto))
@@ -80,6 +80,14 @@ pub enum UdpProxyBuildError {
     PayloadCrypto(#[source] XorCryptoBuildError),
 }
 
+#[derive(Debug, Error)]
+pub enum UdpProxyServerBuildError {
+    #[error("{0}")]
+    Hook(#[from] UdpProxyBuildError),
+    #[error("{0}")]
+    Server(#[from] ListenerBindError),
+}
+
 #[derive(Debug)]
 pub struct UdpProxy {
     header_crypto: XorCrypto,
@@ -94,8 +102,13 @@ impl UdpProxy {
         }
     }
 
-    pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<UdpServer<Self>> {
-        let listener = UdpSocket::bind(listen_addr).await?;
+    pub async fn build(
+        self,
+        listen_addr: impl ToSocketAddrs,
+    ) -> Result<UdpServer<Self>, ListenerBindError> {
+        let listener = UdpSocket::bind(listen_addr)
+            .await
+            .map_err(ListenerBindError)?;
         Ok(UdpServer::new(listener, self))
     }
 

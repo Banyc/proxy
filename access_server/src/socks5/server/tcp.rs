@@ -119,16 +119,12 @@ pub struct Socks5ServerTcpAccessServerBuilder {
 impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
     type Hook = Socks5ServerTcpAccess;
     type Server = TcpServer<Self::Hook>;
+    type Err = io::Error;
 
-    async fn build_server(self) -> io::Result<TcpServer<Socks5ServerTcpAccess>> {
+    async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let access = self.build_hook()?;
-        let tcp_listener = tokio::net::TcpListener::bind(listen_addr.as_ref())
-            .await
-            .map_err(|e| {
-                error!(?e, "Failed to bind to listen address");
-                e
-            })?;
+        let tcp_listener = tokio::net::TcpListener::bind(listen_addr.as_ref()).await?;
         Ok(TcpServer::new(tcp_listener, access))
     }
 
@@ -136,7 +132,7 @@ impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
         &self.listen_addr
     }
 
-    fn build_hook(self) -> io::Result<Socks5ServerTcpAccess> {
+    fn build_hook(self) -> Result<Self::Hook, Self::Err> {
         let access = Socks5ServerTcpAccess::new(
             self.proxy_table,
             self.stream_pool,

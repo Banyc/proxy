@@ -99,8 +99,9 @@ pub struct HttpAccessServerBuilder {
 impl loading::Builder for HttpAccessServerBuilder {
     type Hook = HttpAccess;
     type Server = TcpServer<Self::Hook>;
+    type Err = io::Error;
 
-    async fn build_server(self) -> io::Result<TcpServer<HttpAccess>> {
+    async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let access = self.build_hook()?;
         let server = access.build(listen_addr.as_ref()).await?;
@@ -111,7 +112,7 @@ impl loading::Builder for HttpAccessServerBuilder {
         &self.listen_addr
     }
 
-    fn build_hook(self) -> io::Result<HttpAccess> {
+    fn build_hook(self) -> Result<Self::Hook, Self::Err> {
         let access = HttpAccess::new(
             self.proxy_table,
             self.stream_pool,
@@ -147,12 +148,7 @@ impl HttpAccess {
 
     #[instrument(skip(self, listen_addr))]
     pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<TcpServer<Self>> {
-        let tcp_listener = tokio::net::TcpListener::bind(listen_addr)
-            .await
-            .map_err(|e| {
-                error!(?e, "Failed to bind to listen address");
-                e
-            })?;
+        let tcp_listener = tokio::net::TcpListener::bind(listen_addr).await?;
         Ok(TcpServer::new(tcp_listener, self))
     }
 

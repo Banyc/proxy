@@ -25,6 +25,8 @@ use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tracing::{error, info, instrument, warn};
 
+use crate::ListenerBindError;
+
 pub mod kcp;
 pub mod tcp;
 
@@ -61,6 +63,14 @@ pub enum StreamProxyBuildError {
     PayloadCrypto(#[source] XorCryptoBuildError),
     #[error("Stream pool: {0}")]
     StreamPool(#[from] ParseInternetAddrError),
+}
+
+#[derive(Debug, Error)]
+pub enum StreamProxyServerBuildError {
+    #[error("{0}")]
+    Hook(#[from] StreamProxyBuildError),
+    #[error("{0}")]
+    Server(#[from] ListenerBindError),
 }
 
 #[derive(Debug)]

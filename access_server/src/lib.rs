@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use common::{
     error::AnyResult,
@@ -68,12 +68,9 @@ impl AccessServerConfig {
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut AccessServerLoader,
-    ) -> io::Result<()> {
+    ) -> AnyResult {
         // Shared
-        let stream_pool = self
-            .stream_pool
-            .build()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let stream_pool = self.stream_pool.build()?;
         let stream_proxy_tables = self
             .stream_proxy_tables
             .into_iter()
@@ -81,8 +78,7 @@ impl AccessServerConfig {
                 Ok(v) => Ok((k, v)),
                 Err(e) => Err(e),
             })
-            .collect::<Result<HashMap<_, _>, _>>()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            .collect::<Result<HashMap<_, _>, _>>()?;
         let udp_proxy_tables = self
             .udp_proxy_tables
             .into_iter()
@@ -90,18 +86,15 @@ impl AccessServerConfig {
                 Ok(v) => Ok((k, v)),
                 Err(e) => Err(e),
             })
-            .collect::<Result<HashMap<_, _>, _>>()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        let filters = filter::build_from_map(self.matchers, self.filters)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        let filters = filter::build_from_map(self.matchers, self.filters)?;
 
         // TCP servers
         let tcp_server = self
             .tcp_server
             .into_iter()
             .map(|c| c.into_builder(stream_pool.clone(), &stream_proxy_tables))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            .collect::<Result<Vec<_>, _>>()?;
         loader.tcp_server.load(join_set, tcp_server).await?;
 
         // UDP servers
@@ -109,8 +102,7 @@ impl AccessServerConfig {
             .udp_server
             .into_iter()
             .map(|c| c.into_builder(&udp_proxy_tables))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            .collect::<Result<Vec<_>, _>>()?;
         loader.udp_server.load(join_set, udp_server).await?;
 
         // HTTP servers
@@ -118,8 +110,7 @@ impl AccessServerConfig {
             .http_server
             .into_iter()
             .map(|c| c.into_builder(stream_pool.clone(), &stream_proxy_tables, &filters))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            .collect::<Result<Vec<_>, _>>()?;
         loader.http_server.load(join_set, http_server).await?;
 
         // SOCKS5 TCP servers
@@ -127,8 +118,7 @@ impl AccessServerConfig {
             .socks5_tcp_server
             .into_iter()
             .map(|c| c.into_builder(stream_pool.clone(), &stream_proxy_tables, &filters))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            .collect::<Result<Vec<_>, _>>()?;
         loader
             .socks5_tcp_server
             .load(join_set, socks5_tcp_server)
@@ -139,8 +129,7 @@ impl AccessServerConfig {
             .socks5_udp_server
             .into_iter()
             .map(|c| c.into_builder(&udp_proxy_tables))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            .collect::<Result<Vec<_>, _>>()?;
         loader
             .socks5_udp_server
             .load(join_set, socks5_udp_server)
