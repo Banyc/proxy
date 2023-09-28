@@ -298,7 +298,7 @@ async fn tls_http<S>(
     req: Request<Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>
 where
-    S: AsyncWrite + AsyncRead + Send + Unpin,
+    S: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
     // Establish TLS connection
     let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
