@@ -243,10 +243,9 @@ where
             let domain_name = String::from_utf8(buf)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             let port = reader.read_u16().await?;
-            InternetAddr::DomainName {
-                addr: domain_name.into(),
-                port,
-            }
+            let addr = format!("{domain_name}:{port}");
+            addr.parse::<InternetAddr>()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
         }
     };
     Ok(address)
