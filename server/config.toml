@@ -1,20 +1,20 @@
 [global]
-stream_pool = ["tcp://"]
+stream_pool = ["tcp://proxy.example.org:80"]
 
 [access_server.stream_proxy_tables]
 "default" = { chains = [
     { weight = 1, chain = [
-        { address = "tcp://", xor_key = "base64" },
-    ],                        payload_xor_key = "base64" },
+        { address = "tcp://proxy.example.org:80", xor_key = "base64" },
+    ],                                            payload_xor_key = "base64" },
     { weight = 1, chain = [
-        { address = "kcp://", xor_key = "base64" },
-    ],                        payload_xor_key = "base64" },
+        { address = "kcp://proxy.example.org:80", xor_key = "base64" },
+    ],                                            payload_xor_key = "base64" },
 ], trace_rtt = false, active_chains = 1 }
 [access_server.udp_proxy_tables]
 "default" = { chains = [
     { weight = 1, chain = [
-        { address = "", xor_key = "base64" },
-    ],                  payload_xor_key = "base64" },
+        { address = "proxy.example.org:80", xor_key = "base64" },
+    ],                                      payload_xor_key = "base64" },
 ], trace_rtt = false, active_chains = 1 }
 [access_server.filters]
 "default" = [
@@ -31,47 +31,27 @@ stream_pool = ["tcp://"]
 ]
 
 [[access_server.tcp_server]]
-listen_addr = ""
-destination = "tcp://"
-proxy_table = "default"
-# proxy_table = { chains = [
-#     { weight = 1, chain = [
-#         { address = "tcp://", xor_key = "base64" },
-#     ],                        payload_xor_key = "base64" },
-# ], trace_rtt = false }
+listen_addr = "0.0.0.0:80"
+destination = "tcp://www.example.org:80"
+proxy_table = "default" # Or, `proxy_table = { chains = ..., trace_rtt = ..., ... }`
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[access_server.udp_server]]
-listen_addr = ""
-destination = ""
-# proxy_table = "default"
-proxy_table = { chains = [
-    { weight = 1, chain = [
-        { address = "", xor_key = "base64" },
-    ],                  payload_xor_key = "base64" },
-], trace_rtt = false }
+listen_addr = "0.0.0.0:80"
+destination = "www.example.org:80"
+proxy_table = "default" # Or, `proxy_table = { chains = ..., trace_rtt = ..., ... }`
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[access_server.http_server]]
-listen_addr = ""
-proxy_table = "default"
-# proxy_table = { chains = [
-#     { weight = 1, chain = [
-#         { address = "tcp://", xor_key = "base64" },
-#     ],                        payload_xor_key = "base64" },
-# ], trace_rtt = false }
+listen_addr = "0.0.0.0:80"
+proxy_table = "default" # Or, `proxy_table = { chains = ..., trace_rtt = ..., ... }`
 filter = "default"
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[access_server.socks5_tcp_server]]
-listen_addr = ""
-udp_server_addr = ""
-proxy_table = "default"
-# proxy_table = { chains = [
-#     { weight = 1, chain = [
-#         { address = "tcp://", xor_key = "base64" },
-#     ],                        payload_xor_key = "base64" },
-# ], trace_rtt = false }
+listen_addr = "0.0.0.0:80"
+udp_server_addr = "0.0.0.0:80"
+proxy_table = "default" # Or, `proxy_table = { chains = ..., trace_rtt = ..., ... }`
 filter = "default"
 # speed_limit = 1024.0 # 1.0 KiB/s
 # users = [
@@ -79,26 +59,21 @@ filter = "default"
 # ]
 
 [[access_server.socks5_udp_server]]
-listen_addr = ""
-proxy_table = "default"
-# proxy_table = { chains = [
-#     { weight = 1, chain = [
-#         { address = "", xor_key = "base64" },
-#     ],                  payload_xor_key = "base64" },
-# ], trace_rtt = false }
+listen_addr = "0.0.0.0:80"
+proxy_table = "default" # Or, `proxy_table = { chains = ..., trace_rtt = ..., ... }`
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[proxy_server.tcp_server]]
-listen_addr = ""
+listen_addr = "0.0.0.0:80"
 header_xor_key = "base64"
 # payload_xor_key = "base64"
 
 [[proxy_server.kcp_server]]
-listen_addr = ""
+listen_addr = "0.0.0.0:80"
 header_xor_key = "base64"
 # payload_xor_key = "base64"
 
 [[proxy_server.udp_server]]
-listen_addr = ""
+listen_addr = "0.0.0.0:80"
 header_xor_key = "base64"
 # payload_xor_key = "base64"
