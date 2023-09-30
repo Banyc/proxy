@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 access_server = { path = "../access_server" }
 async-trait = "0.1.73"
-clap = { version = "4.4.4", features = ["derive"] }
+clap = { version = "4.4.6", features = ["derive"] }
 common = { path = "../common" }
 file_watcher_tokio = "0.2.0"
 notify = "6.1.1"
