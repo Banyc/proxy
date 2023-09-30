@@ -181,8 +181,7 @@ impl HttpAccess {
         let method = req.method().clone();
         let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
         let port = req.uri().port_u16().unwrap_or(80);
-        let addr = format!("{}:{}", host, port);
-        let addr = addr.parse()?;
+        let addr = InternetAddr::from_host_and_port(host, port)?;
 
         let action = self.filter.filter(&addr);
         match action {

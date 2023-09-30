@@ -90,6 +90,25 @@ impl InternetAddr {
         ))
     }
 
+    pub fn from_host_and_port<H>(host: H, port: u16) -> Result<Self, ParseInternetAddrError>
+    where
+        H: Into<Arc<str>> + AsRef<str>,
+    {
+        if let Ok(ip) = host.as_ref().parse::<IpAddr>() {
+            return Ok(Self(InternetAddrKind::SocketAddr(SocketAddr::new(
+                ip, port,
+            ))));
+        }
+
+        if host.as_ref().contains(':') {
+            return Err(ParseInternetAddrError);
+        }
+        Ok(Self(InternetAddrKind::DomainName {
+            addr: host.into(),
+            port,
+        }))
+    }
+
     pub fn port(&self) -> u16 {
         match self.deref() {
             InternetAddrKind::SocketAddr(s) => s.port(),
