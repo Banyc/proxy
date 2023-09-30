@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    ops::RangeInclusive,
+    ops::{Deref, RangeInclusive},
     sync::Arc,
 };
 
@@ -10,7 +10,10 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{addr::InternetAddr, config::SharableConfig};
+use crate::{
+    addr::{InternetAddr, InternetAddrKind},
+    config::SharableConfig,
+};
 
 pub fn build_from_map(
     matchers: HashMap<Arc<str>, MatcherBuilder>,
@@ -103,9 +106,9 @@ pub struct Filter {
 
 impl Filter {
     pub fn filter(&self, addr: &InternetAddr) -> Action {
-        match addr {
-            InternetAddr::SocketAddr(addr) => self.filter_ip(*addr),
-            InternetAddr::DomainName { addr, port } => self.filter_domain_name(addr, *port),
+        match addr.deref() {
+            InternetAddrKind::SocketAddr(addr) => self.filter_ip(*addr),
+            InternetAddrKind::DomainName { addr, port } => self.filter_domain_name(addr, *port),
         }
     }
 

@@ -115,7 +115,9 @@ impl<'de> Visitor<'de> for StreamAddrStrVisitor {
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
+    use std::{net::SocketAddr, ops::Deref};
+
+    use crate::addr::InternetAddrKind;
 
     use super::*;
 
@@ -136,8 +138,8 @@ mod tests {
         let s = "\"tcp://127.0.0.1:1\"";
         let v: StreamAddrStr = serde_json::from_str(s).unwrap();
         assert_eq!(
-            v.0.address,
-            InternetAddr::SocketAddr("127.0.0.1:1".parse().unwrap())
+            v.0.address.deref(),
+            &InternetAddrKind::SocketAddr("127.0.0.1:1".parse().unwrap())
         );
         assert_eq!(v.0.stream_type, StreamType::Tcp);
         let new_s = serde_json::to_string(&v).unwrap();

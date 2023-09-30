@@ -1,9 +1,10 @@
 use std::{
     io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
+    ops::Deref,
 };
 
-use common::addr::InternetAddr;
+use common::addr::{InternetAddr, InternetAddrKind};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub mod sub_negotiations;
@@ -255,8 +256,8 @@ pub async fn encode_address<W>(addr: &InternetAddr, writer: &mut W) -> io::Resul
 where
     W: AsyncWrite + Unpin,
 {
-    match addr {
-        InternetAddr::SocketAddr(addr) => match addr {
+    match addr.deref() {
+        InternetAddrKind::SocketAddr(addr) => match addr {
             SocketAddr::V4(addr) => {
                 writer.write_u8(AddressType::Ipv4.into()).await?;
                 writer.write_all(&addr.ip().octets()).await?;
@@ -268,7 +269,7 @@ where
                 writer.write_u16(addr.port()).await?;
             }
         },
-        InternetAddr::DomainName { addr, port } => {
+        InternetAddrKind::DomainName { addr, port } => {
             writer.write_u8(AddressType::DomainName.into()).await?;
             let len = u8::try_from(addr.as_bytes().len())
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -544,10 +545,7 @@ mod tests {
 
     #[tokio::test]
     async fn address_domain_name() {
-        let expected = InternetAddr::DomainName {
-            addr: "a".into(),
-            port: 5,
-        };
+        let expected = "a:5".parse::<InternetAddr>().unwrap();
         let mut wtr = io::Cursor::new(Vec::new());
         encode_address(&expected, &mut wtr).await.unwrap();
         assert_eq!(
@@ -563,7 +561,7 @@ mod tests {
     async fn relay_request() {
         let expected = RelayRequest {
             command: Command::Connect,
-            destination: InternetAddr::SocketAddr("1.2.3.4:5".parse().unwrap()),
+            destination: "1.2.3.4:5".parse().unwrap(),
         };
         let mut wtr = io::Cursor::new(Vec::new());
         expected.encode(&mut wtr).await.unwrap();
@@ -591,7 +589,7 @@ mod tests {
     async fn relay_response() {
         let expected = RelayResponse {
             reply: Reply::GeneralSocksServerFailure,
-            bind: InternetAddr::SocketAddr("1.2.3.4:5".parse().unwrap()),
+            bind: "1.2.3.4:5".parse().unwrap(),
         };
         let mut wtr = io::Cursor::new(Vec::new());
         expected.encode(&mut wtr).await.unwrap();
@@ -619,7 +617,7 @@ mod tests {
     async fn udp_request_header() {
         let expected = UdpRequestHeader {
             fragment: 1,
-            destination: InternetAddr::SocketAddr("1.2.3.4:5".parse().unwrap()),
+            destination: "1.2.3.4:5".parse().unwrap(),
         };
         let mut wtr = io::Cursor::new(Vec::new());
         expected.encode(&mut wtr).await.unwrap();

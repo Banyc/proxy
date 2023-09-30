@@ -3,6 +3,7 @@ use std::{
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4},
     num::NonZeroUsize,
+    ops::Deref,
     str::FromStr,
     sync::{Arc, Mutex},
 };
@@ -27,7 +28,19 @@ pub fn any_addr(ip_version: &IpAddr) -> SocketAddr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub enum InternetAddr {
+pub struct InternetAddr(InternetAddrKind);
+
+impl Deref for InternetAddr {
+    type Target = InternetAddrKind;
+
+    fn deref(&self) -> &Self::Target {
+        let Self(kind) = self;
+        kind
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub enum InternetAddrKind {
     SocketAddr(SocketAddr),
     DomainName { addr: Arc<str>, port: u16 },
 }
@@ -35,15 +48,15 @@ pub enum InternetAddr {
 impl Display for InternetAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::SocketAddr(addr) => write!(f, "{}", addr),
-            Self::DomainName { addr, port } => write!(f, "{addr}:{port}",),
+            Self(InternetAddrKind::SocketAddr(addr)) => write!(f, "{}", addr),
+            Self(InternetAddrKind::DomainName { addr, port }) => write!(f, "{addr}:{port}",),
         }
     }
 }
 
 impl From<SocketAddr> for InternetAddr {
     fn from(addr: SocketAddr) -> Self {
-        Self::SocketAddr(addr)
+        Self(InternetAddrKind::SocketAddr(addr))
     }
 }
 
@@ -52,7 +65,7 @@ impl FromStr for InternetAddr {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Ok(addr) = s.parse::<SocketAddr>() {
-            return Ok(Self::SocketAddr(addr));
+            return Ok(Self(InternetAddrKind::SocketAddr(addr)));
         }
 
         let mut parts = s.split(':');
@@ -62,7 +75,7 @@ impl FromStr for InternetAddr {
         if parts.next().is_some() {
             return Err(ParseInternetAddrError);
         }
-        Ok(Self::DomainName { addr, port })
+        Ok(Self(InternetAddrKind::DomainName { addr, port }))
     }
 }
 
@@ -72,20 +85,22 @@ pub struct ParseInternetAddrError;
 
 impl InternetAddr {
     pub fn zero_ipv4_addr() -> Self {
-        Self::SocketAddr(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into())
+        Self(InternetAddrKind::SocketAddr(
+            SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into(),
+        ))
     }
 
     pub fn port(&self) -> u16 {
-        match self {
-            InternetAddr::SocketAddr(s) => s.port(),
-            InternetAddr::DomainName { port, .. } => *port,
+        match self.deref() {
+            InternetAddrKind::SocketAddr(s) => s.port(),
+            InternetAddrKind::DomainName { port, .. } => *port,
         }
     }
 
     pub async fn to_socket_addr(&self) -> io::Result<SocketAddr> {
         match self {
-            Self::SocketAddr(addr) => Ok(*addr),
-            Self::DomainName { addr, port } => {
+            Self(InternetAddrKind::SocketAddr(addr)) => Ok(*addr),
+            Self(InternetAddrKind::DomainName { addr, port }) => {
                 let res = lookup_host((addr.as_ref(), *port))
                     .await
                     .and_then(|mut res| {
@@ -160,8 +175,8 @@ mod tests {
         let s = "\"127.0.0.1:1\"";
         let v: InternetAddrStr = serde_json::from_str(s).unwrap();
         assert_eq!(
-            v.0,
-            InternetAddr::SocketAddr("127.0.0.1:1".parse().unwrap())
+            v.0.deref(),
+            &InternetAddrKind::SocketAddr("127.0.0.1:1".parse().unwrap())
         );
         let new_s = serde_json::to_string(&v).unwrap();
         assert_eq!(s, new_s);
@@ -172,8 +187,8 @@ mod tests {
         let s = "\"example.website:1\"";
         let v: InternetAddrStr = serde_json::from_str(s).unwrap();
         assert_eq!(
-            v.0,
-            InternetAddr::DomainName {
+            v.0.deref(),
+            &InternetAddrKind::DomainName {
                 addr: "example.website".into(),
                 port: 1
             }

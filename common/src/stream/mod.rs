@@ -1,4 +1,11 @@
-use std::{fmt::Display, io, net::SocketAddr, ops::DerefMut, pin::Pin, time::Instant};
+use std::{
+    fmt::Display,
+    io,
+    net::SocketAddr,
+    ops::{Deref, DerefMut},
+    pin::Pin,
+    time::Instant,
+};
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
@@ -8,7 +15,11 @@ use tokio::{
     net::TcpStream,
 };
 
-use crate::{addr::InternetAddr, crypto::XorCrypto, loading};
+use crate::{
+    addr::{InternetAddr, InternetAddrKind},
+    crypto::XorCrypto,
+    loading,
+};
 
 use self::{
     addr::StreamAddr,
@@ -75,9 +86,9 @@ impl Display for StreamMetrics {
         let duration = duration.as_secs_f64();
         let uplink_speed = self.bytes_uplink as f64 / duration;
         let downlink_speed = self.bytes_downlink as f64 / duration;
-        let upstream_addrs = match &self.upstream_addr.address {
-            InternetAddr::SocketAddr(_) => self.upstream_addr.to_string(),
-            InternetAddr::DomainName { .. } => {
+        let upstream_addrs = match self.upstream_addr.address.deref() {
+            InternetAddrKind::SocketAddr(_) => self.upstream_addr.to_string(),
+            InternetAddrKind::DomainName { .. } => {
                 format!("{},{}", self.upstream_addr, self.upstream_sock_addr.ip())
             }
         };
@@ -102,9 +113,9 @@ impl Display for SimplifiedStreamMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let duration = self.end - self.start;
         let duration = duration.as_secs_f64();
-        let upstream_addrs = match &self.upstream_addr.address {
-            InternetAddr::SocketAddr(_) => self.upstream_addr.to_string(),
-            InternetAddr::DomainName { .. } => {
+        let upstream_addrs = match self.upstream_addr.address.deref() {
+            InternetAddrKind::SocketAddr(_) => self.upstream_addr.to_string(),
+            InternetAddrKind::DomainName { .. } => {
                 format!("{},{}", self.upstream_addr, self.upstream_sock_addr.ip())
             }
         };
