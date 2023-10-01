@@ -203,7 +203,7 @@ impl HttpAccess {
 
         // Establish proxy chain
         let proxy_chain = self.proxy_table.choose_chain();
-        let (upstream, upstream_addr, upstream_sock_addr) = establish(
+        let upstream = establish(
             &proxy_chain.chain,
             StreamAddr {
                 address: addr.clone(),
@@ -216,11 +216,11 @@ impl HttpAccess {
         let res = match &proxy_chain.payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
-                let xor_stream = XorStream::upgrade(upstream, crypto);
+                let xor_stream = XorStream::upgrade(upstream.stream, crypto);
 
                 tls_http(xor_stream, req).await
             }
-            None => tls_http(upstream, req).await,
+            None => tls_http(upstream.stream, req).await,
         };
 
         let end = std::time::Instant::now();
@@ -228,8 +228,8 @@ impl HttpAccess {
             stream: SimplifiedStreamMetrics {
                 start,
                 end,
-                upstream_addr,
-                upstream_sock_addr,
+                upstream_addr: upstream.addr,
+                upstream_sock_addr: upstream.sock_addr,
                 downstream_addr: None,
             },
             destination: addr,
@@ -461,20 +461,19 @@ impl HttpConnect {
             stream_type: StreamType::Tcp,
         };
         let proxy_chain = self.proxy_table.choose_chain();
-        let (upstream, upstream_addr, upstream_sock_addr) =
-            establish(&proxy_chain.chain, destination, &self.stream_pool).await?;
+        let upstream = establish(&proxy_chain.chain, destination, &self.stream_pool).await?;
 
         // Proxy data
         let res = copy_bidirectional_with_payload_crypto(
             upgraded,
-            upstream,
+            upstream.stream,
             proxy_chain.payload_crypto.as_ref(),
             self.speed_limiter.clone(),
         )
         .await;
 
         let (metrics, res) =
-            get_metrics_from_copy_result(start, upstream_addr, upstream_sock_addr, None, res);
+            get_metrics_from_copy_result(start, upstream.addr, upstream.sock_addr, None, res);
         let metrics = StreamProxyMetrics {
             stream: metrics,
             destination: address,

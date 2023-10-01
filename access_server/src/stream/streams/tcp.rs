@@ -136,7 +136,7 @@ impl TcpAccess {
         let downstream_addr = downstream.peer_addr().map_err(ProxyError::DownstreamAddr)?;
 
         let proxy_chain = self.proxy_table.choose_chain();
-        let (upstream, upstream_addr, upstream_sock_addr) = establish(
+        let upstream = establish(
             &proxy_chain.chain,
             self.destination.clone(),
             &self.stream_pool,
@@ -145,7 +145,7 @@ impl TcpAccess {
 
         let res = copy_bidirectional_with_payload_crypto(
             downstream,
-            upstream,
+            upstream.stream,
             proxy_chain.payload_crypto.as_ref(),
             self.speed_limiter.clone(),
         )
@@ -153,8 +153,8 @@ impl TcpAccess {
 
         let (metrics, res) = get_metrics_from_copy_result(
             start,
-            upstream_addr,
-            upstream_sock_addr,
+            upstream.addr,
+            upstream.sock_addr,
             Some(downstream_addr),
             res,
         );

@@ -260,3 +260,10 @@ pub fn get_metrics_from_copy_result(
 
     (metrics, result.io_result)
 }
+
+#[derive(Debug)]
+pub struct CreatedStreamAndAddr {
+    pub stream: CreatedStream,
+    pub addr: StreamAddr,
+    pub sock_addr: SocketAddr,
+}

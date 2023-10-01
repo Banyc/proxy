@@ -9,6 +9,7 @@ mod tests {
             addr::{StreamAddr, StreamType},
             pool::Pool,
             proxy_table::StreamProxyConfig,
+            CreatedStreamAndAddr,
         },
     };
     use proxy_client::stream::{establish, trace_rtt};
@@ -137,7 +138,8 @@ mod tests {
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let (mut stream, _, _) = establish(&proxies, greet_addr, &Pool::new()).await.unwrap();
+        let CreatedStreamAndAddr { mut stream, .. } =
+            establish(&proxies, greet_addr, &Pool::new()).await.unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();
@@ -176,7 +178,7 @@ mod tests {
             let greet_addr = greet_addr.clone();
             handles.spawn(async move {
                 // Connect to proxy server
-                let (mut stream, _, _) =
+                let CreatedStreamAndAddr { mut stream, .. } =
                     establish(&proxies, greet_addr, &Pool::new()).await.unwrap();
 
                 // Send message
@@ -233,7 +235,7 @@ mod tests {
                 for _ in 0..STRESS_SERIAL {
                     let greet_addr = greet_addr.clone();
                     // Connect to proxy server
-                    let (mut stream, _, _) =
+                    let CreatedStreamAndAddr { mut stream, .. } =
                         establish(&proxies, greet_addr, &Pool::new()).await.unwrap();
 
                     // Send message
@@ -297,7 +299,8 @@ mod tests {
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let (mut stream, _, _) = establish(&[], greet_addr, &Pool::new()).await.unwrap();
+        let CreatedStreamAndAddr { mut stream, .. } =
+            establish(&[], greet_addr, &Pool::new()).await.unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();

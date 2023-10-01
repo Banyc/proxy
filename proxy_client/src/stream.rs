@@ -1,7 +1,4 @@
-use std::{
-    net::SocketAddr,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use common::{
@@ -18,7 +15,7 @@ use common::{
         connect::{connect_with_pool, ConnectError},
         pool::Pool,
         proxy_table::StreamProxyChain,
-        CreatedStream,
+        CreatedStreamAndAddr,
     },
 };
 use thiserror::Error;
@@ -31,13 +28,17 @@ pub async fn establish(
     proxies: &StreamProxyChain,
     destination: StreamAddr,
     stream_pool: &Pool,
-) -> Result<(CreatedStream, StreamAddr, SocketAddr), StreamEstablishError> {
+) -> Result<CreatedStreamAndAddr, StreamEstablishError> {
     // If there are no proxy configs, just connect to the destination
     if proxies.is_empty() {
         let (stream, sock_addr) = connect_with_pool(&destination, stream_pool, true, IO_TIMEOUT)
             .await
             .map_err(StreamEstablishError::ConnectDestination)?;
-        return Ok((stream, destination, sock_addr));
+        return Ok(CreatedStreamAndAddr {
+            stream,
+            addr: destination,
+            sock_addr,
+        });
     }
 
     // Connect to the first proxy
@@ -91,7 +92,11 @@ pub async fn establish(
     // }
 
     // Return stream
-    Ok((stream, addr, sock_addr))
+    Ok(CreatedStreamAndAddr {
+        stream,
+        addr,
+        sock_addr,
+    })
 }
 
 #[derive(Debug, Error)]

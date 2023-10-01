@@ -12,12 +12,11 @@ use common::{
     },
     loading,
     stream::{
-        addr::StreamAddr,
         connect::{connect_with_pool, ConnectError},
         copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         header::StreamRequestHeader,
         pool::Pool,
-        tokio_io, CreatedStream, IoAddr, IoStream, StreamMetrics, StreamServerHook,
+        tokio_io, CreatedStreamAndAddr, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };
 use serde::Deserialize;
@@ -125,20 +124,19 @@ impl StreamProxy {
             .map_err(StreamProxyServerError::DownstreamAddr)?;
 
         // Establish proxy chain
-        let (upstream, upstream_addr, upstream_sock_addr) =
-            match self.acceptor.establish(&mut downstream).await {
-                Ok(Some(upstream)) => upstream,
-                Ok(None) => return Ok(None),
-                Err(e) => {
-                    // self.handle_proxy_error(&mut downstream, e).await;
-                    return Err(StreamProxyServerError::EstablishProxyChain(e));
-                }
-            };
+        let upstream = match self.acceptor.establish(&mut downstream).await {
+            Ok(Some(upstream)) => upstream,
+            Ok(None) => return Ok(None),
+            Err(e) => {
+                // self.handle_proxy_error(&mut downstream, e).await;
+                return Err(StreamProxyServerError::EstablishProxyChain(e));
+            }
+        };
 
         // Copy data
         let res = copy_bidirectional_with_payload_crypto(
             downstream,
-            upstream,
+            upstream.stream,
             self.payload_crypto.as_ref(),
             Limiter::new(f64::INFINITY),
         )
@@ -146,8 +144,8 @@ impl StreamProxy {
 
         let (metrics, res) = get_metrics_from_copy_result(
             start,
-            upstream_addr,
-            upstream_sock_addr,
+            upstream.addr,
+            upstream.sock_addr,
             Some(downstream_addr),
             res,
         );
@@ -216,7 +214,7 @@ impl StreamProxyAcceptor {
     async fn establish<S>(
         &self,
         downstream: &mut S,
-    ) -> Result<Option<(CreatedStream, StreamAddr, SocketAddr)>, StreamProxyAcceptorError>
+    ) -> Result<Option<CreatedStreamAndAddr>, StreamProxyAcceptorError>
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
@@ -286,7 +284,11 @@ impl StreamProxyAcceptor {
         //     )?;
 
         // Return upstream
-        Ok(Some((upstream, addr, sock_addr)))
+        Ok(Some(CreatedStreamAndAddr {
+            stream: upstream,
+            addr,
+            sock_addr,
+        }))
     }
 
     // #[instrument(skip(self))]

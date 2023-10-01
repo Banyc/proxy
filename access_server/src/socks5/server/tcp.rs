@@ -14,7 +14,7 @@ use common::{
         pool::Pool,
         proxy_table::StreamProxyTable,
         streams::tcp::TcpServer,
-        tokio_io, CreatedStream, IoAddr, IoStream, StreamProxyMetrics, StreamServerHook,
+        tokio_io, CreatedStreamAndAddr, IoAddr, IoStream, StreamProxyMetrics, StreamServerHook,
     },
 };
 use proxy_client::stream::StreamEstablishError;
@@ -205,12 +205,7 @@ impl Socks5ServerTcpAccess {
         let downstream_addr = downstream.peer_addr().map_err(ProxyError::DownstreamAddr)?;
 
         let res = self.establish(downstream).await?;
-        let (
-            destination,
-            downstream,
-            (upstream, upstream_addr, upstream_sock_addr),
-            payload_crypto,
-        ) = match res {
+        let (destination, downstream, upstream, payload_crypto) = match res {
             EstablishResult::Blocked { destination } => {
                 trace!(?destination, "Blocked");
                 return Ok(None);
@@ -265,7 +260,7 @@ impl Socks5ServerTcpAccess {
 
         let res = copy_bidirectional_with_payload_crypto(
             downstream,
-            upstream,
+            upstream.stream,
             payload_crypto.as_ref(),
             self.speed_limiter.clone(),
         )
@@ -273,8 +268,8 @@ impl Socks5ServerTcpAccess {
 
         let (metrics, res) = get_metrics_from_copy_result(
             start,
-            upstream_addr,
-            upstream_sock_addr,
+            upstream.addr,
+            upstream.sock_addr,
             Some(downstream_addr),
             res,
         );
@@ -495,8 +490,7 @@ impl Socks5ServerTcpAccess {
     async fn establish_proxy_chain(
         &self,
         destination: InternetAddr,
-    ) -> Result<((CreatedStream, StreamAddr, SocketAddr), Option<XorCrypto>), StreamEstablishError>
-    {
+    ) -> Result<(CreatedStreamAndAddr, Option<XorCrypto>), StreamEstablishError> {
         let proxy_chain = self.proxy_table.choose_chain();
         let res = proxy_client::stream::establish(
             &proxy_chain.chain,
@@ -527,7 +521,7 @@ pub enum EstablishResult<S> {
     Proxy {
         destination: InternetAddr,
         downstream: S,
-        upstream: (CreatedStream, StreamAddr, SocketAddr),
+        upstream: CreatedStreamAndAddr,
         payload_crypto: Option<XorCrypto>,
     },
 }
