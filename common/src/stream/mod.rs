@@ -31,6 +31,7 @@ pub mod connect;
 pub mod header;
 pub mod pool;
 pub mod proxy_table;
+pub mod steer;
 pub mod streams;
 pub mod tokio_io;
 

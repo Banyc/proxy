@@ -4,24 +4,18 @@ use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use common::{
     addr::ParseInternetAddrError,
-    crypto::{XorCrypto, XorCryptoBuildError, XorCryptoBuilder, XorCryptoCursor},
-    header::{
-        codec::{timed_read_header_async, timed_write_header_async, CodecError},
-        heartbeat::{self, HeartbeatError},
-        route::RouteResponse,
-    },
+    crypto::{XorCrypto, XorCryptoBuildError, XorCryptoBuilder},
     loading,
     stream::{
         connect::{connect_with_pool, ConnectError},
         copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
-        header::StreamRequestHeader,
         pool::Pool,
+        steer::{steer, SteerError},
         tokio_io, CreatedStreamAndAddr, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };
 use serde::Deserialize;
 use thiserror::Error;
-use tokio::io::AsyncWriteExt;
 use tracing::{error, info, instrument, warn};
 
 use crate::ListenerBindError;
@@ -218,49 +212,9 @@ impl StreamProxyAcceptor {
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
-        // Wait for heartbeat upgrade
-        heartbeat::wait_upgrade(downstream, IO_TIMEOUT)
-            .await
-            .map_err(|e| {
-                let downstream_addr = downstream.peer_addr().ok();
-                StreamProxyAcceptorError::ReadHeartbeatUpgrade {
-                    source: e,
-                    downstream_addr,
-                }
-            })?;
-
-        // Decode header
-        let mut read_crypto_cursor = XorCryptoCursor::new(&self.crypto);
-        let header: StreamRequestHeader =
-            timed_read_header_async(downstream, &mut read_crypto_cursor, IO_TIMEOUT)
-                .await
-                .map_err(|e| {
-                    let downstream_addr = downstream.peer_addr().ok();
-                    StreamProxyAcceptorError::ReadStreamRequestHeader {
-                        source: e,
-                        downstream_addr,
-                    }
-                })?;
-
-        // Echo
-        let addr = match header.upstream {
-            Some(upstream) => upstream,
-            None => {
-                let resp = RouteResponse { result: Ok(()) };
-                let mut write_crypto_cursor = XorCryptoCursor::new(&self.crypto);
-                timed_write_header_async(downstream, &resp, &mut write_crypto_cursor, IO_TIMEOUT)
-                    .await
-                    .map_err(|e| {
-                        let downstream_addr = downstream.peer_addr().ok();
-                        StreamProxyAcceptorError::WriteEchoResponse {
-                            source: e,
-                            downstream_addr,
-                        }
-                    })?;
-                let _ = tokio::time::timeout(IO_TIMEOUT, downstream.flush()).await;
-
-                return Ok(None);
-            }
+        let addr = match steer(downstream, &self.crypto).await? {
+            Some(addr) => addr,
+            None => return Ok(None), // Echo
         };
 
         // Connect to upstream
@@ -338,24 +292,8 @@ pub enum StreamProxyServerError {
 
 #[derive(Debug, Error)]
 pub enum StreamProxyAcceptorError {
-    #[error("Failed to read heartbeat header from downstream: {source}, {downstream_addr:?}")]
-    ReadHeartbeatUpgrade {
-        #[source]
-        source: HeartbeatError,
-        downstream_addr: Option<SocketAddr>,
-    },
-    #[error("Failed to read stream request header from downstream: {source}, {downstream_addr:?}")]
-    ReadStreamRequestHeader {
-        #[source]
-        source: CodecError,
-        downstream_addr: Option<SocketAddr>,
-    },
-    #[error("Failed to write echo response to downstream: {source}, {downstream_addr:?}")]
-    WriteEchoResponse {
-        #[source]
-        source: CodecError,
-        downstream_addr: Option<SocketAddr>,
-    },
+    #[error("Steer error: {0}")]
+    Steer(#[from] SteerError),
     #[error("Failed to connect to upstream: {source}, {downstream_addr:?}")]
     ConnectUpstream {
         #[source]
