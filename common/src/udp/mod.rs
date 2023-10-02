@@ -19,6 +19,8 @@ use crate::{addr::InternetAddr, error::AnyResult, loading};
 pub mod header;
 pub mod io_copy;
 pub mod proxy_table;
+pub mod respond;
+pub mod steer;
 
 pub const BUFFER_LENGTH: usize = 1024 * 8;
 

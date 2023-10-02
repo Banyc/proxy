@@ -1,8 +1,4 @@
-use std::{
-    io::{self, Write},
-    net::SocketAddr,
-    sync::Arc,
-};
+use std::{io, net::SocketAddr, sync::Arc};
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
@@ -10,13 +6,14 @@ use common::{
     addr::{any_addr, InternetAddr},
     crypto::{XorCrypto, XorCryptoBuildError, XorCryptoBuilder, XorCryptoCursor},
     header::{
-        codec::{read_header, write_header, CodecError},
-        route::{RouteError, RouteErrorKind, RouteResponse},
+        codec::write_header,
+        route::{RouteErrorKind, RouteResponse},
     },
     loading,
     udp::{
-        header::UdpRequestHeader,
         io_copy::{copy_bidirectional, CopyBiError, DownstreamParts, UpstreamParts},
+        respond::respond_with_error,
+        steer::steer,
         Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
@@ -112,30 +109,6 @@ impl UdpProxy {
         Ok(UdpServer::new(listener, self))
     }
 
-    #[instrument(skip(self, buf))]
-    async fn steer<'buf>(
-        &self,
-        buf: &'buf [u8],
-    ) -> Result<(Option<UpstreamAddr>, &'buf [u8]), CodecError> {
-        // Decode header
-        let mut reader = io::Cursor::new(buf);
-        let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
-        let header: UdpRequestHeader = read_header(&mut reader, &mut crypto_cursor)?;
-        let header_len = reader.position() as usize;
-        let payload = &buf[header_len..];
-
-        Ok((header.upstream.map(UpstreamAddr), payload))
-    }
-
-    async fn handle_steer_error(&self, downstream_writer: &UdpDownstreamWriter, error: CodecError) {
-        let peer_addr = downstream_writer.peer_addr();
-        warn!(?error, ?peer_addr, "Failed to steer");
-        let kind = error_kind_from_header_error(error);
-        if let Err(e) = self.respond_with_error(downstream_writer, kind).await {
-            trace!(?e, ?peer_addr, "Failed to respond with error to downstream");
-        }
-    }
-
     #[instrument(skip(self, rx, downstream_writer))]
     async fn proxy(
         &self,
@@ -221,33 +194,13 @@ impl UdpProxy {
                 let peer_addr = downstream_writer.peer_addr();
                 warn!(?e, ?peer_addr, "Proxy failed");
                 let kind = error_kind_from_proxy_error(e);
-                if let Err(e) = self.respond_with_error(downstream_writer, kind).await {
+                if let Err(e) =
+                    respond_with_error(downstream_writer, kind, &self.header_crypto).await
+                {
                     trace!(?e, ?peer_addr, "Failed to respond with error");
                 }
             }
         }
-    }
-
-    #[instrument(skip(self, downstream_writer))]
-    async fn respond_with_error(
-        &self,
-        downstream_writer: &UdpDownstreamWriter,
-        kind: RouteErrorKind,
-    ) -> Result<(), io::Error> {
-        // Respond with error
-        let resp = RouteResponse {
-            result: Err(RouteError { kind }),
-        };
-        let mut buf = Vec::new();
-        let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
-        write_header(&mut buf, &resp, &mut crypto_cursor).unwrap();
-        downstream_writer.send(&buf).await.map_err(|e| {
-            let peer_addr = downstream_writer.peer_addr();
-            trace!(?e, ?peer_addr, "Failed to send response to downstream");
-            e
-        })?;
-
-        Ok(())
     }
 }
 
@@ -282,12 +235,6 @@ pub enum ProxyError {
     },
 }
 
-fn error_kind_from_header_error(e: CodecError) -> RouteErrorKind {
-    match e {
-        CodecError::Io(_) => RouteErrorKind::Io,
-        CodecError::Serialization(_) => RouteErrorKind::Codec,
-    }
-}
 fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
     match e {
         ProxyError::Resolve { .. }
@@ -307,36 +254,9 @@ impl UdpServerHook for UdpProxy {
         buf: &'buf [u8],
         downstream_writer: &UdpDownstreamWriter,
     ) -> Option<(UpstreamAddr, &'buf [u8])> {
-        let res = self.steer(buf).await;
-        match res {
-            Ok((upstream_addr, payload)) => {
-                // Proxy
-                if let Some(addr) = upstream_addr {
-                    return Some((addr, payload));
-                }
-
-                // Echo
-                let resp = RouteResponse { result: Ok(()) };
-                let mut wtr = Vec::new();
-                let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
-                write_header(&mut wtr, &resp, &mut crypto_cursor).unwrap();
-                wtr.write_all(payload).unwrap();
-                let downstream_writer = downstream_writer.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = downstream_writer.send(&wtr).await {
-                        warn!(
-                            ?e,
-                            ?downstream_writer,
-                            "Failed to send response to downstream"
-                        );
-                    };
-                });
-                None
-            }
-            Err(err) => {
-                self.handle_steer_error(downstream_writer, err).await;
-                None
-            }
+        match steer(buf, downstream_writer, &self.header_crypto).await {
+            Ok(res) => res,
+            Err(_) => None,
         }
     }
 
