@@ -1,6 +1,9 @@
 use std::{
     io::{self, Write},
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, RwLock,
+    },
 };
 
 use async_speed_limit::Limiter;
@@ -56,10 +59,10 @@ where
     let last_uplink_packet = Arc::new(RwLock::new(std::time::Instant::now()));
     let last_downlink_packet = Arc::new(RwLock::new(std::time::Instant::now()));
 
-    let bytes_uplink = Arc::new(RwLock::new(0));
-    let bytes_downlink = Arc::new(RwLock::new(0));
-    let packets_uplink = Arc::new(RwLock::new(0));
-    let packets_downlink = Arc::new(RwLock::new(0));
+    let bytes_uplink = Arc::new(AtomicU64::new(0));
+    let bytes_downlink = Arc::new(AtomicU64::new(0));
+    let packets_uplink = Arc::new(AtomicUsize::new(0));
+    let packets_downlink = Arc::new(AtomicUsize::new(0));
 
     let mut join_set = tokio::task::JoinSet::<Result<(), CopyBiError>>::new();
     join_set.spawn({
@@ -81,23 +84,23 @@ where
                 };
 
                 // Limit speed
-                speed_limiter.consume(packet.0.len()).await;
+                speed_limiter.consume(packet.len()).await;
 
                 // Xor payload
                 if let Some(payload_crypto) = &payload_crypto {
                     let mut crypto_cursor = XorCryptoCursor::new(payload_crypto);
-                    crypto_cursor.xor(&mut packet.0);
+                    crypto_cursor.xor(&mut packet);
                 }
 
                 // Send packet to upstream
                 upstream
                     .write
-                    .trait_send(&packet.0)
+                    .trait_send(&packet)
                     .await
                     .map_err(CopyBiError::SendUpstream)?;
 
-                *bytes_uplink.write().unwrap() += packet.0.len() as u64;
-                *packets_uplink.write().unwrap() += 1;
+                bytes_uplink.fetch_add(packet.len() as u64, Ordering::Relaxed);
+                packets_uplink.fetch_add(1, Ordering::Relaxed);
                 *last_uplink_packet.write().unwrap() = std::time::Instant::now();
             }
             Ok(())
@@ -163,8 +166,8 @@ where
                         downstream: downstream.write.clone(),
                     })?;
 
-                *bytes_downlink.write().unwrap() += pkt.len() as u64;
-                *packets_downlink.write().unwrap() += 1;
+                bytes_downlink.fetch_add(pkt.len() as u64, Ordering::Relaxed);
+                packets_downlink.fetch_add(1, Ordering::Relaxed);
                 *last_downlink_packet.write().unwrap() = std::time::Instant::now();
             }
         }
@@ -200,18 +203,14 @@ where
         *last_downlink_packet.read().unwrap(),
         *last_uplink_packet.read().unwrap(),
     );
-    let bytes_uplink = *bytes_uplink.read().unwrap();
-    let bytes_downlink = *bytes_downlink.read().unwrap();
-    let packets_uplink = *packets_uplink.read().unwrap();
-    let packets_downlink = *packets_downlink.read().unwrap();
     Ok(FlowMetrics {
         flow,
         start,
         end: last_packet,
-        bytes_uplink,
-        bytes_downlink,
-        packets_uplink,
-        packets_downlink,
+        bytes_uplink: bytes_uplink.load(Ordering::Relaxed),
+        bytes_downlink: bytes_downlink.load(Ordering::Relaxed),
+        packets_uplink: packets_uplink.load(Ordering::Relaxed),
+        packets_downlink: packets_downlink.load(Ordering::Relaxed),
     })
 }
 

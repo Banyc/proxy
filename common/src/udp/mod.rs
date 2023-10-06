@@ -3,7 +3,7 @@ use std::{
     fmt::Display,
     io,
     net::SocketAddr,
-    ops::Deref,
+    ops::{Deref, DerefMut},
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -264,6 +264,20 @@ pub struct Flow {
 }
 
 pub struct Packet(pub Vec<u8>);
+
+impl Deref for Packet {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Packet {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FlowMetrics {
