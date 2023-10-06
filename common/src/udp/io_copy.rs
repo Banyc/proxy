@@ -18,7 +18,9 @@ use crate::{
     udp::TIMEOUT,
 };
 
-use super::{Flow, FlowMetrics, Packet, UdpDownstreamWriter, BUFFER_LENGTH, LIVE_CHECK_INTERVAL};
+use super::{
+    Flow, FlowMetrics, Packet, UdpDownstreamWriter, ACTIVITY_CHECK_INTERVAL, BUFFER_LENGTH,
+};
 
 #[async_trait]
 pub trait UdpRecv {
@@ -55,7 +57,7 @@ where
     let start = std::time::Instant::now();
 
     // Periodic check if the flow is still alive
-    let mut tick = tokio::time::interval(LIVE_CHECK_INTERVAL);
+    let mut activity_check = tokio::time::interval(ACTIVITY_CHECK_INTERVAL);
     let last_uplink_packet = Arc::new(RwLock::new(std::time::Instant::now()));
     let last_downlink_packet = Arc::new(RwLock::new(std::time::Instant::now()));
 
@@ -64,8 +66,8 @@ where
     let packets_uplink = Arc::new(AtomicUsize::new(0));
     let packets_downlink = Arc::new(AtomicUsize::new(0));
 
-    let mut join_set = tokio::task::JoinSet::<Result<(), CopyBiError>>::new();
-    join_set.spawn({
+    let mut io_copy_tasks = tokio::task::JoinSet::<Result<(), CopyBiError>>::new();
+    io_copy_tasks.spawn({
         let last_uplink_packet = Arc::clone(&last_uplink_packet);
         let bytes_uplink = Arc::clone(&bytes_uplink);
         let packets_uplink = Arc::clone(&packets_uplink);
@@ -106,7 +108,7 @@ where
             Ok(())
         }
     });
-    join_set.spawn({
+    io_copy_tasks.spawn({
         let flow = flow.clone();
         let last_downlink_packet = Arc::clone(&last_downlink_packet);
         let bytes_downlink = Arc::clone(&bytes_downlink);
@@ -177,14 +179,14 @@ where
     loop {
         trace!("Waiting for packet");
         tokio::select! {
-            res = join_set.join_next() => {
+            res = io_copy_tasks.join_next() => {
                 let res = match res {
                     Some(res) => res.unwrap(),
                     None => break,
                 };
                 res?;
             }
-            _ = tick.tick() => {
+            _ = activity_check.tick() => {
                 trace!("Checking if flow is still alive");
                 let now = std::time::Instant::now();
                 let last_uplink_packet = *last_uplink_packet.read().unwrap();
@@ -192,7 +194,7 @@ where
 
                 if now.duration_since(last_uplink_packet) > TIMEOUT && now.duration_since(last_downlink_packet) > TIMEOUT {
                     trace!(?flow, "Flow timed out");
-                    join_set.abort_all();
+                    io_copy_tasks.abort_all();
                     break;
                 }
             }

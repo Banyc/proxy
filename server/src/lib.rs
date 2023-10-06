@@ -22,10 +22,10 @@ where
 {
     let mut access_server_loader = AccessServerLoader::new();
     let mut proxy_server_loader = ProxyServerLoader::new();
-    let mut join_set = tokio::task::JoinSet::new();
+    let mut server_tasks = tokio::task::JoinSet::new();
 
     // Make sure there is always `Some(res)` from `join_next`
-    join_set.spawn(async move {
+    server_tasks.spawn(async move {
         let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
         rx.await.unwrap();
         unreachable!()
@@ -33,7 +33,7 @@ where
 
     read_and_load_config(
         &config_reader,
-        &mut join_set,
+        &mut server_tasks,
         &mut access_server_loader,
         &mut proxy_server_loader,
     )
@@ -41,7 +41,7 @@ where
 
     loop {
         tokio::select! {
-            res = join_set.join_next() => {
+            res = server_tasks.join_next() => {
                 let res = res.expect("Always `Some(res)` from `join_next`");
                 let res = res.unwrap();
                 res.map_err(ServeError::ServerTask)?;
@@ -54,7 +54,7 @@ where
 
                 if let Err(e) = read_and_load_config(
                     &config_reader,
-                    &mut join_set,
+                    &mut server_tasks,
                     &mut access_server_loader,
                     &mut proxy_server_loader,
                 ).await {
@@ -67,7 +67,7 @@ where
 
 async fn read_and_load_config<CR>(
     config_reader: &CR,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
+    server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     access_server_loader: &mut AccessServerLoader,
     proxy_server_loader: &mut ProxyServerLoader,
 ) -> Result<(), ServeError>
@@ -78,9 +78,14 @@ where
         .read_config()
         .await
         .map_err(ServeError::Config)?;
-    load(config, join_set, access_server_loader, proxy_server_loader)
-        .await
-        .map_err(ServeError::Load)?;
+    load(
+        config,
+        server_tasks,
+        access_server_loader,
+        proxy_server_loader,
+    )
+    .await
+    .map_err(ServeError::Load)?;
     Ok(())
 }
 
@@ -96,18 +101,18 @@ pub enum ServeError {
 
 pub async fn load(
     config: ServerConfig,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
+    server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     access_server_loader: &mut AccessServerLoader,
     proxy_server_loader: &mut ProxyServerLoader,
 ) -> AnyResult {
     let stream_pool = config.global.stream_pool.build()?;
     config
         .access_server
-        .spawn_and_kill(join_set, access_server_loader, &stream_pool)
+        .spawn_and_kill(server_tasks, access_server_loader, &stream_pool)
         .await?;
     config
         .proxy_server
-        .spawn_and_kill(join_set, proxy_server_loader, &stream_pool)
+        .spawn_and_kill(server_tasks, proxy_server_loader, &stream_pool)
         .await?;
     Ok(())
 }
