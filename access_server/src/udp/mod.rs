@@ -161,15 +161,12 @@ pub enum AccessProxyError {
 
 #[async_trait]
 impl UdpServerHook for UdpAccess {
-    async fn parse_upstream_addr<'buf>(
+    async fn parse_upstream_addr(
         &self,
-        buf: &'buf [u8],
+        _buf: &mut io::Cursor<&[u8]>,
         _downstream_writer: &UdpDownstreamWriter,
-    ) -> Option<(UpstreamAddr, &'buf [u8])> {
-        Some((
-            UpstreamAddr(any_addr(&Ipv4Addr::UNSPECIFIED.into()).into()),
-            buf,
-        ))
+    ) -> Option<UpstreamAddr> {
+        Some(UpstreamAddr(any_addr(&Ipv4Addr::UNSPECIFIED.into()).into()))
     }
 
     async fn handle_flow(

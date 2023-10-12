@@ -164,25 +164,23 @@ pub enum AccessProxyError {
 
 #[async_trait]
 impl UdpServerHook for Socks5ServerUdpAccess {
-    async fn parse_upstream_addr<'buf>(
+    async fn parse_upstream_addr(
         &self,
-        buf: &'buf [u8],
+        buf: &mut io::Cursor<&[u8]>,
         _downstream_writer: &UdpDownstreamWriter,
-    ) -> Option<(UpstreamAddr, &'buf [u8])> {
-        let mut rdr = io::Cursor::new(buf);
-        let request_header = match UdpRequestHeader::decode(&mut rdr).await {
+    ) -> Option<UpstreamAddr> {
+        let request_header = match UdpRequestHeader::decode(buf).await {
             Ok(header) => header,
             Err(e) => {
                 warn!(?e, "Failed to decode UDP request header");
                 return None;
             }
         };
-        let buf = &buf[rdr.position() as usize..];
         if request_header.fragment != 0 {
             return None;
         }
 
-        Some((UpstreamAddr(request_header.destination), buf))
+        Some(UpstreamAddr(request_header.destination))
     }
 
     async fn handle_flow(

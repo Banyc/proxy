@@ -249,11 +249,11 @@ impl loading::Hook for UdpProxy {}
 
 #[async_trait]
 impl UdpServerHook for UdpProxy {
-    async fn parse_upstream_addr<'buf>(
+    async fn parse_upstream_addr(
         &self,
-        buf: &'buf [u8],
+        buf: &mut io::Cursor<&[u8]>,
         downstream_writer: &UdpDownstreamWriter,
-    ) -> Option<(UpstreamAddr, &'buf [u8])> {
+    ) -> Option<UpstreamAddr> {
         match steer(buf, downstream_writer, &self.header_crypto).await {
             Ok(res) => res,
             Err(_) => None,

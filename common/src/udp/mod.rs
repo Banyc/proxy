@@ -3,13 +3,16 @@ use std::{
     fmt::Display,
     io,
     net::SocketAddr,
-    ops::{Deref, DerefMut},
+    ops::Deref,
     sync::{Arc, RwLock},
     time::Duration,
 };
 
 use async_trait::async_trait;
+use bytes::BytesMut;
 use bytesize::ByteSize;
+use lockfree_object_pool::{LinearObjectPool, LinearOwnedReusable};
+use once_cell::sync::Lazy;
 use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{error, info, instrument, trace, warn};
@@ -22,7 +25,13 @@ pub mod proxy_table;
 pub mod respond;
 pub mod steer;
 
-pub const BUFFER_LENGTH: usize = 1024 * 8;
+pub const BUFFER_LENGTH: usize = 2_usize.pow(16);
+pub static BUFFER_POOL: Lazy<Arc<LinearObjectPool<BytesMut>>> = Lazy::new(|| {
+    Arc::new(LinearObjectPool::new(
+        || BytesMut::with_capacity(BUFFER_LENGTH),
+        |buf| buf.clear(),
+    ))
+});
 
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 pub const ACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
@@ -120,13 +129,13 @@ where
             .local_addr()
             .map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
-        let mut buf = [0; BUFFER_LENGTH];
         let mut hook = Arc::new(self.hook);
         let mut warned = false;
         loop {
             trace!("Waiting for packet");
+            let mut buf = BUFFER_POOL.pull_owned();
             tokio::select! {
-                res = downstream_listener.recv_from(&mut buf) => {
+                res = downstream_listener.recv_buf_from(&mut *buf) => {
                     let (n, downstream_addr) = match res {
                         Ok((n, addr)) => (n, addr),
                         Err(e) => {
@@ -139,7 +148,7 @@ where
                         }
                     };
                     warned = false;
-                    if n == buf.len() {
+                    if n == BUFFER_LENGTH {
                         warn!(?addr, ?n, "Received uplink packet of size may be too large");
                         continue;
                     }
@@ -149,7 +158,7 @@ where
                     steer(
                         downstream_writer.clone(),
                         Arc::clone(&flows),
-                        &buf[..n],
+                        buf,
                         Arc::clone(&hook),
                     )
                     .await;
@@ -184,12 +193,16 @@ pub enum ServeError {
 async fn steer<H>(
     downstream_writer: UdpDownstreamWriter,
     flows: Arc<RwLock<FlowMap>>,
-    buf: &[u8],
+    buf: LinearOwnedReusable<BytesMut>,
     hook: Arc<H>,
 ) where
     H: UdpServerHook + Send + Sync + 'static,
 {
-    let (upstream, payload) = match hook.parse_upstream_addr(buf, &downstream_writer).await {
+    let mut buf_reader = io::Cursor::new(&buf[..]);
+    let upstream = match hook
+        .parse_upstream_addr(&mut buf_reader, &downstream_writer)
+        .await
+    {
         Some(x) => x,
         None => {
             trace!("No upstream address found");
@@ -229,17 +242,19 @@ async fn steer<H>(
     };
 
     // Steer packet
-    let packet = Packet(payload.to_vec());
+    let read = buf_reader.position() as usize;
+    let mut packet = Packet::new(buf);
+    packet.advance(read).unwrap();
     let _ = flow_tx.send(packet).await;
 }
 
 #[async_trait]
 pub trait UdpServerHook: loading::Hook {
-    async fn parse_upstream_addr<'buf>(
+    async fn parse_upstream_addr(
         &self,
-        buf: &'buf [u8],
+        buf: &mut io::Cursor<&[u8]>,
         downstream_writer: &UdpDownstreamWriter,
-    ) -> Option<(UpstreamAddr, &'buf [u8])>;
+    ) -> Option<UpstreamAddr>;
 
     async fn handle_flow(
         &self,
@@ -263,21 +278,37 @@ pub struct Flow {
     pub downstream: DownstreamAddr,
 }
 
-pub struct Packet(pub Vec<u8>);
+pub struct Packet {
+    buf: LinearOwnedReusable<BytesMut>,
+    pos: usize,
+}
 
-impl Deref for Packet {
-    type Target = Vec<u8>;
+impl Packet {
+    pub fn new(buf: LinearOwnedReusable<BytesMut>) -> Self {
+        Self { buf, pos: 0 }
+    }
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    pub fn advance(&mut self, bytes: usize) -> Result<(), PacketPositionAdvancesOutOfRange> {
+        let new_pos = bytes + self.pos;
+        if new_pos > self.buf.len() {
+            return Err(PacketPositionAdvancesOutOfRange);
+        }
+        self.pos = new_pos;
+        Ok(())
+    }
+
+    pub fn slice(&self) -> &[u8] {
+        &self.buf[self.pos..]
+    }
+
+    pub fn slice_mut(&mut self) -> &mut [u8] {
+        &mut self.buf[self.pos..]
     }
 }
 
-impl DerefMut for Packet {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
+#[derive(Debug, Error)]
+#[error("Packet position advances out of range")]
+pub struct PacketPositionAdvancesOutOfRange;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FlowMetrics {

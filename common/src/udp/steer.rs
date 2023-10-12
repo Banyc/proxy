@@ -13,17 +13,17 @@ use crate::{
 
 use super::{header::UdpRequestHeader, UdpDownstreamWriter, UpstreamAddr};
 
-pub async fn steer<'buf>(
-    buf: &'buf [u8],
+pub async fn steer(
+    buf: &mut io::Cursor<&[u8]>,
     downstream_writer: &UdpDownstreamWriter,
     header_crypto: &XorCrypto,
-) -> Result<Option<(UpstreamAddr, &'buf [u8])>, CodecError> {
+) -> Result<Option<UpstreamAddr>, CodecError> {
     let res = decode_header(buf, header_crypto).await;
     match res {
-        Ok((upstream_addr, payload)) => {
+        Ok(upstream_addr) => {
             // Proxy
             if let Some(addr) = upstream_addr {
-                return Ok(Some((addr, payload)));
+                return Ok(Some(addr));
             }
 
             // Echo
@@ -31,7 +31,8 @@ pub async fn steer<'buf>(
             let mut wtr = Vec::new();
             let mut crypto_cursor = XorCryptoCursor::new(header_crypto);
             write_header(&mut wtr, &resp, &mut crypto_cursor).unwrap();
-            wtr.write_all(payload).unwrap();
+            wtr.write_all(&buf.get_ref()[buf.position() as usize..])
+                .unwrap();
             let downstream_writer = downstream_writer.clone();
             tokio::spawn(async move {
                 if let Err(e) = downstream_writer.send(&wtr).await {
@@ -51,18 +52,15 @@ pub async fn steer<'buf>(
     }
 }
 
-async fn decode_header<'buf>(
-    buf: &'buf [u8],
+async fn decode_header(
+    buf: &mut io::Cursor<&[u8]>,
     header_crypto: &XorCrypto,
-) -> Result<(Option<UpstreamAddr>, &'buf [u8]), CodecError> {
+) -> Result<Option<UpstreamAddr>, CodecError> {
     // Decode header
-    let mut reader = io::Cursor::new(buf);
     let mut crypto_cursor = XorCryptoCursor::new(header_crypto);
-    let header: UdpRequestHeader = read_header(&mut reader, &mut crypto_cursor)?;
-    let header_len = reader.position() as usize;
-    let payload = &buf[header_len..];
+    let header: UdpRequestHeader = read_header(buf, &mut crypto_cursor)?;
 
-    Ok((header.upstream.map(UpstreamAddr), payload))
+    Ok(header.upstream.map(UpstreamAddr))
 }
 
 async fn handle_steer_error(

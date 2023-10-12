@@ -18,7 +18,7 @@ use common::{
     udp::{
         io_copy::{UdpRecv, UdpSend},
         proxy_table::UdpProxyChain,
-        BUFFER_LENGTH,
+        BUFFER_POOL,
     },
 };
 use thiserror::Error;
@@ -339,8 +339,8 @@ pub async fn trace_rtt(proxies: &UdpProxyChain) -> Result<Duration, TraceError> 
     upstream.send(&buf).await?;
 
     // Recv response
-    buf.resize(BUFFER_LENGTH, 0);
-    let n = upstream.recv(&mut buf).await?;
+    let mut buf = BUFFER_POOL.pull();
+    let n = upstream.recv_buf(&mut *buf).await?;
 
     let end = Instant::now();
 

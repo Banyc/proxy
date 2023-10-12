@@ -86,22 +86,22 @@ where
                 };
 
                 // Limit speed
-                speed_limiter.consume(packet.len()).await;
+                speed_limiter.consume(packet.slice().len()).await;
 
                 // Xor payload
                 if let Some(payload_crypto) = &payload_crypto {
                     let mut crypto_cursor = XorCryptoCursor::new(payload_crypto);
-                    crypto_cursor.xor(&mut packet);
+                    crypto_cursor.xor(packet.slice_mut());
                 }
 
                 // Send packet to upstream
                 upstream
                     .write
-                    .trait_send(&packet)
+                    .trait_send(packet.slice())
                     .await
                     .map_err(CopyBiError::SendUpstream)?;
 
-                bytes_uplink.fetch_add(packet.len() as u64, Ordering::Relaxed);
+                bytes_uplink.fetch_add(packet.slice().len() as u64, Ordering::Relaxed);
                 packets_uplink.fetch_add(1, Ordering::Relaxed);
                 *last_uplink_packet.write().unwrap() = std::time::Instant::now();
             }

@@ -15,7 +15,7 @@ notify = "6.1.1"
 proxy_server = { path = "../proxy_server" }
 serde = { version = "1.0.188", features = ["derive"] }
 thiserror = "1.0.48"
-tokio = { version = "1.32.0", features = ["full"] }
+tokio = { version = "1.33.0", features = ["full"] }
 toml = "0.8.0"
 tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
