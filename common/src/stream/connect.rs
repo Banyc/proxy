@@ -1,7 +1,7 @@
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use thiserror::Error;
 
 use super::{
@@ -13,9 +13,8 @@ use super::{
 
 pub type ArcStreamConnect = Arc<dyn StreamConnect + Sync + Send>;
 
-lazy_static! {
-    pub static ref STREAM_CONNECTOR_TABLE: StreamConnectorTable = StreamConnectorTable::new();
-}
+pub static STREAM_CONNECTOR_TABLE: Lazy<StreamConnectorTable> =
+    Lazy::new(StreamConnectorTable::new);
 
 #[derive(Debug)]
 pub struct StreamConnectorTable {
