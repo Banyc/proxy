@@ -7,6 +7,7 @@ use common::{
 use proxy_client::udp::UdpTracer;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -17,7 +18,10 @@ pub struct UdpProxyTableBuilder {
 }
 
 impl UdpProxyTableBuilder {
-    pub fn build(self) -> Result<UdpProxyTable, UdpProxyTableBuildError> {
+    pub fn build(
+        self,
+        cancellation: CancellationToken,
+    ) -> Result<UdpProxyTable, UdpProxyTableBuildError> {
         let chains = self
             .chains
             .into_iter()
@@ -28,7 +32,12 @@ impl UdpProxyTableBuilder {
             true => Some(UdpTracer::new()),
             false => None,
         };
-        Ok(ProxyTable::new(chains, tracer, self.active_chains)?)
+        Ok(ProxyTable::new(
+            chains,
+            tracer,
+            self.active_chains,
+            cancellation,
+        )?)
     }
 }
 

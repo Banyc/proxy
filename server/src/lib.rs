@@ -9,6 +9,7 @@ use config::ConfigReader;
 use proxy_server::{ProxyServerConfig, ProxyServerLoader};
 use serde::Deserialize;
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 pub mod config;
@@ -31,13 +32,17 @@ where
         unreachable!()
     });
 
+    let cancellation = CancellationToken::new();
     read_and_load_config(
         &config_reader,
         &mut server_tasks,
         &mut access_server_loader,
         &mut proxy_server_loader,
+        cancellation.clone(),
     )
     .await?;
+
+    let mut _cancellation_guard = cancellation.drop_guard();
 
     loop {
         tokio::select! {
@@ -52,14 +57,19 @@ where
                 // Wait for file change to settle
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
+                let cancellation = CancellationToken::new();
                 if let Err(e) = read_and_load_config(
                     &config_reader,
                     &mut server_tasks,
                     &mut access_server_loader,
                     &mut proxy_server_loader,
+                    cancellation.clone(),
                 ).await {
                     warn!(?e, "Failed to read and load config");
+                    continue;
                 }
+
+                _cancellation_guard = cancellation.drop_guard();
             }
         }
     }
@@ -70,6 +80,7 @@ async fn read_and_load_config<CR>(
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     access_server_loader: &mut AccessServerLoader,
     proxy_server_loader: &mut ProxyServerLoader,
+    cancellation: CancellationToken,
 ) -> Result<(), ServeError>
 where
     CR: ConfigReader<Config = ServerConfig>,
@@ -83,6 +94,7 @@ where
         server_tasks,
         access_server_loader,
         proxy_server_loader,
+        cancellation,
     )
     .await
     .map_err(ServeError::Load)?;
@@ -104,11 +116,17 @@ pub async fn load(
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     access_server_loader: &mut AccessServerLoader,
     proxy_server_loader: &mut ProxyServerLoader,
+    cancellation: CancellationToken,
 ) -> AnyResult {
     let stream_pool = config.global.stream_pool.build()?;
     config
         .access_server
-        .spawn_and_kill(server_tasks, access_server_loader, &stream_pool)
+        .spawn_and_kill(
+            server_tasks,
+            access_server_loader,
+            &stream_pool,
+            cancellation,
+        )
         .await?;
     config
         .proxy_server

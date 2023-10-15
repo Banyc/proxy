@@ -21,6 +21,7 @@ use proxy_client::stream::StreamEstablishError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, trace, warn};
 
 use crate::{
@@ -52,13 +53,14 @@ impl Socks5ServerTcpAccessServerConfig {
         stream_pool: Pool,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
         filters: &HashMap<Arc<str>, Filter>,
+        cancellation: CancellationToken,
     ) -> Result<Socks5ServerTcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(&stream_pool)?,
+            SharableConfig::Private(x) => x.build(&stream_pool, cancellation)?,
         };
         let filter = match self.filter {
             SharableConfig::SharingKey(key) => filters

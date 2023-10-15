@@ -17,6 +17,7 @@ use proxy_client::udp::{EstablishError, UdpProxyClient};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use self::proxy_table::{UdpProxyTableBuildError, UdpProxyTableBuilder};
@@ -36,13 +37,14 @@ impl UdpAccessServerConfig {
     pub fn into_builder(
         self,
         proxy_tables: &HashMap<Arc<str>, UdpProxyTable>,
+        cancellation: CancellationToken,
     ) -> Result<UdpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build()?,
+            SharableConfig::Private(x) => x.build(cancellation.clone())?,
         };
 
         Ok(UdpAccessServerBuilder {

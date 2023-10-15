@@ -18,6 +18,7 @@ use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::ToSocketAddrs;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, instrument, warn};
 
 use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder};
@@ -36,13 +37,14 @@ impl TcpAccessServerConfig {
         self,
         stream_pool: Pool,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
+        cancellation: CancellationToken,
     ) -> Result<TcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(&stream_pool)?,
+            SharableConfig::Private(x) => x.build(&stream_pool, cancellation)?,
         };
 
         Ok(TcpAccessServerBuilder {

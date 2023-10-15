@@ -10,6 +10,7 @@ use rand::Rng;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, trace};
 
 use crate::{
@@ -75,6 +76,7 @@ where
         chains: Vec<WeightedProxyChain<A>>,
         tracer: Option<T>,
         active_chains: Option<NonZeroUsize>,
+        cancellation: CancellationToken,
     ) -> Result<Self, ProxyTableError>
     where
         T: Tracer<Address = A> + Send + Sync + 'static,
@@ -98,7 +100,7 @@ where
         let tracer = tracer.map(Arc::new);
         let chains = chains
             .into_iter()
-            .map(|c| GaugedProxyChain::new(c, tracer.clone()))
+            .map(|c| GaugedProxyChain::new(c, tracer.clone(), cancellation.clone()))
             .collect::<Arc<[_]>>();
         let score_store = Arc::new(RwLock::new(ScoreStore::new(None, TRACE_INTERVAL)));
         Ok(Self {
@@ -228,14 +230,25 @@ impl<A> GaugedProxyChain<A>
 where
     A: std::fmt::Debug + Display + Clone + Send + Sync + 'static,
 {
-    pub fn new<T>(weighted: WeightedProxyChain<A>, tracer: Option<Arc<T>>) -> Self
+    pub fn new<T>(
+        weighted: WeightedProxyChain<A>,
+        tracer: Option<Arc<T>>,
+        cancellation: CancellationToken,
+    ) -> Self
     where
         T: Tracer<Address = A> + Send + Sync + 'static,
     {
         let rtt = Arc::new(RwLock::new(None));
         let loss = Arc::new(RwLock::new(None));
-        let task_handle = tracer
-            .map(|tracer| spawn_tracer(tracer, weighted.chain.clone(), rtt.clone(), loss.clone()));
+        let task_handle = tracer.map(|tracer| {
+            spawn_tracer(
+                tracer,
+                weighted.chain.clone(),
+                rtt.clone(),
+                loss.clone(),
+                cancellation,
+            )
+        });
         Self {
             weighted,
             rtt,
@@ -262,6 +275,7 @@ fn spawn_tracer<T, A>(
     chain: Arc<ProxyChain<A>>,
     rtt_store: Arc<RwLock<Option<Duration>>>,
     loss_store: Arc<RwLock<Option<f64>>>,
+    cancellation: CancellationToken,
 ) -> tokio::task::JoinHandle<()>
 where
     T: Tracer<Address = A> + Send + Sync + 'static,
@@ -269,7 +283,7 @@ where
 {
     tokio::task::spawn(async move {
         let mut wave = tokio::task::JoinSet::new();
-        loop {
+        while !cancellation.is_cancelled() {
             // Spawn tracing tasks
             for _ in 0..TRACES_PER_WAVE {
                 let chain = chain.clone();

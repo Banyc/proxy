@@ -18,6 +18,7 @@ use stream::{
         tcp::{TcpAccess, TcpAccessServerConfig},
     },
 };
+use tokio_util::sync::CancellationToken;
 use udp::{proxy_table::UdpProxyTableBuilder, UdpAccess, UdpAccessServerConfig};
 
 pub mod socks5;
@@ -67,12 +68,13 @@ impl AccessServerConfig {
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut AccessServerLoader,
         stream_pool: &Pool,
+        cancellation: CancellationToken,
     ) -> AnyResult {
         // Shared
         let stream_proxy_tables = self
             .stream_proxy_tables
             .into_iter()
-            .map(|(k, v)| match v.build(stream_pool) {
+            .map(|(k, v)| match v.build(stream_pool, cancellation.clone()) {
                 Ok(v) => Ok((k, v)),
                 Err(e) => Err(e),
             })
@@ -80,7 +82,7 @@ impl AccessServerConfig {
         let udp_proxy_tables = self
             .udp_proxy_tables
             .into_iter()
-            .map(|(k, v)| match v.build() {
+            .map(|(k, v)| match v.build(cancellation.clone()) {
                 Ok(v) => Ok((k, v)),
                 Err(e) => Err(e),
             })
@@ -91,7 +93,13 @@ impl AccessServerConfig {
         let tcp_server = self
             .tcp_server
             .into_iter()
-            .map(|c| c.into_builder(stream_pool.clone(), &stream_proxy_tables))
+            .map(|c| {
+                c.into_builder(
+                    stream_pool.clone(),
+                    &stream_proxy_tables,
+                    cancellation.clone(),
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         loader.tcp_server.load(join_set, tcp_server).await?;
 
@@ -99,7 +107,7 @@ impl AccessServerConfig {
         let udp_server = self
             .udp_server
             .into_iter()
-            .map(|c| c.into_builder(&udp_proxy_tables))
+            .map(|c| c.into_builder(&udp_proxy_tables, cancellation.clone()))
             .collect::<Result<Vec<_>, _>>()?;
         loader.udp_server.load(join_set, udp_server).await?;
 
@@ -107,7 +115,14 @@ impl AccessServerConfig {
         let http_server = self
             .http_server
             .into_iter()
-            .map(|c| c.into_builder(stream_pool.clone(), &stream_proxy_tables, &filters))
+            .map(|c| {
+                c.into_builder(
+                    stream_pool.clone(),
+                    &stream_proxy_tables,
+                    &filters,
+                    cancellation.clone(),
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         loader.http_server.load(join_set, http_server).await?;
 
@@ -115,7 +130,14 @@ impl AccessServerConfig {
         let socks5_tcp_server = self
             .socks5_tcp_server
             .into_iter()
-            .map(|c| c.into_builder(stream_pool.clone(), &stream_proxy_tables, &filters))
+            .map(|c| {
+                c.into_builder(
+                    stream_pool.clone(),
+                    &stream_proxy_tables,
+                    &filters,
+                    cancellation.clone(),
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         loader
             .socks5_tcp_server
@@ -126,7 +148,7 @@ impl AccessServerConfig {
         let socks5_udp_server = self
             .socks5_udp_server
             .into_iter()
-            .map(|c| c.into_builder(&udp_proxy_tables))
+            .map(|c| c.into_builder(&udp_proxy_tables, cancellation.clone()))
             .collect::<Result<Vec<_>, _>>()?;
         loader
             .socks5_udp_server

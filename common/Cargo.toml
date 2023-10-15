@@ -27,6 +27,7 @@ serde = { version = "1.0.188", features = ["derive",  "rc"] }
 thiserror = "1.0.48"
 tokio = { version = "1.33.0", features = ["full"] }
 tokio-io-timeout = "1.2.0"
+tokio-util = "0.7.9"
 tokio_kcp = "0.9.6"
 tracing = "0.1.37"
 

@@ -12,6 +12,7 @@ use common::{
 use proxy_client::stream::StreamTracer;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -22,7 +23,11 @@ pub struct StreamProxyTableBuilder {
 }
 
 impl StreamProxyTableBuilder {
-    pub fn build(self, stream_pool: &Pool) -> Result<StreamProxyTable, StreamProxyTableBuildError> {
+    pub fn build(
+        self,
+        stream_pool: &Pool,
+        cancellation: CancellationToken,
+    ) -> Result<StreamProxyTable, StreamProxyTableBuildError> {
         let chains = self
             .chains
             .into_iter()
@@ -33,7 +38,12 @@ impl StreamProxyTableBuilder {
             true => Some(StreamTracer::new(stream_pool.clone())),
             false => None,
         };
-        Ok(ProxyTable::new(chains, tracer, self.active_chains)?)
+        Ok(ProxyTable::new(
+            chains,
+            tracer,
+            self.active_chains,
+            cancellation,
+        )?)
     }
 }
 

@@ -16,6 +16,7 @@ proxy_server = { path = "../proxy_server" }
 serde = { version = "1.0.188", features = ["derive"] }
 thiserror = "1.0.48"
 tokio = { version = "1.33.0", features = ["full"] }
+tokio-util = "0.7.9"
 toml = "0.8.0"
 tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
