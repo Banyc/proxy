@@ -213,7 +213,7 @@ impl Pool {
     where
         I: Iterator<Item = StreamAddr>,
     {
-        fn add_queue(pool: &RwLock<HashMap<StreamAddr, SocketQueue>>, addr: StreamAddr) {
+        fn add_queue(pool: &mut HashMap<StreamAddr, SocketQueue>, addr: StreamAddr) {
             let mut queue = SocketQueue::new();
             let connector = {
                 let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type);
@@ -226,11 +226,12 @@ impl Pool {
                     HEARTBEAT_INTERVAL,
                 );
             }
-            pool.write().unwrap().insert(addr, queue);
+            pool.insert(addr, queue);
         }
 
-        let pool: Arc<RwLock<HashMap<StreamAddr, SocketQueue>>> = Default::default();
-        addrs.for_each(|addr| add_queue(&pool, addr));
+        let mut pool: HashMap<StreamAddr, SocketQueue> = HashMap::new();
+        addrs.for_each(|addr| add_queue(&mut pool, addr));
+        let pool = Arc::new(RwLock::new(pool));
 
         let mut task_handle = JoinSet::new();
         task_handle.spawn({
