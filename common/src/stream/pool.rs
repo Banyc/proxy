@@ -8,7 +8,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock as TokioRwLock;
+use tokio::{sync::RwLock as TokioRwLock, task::JoinSet};
 use tracing::warn;
 
 use crate::{
@@ -52,7 +52,7 @@ impl Default for PoolBuilder {
 #[derive(Debug)]
 struct SocketCell {
     cell: Arc<TokioRwLock<Option<CreatedStream>>>,
-    task_handle: tokio::task::JoinHandle<Result<(), HeartbeatError>>,
+    _task_handle: JoinSet<Result<(), HeartbeatError>>,
 }
 
 impl SocketCell {
@@ -66,7 +66,8 @@ impl SocketCell {
             .timed_connect(sock_addr, HEARTBEAT_INTERVAL)
             .await?;
         let cell = Arc::new(TokioRwLock::new(Some(stream)));
-        let task_handle = tokio::spawn({
+        let mut task_handle = JoinSet::new();
+        task_handle.spawn({
             let cell = Arc::clone(&cell);
             async move {
                 loop {
@@ -90,7 +91,10 @@ impl SocketCell {
                 Result::<(), HeartbeatError>::Ok(())
             }
         });
-        Ok(Self { cell, task_handle })
+        Ok(Self {
+            cell,
+            _task_handle: task_handle,
+        })
     }
 
     pub fn try_take(&self) -> TryTake {
@@ -105,12 +109,6 @@ impl SocketCell {
     }
 }
 
-impl Drop for SocketCell {
-    fn drop(&mut self) {
-        self.task_handle.abort();
-    }
-}
-
 enum TryTake {
     Ok(CreatedStream),
     Occupied,
@@ -120,7 +118,7 @@ enum TryTake {
 #[derive(Debug)]
 struct SocketQueue {
     queue: Arc<RwLock<VecDeque<SocketCell>>>,
-    task_handles: Vec<tokio::task::JoinHandle<()>>,
+    task_handles: JoinSet<()>,
 }
 
 impl SocketQueue {
@@ -150,7 +148,7 @@ impl SocketQueue {
         heartbeat_interval: Duration,
     ) {
         let queue = self.queue.clone();
-        let task_handle = tokio::spawn(async move {
+        self.task_handles.spawn(async move {
             loop {
                 let queue = queue.clone();
                 match Self::insert(queue, &connector, &addr, heartbeat_interval).await {
@@ -161,7 +159,6 @@ impl SocketQueue {
                 }
             }
         });
-        self.task_handles.push(task_handle);
     }
 
     pub fn try_swap(
@@ -170,22 +167,25 @@ impl SocketQueue {
         addr: &InternetAddr,
         heartbeat_interval: Duration,
     ) -> Option<CreatedStream> {
-        let front = {
+        let res = {
             let mut queue = match self.queue.try_write() {
                 Ok(x) => x,
                 // The queue is being occupied
                 Err(_) => return None,
             };
-            match queue.pop_front() {
+            let front = match queue.pop_front() {
                 Some(x) => x,
                 // The queue is empty
                 None => return None,
+            };
+            match front.try_take() {
+                TryTake::Ok(tcp) => Some(tcp),
+                TryTake::Occupied => {
+                    queue.push_back(front);
+                    return None;
+                }
+                TryTake::Killed => None,
             }
-        };
-        let res = match front.try_take() {
-            TryTake::Ok(tcp) => Some(tcp),
-            TryTake::Occupied => return None,
-            TryTake::Killed => None,
         };
 
         // Replenish
