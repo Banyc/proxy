@@ -9,6 +9,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tokio::{sync::RwLock as TokioRwLock, task::JoinSet};
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::{
@@ -36,9 +37,8 @@ impl PoolBuilder {
         Self(vec![])
     }
 
-    pub fn build(self) -> Result<Pool, ParseInternetAddrError> {
-        let pool = Pool::new();
-        pool.add_many_queues(self.0.into_iter().map(|a| a.0));
+    pub fn build(self, cancellation: CancellationToken) -> Result<Pool, ParseInternetAddrError> {
+        let pool = Pool::new(self.0.into_iter().map(|a| a.0), cancellation);
         Ok(pool)
     }
 }
@@ -198,36 +198,57 @@ impl SocketQueue {
 #[derive(Debug, Clone)]
 pub struct Pool {
     pool: Arc<RwLock<HashMap<StreamAddr, SocketQueue>>>,
+    _task_handle: Arc<JoinSet<()>>,
 }
 
 impl Pool {
-    pub fn new() -> Self {
+    pub fn empty() -> Self {
         Self {
             pool: Default::default(),
+            _task_handle: Default::default(),
         }
     }
 
-    pub fn add_many_queues<I>(&self, addrs: I)
+    pub fn new<I>(addrs: I, cancellation: CancellationToken) -> Self
     where
         I: Iterator<Item = StreamAddr>,
     {
-        addrs.for_each(|addr| self.add_queue(addr));
-    }
-
-    pub fn add_queue(&self, addr: StreamAddr) {
-        let mut queue = SocketQueue::new();
-        let connector = {
-            let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type);
-            Arc::clone(connector)
-        };
-        for _ in 0..QUEUE_LEN {
-            queue.spawn_insert(
-                Arc::clone(&connector),
-                addr.address.clone(),
-                HEARTBEAT_INTERVAL,
-            );
+        fn add_queue(pool: &RwLock<HashMap<StreamAddr, SocketQueue>>, addr: StreamAddr) {
+            let mut queue = SocketQueue::new();
+            let connector = {
+                let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type);
+                Arc::clone(connector)
+            };
+            for _ in 0..QUEUE_LEN {
+                queue.spawn_insert(
+                    Arc::clone(&connector),
+                    addr.address.clone(),
+                    HEARTBEAT_INTERVAL,
+                );
+            }
+            pool.write().unwrap().insert(addr, queue);
         }
-        self.pool.write().unwrap().insert(addr, queue);
+
+        let pool: Arc<RwLock<HashMap<StreamAddr, SocketQueue>>> = Default::default();
+        addrs.for_each(|addr| add_queue(&pool, addr));
+
+        let mut task_handle = JoinSet::new();
+        task_handle.spawn({
+            let pool = Arc::clone(&pool);
+            async move {
+                tokio::select! {
+                    _ = cancellation.cancelled() => {
+                        let mut pool = pool.write().unwrap();
+                        pool.clear();
+                    }
+                }
+            }
+        });
+
+        Self {
+            pool,
+            _task_handle: Arc::new(task_handle),
+        }
     }
 
     pub async fn open_stream(&self, addr: &StreamAddr) -> Option<(CreatedStream, SocketAddr)> {
@@ -255,12 +276,6 @@ impl Pool {
             Err(_) => return None,
         };
         Some((stream, peer_addr))
-    }
-}
-
-impl Default for Pool {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -293,13 +308,12 @@ mod tests {
 
     #[tokio::test]
     async fn take_none() {
-        let pool = Pool::new();
         let addr = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
         let addr = StreamAddr {
             address: addr.into(),
             stream_type: StreamType::Tcp,
         };
-        pool.add_queue(addr.clone());
+        let pool = Pool::new(vec![addr.clone()].into_iter(), CancellationToken::new());
         let mut join_set = JoinSet::new();
         for _ in 0..100 {
             let pool = pool.clone();
@@ -313,13 +327,12 @@ mod tests {
 
     #[tokio::test]
     async fn take_some() {
-        let pool = Pool::new();
         let addr = spawn_listener().await;
         let addr = StreamAddr {
             address: addr.into(),
             stream_type: StreamType::Tcp,
         };
-        pool.add_queue(addr.clone());
+        let pool = Pool::new(vec![addr.clone()].into_iter(), CancellationToken::new());
         for _ in 0..10 {
             tokio::time::sleep(Duration::from_millis(500)).await;
             for _ in 0..QUEUE_LEN {

@@ -106,7 +106,7 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy = StreamProxy::new(crypto.clone(), None, Pool::new());
+            let proxy = StreamProxy::new(crypto.clone(), None, Pool::empty());
 
             let server = build_tcp_proxy_server("localhost:0", proxy).await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();

@@ -30,7 +30,7 @@ mod tests {
         ty: StreamType,
     ) -> StreamProxyConfig {
         let crypto = create_random_crypto();
-        let proxy = StreamProxy::new(crypto.clone(), None, Pool::new());
+        let proxy = StreamProxy::new(crypto.clone(), None, Pool::empty());
         let proxy_addr = match ty {
             StreamType::Tcp => {
                 let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
@@ -139,7 +139,9 @@ mod tests {
 
         // Connect to proxy server
         let CreatedStreamAndAddr { mut stream, .. } =
-            establish(&proxies, greet_addr, &Pool::new()).await.unwrap();
+            establish(&proxies, greet_addr, &Pool::empty())
+                .await
+                .unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();
@@ -148,7 +150,7 @@ mod tests {
         read_response(&mut stream, resp_msg).await.unwrap();
 
         // Trace
-        let rtt = trace_rtt(&proxies, &Pool::new()).await.unwrap();
+        let rtt = trace_rtt(&proxies, &Pool::empty()).await.unwrap();
         assert!(rtt > Duration::from_secs(0));
         assert!(rtt < Duration::from_secs(1));
     }
@@ -179,7 +181,9 @@ mod tests {
             handles.spawn(async move {
                 // Connect to proxy server
                 let CreatedStreamAndAddr { mut stream, .. } =
-                    establish(&proxies, greet_addr, &Pool::new()).await.unwrap();
+                    establish(&proxies, greet_addr, &Pool::empty())
+                        .await
+                        .unwrap();
 
                 // Send message
                 stream.write_all(req_msg).await.unwrap();
@@ -236,7 +240,9 @@ mod tests {
                     let greet_addr = greet_addr.clone();
                     // Connect to proxy server
                     let CreatedStreamAndAddr { mut stream, .. } =
-                        establish(&proxies, greet_addr, &Pool::new()).await.unwrap();
+                        establish(&proxies, greet_addr, &Pool::empty())
+                            .await
+                            .unwrap();
 
                     // Send message
                     stream.write_all(req_msg).await.unwrap();
@@ -269,7 +275,7 @@ mod tests {
     //     let err = establish(
     //         &[proxy_1_config.clone(), proxy_2_config, proxy_3_config],
     //         greet_addr,
-    //         &Pool::new(),
+    //         &Pool::empty(),
     //     )
     //     .await
     //     .unwrap_err();
@@ -300,7 +306,7 @@ mod tests {
 
         // Connect to proxy server
         let CreatedStreamAndAddr { mut stream, .. } =
-            establish(&[], greet_addr, &Pool::new()).await.unwrap();
+            establish(&[], greet_addr, &Pool::empty()).await.unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();

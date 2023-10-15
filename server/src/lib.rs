@@ -118,7 +118,7 @@ pub async fn load(
     proxy_server_loader: &mut ProxyServerLoader,
     cancellation: CancellationToken,
 ) -> AnyResult {
-    let stream_pool = config.global.stream_pool.build()?;
+    let stream_pool = config.global.stream_pool.build(cancellation.clone())?;
     config
         .access_server
         .spawn_and_kill(
