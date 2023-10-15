@@ -58,7 +58,7 @@ struct SocketCell {
 impl SocketCell {
     pub async fn create(
         connector: &ArcStreamConnect,
-        addr: &InternetAddr,
+        addr: InternetAddr,
         heartbeat_interval: Duration,
     ) -> io::Result<Self> {
         let sock_addr = addr.to_socket_addr().await?;
@@ -80,8 +80,7 @@ impl SocketCell {
                     match send_noop(stream, HEARTBEAT_INTERVAL).await {
                         Ok(()) => (),
                         Err(e) => {
-                            let peer_addr = stream.peer_addr().ok();
-                            warn!(?e, ?peer_addr, "Stream pool failed to send noop heartbeat");
+                            warn!(?e, %addr, "Stream pool failed to send noop heartbeat");
                             // Drop the stream
                             cell.take();
                             return Err(e);
@@ -132,7 +131,7 @@ impl SocketQueue {
     async fn insert(
         queue: Arc<RwLock<VecDeque<SocketCell>>>,
         connector: &ArcStreamConnect,
-        addr: &InternetAddr,
+        addr: InternetAddr,
         heartbeat_interval: Duration,
     ) -> io::Result<()> {
         let cell = SocketCell::create(connector, addr, heartbeat_interval).await?;
@@ -151,7 +150,7 @@ impl SocketQueue {
         self.task_handles.spawn(async move {
             loop {
                 let queue = queue.clone();
-                match Self::insert(queue, &connector, &addr, heartbeat_interval).await {
+                match Self::insert(queue, &connector, addr.clone(), heartbeat_interval).await {
                     Ok(()) => break,
                     Err(_e) => {
                         tokio::time::sleep(RETRY_INTERVAL).await;
