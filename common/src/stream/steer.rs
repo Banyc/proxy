@@ -1,5 +1,6 @@
 use std::{net::SocketAddr, time::Duration};
 
+use metrics::counter;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 
@@ -64,6 +65,7 @@ where
                 })?;
             let _ = tokio::time::timeout(IO_TIMEOUT, downstream.flush()).await;
 
+            counter!("stream.echoes", 1);
             return Ok(None);
         }
     };

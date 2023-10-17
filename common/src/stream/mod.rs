@@ -10,6 +10,8 @@ use std::{
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use bytesize::ByteSize;
+use metrics::{counter, decrement_gauge, increment_gauge};
+use scopeguard::defer;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
@@ -230,6 +232,9 @@ where
     US: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     DS: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    counter!("stream.io_copies", 1);
+    increment_gauge!("stream.current_io_copies", 1.);
+    defer!(decrement_gauge!("stream.current_io_copies", 1.));
     match payload_crypto {
         Some(crypto) => {
             // Establish encrypted stream
@@ -249,6 +254,8 @@ pub fn get_metrics_from_copy_result(
 ) -> (StreamMetrics, Result<(), tokio_io::CopyBiErrorKind>) {
     let (bytes_uplink, bytes_downlink) = result.amounts;
 
+    counter!("stream.bytes_uplink", bytes_uplink);
+    counter!("stream.bytes_downlink", bytes_downlink);
     let metrics = StreamMetrics {
         start,
         end: result.end,

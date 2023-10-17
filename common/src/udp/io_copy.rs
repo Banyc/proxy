@@ -8,6 +8,8 @@ use std::{
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
+use metrics::{counter, decrement_gauge, increment_gauge};
+use scopeguard::defer;
 use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{trace, warn};
@@ -54,6 +56,10 @@ where
     R: UdpRecv + Send + 'static,
     W: UdpSend + Send + 'static,
 {
+    counter!("udp.io_copies", 1);
+    increment_gauge!("udp.current_io_copies", 1.);
+    defer!(decrement_gauge!("udp.current_io_copies", 1.));
+
     let start = std::time::Instant::now();
 
     // Periodic check if the flow is still alive
@@ -204,6 +210,22 @@ where
     let last_packet = std::time::Instant::max(
         *last_downlink_packet.read().unwrap(),
         *last_uplink_packet.read().unwrap(),
+    );
+    counter!(
+        "udp.io_copy.bytes_uplink",
+        bytes_uplink.load(Ordering::Relaxed)
+    );
+    counter!(
+        "udp.io_copy.bytes_downlink",
+        bytes_downlink.load(Ordering::Relaxed)
+    );
+    counter!(
+        "udp.io_copy.packets_uplink",
+        packets_uplink.load(Ordering::Relaxed) as _
+    );
+    counter!(
+        "udp.io_copy.packets_downlink",
+        packets_downlink.load(Ordering::Relaxed) as _
     );
     Ok(FlowMetrics {
         flow,

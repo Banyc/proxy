@@ -1,5 +1,6 @@
 use std::io::{self, Write};
 
+use metrics::counter;
 use tracing::{trace, warn};
 
 use crate::{
@@ -43,6 +44,7 @@ pub async fn steer(
                     );
                 };
             });
+            counter!("udp.echoes", 1);
             Ok(None)
         }
         Err(err) => {

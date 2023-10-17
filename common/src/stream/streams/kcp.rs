@@ -1,6 +1,7 @@
 use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
+use metrics::counter;
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -89,6 +90,7 @@ where
                         local_addr: addr,
                         peer_addr,
                     };
+                    counter!("stream.kcp.accepts", 1);
                     // Arc hook
                     let hook = Arc::clone(&hook);
                     tokio::spawn(async move {
@@ -186,6 +188,7 @@ impl StreamConnect for KcpConnector {
             local_addr,
             peer_addr: addr,
         };
+        counter!("stream.kcp.connects", 1);
         Ok(CreatedStream::Kcp(stream))
     }
 }

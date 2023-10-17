@@ -1,6 +1,7 @@
 use std::{io, net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
+use metrics::counter;
 use thiserror::Error;
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -82,6 +83,7 @@ where
                             continue;
                         }
                     };
+                    counter!("stream.tcp.accepts", 1);
                     // Arc hook
                     let hook = Arc::clone(&hook);
                     tokio::spawn(async move {
@@ -131,6 +133,7 @@ pub struct TcpConnector;
 impl StreamConnect for TcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
         let stream = TcpStream::connect(addr).await?;
+        counter!("stream.tcp.connects", 1);
         Ok(CreatedStream::Tcp(stream))
     }
 }

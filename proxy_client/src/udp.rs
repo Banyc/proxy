@@ -21,6 +21,7 @@ use common::{
         BUFFER_POOL,
     },
 };
+use metrics::counter;
 use thiserror::Error;
 use tokio::net::UdpSocket;
 use tracing::{error, instrument, trace, warn};
@@ -359,6 +360,7 @@ pub async fn trace_rtt(proxies: &UdpProxyChain) -> Result<Duration, TraceError> 
         }
     }
 
+    counter!("udp.traces", 1);
     Ok(end.duration_since(start))
 }
 

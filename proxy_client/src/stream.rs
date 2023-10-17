@@ -18,6 +18,7 @@ use common::{
         CreatedStreamAndAddr,
     },
 };
+use metrics::counter;
 use thiserror::Error;
 use tracing::{error, instrument, trace};
 
@@ -179,6 +180,7 @@ pub async fn trace_rtt(
 
     let end = Instant::now();
 
+    counter!("stream.traces", 1);
     Ok(end.duration_since(start))
 }
 
