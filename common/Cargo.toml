@@ -26,6 +26,7 @@ rayon = "1.8.0"
 regex = "1.10.2"
 scopeguard = "1.2.0"
 serde = { version = "1.0.188", features = ["derive",  "rc"] }
+slotmap = "1.0.6"
 thiserror = "1.0.48"
 tokio = { version = "1.33.0", features = ["full"] }
 tokio-io-timeout = "1.2.0"
