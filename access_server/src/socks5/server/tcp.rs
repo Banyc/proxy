@@ -218,9 +218,10 @@ impl Socks5ServerTcpAccess {
                 upstream_addr,
                 upstream_sock_addr,
             } => {
-                let res = tokio_io::timed_copy_bidirectional(
+                let res = copy_bidirectional_with_payload_crypto(
                     downstream,
                     upstream,
+                    None,
                     self.speed_limiter.clone(),
                 )
                 .await;

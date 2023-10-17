@@ -375,7 +375,7 @@ async fn upgrade(
             return;
         }
     };
-    let res = tokio_io::timed_copy_bidirectional(upgraded, upstream, speed_limiter).await;
+    let res = copy_bidirectional_with_payload_crypto(upgraded, upstream, None, speed_limiter).await;
 
     let (metrics, res) = get_metrics_from_copy_result(
         start,
