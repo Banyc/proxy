@@ -307,8 +307,9 @@ impl HttpAccess {
         };
 
         let speed_limiter = self.speed_limiter.clone();
+        let session_table = self.session_table.clone();
         tokio::task::spawn(async move {
-            upgrade(req, addr, http_connect, speed_limiter).await;
+            upgrade(req, addr, http_connect, speed_limiter, session_table).await;
         });
 
         // Return STATUS_OK
@@ -352,6 +353,7 @@ async fn upgrade(
     addr: InternetAddr,
     http_connect: Option<HttpConnect>,
     speed_limiter: Limiter,
+    session_table: StreamSessionTable,
 ) {
     let upgraded = match hyper::upgrade::on(req).await {
         Ok(upgraded) => upgraded,
@@ -397,6 +399,14 @@ async fn upgrade(
             return;
         }
     };
+    let _session_guard = session_table.set_scope(Session {
+        start: SystemTime::now(),
+        destination: StreamAddr {
+            stream_type: StreamType::Tcp,
+            address: addr.clone(),
+        },
+        upstream_local: upstream.local_addr().ok(),
+    });
     let res = copy_bidirectional_with_payload_crypto(upgraded, upstream, None, speed_limiter).await;
 
     let (metrics, res) = get_metrics_from_copy_result(

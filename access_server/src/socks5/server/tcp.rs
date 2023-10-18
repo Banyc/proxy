@@ -226,6 +226,14 @@ impl Socks5ServerTcpAccess {
                 upstream_addr,
                 upstream_sock_addr,
             } => {
+                let _session_guard = self.session_table.set_scope(Session {
+                    start: SystemTime::now(),
+                    destination: StreamAddr {
+                        stream_type: StreamType::Tcp,
+                        address: upstream_addr.clone(),
+                    },
+                    upstream_local: upstream.local_addr().ok(),
+                });
                 let res = copy_bidirectional_with_payload_crypto(
                     downstream,
                     upstream,
