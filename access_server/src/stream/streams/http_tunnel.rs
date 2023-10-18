@@ -1,4 +1,9 @@
-use std::{collections::HashMap, io, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    io,
+    sync::Arc,
+    time::{Instant, SystemTime},
+};
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
@@ -13,8 +18,9 @@ use common::{
         copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         pool::Pool,
         proxy_table::StreamProxyTable,
+        session_table::{Session, SessionTable},
         streams::{tcp::TcpServer, xor::XorStream},
-        tokio_io, IoStream, SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics,
+        tokio_io, IoAddr, IoStream, SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics,
         StreamProxyMetrics, StreamServerHook,
     },
 };
@@ -23,6 +29,7 @@ use hyper::{
     body::Incoming, http, service::service_fn, upgrade::Upgraded, Method, Request, Response,
 };
 use proxy_client::stream::{establish, StreamEstablishError};
+use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
@@ -50,6 +57,7 @@ impl HttpAccessServerConfig {
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
         filters: &HashMap<Arc<str>, Filter>,
         cancellation: CancellationToken,
+        session_table: SessionTable,
     ) -> Result<HttpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -72,6 +80,7 @@ impl HttpAccessServerConfig {
             stream_pool,
             filter,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
+            session_table,
         })
     }
 }
@@ -95,6 +104,7 @@ pub struct HttpAccessServerBuilder {
     stream_pool: Pool,
     filter: Filter,
     speed_limit: f64,
+    session_table: SessionTable,
 }
 
 #[async_trait]
@@ -120,6 +130,7 @@ impl loading::Builder for HttpAccessServerBuilder {
             self.stream_pool,
             self.filter,
             self.speed_limit,
+            self.session_table,
         );
         Ok(access)
     }
@@ -131,6 +142,7 @@ pub struct HttpAccess {
     stream_pool: Pool,
     filter: Filter,
     speed_limiter: Limiter,
+    session_table: SessionTable,
 }
 
 impl HttpAccess {
@@ -139,12 +151,14 @@ impl HttpAccess {
         stream_pool: Pool,
         filter: Filter,
         speed_limit: f64,
+        session_table: SessionTable,
     ) -> Self {
         Self {
             proxy_table: Arc::new(proxy_table),
             stream_pool,
             filter,
             speed_limiter: Limiter::new(speed_limit),
+            session_table,
         }
     }
 
@@ -215,6 +229,15 @@ impl HttpAccess {
         )
         .await?;
 
+        let key = self.session_table.insert(Session {
+            start: SystemTime::now(),
+            destination: StreamAddr {
+                address: addr.clone(),
+                stream_type: StreamType::Tcp,
+            },
+            upstream_local: upstream.stream.local_addr().unwrap(),
+        });
+        defer! { self.session_table.remove(key); };
         let res = match &proxy_chain.payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
@@ -276,6 +299,7 @@ impl HttpAccess {
                 Arc::clone(&self.proxy_table),
                 self.stream_pool.clone(),
                 self.speed_limiter.clone(),
+                self.session_table.clone(),
             )),
             filter::Action::Block => {
                 trace!(?addr, "Blocked CONNECT");
@@ -432,6 +456,7 @@ struct HttpConnect {
     proxy_table: Arc<StreamProxyTable>,
     stream_pool: Pool,
     speed_limiter: Limiter,
+    session_table: SessionTable,
 }
 
 impl HttpConnect {
@@ -439,11 +464,13 @@ impl HttpConnect {
         proxy_table: Arc<StreamProxyTable>,
         stream_pool: Pool,
         speed_limiter: Limiter,
+        session_table: SessionTable,
     ) -> Self {
         Self {
             proxy_table,
             stream_pool,
             speed_limiter,
+            session_table,
         }
     }
 
@@ -465,6 +492,15 @@ impl HttpConnect {
         let proxy_chain = self.proxy_table.choose_chain();
         let upstream = establish(&proxy_chain.chain, destination, &self.stream_pool).await?;
 
+        let key = self.session_table.insert(Session {
+            start: SystemTime::now(),
+            destination: StreamAddr {
+                address: address.clone(),
+                stream_type: StreamType::Tcp,
+            },
+            upstream_local: upstream.stream.local_addr().unwrap(),
+        });
+        defer! { self.session_table.remove(key); };
         // Proxy data
         let res = copy_bidirectional_with_payload_crypto(
             upgraded,

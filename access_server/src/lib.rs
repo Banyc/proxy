@@ -122,6 +122,7 @@ impl AccessServerConfig {
                     &stream_proxy_tables,
                     &filters,
                     cancellation.clone(),
+                    session_table.clone(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
