@@ -32,6 +32,11 @@ impl SessionTable {
         }
     }
 
+    pub fn set_scope(&self, session: Session) -> SessionGuard {
+        let key = self.insert(session);
+        SessionGuard { table: self, key }
+    }
+
     #[must_use]
     pub fn insert(&self, session: Session) -> SessionKey {
         if !self.enabled {
@@ -59,6 +64,18 @@ impl SessionTable {
 impl Default for SessionTable {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Debug)]
+pub struct SessionGuard<'table> {
+    table: &'table SessionTable,
+    key: SessionKey,
+}
+
+impl Drop for SessionGuard<'_> {
+    fn drop(&mut self) {
+        self.table.remove(self.key);
     }
 }
 

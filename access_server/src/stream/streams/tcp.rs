@@ -16,7 +16,6 @@ use common::{
     },
 };
 use proxy_client::stream::{establish, StreamEstablishError};
-use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::ToSocketAddrs;
@@ -154,12 +153,11 @@ impl TcpAccess {
         )
         .await?;
 
-        let key = self.session_table.insert(Session {
+        let _session_guard = self.session_table.set_scope(Session {
             start: SystemTime::now(),
             destination: self.destination.clone(),
             upstream_local: upstream.stream.local_addr().unwrap(),
         });
-        defer! { self.session_table.remove(key); }
         let res = copy_bidirectional_with_payload_crypto(
             downstream,
             upstream.stream,

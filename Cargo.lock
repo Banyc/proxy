@@ -13,7 +13,6 @@ dependencies = [
  "http-body-util",
  "hyper 1.0.0-rc.3",
  "proxy_client",
- "scopeguard",
  "serde",
  "thiserror",
  "tokio",

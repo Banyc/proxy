@@ -29,7 +29,6 @@ use hyper::{
     body::Incoming, http, service::service_fn, upgrade::Upgraded, Method, Request, Response,
 };
 use proxy_client::stream::{establish, StreamEstablishError};
-use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
@@ -229,7 +228,7 @@ impl HttpAccess {
         )
         .await?;
 
-        let key = self.session_table.insert(Session {
+        let _session_guard = self.session_table.set_scope(Session {
             start: SystemTime::now(),
             destination: StreamAddr {
                 address: addr.clone(),
@@ -237,7 +236,6 @@ impl HttpAccess {
             },
             upstream_local: upstream.stream.local_addr().unwrap(),
         });
-        defer! { self.session_table.remove(key); };
         let res = match &proxy_chain.payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
@@ -492,7 +490,7 @@ impl HttpConnect {
         let proxy_chain = self.proxy_table.choose_chain();
         let upstream = establish(&proxy_chain.chain, destination, &self.stream_pool).await?;
 
-        let key = self.session_table.insert(Session {
+        let _session_guard = self.session_table.set_scope(Session {
             start: SystemTime::now(),
             destination: StreamAddr {
                 address: address.clone(),
@@ -500,7 +498,6 @@ impl HttpConnect {
             },
             upstream_local: upstream.stream.local_addr().unwrap(),
         });
-        defer! { self.session_table.remove(key); };
         // Proxy data
         let res = copy_bidirectional_with_payload_crypto(
             upgraded,

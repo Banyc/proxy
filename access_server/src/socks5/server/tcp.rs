@@ -19,7 +19,6 @@ use common::{
     },
 };
 use proxy_client::stream::StreamEstablishError;
-use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
@@ -270,7 +269,7 @@ impl Socks5ServerTcpAccess {
             } => (destination, downstream, upstream, payload_crypto),
         };
 
-        let key = self.session_table.insert(Session {
+        let _session_guard = self.session_table.set_scope(Session {
             start: SystemTime::now(),
             destination: StreamAddr {
                 address: destination.clone(),
@@ -278,7 +277,6 @@ impl Socks5ServerTcpAccess {
             },
             upstream_local: upstream.stream.local_addr().unwrap(),
         });
-        defer! { self.session_table.remove(key); };
         let res = copy_bidirectional_with_payload_crypto(
             downstream,
             upstream.stream,
