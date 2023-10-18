@@ -5,6 +5,7 @@ use common::{
     filter::{self, FilterBuilder, MatcherBuilder},
     loading,
     stream::{pool::Pool, session_table::StreamSessionTable},
+    udp::session_table::UdpSessionTable,
 };
 use serde::{Deserialize, Serialize};
 use socks5::server::{
@@ -70,6 +71,7 @@ impl AccessServerConfig {
         stream_pool: &Pool,
         cancellation: CancellationToken,
         stream_session_table: StreamSessionTable,
+        udp_session_table: UdpSessionTable,
     ) -> AnyResult {
         // Shared
         let stream_proxy_tables = self
@@ -109,7 +111,13 @@ impl AccessServerConfig {
         let udp_server = self
             .udp_server
             .into_iter()
-            .map(|c| c.into_builder(&udp_proxy_tables, cancellation.clone()))
+            .map(|c| {
+                c.into_builder(
+                    &udp_proxy_tables,
+                    cancellation.clone(),
+                    udp_session_table.clone(),
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         loader.udp_server.load(join_set, udp_server).await?;
 
@@ -152,7 +160,13 @@ impl AccessServerConfig {
         let socks5_udp_server = self
             .socks5_udp_server
             .into_iter()
-            .map(|c| c.into_builder(&udp_proxy_tables, cancellation.clone()))
+            .map(|c| {
+                c.into_builder(
+                    &udp_proxy_tables,
+                    cancellation.clone(),
+                    udp_session_table.clone(),
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         loader
             .socks5_udp_server

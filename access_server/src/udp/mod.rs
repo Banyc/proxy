@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, net::Ipv4Addr, sync::Arc};
+use std::{collections::HashMap, io, net::Ipv4Addr, sync::Arc, time::SystemTime};
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
@@ -10,6 +10,7 @@ use common::{
     udp::{
         io_copy::{copy_bidirectional, CopyBiError, DownstreamParts, UpstreamParts},
         proxy_table::UdpProxyTable,
+        session_table::{Session, UdpSessionTable},
         Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
@@ -38,6 +39,7 @@ impl UdpAccessServerConfig {
         self,
         proxy_tables: &HashMap<Arc<str>, UdpProxyTable>,
         cancellation: CancellationToken,
+        session_table: UdpSessionTable,
     ) -> Result<UdpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -52,6 +54,7 @@ impl UdpAccessServerConfig {
             destination: self.destination,
             proxy_table,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
+            session_table,
         })
     }
 }
@@ -70,6 +73,7 @@ pub struct UdpAccessServerBuilder {
     destination: InternetAddrStr,
     proxy_table: UdpProxyTable,
     speed_limit: f64,
+    session_table: UdpSessionTable,
 }
 
 #[async_trait]
@@ -94,6 +98,7 @@ impl loading::Builder for UdpAccessServerBuilder {
             self.proxy_table,
             self.destination.0,
             self.speed_limit,
+            self.session_table,
         ))
     }
 }
@@ -103,16 +108,23 @@ pub struct UdpAccess {
     proxy_table: UdpProxyTable,
     destination: InternetAddr,
     speed_limiter: Limiter,
+    session_table: UdpSessionTable,
 }
 
 impl loading::Hook for UdpAccess {}
 
 impl UdpAccess {
-    pub fn new(proxy_table: UdpProxyTable, destination: InternetAddr, speed_limit: f64) -> Self {
+    pub fn new(
+        proxy_table: UdpProxyTable,
+        destination: InternetAddr,
+        speed_limit: f64,
+        session_table: UdpSessionTable,
+    ) -> Self {
         Self {
             proxy_table,
             destination,
             speed_limiter: Limiter::new(speed_limit),
+            session_table,
         }
     }
 
@@ -134,6 +146,11 @@ impl UdpAccess {
 
         let (upstream_read, upstream_write) = upstream.into_split();
 
+        let _session_guard = self.session_table.set_scope(Session {
+            start: SystemTime::now(),
+            destination: flow.upstream.0.clone(),
+            upstream_local: upstream_read.inner().local_addr().ok(),
+        });
         let metrics = copy_bidirectional(
             flow,
             UpstreamParts {

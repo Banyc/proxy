@@ -4,6 +4,7 @@ use access_server::{AccessServerConfig, AccessServerLoader};
 use common::{
     error::{AnyError, AnyResult},
     stream::{pool::PoolBuilder, session_table::StreamSessionTable},
+    udp::session_table::UdpSessionTable,
 };
 use config::ConfigReader;
 use proxy_server::{ProxyServerConfig, ProxyServerLoader};
@@ -18,6 +19,7 @@ pub async fn serve<CR>(
     notify_rx: Arc<tokio::sync::Notify>,
     config_reader: CR,
     stream_session_table: StreamSessionTable,
+    udp_session_table: UdpSessionTable,
 ) -> Result<(), ServeError>
 where
     CR: ConfigReader<Config = ServerConfig>,
@@ -41,6 +43,7 @@ where
         &mut proxy_server_loader,
         cancellation.clone(),
         stream_session_table.clone(),
+        udp_session_table.clone(),
     )
     .await?;
 
@@ -67,6 +70,7 @@ where
                     &mut proxy_server_loader,
                     cancellation.clone(),
                     stream_session_table.clone(),
+                    udp_session_table.clone(),
                 ).await {
                     warn!(?e, "Failed to read and load config");
                     continue;
@@ -85,6 +89,7 @@ async fn read_and_load_config<CR>(
     proxy_server_loader: &mut ProxyServerLoader,
     cancellation: CancellationToken,
     stream_session_table: StreamSessionTable,
+    udp_session_table: UdpSessionTable,
 ) -> Result<(), ServeError>
 where
     CR: ConfigReader<Config = ServerConfig>,
@@ -100,6 +105,7 @@ where
         proxy_server_loader,
         cancellation,
         stream_session_table,
+        udp_session_table,
     )
     .await
     .map_err(ServeError::Load)?;
@@ -123,6 +129,7 @@ pub async fn load(
     proxy_server_loader: &mut ProxyServerLoader,
     cancellation: CancellationToken,
     stream_session_table: StreamSessionTable,
+    udp_session_table: UdpSessionTable,
 ) -> AnyResult {
     let stream_pool = config.global.stream_pool.build(cancellation.clone())?;
     config
@@ -133,6 +140,7 @@ pub async fn load(
             &stream_pool,
             cancellation,
             stream_session_table,
+            udp_session_table,
         )
         .await?;
     config
