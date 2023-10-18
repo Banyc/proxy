@@ -36,12 +36,7 @@ async fn main() -> AnyResult {
                 metrics_handle.render()
             }
             async fn sessions(session_table: State<SessionTable>) -> String {
-                let mut sessions = session_table
-                    .inner()
-                    .iter()
-                    .map(|(_, v)| v)
-                    .cloned()
-                    .collect::<Vec<_>>();
+                let mut sessions = session_table.sessions().iter().cloned().collect::<Vec<_>>();
                 sessions.sort_by_key(|session| session.start);
                 let mut text = String::new();
                 for session in sessions {

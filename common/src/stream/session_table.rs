@@ -51,14 +51,29 @@ impl SessionTable {
         map.remove(key)
     }
 
-    pub fn inner(&self) -> RwLockReadGuard<'_, HopSlotMap<SessionKey, Session>> {
-        self.map.read().unwrap()
+    pub fn sessions(&self) -> Sessions {
+        Sessions::new(self.map.read().unwrap())
     }
 }
 
 impl Default for SessionTable {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Debug)]
+pub struct Sessions<'lock> {
+    map: RwLockReadGuard<'lock, HopSlotMap<SessionKey, Session>>,
+}
+
+impl<'lock> Sessions<'lock> {
+    pub fn new(map: RwLockReadGuard<'lock, HopSlotMap<SessionKey, Session>>) -> Self {
+        Self { map }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Session> {
+        self.map.iter().map(|(_, v)| v)
     }
 }
 
