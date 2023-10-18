@@ -13,7 +13,7 @@ use common::{
         copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         pool::Pool,
         proxy_table::StreamProxyTable,
-        session_table::{Session, SessionTable},
+        session_table::{Session, StreamSessionTable},
         streams::tcp::TcpServer,
         tokio_io, CreatedStreamAndAddr, IoAddr, IoStream, StreamProxyMetrics, StreamServerHook,
     },
@@ -55,7 +55,7 @@ impl Socks5ServerTcpAccessServerConfig {
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
         filters: &HashMap<Arc<str>, Filter>,
         cancellation: CancellationToken,
-        session_table: SessionTable,
+        session_table: StreamSessionTable,
     ) -> Result<Socks5ServerTcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -118,7 +118,7 @@ pub struct Socks5ServerTcpAccessServerBuilder {
     speed_limit: f64,
     udp_server_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-    session_table: SessionTable,
+    session_table: StreamSessionTable,
 }
 
 #[async_trait]
@@ -160,7 +160,7 @@ pub struct Socks5ServerTcpAccess {
     speed_limiter: Limiter,
     udp_listen_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-    session_table: SessionTable,
+    session_table: StreamSessionTable,
 }
 
 impl Hook for Socks5ServerTcpAccess {}
@@ -193,7 +193,7 @@ impl Socks5ServerTcpAccess {
         speed_limit: f64,
         udp_listen_addr: Option<InternetAddr>,
         users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-        session_table: SessionTable,
+        session_table: StreamSessionTable,
     ) -> Self {
         Self {
             proxy_table,

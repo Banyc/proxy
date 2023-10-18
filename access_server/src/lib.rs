@@ -4,7 +4,7 @@ use common::{
     error::AnyResult,
     filter::{self, FilterBuilder, MatcherBuilder},
     loading,
-    stream::{pool::Pool, session_table::SessionTable},
+    stream::{pool::Pool, session_table::StreamSessionTable},
 };
 use serde::{Deserialize, Serialize};
 use socks5::server::{
@@ -69,7 +69,7 @@ impl AccessServerConfig {
         loader: &mut AccessServerLoader,
         stream_pool: &Pool,
         cancellation: CancellationToken,
-        session_table: SessionTable,
+        stream_session_table: StreamSessionTable,
     ) -> AnyResult {
         // Shared
         let stream_proxy_tables = self
@@ -99,7 +99,7 @@ impl AccessServerConfig {
                     stream_pool.clone(),
                     &stream_proxy_tables,
                     cancellation.clone(),
-                    session_table.clone(),
+                    stream_session_table.clone(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -123,7 +123,7 @@ impl AccessServerConfig {
                     &stream_proxy_tables,
                     &filters,
                     cancellation.clone(),
-                    session_table.clone(),
+                    stream_session_table.clone(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -139,7 +139,7 @@ impl AccessServerConfig {
                     &stream_proxy_tables,
                     &filters,
                     cancellation.clone(),
-                    session_table.clone(),
+                    stream_session_table.clone(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;

@@ -10,7 +10,7 @@ use common::{
         copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         pool::Pool,
         proxy_table::StreamProxyTable,
-        session_table::{Session, SessionTable},
+        session_table::{Session, StreamSessionTable},
         streams::tcp::TcpServer,
         tokio_io, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
@@ -39,7 +39,7 @@ impl TcpAccessServerConfig {
         stream_pool: Pool,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
         cancellation: CancellationToken,
-        session_table: SessionTable,
+        session_table: StreamSessionTable,
     ) -> Result<TcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -75,7 +75,7 @@ pub struct TcpAccessServerBuilder {
     proxy_table: StreamProxyTable,
     stream_pool: Pool,
     speed_limit: f64,
-    session_table: SessionTable,
+    session_table: StreamSessionTable,
 }
 
 #[async_trait]
@@ -112,7 +112,7 @@ pub struct TcpAccess {
     destination: StreamAddr,
     stream_pool: Pool,
     speed_limiter: Limiter,
-    session_table: SessionTable,
+    session_table: StreamSessionTable,
 }
 
 impl TcpAccess {
@@ -121,7 +121,7 @@ impl TcpAccess {
         destination: StreamAddr,
         stream_pool: Pool,
         speed_limit: f64,
-        session_table: SessionTable,
+        session_table: StreamSessionTable,
     ) -> Self {
         Self {
             proxy_table,

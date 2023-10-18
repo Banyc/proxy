@@ -18,7 +18,7 @@ use common::{
         copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         pool::Pool,
         proxy_table::StreamProxyTable,
-        session_table::{Session, SessionTable},
+        session_table::{Session, StreamSessionTable},
         streams::{tcp::TcpServer, xor::XorStream},
         tokio_io, IoAddr, IoStream, SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics,
         StreamProxyMetrics, StreamServerHook,
@@ -56,7 +56,7 @@ impl HttpAccessServerConfig {
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
         filters: &HashMap<Arc<str>, Filter>,
         cancellation: CancellationToken,
-        session_table: SessionTable,
+        session_table: StreamSessionTable,
     ) -> Result<HttpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -103,7 +103,7 @@ pub struct HttpAccessServerBuilder {
     stream_pool: Pool,
     filter: Filter,
     speed_limit: f64,
-    session_table: SessionTable,
+    session_table: StreamSessionTable,
 }
 
 #[async_trait]
@@ -141,7 +141,7 @@ pub struct HttpAccess {
     stream_pool: Pool,
     filter: Filter,
     speed_limiter: Limiter,
-    session_table: SessionTable,
+    session_table: StreamSessionTable,
 }
 
 impl HttpAccess {
@@ -150,7 +150,7 @@ impl HttpAccess {
         stream_pool: Pool,
         filter: Filter,
         speed_limit: f64,
-        session_table: SessionTable,
+        session_table: StreamSessionTable,
     ) -> Self {
         Self {
             proxy_table: Arc::new(proxy_table),
@@ -454,7 +454,7 @@ struct HttpConnect {
     proxy_table: Arc<StreamProxyTable>,
     stream_pool: Pool,
     speed_limiter: Limiter,
-    session_table: SessionTable,
+    session_table: StreamSessionTable,
 }
 
 impl HttpConnect {
@@ -462,7 +462,7 @@ impl HttpConnect {
         proxy_table: Arc<StreamProxyTable>,
         stream_pool: Pool,
         speed_limiter: Limiter,
-        session_table: SessionTable,
+        session_table: StreamSessionTable,
     ) -> Self {
         Self {
             proxy_table,

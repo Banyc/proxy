@@ -3,7 +3,7 @@ use std::sync::Arc;
 use access_server::{AccessServerConfig, AccessServerLoader};
 use common::{
     error::{AnyError, AnyResult},
-    stream::{pool::PoolBuilder, session_table::SessionTable},
+    stream::{pool::PoolBuilder, session_table::StreamSessionTable},
 };
 use config::ConfigReader;
 use proxy_server::{ProxyServerConfig, ProxyServerLoader};
@@ -17,7 +17,7 @@ pub mod config;
 pub async fn serve<CR>(
     notify_rx: Arc<tokio::sync::Notify>,
     config_reader: CR,
-    session_table: SessionTable,
+    stream_session_table: StreamSessionTable,
 ) -> Result<(), ServeError>
 where
     CR: ConfigReader<Config = ServerConfig>,
@@ -40,7 +40,7 @@ where
         &mut access_server_loader,
         &mut proxy_server_loader,
         cancellation.clone(),
-        session_table.clone(),
+        stream_session_table.clone(),
     )
     .await?;
 
@@ -66,7 +66,7 @@ where
                     &mut access_server_loader,
                     &mut proxy_server_loader,
                     cancellation.clone(),
-                    session_table.clone(),
+                    stream_session_table.clone(),
                 ).await {
                     warn!(?e, "Failed to read and load config");
                     continue;
@@ -84,7 +84,7 @@ async fn read_and_load_config<CR>(
     access_server_loader: &mut AccessServerLoader,
     proxy_server_loader: &mut ProxyServerLoader,
     cancellation: CancellationToken,
-    session_table: SessionTable,
+    stream_session_table: StreamSessionTable,
 ) -> Result<(), ServeError>
 where
     CR: ConfigReader<Config = ServerConfig>,
@@ -99,7 +99,7 @@ where
         access_server_loader,
         proxy_server_loader,
         cancellation,
-        session_table,
+        stream_session_table,
     )
     .await
     .map_err(ServeError::Load)?;
@@ -122,7 +122,7 @@ pub async fn load(
     access_server_loader: &mut AccessServerLoader,
     proxy_server_loader: &mut ProxyServerLoader,
     cancellation: CancellationToken,
-    session_table: SessionTable,
+    stream_session_table: StreamSessionTable,
 ) -> AnyResult {
     let stream_pool = config.global.stream_pool.build(cancellation.clone())?;
     config
@@ -132,7 +132,7 @@ pub async fn load(
             access_server_loader,
             &stream_pool,
             cancellation,
-            session_table,
+            stream_session_table,
         )
         .await?;
     config

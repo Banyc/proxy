@@ -8,5 +8,6 @@ pub mod header;
 pub mod loading;
 pub mod proxy_table;
 pub mod sampling;
+pub mod session_table;
 pub mod stream;
 pub mod udp;
