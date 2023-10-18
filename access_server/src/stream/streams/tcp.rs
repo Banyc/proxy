@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, sync::Arc};
+use std::{collections::HashMap, io, sync::Arc, time::SystemTime};
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
@@ -10,11 +10,13 @@ use common::{
         copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         pool::Pool,
         proxy_table::StreamProxyTable,
+        session_table::{Session, SessionTable},
         streams::tcp::TcpServer,
         tokio_io, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };
 use proxy_client::stream::{establish, StreamEstablishError};
+use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::ToSocketAddrs;
@@ -38,6 +40,7 @@ impl TcpAccessServerConfig {
         stream_pool: Pool,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
         cancellation: CancellationToken,
+        session_table: SessionTable,
     ) -> Result<TcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -53,6 +56,7 @@ impl TcpAccessServerConfig {
             proxy_table,
             stream_pool,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
+            session_table,
         })
     }
 }
@@ -72,6 +76,7 @@ pub struct TcpAccessServerBuilder {
     proxy_table: StreamProxyTable,
     stream_pool: Pool,
     speed_limit: f64,
+    session_table: SessionTable,
 }
 
 #[async_trait]
@@ -97,6 +102,7 @@ impl loading::Builder for TcpAccessServerBuilder {
             self.destination.0,
             self.stream_pool,
             self.speed_limit,
+            self.session_table,
         ))
     }
 }
@@ -107,6 +113,7 @@ pub struct TcpAccess {
     destination: StreamAddr,
     stream_pool: Pool,
     speed_limiter: Limiter,
+    session_table: SessionTable,
 }
 
 impl TcpAccess {
@@ -115,12 +122,14 @@ impl TcpAccess {
         destination: StreamAddr,
         stream_pool: Pool,
         speed_limit: f64,
+        session_table: SessionTable,
     ) -> Self {
         Self {
             proxy_table,
             destination,
             stream_pool,
             speed_limiter: Limiter::new(speed_limit),
+            session_table,
         }
     }
 
@@ -145,6 +154,12 @@ impl TcpAccess {
         )
         .await?;
 
+        let key = self.session_table.insert(Session {
+            start: SystemTime::now(),
+            destination: self.destination.clone(),
+            upstream_local: upstream.stream.local_addr().unwrap(),
+        });
+        defer! { self.session_table.remove(key); }
         let res = copy_bidirectional_with_payload_crypto(
             downstream,
             upstream.stream,

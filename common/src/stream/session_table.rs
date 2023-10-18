@@ -12,6 +12,7 @@ use super::addr::StreamAddr;
 #[derive(Debug, Clone)]
 pub struct SessionTable {
     map: Arc<RwLock<HopSlotMap<SessionKey, Session>>>,
+    enabled: bool,
 }
 
 impl SessionTable {
@@ -19,16 +20,33 @@ impl SessionTable {
     pub fn new() -> Self {
         Self {
             map: Arc::new(RwLock::new(HopSlotMap::with_key())),
+            enabled: true,
+        }
+    }
+
+    #[must_use]
+    pub fn new_disabled() -> Self {
+        Self {
+            map: Arc::new(RwLock::new(HopSlotMap::with_key())),
+            enabled: false,
         }
     }
 
     #[must_use]
     pub fn insert(&self, session: Session) -> SessionKey {
+        if !self.enabled {
+            return SessionKey::default();
+        }
+
         let mut map = self.map.write().unwrap();
         map.insert(session)
     }
 
     pub fn remove(&self, key: SessionKey) -> Option<Session> {
+        if !self.enabled {
+            return None;
+        }
+
         let mut map = self.map.write().unwrap();
         map.remove(key)
     }

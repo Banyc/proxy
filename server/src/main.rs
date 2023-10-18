@@ -26,9 +26,10 @@ async fn main() -> AnyResult {
     let args = Args::parse();
 
     // Metrics
-    let session_table = SessionTable::new();
+    let session_table: SessionTable;
     if let Some(metrics_addr) = args.metrics {
         let metrics_handle = PrometheusBuilder::new().install_recorder().unwrap();
+        session_table = SessionTable::new();
         let session_table = session_table.clone();
         tokio::spawn(async move {
             async fn metrics(metrics_handle: State<PrometheusHandle>) -> String {
@@ -61,6 +62,8 @@ async fn main() -> AnyResult {
             );
             server.await.unwrap();
         });
+    } else {
+        session_table = SessionTable::new_disabled();
     }
 
     let notify_rx = spawn_watch_tasks(&args.config_file_paths);
