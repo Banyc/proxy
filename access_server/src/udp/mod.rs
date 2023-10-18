@@ -148,7 +148,7 @@ impl UdpAccess {
 
         let _session_guard = self.session_table.set_scope(Session {
             start: SystemTime::now(),
-            destination: flow.upstream.0.clone(),
+            destination: self.destination.clone(),
             upstream_local: upstream_read.inner().local_addr().ok(),
         });
         let metrics = copy_bidirectional(
