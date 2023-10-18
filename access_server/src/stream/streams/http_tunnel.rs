@@ -234,7 +234,7 @@ impl HttpAccess {
                 address: addr.clone(),
                 stream_type: StreamType::Tcp,
             },
-            upstream_local: upstream.stream.local_addr().unwrap(),
+            upstream_local: upstream.stream.local_addr().ok(),
         });
         let res = match &proxy_chain.payload_crypto {
             Some(crypto) => {
@@ -496,7 +496,7 @@ impl HttpConnect {
                 address: address.clone(),
                 stream_type: StreamType::Tcp,
             },
-            upstream_local: upstream.stream.local_addr().unwrap(),
+            upstream_local: upstream.stream.local_addr().ok(),
         });
         // Proxy data
         let res = copy_bidirectional_with_payload_crypto(

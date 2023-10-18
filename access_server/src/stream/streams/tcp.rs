@@ -156,7 +156,7 @@ impl TcpAccess {
         let _session_guard = self.session_table.set_scope(Session {
             start: SystemTime::now(),
             destination: self.destination.clone(),
-            upstream_local: upstream.stream.local_addr().unwrap(),
+            upstream_local: upstream.stream.local_addr().ok(),
         });
         let res = copy_bidirectional_with_payload_crypto(
             downstream,

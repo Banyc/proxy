@@ -275,7 +275,7 @@ impl Socks5ServerTcpAccess {
                 address: destination.clone(),
                 stream_type: StreamType::Tcp,
             },
-            upstream_local: upstream.stream.local_addr().unwrap(),
+            upstream_local: upstream.stream.local_addr().ok(),
         });
         let res = copy_bidirectional_with_payload_crypto(
             downstream,
