@@ -18,9 +18,9 @@ struct Args {
     /// Paths to the configuration files.
     config_file_paths: Vec<Arc<str>>,
 
-    /// Listen address for metrics
+    /// Listen address for monitoring
     #[arg(short, long)]
-    metrics: Option<SocketAddr>,
+    monitor: Option<SocketAddr>,
 }
 
 #[tokio::main]
@@ -31,7 +31,7 @@ async fn main() -> AnyResult {
     // Monitoring
     let stream_session_table: StreamSessionTable;
     let udp_session_table: UdpSessionTable;
-    if let Some(metrics_addr) = args.metrics {
+    if let Some(monitor_addr) = args.monitor {
         let metrics_handle = PrometheusBuilder::new().install_recorder().unwrap();
         stream_session_table = StreamSessionTable::new();
         udp_session_table = UdpSessionTable::new();
@@ -80,7 +80,7 @@ async fn main() -> AnyResult {
                 .with_state(metrics_handle)
                 .route("/sessions", get(sessions))
                 .with_state((stream_session_table, udp_session_table));
-            let server = axum::Server::bind(&metrics_addr).serve(router.into_make_service());
+            let server = axum::Server::bind(&monitor_addr).serve(router.into_make_service());
             info!(
                 "Monitoring HTTP server listening addr: {}",
                 server.local_addr()
