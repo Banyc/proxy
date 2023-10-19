@@ -5,6 +5,10 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[[bin]]
+name = "proxy"
+path = "src/main.rs"
+
 [dependencies]
 access_server = { path = "../access_server" }
 async-trait = "0.1.73"
