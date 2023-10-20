@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, sync::Arc, time::SystemTime};
+use std::{collections::HashMap, io, sync::Arc};
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
@@ -7,12 +7,11 @@ use common::{
     loading,
     stream::{
         addr::{StreamAddr, StreamAddrStr},
-        copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         pool::Pool,
         proxy_table::StreamProxyTable,
-        session_table::{Session, StreamSessionTable},
+        session_table::StreamSessionTable,
         streams::tcp::TcpServer,
-        tokio_io, IoAddr, IoStream, StreamMetrics, StreamServerHook,
+        tokio_io, CopyBidirectional, IoAddr, IoStream, StreamMetrics, StreamServerHook,
     },
 };
 use proxy_client::stream::{establish, StreamEstablishError};
@@ -153,29 +152,32 @@ impl TcpAccess {
         )
         .await?;
 
-        let _session_guard = self.session_table.set_scope(Session {
-            start: SystemTime::now(),
-            destination: self.destination.clone(),
-            upstream_local: upstream.stream.local_addr().ok(),
-        });
-        let res = copy_bidirectional_with_payload_crypto(
+        let upstream_local = upstream.stream.local_addr().ok();
+        let io_copy = CopyBidirectional {
             downstream,
-            upstream.stream,
-            proxy_chain.payload_crypto.as_ref(),
-            self.speed_limiter.clone(),
-        )
-        .await;
-
-        let (metrics, res) = get_metrics_from_copy_result(
+            upstream: upstream.stream,
+            payload_crypto: proxy_chain.payload_crypto.clone(),
+            speed_limiter: self.speed_limiter.clone(),
             start,
-            upstream.addr,
-            upstream.sock_addr,
-            Some(downstream_addr),
-            res,
-        );
+            upstream_addr: upstream.addr,
+            upstream_sock_addr: upstream.sock_addr,
+            downstream_addr: Some(downstream_addr),
+        };
+        let (metrics, res) = io_copy
+            .serve_as_access_server(
+                self.destination.clone(),
+                self.session_table.clone(),
+                upstream_local,
+                "TCP",
+            )
+            .await;
+
         match res {
-            Ok(()) => Ok(metrics),
-            Err(e) => Err(ProxyError::IoCopy { source: e, metrics }),
+            Ok(()) => Ok(metrics.stream),
+            Err(e) => Err(ProxyError::IoCopy {
+                source: e,
+                metrics: metrics.stream,
+            }),
         }
     }
 }

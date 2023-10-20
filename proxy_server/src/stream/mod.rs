@@ -8,10 +8,10 @@ use common::{
     loading,
     stream::{
         connect::{connect_with_pool, ConnectError},
-        copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         pool::Pool,
         steer::{steer, SteerError},
-        tokio_io, CreatedStreamAndAddr, IoAddr, IoStream, StreamMetrics, StreamServerHook,
+        tokio_io, CopyBidirectional, CreatedStreamAndAddr, IoAddr, IoStream, StreamMetrics,
+        StreamServerHook,
     },
 };
 use serde::Deserialize;
@@ -128,21 +128,18 @@ impl StreamProxy {
         };
 
         // Copy data
-        let res = copy_bidirectional_with_payload_crypto(
+        let io_copy = CopyBidirectional {
             downstream,
-            upstream.stream,
-            self.payload_crypto.as_ref(),
-            Limiter::new(f64::INFINITY),
-        )
-        .await;
-
-        let (metrics, res) = get_metrics_from_copy_result(
+            upstream: upstream.stream,
+            payload_crypto: self.payload_crypto.clone(),
+            speed_limiter: Limiter::new(f64::INFINITY),
             start,
-            upstream.addr,
-            upstream.sock_addr,
-            Some(downstream_addr),
-            res,
-        );
+            upstream_addr: upstream.addr,
+            upstream_sock_addr: upstream.sock_addr,
+            downstream_addr: Some(downstream_addr),
+        };
+        let (metrics, res) = io_copy.serve_as_proxy_server("Stream").await;
+
         match res {
             Ok(()) => Ok(Some(metrics)),
             Err(e) => Err(StreamProxyServerError::IoCopy { source: e, metrics }),

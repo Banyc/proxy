@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, net::SocketAddr, num::NonZeroU8, sync::Arc, time::SystemTime};
+use std::{collections::HashMap, io, net::SocketAddr, num::NonZeroU8, sync::Arc};
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
@@ -10,12 +10,12 @@ use common::{
     loading::{self, Hook},
     stream::{
         addr::{StreamAddr, StreamType},
-        copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         pool::Pool,
         proxy_table::StreamProxyTable,
-        session_table::{Session, StreamSessionTable},
+        session_table::StreamSessionTable,
         streams::tcp::TcpServer,
-        tokio_io, CreatedStreamAndAddr, IoAddr, IoStream, StreamProxyMetrics, StreamServerHook,
+        tokio_io, CopyBidirectional, CreatedStreamAndAddr, IoAddr, IoStream, StreamProxyMetrics,
+        StreamServerHook,
     },
 };
 use proxy_client::stream::StreamEstablishError;
@@ -226,41 +226,31 @@ impl Socks5ServerTcpAccess {
                 upstream_addr,
                 upstream_sock_addr,
             } => {
-                let _session_guard = self.session_table.set_scope(Session {
-                    start: SystemTime::now(),
-                    destination: StreamAddr {
+                let upstream_local = upstream.local_addr().ok();
+                let io_copy = CopyBidirectional {
+                    downstream,
+                    upstream,
+                    payload_crypto: None,
+                    speed_limiter: self.speed_limiter.clone(),
+                    start,
+                    upstream_addr: StreamAddr {
                         stream_type: StreamType::Tcp,
                         address: upstream_addr.clone(),
                     },
-                    upstream_local: upstream.local_addr().ok(),
-                });
-                let res = copy_bidirectional_with_payload_crypto(
-                    downstream,
-                    upstream,
-                    None,
-                    self.speed_limiter.clone(),
-                )
-                .await;
-
-                let (metrics, res) = get_metrics_from_copy_result(
-                    start,
-                    StreamAddr {
-                        stream_type: StreamType::Tcp,
-                        address: upstream_addr,
-                    },
                     upstream_sock_addr,
-                    Some(downstream_addr),
-                    res,
-                );
-
-                match res {
-                    Ok(()) => {
-                        info!(%metrics, "Direct finished");
-                    }
-                    Err(e) => {
-                        info!(?e, %metrics, "Direct error");
-                    }
-                }
+                    downstream_addr: Some(downstream_addr),
+                };
+                let _ = io_copy
+                    .serve_as_access_server(
+                        StreamAddr {
+                            stream_type: StreamType::Tcp,
+                            address: upstream_addr,
+                        },
+                        self.session_table.clone(),
+                        upstream_local,
+                        "SOCKS5 TCP direct",
+                    )
+                    .await;
                 return Ok(None);
             }
             EstablishResult::Udp { mut downstream } => {
@@ -277,33 +267,28 @@ impl Socks5ServerTcpAccess {
             } => (destination, downstream, upstream, payload_crypto),
         };
 
-        let _session_guard = self.session_table.set_scope(Session {
-            start: SystemTime::now(),
-            destination: StreamAddr {
-                address: destination.clone(),
-                stream_type: StreamType::Tcp,
-            },
-            upstream_local: upstream.stream.local_addr().ok(),
-        });
-        let res = copy_bidirectional_with_payload_crypto(
+        let upstream_local = upstream.stream.local_addr().ok();
+        let io_copy = CopyBidirectional {
             downstream,
-            upstream.stream,
-            payload_crypto.as_ref(),
-            self.speed_limiter.clone(),
-        )
-        .await;
-
-        let (metrics, res) = get_metrics_from_copy_result(
+            upstream: upstream.stream,
+            payload_crypto,
+            speed_limiter: self.speed_limiter.clone(),
             start,
-            upstream.addr,
-            upstream.sock_addr,
-            Some(downstream_addr),
-            res,
-        );
-        let metrics = StreamProxyMetrics {
-            stream: metrics,
-            destination,
+            upstream_addr: upstream.addr,
+            upstream_sock_addr: upstream.sock_addr,
+            downstream_addr: Some(downstream_addr),
         };
+        let (metrics, res) = io_copy
+            .serve_as_access_server(
+                StreamAddr {
+                    stream_type: StreamType::Tcp,
+                    address: destination.clone(),
+                },
+                self.session_table.clone(),
+                upstream_local,
+                "SOCKS5 TCP",
+            )
+            .await;
 
         match res {
             Ok(()) => Ok(Some(metrics)),

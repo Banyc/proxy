@@ -4,7 +4,7 @@ use std::{
     net::SocketAddr,
     ops::{Deref, DerefMut},
     pin::Pin,
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 
 use async_speed_limit::Limiter;
@@ -16,6 +16,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
+use tracing::info;
 
 use crate::{
     addr::{InternetAddr, InternetAddrKind},
@@ -25,6 +26,7 @@ use crate::{
 
 use self::{
     addr::StreamAddr,
+    session_table::{Session, StreamSessionTable},
     streams::{kcp::AddressedKcpStream, xor::XorStream},
 };
 
@@ -220,6 +222,95 @@ impl AsyncRead for CreatedStream {
             CreatedStream::Tcp(x) => Pin::new(x).poll_read(cx, buf),
             CreatedStream::Kcp(x) => Pin::new(x).poll_read(cx, buf),
         }
+    }
+}
+
+pub struct CopyBidirectional<DS, US> {
+    pub downstream: DS,
+    pub upstream: US,
+    pub payload_crypto: Option<XorCrypto>,
+    pub speed_limiter: Limiter,
+    pub start: Instant,
+    pub upstream_addr: StreamAddr,
+    pub upstream_sock_addr: SocketAddr,
+    pub downstream_addr: Option<SocketAddr>,
+}
+
+impl<DS, US> CopyBidirectional<DS, US>
+where
+    US: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    DS: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    pub async fn serve_as_proxy_server(
+        self,
+        log_prefix: &str,
+    ) -> (StreamMetrics, Result<(), tokio_io::CopyBiErrorKind>) {
+        let (metrics, res) = self.serve_as_proxy_server_no_logs().await;
+
+        match &res {
+            Ok(()) => {
+                info!(%metrics, "{log_prefix}: I/O copy finished");
+            }
+            Err(e) => {
+                info!(?e, %metrics, "{log_prefix}: I/O copy error");
+            }
+        }
+
+        (metrics, res)
+    }
+
+    pub async fn serve_as_access_server(
+        self,
+        destination: StreamAddr,
+        session_table: StreamSessionTable,
+        upstream_local: Option<SocketAddr>,
+        log_prefix: &str,
+    ) -> (StreamProxyMetrics, Result<(), tokio_io::CopyBiErrorKind>) {
+        let _session_guard = session_table.set_scope(Session {
+            start: SystemTime::now(),
+            destination: destination.clone(),
+            upstream_local,
+        });
+
+        let (metrics, res) = self.serve_as_proxy_server_no_logs().await;
+
+        let metrics = StreamProxyMetrics {
+            stream: metrics,
+            destination: destination.address,
+        };
+
+        match &res {
+            Ok(()) => {
+                info!(%metrics, "{log_prefix}: I/O copy finished");
+            }
+            Err(e) => {
+                info!(?e, %metrics, "{log_prefix}: I/O copy error");
+            }
+        }
+
+        (metrics, res)
+    }
+
+    async fn serve_as_proxy_server_no_logs(
+        self,
+    ) -> (StreamMetrics, Result<(), tokio_io::CopyBiErrorKind>) {
+        let res = copy_bidirectional_with_payload_crypto(
+            self.downstream,
+            self.upstream,
+            self.payload_crypto.as_ref(),
+            self.speed_limiter,
+        )
+        .await;
+
+        let (metrics, res) = get_metrics_from_copy_result(
+            self.start,
+            self.upstream_addr,
+            self.upstream_sock_addr,
+            self.downstream_addr,
+            res,
+        );
+
+        (metrics, res)
     }
 }
 

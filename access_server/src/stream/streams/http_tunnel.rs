@@ -15,13 +15,12 @@ use common::{
     loading,
     stream::{
         addr::{StreamAddr, StreamType},
-        copy_bidirectional_with_payload_crypto, get_metrics_from_copy_result,
         pool::Pool,
         proxy_table::StreamProxyTable,
         session_table::{Session, StreamSessionTable},
         streams::{tcp::TcpServer, xor::XorStream},
-        tokio_io, IoAddr, IoStream, SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics,
-        StreamProxyMetrics, StreamServerHook,
+        tokio_io, CopyBidirectional, IoAddr, IoStream, SimplifiedStreamMetrics,
+        SimplifiedStreamProxyMetrics, StreamProxyMetrics, StreamServerHook,
     },
 };
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
@@ -399,35 +398,32 @@ async fn upgrade(
             return;
         }
     };
-    let _session_guard = session_table.set_scope(Session {
-        start: SystemTime::now(),
-        destination: StreamAddr {
+
+    let upstream_local = upstream.local_addr().ok();
+    let io_copy = CopyBidirectional {
+        downstream: upgraded,
+        upstream,
+        payload_crypto: None,
+        speed_limiter,
+        start,
+        upstream_addr: StreamAddr {
             stream_type: StreamType::Tcp,
             address: addr.clone(),
         },
-        upstream_local: upstream.local_addr().ok(),
-    });
-    let res = copy_bidirectional_with_payload_crypto(upgraded, upstream, None, speed_limiter).await;
-
-    let (metrics, res) = get_metrics_from_copy_result(
-        start,
-        StreamAddr {
-            stream_type: StreamType::Tcp,
-            address: addr,
-        },
-        sock_addr,
-        None,
-        res,
-    );
-
-    match res {
-        Ok(()) => {
-            info!(%metrics, "Direct CONNECT finished");
-        }
-        Err(e) => {
-            info!(?e, %metrics, "Direct CONNECT error");
-        }
-    }
+        upstream_sock_addr: sock_addr,
+        downstream_addr: None,
+    };
+    let _ = io_copy
+        .serve_as_access_server(
+            StreamAddr {
+                stream_type: StreamType::Tcp,
+                address: addr,
+            },
+            session_table,
+            upstream_local,
+            "HTTP CONNECT direct",
+        )
+        .await;
 }
 
 #[derive(Debug, Error)]
@@ -500,29 +496,29 @@ impl HttpConnect {
         let proxy_chain = self.proxy_table.choose_chain();
         let upstream = establish(&proxy_chain.chain, destination, &self.stream_pool).await?;
 
-        let _session_guard = self.session_table.set_scope(Session {
-            start: SystemTime::now(),
-            destination: StreamAddr {
-                address: address.clone(),
-                stream_type: StreamType::Tcp,
-            },
-            upstream_local: upstream.stream.local_addr().ok(),
-        });
-        // Proxy data
-        let res = copy_bidirectional_with_payload_crypto(
-            upgraded,
-            upstream.stream,
-            proxy_chain.payload_crypto.as_ref(),
-            self.speed_limiter.clone(),
-        )
-        .await;
-
-        let (metrics, res) =
-            get_metrics_from_copy_result(start, upstream.addr, upstream.sock_addr, None, res);
-        let metrics = StreamProxyMetrics {
-            stream: metrics,
-            destination: address,
+        let upstream_local = upstream.stream.local_addr().ok();
+        let io_copy = CopyBidirectional {
+            downstream: upgraded,
+            upstream: upstream.stream,
+            payload_crypto: proxy_chain.payload_crypto.clone(),
+            speed_limiter: self.speed_limiter.clone(),
+            start,
+            upstream_addr: upstream.addr,
+            upstream_sock_addr: upstream.sock_addr,
+            downstream_addr: None,
         };
+        let (metrics, res) = io_copy
+            .serve_as_access_server(
+                StreamAddr {
+                    address: address.clone(),
+                    stream_type: StreamType::Tcp,
+                },
+                self.session_table.clone(),
+                upstream_local,
+                "HTTP CONNECT",
+            )
+            .await;
+
         match res {
             Ok(()) => Ok(metrics),
             Err(e) => Err(HttpConnectError::IoCopy { source: e, metrics }),
