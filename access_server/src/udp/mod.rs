@@ -1,17 +1,17 @@
-use std::{collections::HashMap, io, net::Ipv4Addr, sync::Arc, time::SystemTime};
+use std::{collections::HashMap, io, sync::Arc};
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
 use common::{
     addr::InternetAddr,
-    addr::{any_addr, InternetAddrStr},
+    addr::InternetAddrStr,
     config::SharableConfig,
     loading,
     udp::{
-        io_copy::{copy_bidirectional, CopyBiError, DownstreamParts, UpstreamParts},
+        io_copy::{CopyBiError, CopyBidirectional, DownstreamParts, UpstreamParts},
         proxy_table::UdpProxyTable,
-        session_table::{Session, UdpSessionTable},
-        Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
+        session_table::UdpSessionTable,
+        FlowOwnedGuard, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
 use proxy_client::udp::{EstablishError, UdpProxyClient};
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 
 use self::proxy_table::{UdpProxyTableBuildError, UdpProxyTableBuilder};
 
@@ -136,9 +136,9 @@ impl UdpAccess {
     async fn proxy(
         &self,
         rx: mpsc::Receiver<Packet>,
-        flow: Flow,
+        flow: FlowOwnedGuard,
         downstream_writer: UdpDownstreamWriter,
-    ) -> Result<FlowMetrics, AccessProxyError> {
+    ) -> Result<(), AccessProxyError> {
         // Connect to upstream
         let proxy_chain = self.proxy_table.choose_chain();
         let upstream =
@@ -146,27 +146,30 @@ impl UdpAccess {
 
         let (upstream_read, upstream_write) = upstream.into_split();
 
-        let _session_guard = self.session_table.set_scope(Session {
-            start: SystemTime::now(),
-            destination: self.destination.clone(),
-            upstream_local: upstream_read.inner().local_addr().ok(),
+        let speed_limiter = self.speed_limiter.clone();
+        let payload_crypto = proxy_chain.payload_crypto.clone();
+        let session_table = self.session_table.clone();
+        let upstream_local = upstream_read.inner().local_addr().ok();
+        tokio::spawn(async move {
+            let io_copy = CopyBidirectional {
+                flow,
+                upstream: UpstreamParts {
+                    read: upstream_read,
+                    write: upstream_write,
+                },
+                downstream: DownstreamParts {
+                    rx,
+                    write: downstream_writer,
+                },
+                speed_limiter,
+                payload_crypto,
+                response_header: None,
+            };
+            let _ = io_copy
+                .serve_as_access_server(session_table, upstream_local, "UDP")
+                .await;
         });
-        let metrics = copy_bidirectional(
-            flow,
-            UpstreamParts {
-                read: upstream_read,
-                write: upstream_write,
-            },
-            DownstreamParts {
-                rx,
-                write: downstream_writer,
-            },
-            self.speed_limiter.clone(),
-            proxy_chain.payload_crypto.clone(),
-            None,
-        )
-        .await?;
-        Ok(metrics)
+        Ok(())
     }
 }
 
@@ -185,20 +188,18 @@ impl UdpServerHook for UdpAccess {
         _buf: &mut io::Cursor<&[u8]>,
         _downstream_writer: &UdpDownstreamWriter,
     ) -> Option<UpstreamAddr> {
-        Some(UpstreamAddr(any_addr(&Ipv4Addr::UNSPECIFIED.into()).into()))
+        Some(UpstreamAddr(self.destination.clone()))
     }
 
     async fn handle_flow(
         &self,
         rx: mpsc::Receiver<Packet>,
-        flow: Flow,
+        flow: FlowOwnedGuard,
         downstream_writer: UdpDownstreamWriter,
     ) {
         let res = self.proxy(rx, flow, downstream_writer).await;
         match res {
-            Ok(metrics) => {
-                info!(%metrics, "Proxy finished");
-            }
+            Ok(()) => (),
             Err(e) => {
                 warn!(?e, "Failed to proxy");
             }

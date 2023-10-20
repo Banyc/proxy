@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, sync::Arc, time::SystemTime};
+use std::{collections::HashMap, io, sync::Arc};
 
 use async_speed_limit::Limiter;
 use async_trait::async_trait;
@@ -6,10 +6,10 @@ use common::{
     config::SharableConfig,
     loading,
     udp::{
-        io_copy::{copy_bidirectional, CopyBiError, DownstreamParts, UpstreamParts},
+        io_copy::{CopyBidirectional, DownstreamParts, UpstreamParts},
         proxy_table::UdpProxyTable,
-        session_table::{Session, UdpSessionTable},
-        Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
+        session_table::UdpSessionTable,
+        FlowOwnedGuard, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
 use proxy_client::udp::{EstablishError, UdpProxyClient};
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 
 use crate::{
     socks5::messages::UdpRequestHeader,
@@ -128,13 +128,14 @@ impl Socks5ServerUdpAccess {
     async fn proxy(
         &self,
         rx: mpsc::Receiver<Packet>,
-        flow: Flow,
+        flow: FlowOwnedGuard,
         downstream_writer: UdpDownstreamWriter,
-    ) -> Result<FlowMetrics, AccessProxyError> {
+    ) -> Result<(), AccessProxyError> {
         // Connect to upstream
         let proxy_chain = self.proxy_table.choose_chain();
         let upstream =
-            UdpProxyClient::establish(proxy_chain.chain.clone(), flow.upstream.0.clone()).await?;
+            UdpProxyClient::establish(proxy_chain.chain.clone(), flow.flow().upstream.0.clone())
+                .await?;
 
         let (upstream_read, upstream_write) = upstream.into_split();
 
@@ -142,33 +143,36 @@ impl Socks5ServerUdpAccess {
             let mut wtr = Vec::new();
             let udp_request_header = UdpRequestHeader {
                 fragment: 0,
-                destination: flow.upstream.0.clone(),
+                destination: flow.flow().upstream.0.clone(),
             };
             udp_request_header.encode(&mut wtr).await.unwrap();
             wtr.into()
         };
 
-        let _session_guard = self.session_table.set_scope(Session {
-            start: SystemTime::now(),
-            destination: flow.upstream.0.clone(),
-            upstream_local: upstream_read.inner().local_addr().ok(),
+        let speed_limiter = self.speed_limiter.clone();
+        let payload_crypto = proxy_chain.payload_crypto.clone();
+        let session_table = self.session_table.clone();
+        let upstream_local = upstream_read.inner().local_addr().ok();
+        tokio::spawn(async move {
+            let io_copy = CopyBidirectional {
+                flow,
+                upstream: UpstreamParts {
+                    read: upstream_read,
+                    write: upstream_write,
+                },
+                downstream: DownstreamParts {
+                    rx,
+                    write: downstream_writer,
+                },
+                speed_limiter,
+                payload_crypto,
+                response_header: Some(response_header),
+            };
+            let _ = io_copy
+                .serve_as_access_server(session_table, upstream_local, "SOCKS UDP")
+                .await;
         });
-        let metrics = copy_bidirectional(
-            flow,
-            UpstreamParts {
-                read: upstream_read,
-                write: upstream_write,
-            },
-            DownstreamParts {
-                rx,
-                write: downstream_writer,
-            },
-            self.speed_limiter.clone(),
-            proxy_chain.payload_crypto.clone(),
-            Some(response_header),
-        )
-        .await?;
-        Ok(metrics)
+        Ok(())
     }
 }
 
@@ -176,8 +180,6 @@ impl Socks5ServerUdpAccess {
 pub enum AccessProxyError {
     #[error("Failed to establish proxy chain: {0}")]
     Establish(#[from] EstablishError),
-    #[error("Failed to copy: {0}")]
-    Copy(#[from] CopyBiError),
 }
 
 #[async_trait]
@@ -204,14 +206,12 @@ impl UdpServerHook for Socks5ServerUdpAccess {
     async fn handle_flow(
         &self,
         rx: mpsc::Receiver<Packet>,
-        flow: Flow,
+        flow: FlowOwnedGuard,
         downstream_writer: UdpDownstreamWriter,
     ) {
         let res = self.proxy(rx, flow, downstream_writer).await;
         match res {
-            Ok(metrics) => {
-                info!(%metrics, "Proxy finished");
-            }
+            Ok(()) => (),
             Err(e) => {
                 warn!(?e, "Failed to proxy");
             }

@@ -11,10 +11,10 @@ use common::{
     },
     loading,
     udp::{
-        io_copy::{copy_bidirectional, CopyBiError, DownstreamParts, UpstreamParts},
+        io_copy::{CopyBidirectional, DownstreamParts, UpstreamParts},
         respond::respond_with_error,
         steer::steer,
-        Flow, FlowMetrics, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
+        FlowOwnedGuard, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
 use serde::Deserialize;
@@ -23,7 +23,7 @@ use tokio::{
     net::{ToSocketAddrs, UdpSocket},
     sync::mpsc,
 };
-use tracing::{error, info, instrument, trace, warn};
+use tracing::{error, instrument, trace, warn};
 
 use crate::ListenerBindError;
 
@@ -109,26 +109,27 @@ impl UdpProxy {
         Ok(UdpServer::new(listener, self))
     }
 
-    #[instrument(skip(self, rx, downstream_writer))]
+    #[instrument(skip(self, rx, flow, downstream_writer))]
     async fn proxy(
         &self,
         rx: mpsc::Receiver<Packet>,
-        flow: Flow,
+        flow: FlowOwnedGuard,
         downstream_writer: UdpDownstreamWriter,
-    ) -> Result<FlowMetrics, ProxyError> {
+    ) -> Result<(), ProxyError> {
         // Prevent connections to localhost
         let resolved_upstream =
-            flow.upstream
+            flow.flow()
+                .upstream
                 .0
                 .to_socket_addr()
                 .await
                 .map_err(|e| ProxyError::Resolve {
                     source: e,
-                    addr: flow.upstream.0.clone(),
+                    addr: flow.flow().upstream.0.clone(),
                 })?;
         if resolved_upstream.ip().is_loopback() {
             return Err(ProxyError::Loopback {
-                addr: flow.upstream.0,
+                addr: flow.flow().upstream.0.clone(),
                 sock_addr: resolved_upstream,
             });
         }
@@ -143,7 +144,7 @@ impl UdpProxy {
             .await
             .map_err(|e| ProxyError::ConnectUpstream {
                 source: e,
-                addr: flow.upstream.0.clone(),
+                addr: flow.flow().upstream.0.clone(),
                 sock_addr: resolved_upstream,
             })?;
         let upstream = Arc::new(upstream);
@@ -157,39 +158,39 @@ impl UdpProxy {
             wtr.into()
         };
 
-        let metrics = copy_bidirectional(
-            flow.clone(),
-            UpstreamParts {
-                read: upstream.clone(),
-                write: upstream,
-            },
-            DownstreamParts {
-                rx,
-                write: downstream_writer,
-            },
-            Limiter::new(f64::INFINITY),
-            self.payload_crypto.clone(),
-            Some(response_header),
-        )
-        .await
-        .map_err(|e| ProxyError::Copy {
-            source: e,
-            addr: flow.upstream.0,
-            sock_addr: resolved_upstream,
-        })?;
-        Ok(metrics)
+        let header_crypto = self.header_crypto.clone();
+        let payload_crypto = self.payload_crypto.clone();
+        tokio::spawn(async move {
+            let io_copy = CopyBidirectional {
+                flow,
+                upstream: UpstreamParts {
+                    read: upstream.clone(),
+                    write: upstream,
+                },
+                downstream: DownstreamParts {
+                    rx,
+                    write: downstream_writer.clone(),
+                },
+                speed_limiter: Limiter::new(f64::INFINITY),
+                payload_crypto,
+                response_header: Some(response_header),
+            };
+            let res = io_copy.serve_as_proxy_server("UDP").await;
+            if res.is_err() {
+                let _ = respond_with_error(&downstream_writer, RouteErrorKind::Io, &header_crypto)
+                    .await;
+            }
+        });
+        Ok(())
     }
 
     async fn handle_proxy_result(
         &self,
         downstream_writer: &UdpDownstreamWriter,
-        res: Result<FlowMetrics, ProxyError>,
+        res: Result<(), ProxyError>,
     ) {
         match res {
-            Ok(metrics) => {
-                info!(%metrics, "Proxy finished");
-                // No response
-            }
+            Ok(()) => (),
             Err(e) => {
                 let peer_addr = downstream_writer.peer_addr();
                 warn!(?e, ?peer_addr, "Proxy failed");
@@ -226,21 +227,13 @@ pub enum ProxyError {
         addr: InternetAddr,
         sock_addr: SocketAddr,
     },
-    #[error("Failed to copy: {source}, {addr}, {sock_addr}")]
-    Copy {
-        #[source]
-        source: CopyBiError,
-        addr: InternetAddr,
-        sock_addr: SocketAddr,
-    },
 }
 
 fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
     match e {
         ProxyError::Resolve { .. }
         | ProxyError::ClientBindAny(_)
-        | ProxyError::ConnectUpstream { .. }
-        | ProxyError::Copy { .. } => RouteErrorKind::Io,
+        | ProxyError::ConnectUpstream { .. } => RouteErrorKind::Io,
         ProxyError::Loopback { .. } => RouteErrorKind::Loopback,
     }
 }
@@ -263,7 +256,7 @@ impl UdpServerHook for UdpProxy {
     async fn handle_flow(
         &self,
         rx: mpsc::Receiver<Packet>,
-        flow: Flow,
+        flow: FlowOwnedGuard,
         downstream_writer: UdpDownstreamWriter,
     ) {
         let res = self.proxy(rx, flow, downstream_writer.clone()).await;

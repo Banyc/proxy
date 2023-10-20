@@ -1,9 +1,11 @@
 use std::{
     io::{self, Write},
+    net::SocketAddr,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock,
     },
+    time::SystemTime,
 };
 
 use async_speed_limit::Limiter;
@@ -12,7 +14,7 @@ use metrics::{counter, decrement_gauge, increment_gauge};
 use scopeguard::defer;
 use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 
 use crate::{
     crypto::{XorCrypto, XorCryptoCursor},
@@ -21,7 +23,9 @@ use crate::{
 };
 
 use super::{
-    Flow, FlowMetrics, Packet, UdpDownstreamWriter, ACTIVITY_CHECK_INTERVAL, BUFFER_LENGTH,
+    session_table::{Session, UdpSessionTable},
+    Flow, FlowMetrics, FlowOwnedGuard, Packet, UdpDownstreamWriter, ACTIVITY_CHECK_INTERVAL,
+    BUFFER_LENGTH,
 };
 
 #[async_trait]
@@ -42,6 +46,60 @@ pub struct UpstreamParts<R, W> {
 pub struct DownstreamParts {
     pub rx: mpsc::Receiver<Packet>,
     pub write: UdpDownstreamWriter,
+}
+
+pub struct CopyBidirectional<R, W> {
+    pub flow: FlowOwnedGuard,
+    pub upstream: UpstreamParts<R, W>,
+    pub downstream: DownstreamParts,
+    pub speed_limiter: Limiter,
+    pub payload_crypto: Option<XorCrypto>,
+    pub response_header: Option<Arc<[u8]>>,
+}
+
+impl<R, W> CopyBidirectional<R, W>
+where
+    R: UdpRecv + Send + 'static,
+    W: UdpSend + Send + 'static,
+{
+    pub async fn serve_as_access_server(
+        self,
+        session_table: UdpSessionTable,
+        upstream_local: Option<SocketAddr>,
+        log_prefix: &str,
+    ) -> Result<FlowMetrics, CopyBiError> {
+        let _session_guard: crate::session_table::SessionGuard<'_, Session> = session_table
+            .set_scope(Session {
+                start: SystemTime::now(),
+                destination: self.flow.flow().upstream.0.clone(),
+                upstream_local,
+            });
+
+        self.serve_as_proxy_server(log_prefix).await
+    }
+
+    pub async fn serve_as_proxy_server(self, log_prefix: &str) -> Result<FlowMetrics, CopyBiError> {
+        let res = copy_bidirectional(
+            self.flow.flow().clone(),
+            self.upstream,
+            self.downstream,
+            self.speed_limiter,
+            self.payload_crypto,
+            self.response_header,
+        )
+        .await;
+
+        match &res {
+            Ok(metrics) => {
+                info!(%metrics, "{log_prefix}: I/O copy finished");
+            }
+            Err(e) => {
+                info!(?e, "{log_prefix}: I/O copy error");
+            }
+        }
+
+        res
+    }
 }
 
 pub async fn copy_bidirectional<R, W>(

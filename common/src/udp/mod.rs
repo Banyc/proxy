@@ -231,11 +231,12 @@ async fn steer<H>(
             flows.write().unwrap().insert(flow.clone(), tx.clone());
 
             let hook = Arc::clone(&hook);
+            let flow = FlowOwnedGuard {
+                flow: flow.clone(),
+                map: Arc::clone(&flows),
+            };
             tokio::spawn(async move {
-                hook.handle_flow(rx, flow.clone(), downstream_writer).await;
-
-                // Remove flow
-                flows.write().unwrap().remove(&flow);
+                hook.handle_flow(rx, flow, downstream_writer).await;
             });
 
             tx
@@ -249,6 +250,24 @@ async fn steer<H>(
     let _ = flow_tx.send(packet).await;
 }
 
+pub struct FlowOwnedGuard {
+    flow: Flow,
+    map: Arc<RwLock<FlowMap>>,
+}
+
+impl FlowOwnedGuard {
+    pub fn flow(&self) -> &Flow {
+        &self.flow
+    }
+}
+
+impl Drop for FlowOwnedGuard {
+    fn drop(&mut self) {
+        // Remove flow
+        self.map.write().unwrap().remove(&self.flow);
+    }
+}
+
 #[async_trait]
 pub trait UdpServerHook: loading::Hook {
     async fn parse_upstream_addr(
@@ -260,7 +279,7 @@ pub trait UdpServerHook: loading::Hook {
     async fn handle_flow(
         &self,
         rx: mpsc::Receiver<Packet>,
-        flow: Flow,
+        flow: FlowOwnedGuard,
         downstream_writer: UdpDownstreamWriter,
     );
 }
