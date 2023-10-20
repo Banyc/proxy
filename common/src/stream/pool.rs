@@ -3,14 +3,14 @@ use std::{
     io,
     net::SocketAddr,
     ops::DerefMut,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
 
+use arc_swap::ArcSwap;
 use metrics::counter;
 use serde::{Deserialize, Serialize};
 use tokio::{sync::RwLock as TokioRwLock, task::JoinSet};
-use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::{
@@ -38,8 +38,8 @@ impl PoolBuilder {
         Self(vec![])
     }
 
-    pub fn build(self, cancellation: CancellationToken) -> Result<Pool, ParseInternetAddrError> {
-        let pool = Pool::new(self.0.into_iter().map(|a| a.0), cancellation);
+    pub fn build(self) -> Result<Pool, ParseInternetAddrError> {
+        let pool = Pool::new(self.0.into_iter().map(|a| a.0));
         Ok(pool)
     }
 }
@@ -168,7 +168,7 @@ impl SocketQueue {
 
     pub fn try_swap(
         &mut self,
-        connector: ArcStreamConnect,
+        connector: &ArcStreamConnect,
         addr: &InternetAddr,
         heartbeat_interval: Duration,
     ) -> Option<CreatedStream> {
@@ -194,7 +194,7 @@ impl SocketQueue {
         };
 
         // Replenish
-        self.spawn_insert(connector, addr.clone(), heartbeat_interval);
+        self.spawn_insert(Arc::clone(connector), addr.clone(), heartbeat_interval);
 
         res
     }
@@ -202,23 +202,51 @@ impl SocketQueue {
 
 #[derive(Debug, Clone)]
 pub struct Pool {
-    pool: Arc<RwLock<HashMap<StreamAddr, SocketQueue>>>,
-    _task_handle: Arc<JoinSet<()>>,
+    pool: Arc<ArcSwap<PoolInner>>,
 }
 
 impl Pool {
     pub fn empty() -> Self {
         Self {
-            pool: Default::default(),
-            _task_handle: Default::default(),
+            pool: Arc::new(Arc::new(PoolInner::empty()).into()),
         }
     }
 
-    pub fn new<I>(addrs: I, cancellation: CancellationToken) -> Self
+    pub fn new<I>(addrs: I) -> Self
     where
         I: Iterator<Item = StreamAddr>,
     {
-        fn add_queue(pool: &mut HashMap<StreamAddr, SocketQueue>, addr: StreamAddr) {
+        Self {
+            pool: Arc::new(Arc::new(PoolInner::new(addrs)).into()),
+        }
+    }
+
+    pub async fn open_stream(&self, addr: &StreamAddr) -> Option<(CreatedStream, SocketAddr)> {
+        self.pool.load().open_stream(addr).await
+    }
+
+    pub fn replaced_by(&self, new: Self) {
+        self.pool.store(new.pool.load_full());
+    }
+}
+
+#[derive(Debug)]
+struct PoolInner {
+    pool: HashMap<StreamAddr, Mutex<SocketQueue>>,
+}
+
+impl PoolInner {
+    pub fn empty() -> Self {
+        Self {
+            pool: Default::default(),
+        }
+    }
+
+    pub fn new<I>(addrs: I) -> Self
+    where
+        I: Iterator<Item = StreamAddr>,
+    {
+        fn add_queue(pool: &mut HashMap<StreamAddr, Mutex<SocketQueue>>, addr: StreamAddr) {
             let mut queue = SocketQueue::new();
             let connector = {
                 let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type);
@@ -231,46 +259,22 @@ impl Pool {
                     HEARTBEAT_INTERVAL,
                 );
             }
-            pool.insert(addr, queue);
+            pool.insert(addr, Mutex::new(queue));
         }
 
-        let mut pool: HashMap<StreamAddr, SocketQueue> = HashMap::new();
+        let mut pool = HashMap::new();
         addrs.for_each(|addr| add_queue(&mut pool, addr));
-        let pool = Arc::new(RwLock::new(pool));
 
-        let mut task_handle = JoinSet::new();
-        task_handle.spawn({
-            let pool = Arc::clone(&pool);
-            async move {
-                tokio::select! {
-                    _ = cancellation.cancelled() => {
-                        let mut pool = pool.write().unwrap();
-                        pool.clear();
-                    }
-                }
-            }
-        });
-
-        Self {
-            pool,
-            _task_handle: Arc::new(task_handle),
-        }
+        Self { pool }
     }
 
     pub async fn open_stream(&self, addr: &StreamAddr) -> Option<(CreatedStream, SocketAddr)> {
         let stream = {
-            let mut pool = match self.pool.try_write() {
-                Ok(x) => x,
-                Err(_) => return None,
-            };
-            let queue = match pool.get_mut(addr) {
-                Some(x) => x,
+            let mut queue = match self.pool.get(addr).and_then(|queue| queue.try_lock().ok()) {
+                Some(queue) => queue,
                 None => return None,
             };
-            let connector = {
-                let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type);
-                Arc::clone(connector)
-            };
+            let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type);
             queue.try_swap(connector, &addr.address, HEARTBEAT_INTERVAL)
         };
         let stream = match stream {
@@ -320,7 +324,7 @@ mod tests {
             address: addr.into(),
             stream_type: StreamType::Tcp,
         };
-        let pool = Pool::new(vec![addr.clone()].into_iter(), CancellationToken::new());
+        let pool = Pool::new(vec![addr.clone()].into_iter());
         let mut join_set = JoinSet::new();
         for _ in 0..100 {
             let pool = pool.clone();
@@ -339,7 +343,7 @@ mod tests {
             address: addr.into(),
             stream_type: StreamType::Tcp,
         };
-        let pool = Pool::new(vec![addr.clone()].into_iter(), CancellationToken::new());
+        let pool = Pool::new(vec![addr.clone()].into_iter());
         for _ in 0..10 {
             tokio::time::sleep(Duration::from_millis(500)).await;
             for _ in 0..QUEUE_LEN {

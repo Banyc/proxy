@@ -3,7 +3,10 @@ use std::sync::Arc;
 use access_server::{AccessServerConfig, AccessServerLoader};
 use common::{
     error::{AnyError, AnyResult},
-    stream::{pool::PoolBuilder, session_table::StreamSessionTable},
+    stream::{
+        pool::{Pool, PoolBuilder},
+        session_table::StreamSessionTable,
+    },
     udp::session_table::UdpSessionTable,
 };
 use config::ConfigReader;
@@ -35,12 +38,15 @@ where
         unreachable!()
     });
 
+    let stream_pool = Pool::empty();
+
     let cancellation = CancellationToken::new();
     read_and_load_config(
         &config_reader,
         &mut server_tasks,
         &mut access_server_loader,
         &mut proxy_server_loader,
+        stream_pool.clone(),
         cancellation.clone(),
         stream_session_table.clone(),
         udp_session_table.clone(),
@@ -68,6 +74,7 @@ where
                     &mut server_tasks,
                     &mut access_server_loader,
                     &mut proxy_server_loader,
+                    stream_pool.clone(),
                     cancellation.clone(),
                     stream_session_table.clone(),
                     udp_session_table.clone(),
@@ -87,6 +94,7 @@ async fn read_and_load_config<CR>(
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     access_server_loader: &mut AccessServerLoader,
     proxy_server_loader: &mut ProxyServerLoader,
+    stream_pool: Pool,
     cancellation: CancellationToken,
     stream_session_table: StreamSessionTable,
     udp_session_table: UdpSessionTable,
@@ -103,6 +111,7 @@ where
         server_tasks,
         access_server_loader,
         proxy_server_loader,
+        stream_pool,
         cancellation,
         stream_session_table,
         udp_session_table,
@@ -127,11 +136,13 @@ pub async fn load(
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     access_server_loader: &mut AccessServerLoader,
     proxy_server_loader: &mut ProxyServerLoader,
+    stream_pool: Pool,
     cancellation: CancellationToken,
     stream_session_table: StreamSessionTable,
     udp_session_table: UdpSessionTable,
 ) -> AnyResult {
-    let stream_pool = config.global.stream_pool.build(cancellation.clone())?;
+    stream_pool.replaced_by(config.global.stream_pool.build()?);
+
     config
         .access_server
         .spawn_and_kill(
