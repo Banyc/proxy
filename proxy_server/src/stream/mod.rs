@@ -10,8 +10,7 @@ use common::{
         connect::{connect_with_pool, ConnectError},
         pool::Pool,
         steer::{steer, SteerError},
-        tokio_io, CopyBidirectional, CreatedStreamAndAddr, IoAddr, IoStream, StreamMetrics,
-        StreamServerHook,
+        CopyBidirectional, CreatedStreamAndAddr, IoAddr, IoStream, StreamServerHook,
     },
 };
 use serde::Deserialize;
@@ -104,10 +103,7 @@ impl StreamProxy {
     }
 
     #[instrument(skip(self))]
-    async fn proxy<S>(
-        &self,
-        mut downstream: S,
-    ) -> Result<Option<StreamMetrics>, StreamProxyServerError>
+    async fn proxy<S>(&self, mut downstream: S) -> Result<ProxyResult, StreamProxyServerError>
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
@@ -120,7 +116,7 @@ impl StreamProxy {
         // Establish proxy chain
         let upstream = match self.acceptor.establish(&mut downstream).await {
             Ok(Some(upstream)) => upstream,
-            Ok(None) => return Ok(None),
+            Ok(None) => return Ok(ProxyResult::Echo),
             Err(e) => {
                 // self.handle_proxy_error(&mut downstream, e).await;
                 return Err(StreamProxyServerError::EstablishProxyChain(e));
@@ -128,22 +124,21 @@ impl StreamProxy {
         };
 
         // Copy data
-        let io_copy = CopyBidirectional {
-            downstream,
-            upstream: upstream.stream,
-            payload_crypto: self.payload_crypto.clone(),
-            speed_limiter: Limiter::new(f64::INFINITY),
-            start,
-            upstream_addr: upstream.addr,
-            upstream_sock_addr: upstream.sock_addr,
-            downstream_addr: Some(downstream_addr),
-        };
-        let (metrics, res) = io_copy.serve_as_proxy_server("Stream").await;
-
-        match res {
-            Ok(()) => Ok(Some(metrics)),
-            Err(e) => Err(StreamProxyServerError::IoCopy { source: e, metrics }),
-        }
+        let payload_crypto = self.payload_crypto.clone();
+        tokio::spawn(async move {
+            let io_copy = CopyBidirectional {
+                downstream,
+                upstream: upstream.stream,
+                payload_crypto,
+                speed_limiter: Limiter::new(f64::INFINITY),
+                start,
+                upstream_addr: upstream.addr,
+                upstream_sock_addr: upstream.sock_addr,
+                downstream_addr: Some(downstream_addr),
+            };
+            let _ = io_copy.serve_as_proxy_server("Stream").await;
+        });
+        Ok(ProxyResult::IoCopy)
     }
 
     // #[instrument(skip(self, e))]
@@ -177,14 +172,16 @@ impl StreamServerHook for StreamProxy {
         S: IoStream + IoAddr + std::fmt::Debug,
     {
         match self.proxy(stream).await {
-            Ok(Some(metrics)) => info!(%metrics, "Proxy finished"),
-            Ok(None) => info!("Echo finished"),
-            Err(StreamProxyServerError::IoCopy { source: e, metrics }) => {
-                info!(?e, %metrics, "Proxy error");
-            }
+            Ok(ProxyResult::IoCopy) => (),
+            Ok(ProxyResult::Echo) => info!("Echo finished"),
             Err(e) => warn!(?e, "Proxy error"),
         }
     }
+}
+
+pub enum ProxyResult {
+    Echo,
+    IoCopy,
 }
 
 #[derive(Debug)]
@@ -279,12 +276,6 @@ pub enum StreamProxyServerError {
     DownstreamAddr(#[source] io::Error),
     #[error("Failed to establish proxy chain: {0}")]
     EstablishProxyChain(#[from] StreamProxyAcceptorError),
-    #[error("Failed to copy data between streams: {source}, {metrics}")]
-    IoCopy {
-        #[source]
-        source: tokio_io::CopyBiErrorKind,
-        metrics: StreamMetrics,
-    },
 }
 
 #[derive(Debug, Error)]

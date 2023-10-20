@@ -11,7 +11,7 @@ use common::{
         proxy_table::StreamProxyTable,
         session_table::StreamSessionTable,
         streams::tcp::TcpServer,
-        tokio_io, CopyBidirectional, IoAddr, IoStream, StreamMetrics, StreamServerHook,
+        CopyBidirectional, IoAddr, IoStream, StreamServerHook,
     },
 };
 use proxy_client::stream::{establish, StreamEstablishError};
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::ToSocketAddrs;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, instrument, warn};
+use tracing::{error, instrument, warn};
 
 use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder};
 
@@ -136,7 +136,7 @@ impl TcpAccess {
         Ok(TcpServer::new(tcp_listener, self))
     }
 
-    async fn proxy<S>(&self, downstream: S) -> Result<StreamMetrics, ProxyError>
+    async fn proxy<S>(&self, downstream: S) -> Result<(), ProxyError>
     where
         S: IoStream + IoAddr,
     {
@@ -152,33 +152,27 @@ impl TcpAccess {
         )
         .await?;
 
-        let upstream_local = upstream.stream.local_addr().ok();
-        let io_copy = CopyBidirectional {
-            downstream,
-            upstream: upstream.stream,
-            payload_crypto: proxy_chain.payload_crypto.clone(),
-            speed_limiter: self.speed_limiter.clone(),
-            start,
-            upstream_addr: upstream.addr,
-            upstream_sock_addr: upstream.sock_addr,
-            downstream_addr: Some(downstream_addr),
-        };
-        let (metrics, res) = io_copy
-            .serve_as_access_server(
-                self.destination.clone(),
-                self.session_table.clone(),
-                upstream_local,
-                "TCP",
-            )
-            .await;
-
-        match res {
-            Ok(()) => Ok(metrics.stream),
-            Err(e) => Err(ProxyError::IoCopy {
-                source: e,
-                metrics: metrics.stream,
-            }),
-        }
+        let speed_limiter = self.speed_limiter.clone();
+        let destination = self.destination.clone();
+        let session_table = self.session_table.clone();
+        let payload_crypto = proxy_chain.payload_crypto.clone();
+        tokio::spawn(async move {
+            let upstream_local = upstream.stream.local_addr().ok();
+            let io_copy = CopyBidirectional {
+                downstream,
+                upstream: upstream.stream,
+                payload_crypto,
+                speed_limiter,
+                start,
+                upstream_addr: upstream.addr,
+                upstream_sock_addr: upstream.sock_addr,
+                downstream_addr: Some(downstream_addr),
+            };
+            let _ = io_copy
+                .serve_as_access_server(destination, session_table, upstream_local, "TCP")
+                .await;
+        });
+        Ok(())
     }
 }
 
@@ -188,12 +182,6 @@ pub enum ProxyError {
     DownstreamAddr(#[source] io::Error),
     #[error("Failed to establish proxy chain: {0}")]
     EstablishProxyChain(#[from] StreamEstablishError),
-    #[error("Failed to copy data between streams: {source}, {metrics}")]
-    IoCopy {
-        #[source]
-        source: tokio_io::CopyBiErrorKind,
-        metrics: StreamMetrics,
-    },
 }
 
 impl loading::Hook for TcpAccess {}
@@ -206,12 +194,7 @@ impl StreamServerHook for TcpAccess {
         S: IoStream + IoAddr,
     {
         match self.proxy(stream).await {
-            Ok(metrics) => {
-                info!(%metrics, "Proxy finished");
-            }
-            Err(ProxyError::IoCopy { source: e, metrics }) => {
-                info!(?e, %metrics, "Proxy error");
-            }
+            Ok(()) => (),
             Err(e) => warn!(?e, "Failed to proxy"),
         }
     }

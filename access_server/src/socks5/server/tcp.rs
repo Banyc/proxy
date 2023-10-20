@@ -14,8 +14,7 @@ use common::{
         proxy_table::StreamProxyTable,
         session_table::StreamSessionTable,
         streams::tcp::TcpServer,
-        tokio_io, CopyBidirectional, CreatedStreamAndAddr, IoAddr, IoStream, StreamProxyMetrics,
-        StreamServerHook,
+        CopyBidirectional, CreatedStreamAndAddr, IoAddr, IoStream, StreamServerHook,
     },
 };
 use proxy_client::stream::StreamEstablishError;
@@ -23,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, trace, warn};
+use tracing::{error, trace, warn};
 
 use crate::{
     socks5::messages::{
@@ -173,13 +172,9 @@ impl StreamServerHook for Socks5ServerTcpAccess {
     {
         let res = self.proxy(stream).await;
         match res {
-            Ok(Some(metrics)) => {
-                info!(%metrics, "Proxy finished");
-            }
-            Ok(None) => (),
-            Err(ProxyError::IoCopy { source: e, metrics }) => {
-                info!(?e, %metrics, "Proxy error");
-            }
+            Ok(ProxyResult::Blocked) => (),
+            Ok(ProxyResult::IoCopy) => (),
+            Ok(ProxyResult::Udp) => (),
             Err(e) => warn!(?e, "Failed to proxy"),
         }
     }
@@ -206,7 +201,7 @@ impl Socks5ServerTcpAccess {
         }
     }
 
-    async fn proxy<S>(&self, downstream: S) -> Result<Option<StreamProxyMetrics>, ProxyError>
+    async fn proxy<S>(&self, downstream: S) -> Result<ProxyResult, ProxyError>
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
@@ -218,7 +213,7 @@ impl Socks5ServerTcpAccess {
         let (destination, downstream, upstream, payload_crypto) = match res {
             EstablishResult::Blocked { destination } => {
                 trace!(?destination, "Blocked");
-                return Ok(None);
+                return Ok(ProxyResult::Blocked);
             }
             EstablishResult::Direct {
                 downstream,
@@ -226,38 +221,44 @@ impl Socks5ServerTcpAccess {
                 upstream_addr,
                 upstream_sock_addr,
             } => {
-                let upstream_local = upstream.local_addr().ok();
-                let io_copy = CopyBidirectional {
-                    downstream,
-                    upstream,
-                    payload_crypto: None,
-                    speed_limiter: self.speed_limiter.clone(),
-                    start,
-                    upstream_addr: StreamAddr {
-                        stream_type: StreamType::Tcp,
-                        address: upstream_addr.clone(),
-                    },
-                    upstream_sock_addr,
-                    downstream_addr: Some(downstream_addr),
-                };
-                let _ = io_copy
-                    .serve_as_access_server(
-                        StreamAddr {
+                let speed_limiter = self.speed_limiter.clone();
+                let session_table = self.session_table.clone();
+                tokio::spawn(async move {
+                    let upstream_local = upstream.local_addr().ok();
+                    let io_copy = CopyBidirectional {
+                        downstream,
+                        upstream,
+                        payload_crypto: None,
+                        speed_limiter,
+                        start,
+                        upstream_addr: StreamAddr {
                             stream_type: StreamType::Tcp,
-                            address: upstream_addr,
+                            address: upstream_addr.clone(),
                         },
-                        self.session_table.clone(),
-                        upstream_local,
-                        "SOCKS5 TCP direct",
-                    )
-                    .await;
-                return Ok(None);
+                        upstream_sock_addr,
+                        downstream_addr: Some(downstream_addr),
+                    };
+                    let _ = io_copy
+                        .serve_as_access_server(
+                            StreamAddr {
+                                stream_type: StreamType::Tcp,
+                                address: upstream_addr,
+                            },
+                            session_table,
+                            upstream_local,
+                            "SOCKS5 TCP direct",
+                        )
+                        .await;
+                });
+                return Ok(ProxyResult::IoCopy);
             }
             EstablishResult::Udp { mut downstream } => {
-                // Prevent the UDP association from terminating
-                let mut buf = [0; 1];
-                let _ = downstream.read_exact(&mut buf).await;
-                return Ok(None);
+                tokio::spawn(async move {
+                    // Prevent the UDP association from terminating
+                    let mut buf = [0; 1];
+                    let _ = downstream.read_exact(&mut buf).await;
+                });
+                return Ok(ProxyResult::Udp);
             }
             EstablishResult::Proxy {
                 destination,
@@ -267,33 +268,33 @@ impl Socks5ServerTcpAccess {
             } => (destination, downstream, upstream, payload_crypto),
         };
 
-        let upstream_local = upstream.stream.local_addr().ok();
-        let io_copy = CopyBidirectional {
-            downstream,
-            upstream: upstream.stream,
-            payload_crypto,
-            speed_limiter: self.speed_limiter.clone(),
-            start,
-            upstream_addr: upstream.addr,
-            upstream_sock_addr: upstream.sock_addr,
-            downstream_addr: Some(downstream_addr),
-        };
-        let (metrics, res) = io_copy
-            .serve_as_access_server(
-                StreamAddr {
-                    stream_type: StreamType::Tcp,
-                    address: destination.clone(),
-                },
-                self.session_table.clone(),
-                upstream_local,
-                "SOCKS5 TCP",
-            )
-            .await;
-
-        match res {
-            Ok(()) => Ok(Some(metrics)),
-            Err(e) => Err(ProxyError::IoCopy { source: e, metrics }),
-        }
+        let speed_limiter = self.speed_limiter.clone();
+        let session_table = self.session_table.clone();
+        tokio::spawn(async move {
+            let upstream_local = upstream.stream.local_addr().ok();
+            let io_copy = CopyBidirectional {
+                downstream,
+                upstream: upstream.stream,
+                payload_crypto,
+                speed_limiter,
+                start,
+                upstream_addr: upstream.addr,
+                upstream_sock_addr: upstream.sock_addr,
+                downstream_addr: Some(downstream_addr),
+            };
+            let _ = io_copy
+                .serve_as_access_server(
+                    StreamAddr {
+                        stream_type: StreamType::Tcp,
+                        address: destination.clone(),
+                    },
+                    session_table,
+                    upstream_local,
+                    "SOCKS5 TCP",
+                )
+                .await;
+        });
+        Ok(ProxyResult::IoCopy)
     }
 
     async fn establish<S>(&self, stream: S) -> Result<EstablishResult<S>, EstablishError>
@@ -538,6 +539,12 @@ pub enum EstablishResult<S> {
     },
 }
 
+pub enum ProxyResult {
+    Blocked,
+    Udp,
+    IoCopy,
+}
+
 #[derive(Debug, Error)]
 pub enum EstablishError {
     #[error("Failed to negotiate: {0}")]
@@ -564,10 +571,4 @@ pub enum ProxyError {
     Establish(#[from] EstablishError),
     #[error("Failed to get downstream address: {0}")]
     DownstreamAddr(#[source] io::Error),
-    #[error("Failed to copy data between streams: {source}, {metrics}")]
-    IoCopy {
-        #[source]
-        source: tokio_io::CopyBiErrorKind,
-        metrics: StreamProxyMetrics,
-    },
 }

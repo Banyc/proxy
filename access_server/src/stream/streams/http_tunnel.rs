@@ -19,8 +19,8 @@ use common::{
         proxy_table::StreamProxyTable,
         session_table::{Session, StreamSessionTable},
         streams::{tcp::TcpServer, xor::XorStream},
-        tokio_io, CopyBidirectional, IoAddr, IoStream, SimplifiedStreamMetrics,
-        SimplifiedStreamProxyMetrics, StreamProxyMetrics, StreamServerHook,
+        CopyBidirectional, IoAddr, IoStream, SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics,
+        StreamServerHook,
     },
 };
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
@@ -367,12 +367,7 @@ async fn upgrade(
     // Proxy
     if let Some(http_connect) = http_connect {
         match http_connect.proxy(upgraded, addr).await {
-            Ok(metrics) => {
-                info!(%metrics, "CONNECT finished");
-            }
-            Err(HttpConnectError::IoCopy { source: e, metrics }) => {
-                info!(?e, %metrics, "CONNECT error");
-            }
+            Ok(()) => (),
             Err(e) => warn!(?e, "CONNECT error"),
         };
         return;
@@ -485,7 +480,7 @@ impl HttpConnect {
         &self,
         upgraded: Upgraded,
         address: InternetAddr,
-    ) -> Result<StreamProxyMetrics, HttpConnectError> {
+    ) -> Result<(), HttpConnectError> {
         let start = Instant::now();
 
         // Establish proxy chain
@@ -496,33 +491,34 @@ impl HttpConnect {
         let proxy_chain = self.proxy_table.choose_chain();
         let upstream = establish(&proxy_chain.chain, destination, &self.stream_pool).await?;
 
-        let upstream_local = upstream.stream.local_addr().ok();
-        let io_copy = CopyBidirectional {
-            downstream: upgraded,
-            upstream: upstream.stream,
-            payload_crypto: proxy_chain.payload_crypto.clone(),
-            speed_limiter: self.speed_limiter.clone(),
-            start,
-            upstream_addr: upstream.addr,
-            upstream_sock_addr: upstream.sock_addr,
-            downstream_addr: None,
-        };
-        let (metrics, res) = io_copy
-            .serve_as_access_server(
-                StreamAddr {
-                    address: address.clone(),
-                    stream_type: StreamType::Tcp,
-                },
-                self.session_table.clone(),
-                upstream_local,
-                "HTTP CONNECT",
-            )
-            .await;
-
-        match res {
-            Ok(()) => Ok(metrics),
-            Err(e) => Err(HttpConnectError::IoCopy { source: e, metrics }),
-        }
+        let speed_limiter = self.speed_limiter.clone();
+        let session_table = self.session_table.clone();
+        let payload_crypto = proxy_chain.payload_crypto.clone();
+        tokio::spawn(async move {
+            let upstream_local = upstream.stream.local_addr().ok();
+            let io_copy = CopyBidirectional {
+                downstream: upgraded,
+                upstream: upstream.stream,
+                payload_crypto,
+                speed_limiter,
+                start,
+                upstream_addr: upstream.addr,
+                upstream_sock_addr: upstream.sock_addr,
+                downstream_addr: None,
+            };
+            let _ = io_copy
+                .serve_as_access_server(
+                    StreamAddr {
+                        address: address.clone(),
+                        stream_type: StreamType::Tcp,
+                    },
+                    session_table,
+                    upstream_local,
+                    "HTTP CONNECT",
+                )
+                .await;
+        });
+        Ok(())
     }
 }
 
@@ -530,12 +526,6 @@ impl HttpConnect {
 pub enum HttpConnectError {
     #[error("Failed to establish proxy chain")]
     EstablishProxyChain(#[from] StreamEstablishError),
-    #[error("Failed to copy data between streams")]
-    IoCopy {
-        #[source]
-        source: tokio_io::CopyBiErrorKind,
-        metrics: StreamProxyMetrics,
-    },
 }
 
 fn host_addr(uri: &http::Uri) -> Option<String> {
