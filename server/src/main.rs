@@ -79,7 +79,8 @@ async fn main() -> AnyResult {
                 .route("/", get(metrics))
                 .with_state(metrics_handle)
                 .route("/sessions", get(sessions))
-                .with_state((stream_session_table, udp_session_table));
+                .with_state((stream_session_table, udp_session_table))
+                .route("/health", get(|| async { Ok::<_, ()>(()) }));
             let server = axum::Server::bind(&monitor_addr).serve(router.into_make_service());
             info!(
                 "Monitoring HTTP server listening addr: {}",
