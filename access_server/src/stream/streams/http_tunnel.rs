@@ -15,12 +15,12 @@ use common::{
     loading,
     stream::{
         addr::{StreamAddr, StreamType},
+        io_copy::CopyBidirectional,
         pool::Pool,
         proxy_table::StreamProxyTable,
         session_table::{Session, StreamSessionTable},
         streams::{tcp::TcpServer, xor::XorStream},
-        CopyBidirectional, IoAddr, IoStream, SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics,
-        StreamServerHook,
+        IoAddr, IoStream, SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics, StreamServerHook,
     },
 };
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};

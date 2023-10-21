@@ -8,9 +8,10 @@ use common::{
     loading,
     stream::{
         connect::{connect_with_pool, ConnectError},
+        io_copy::CopyBidirectional,
         pool::Pool,
         steer::{steer, SteerError},
-        CopyBidirectional, CreatedStreamAndAddr, IoAddr, IoStream, StreamServerHook,
+        CreatedStreamAndAddr, IoAddr, IoStream, StreamServerHook,
     },
 };
 use serde::Deserialize;

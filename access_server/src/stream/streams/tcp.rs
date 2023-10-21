@@ -7,11 +7,12 @@ use common::{
     loading,
     stream::{
         addr::{StreamAddr, StreamAddrStr},
+        io_copy::CopyBidirectional,
         pool::Pool,
         proxy_table::StreamProxyTable,
         session_table::StreamSessionTable,
         streams::tcp::TcpServer,
-        CopyBidirectional, IoAddr, IoStream, StreamServerHook,
+        IoAddr, IoStream, StreamServerHook,
     },
 };
 use proxy_client::stream::{establish, StreamEstablishError};

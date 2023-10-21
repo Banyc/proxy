@@ -10,11 +10,12 @@ use common::{
     loading::{self, Hook},
     stream::{
         addr::{StreamAddr, StreamType},
+        io_copy::CopyBidirectional,
         pool::Pool,
         proxy_table::StreamProxyTable,
         session_table::StreamSessionTable,
         streams::tcp::TcpServer,
-        CopyBidirectional, CreatedStreamAndAddr, IoAddr, IoStream, StreamServerHook,
+        CreatedStreamAndAddr, IoAddr, IoStream, StreamServerHook,
     },
 };
 use proxy_client::stream::StreamEstablishError;
