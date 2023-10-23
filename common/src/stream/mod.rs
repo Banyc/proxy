@@ -155,7 +155,7 @@ impl IoAddr for CreatedStream {
             // CreatedStream::Quic(x) => x.peer_addr(),
             CreatedStream::Tcp(x) => x.peer_addr(),
             CreatedStream::Kcp(x) => x.peer_addr(),
-            CreatedStream::Mptcp(x) => x.peer_addr(),
+            CreatedStream::Mptcp(x) => IoAddr::peer_addr(x),
         }
     }
 
@@ -164,7 +164,7 @@ impl IoAddr for CreatedStream {
             // CreatedStream::Quic(x) => x.local_addr(),
             CreatedStream::Tcp(x) => x.local_addr(),
             CreatedStream::Kcp(x) => x.local_addr(),
-            CreatedStream::Mptcp(x) => x.local_addr(),
+            CreatedStream::Mptcp(x) => IoAddr::local_addr(x),
         }
     }
 }

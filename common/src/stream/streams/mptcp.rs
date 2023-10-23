@@ -118,10 +118,20 @@ pub enum ServeError {
 impl IoStream for MptcpStream {}
 impl IoAddr for MptcpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, ""))
+        Self::peer_addr(self).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "MptcpStream may not have a unified peer address",
+            )
+        })
     }
     fn local_addr(&self) -> io::Result<SocketAddr> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, ""))
+        Self::local_addr(self).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "MptcpStream may not have a unified local address",
+            )
+        })
     }
 }
 
