@@ -14,7 +14,8 @@ mod tests {
     };
     use proxy_client::stream::{establish, trace_rtt};
     use proxy_server::stream::{
-        kcp::build_kcp_proxy_server, tcp::build_tcp_proxy_server, StreamProxy,
+        kcp::build_kcp_proxy_server, mptcp::build_mptcp_proxy_server, tcp::build_tcp_proxy_server,
+        StreamProxy,
     };
     use serial_test::serial;
     use tokio::{
@@ -43,6 +44,15 @@ mod tests {
             }
             StreamType::Kcp => {
                 let server = build_kcp_proxy_server(addr, proxy).await.unwrap();
+                let proxy_addr = server.listener().local_addr().unwrap();
+                join_set.spawn(async move {
+                    let _handle = server.handle();
+                    server.serve().await.unwrap();
+                });
+                proxy_addr
+            }
+            StreamType::Mptcp => {
+                let server = build_mptcp_proxy_server(addr, proxy).await.unwrap();
                 let proxy_addr = server.listener().local_addr().unwrap();
                 join_set.spawn(async move {
                     let _handle = server.handle();
@@ -210,6 +220,12 @@ mod tests {
         stress_test(StreamType::Kcp).await
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn stress_test_mptcp() {
+        stress_test(StreamType::Mptcp).await
+    }
+
     async fn stress_test(ty: StreamType) {
         let mut join_set = tokio::task::JoinSet::new();
 
@@ -219,6 +235,7 @@ mod tests {
             let proxy_config = match ty {
                 StreamType::Tcp => spawn_tcp_proxy(&mut join_set, "0.0.0.0:0").await,
                 StreamType::Kcp => spawn_kcp_proxy(&mut join_set, "0.0.0.0:0").await,
+                StreamType::Mptcp => spawn_kcp_proxy(&mut join_set, "0.0.0.0:0").await,
             };
             proxies.push(proxy_config);
         }

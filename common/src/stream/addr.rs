@@ -9,6 +9,7 @@ use crate::addr::{InternetAddr, ParseInternetAddrError};
 pub enum StreamType {
     Tcp,
     Kcp,
+    Mptcp,
 }
 
 impl Display for StreamType {
@@ -16,6 +17,7 @@ impl Display for StreamType {
         match self {
             StreamType::Tcp => write!(f, "tcp"),
             StreamType::Kcp => write!(f, "kcp"),
+            StreamType::Mptcp => write!(f, "mptcp"),
         }
     }
 }
@@ -27,6 +29,7 @@ impl FromStr for StreamType {
         match s {
             "tcp" => Ok(Self::Tcp),
             "kcp" => Ok(Self::Kcp),
+            "mptcp" => Ok(Self::Mptcp),
             _ => Err(ParseInternetAddrError),
         }
     }

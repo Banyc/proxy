@@ -8,6 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
+use mptcp::MptcpStream;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
@@ -144,6 +145,7 @@ pub enum CreatedStream {
     // Quic(QuicIoStream),
     Tcp(TcpStream),
     Kcp(AddressedKcpStream),
+    Mptcp(MptcpStream),
 }
 
 impl IoStream for CreatedStream {}
@@ -153,6 +155,7 @@ impl IoAddr for CreatedStream {
             // CreatedStream::Quic(x) => x.peer_addr(),
             CreatedStream::Tcp(x) => x.peer_addr(),
             CreatedStream::Kcp(x) => x.peer_addr(),
+            CreatedStream::Mptcp(x) => x.peer_addr(),
         }
     }
 
@@ -161,6 +164,7 @@ impl IoAddr for CreatedStream {
             // CreatedStream::Quic(x) => x.local_addr(),
             CreatedStream::Tcp(x) => x.local_addr(),
             CreatedStream::Kcp(x) => x.local_addr(),
+            CreatedStream::Mptcp(x) => x.local_addr(),
         }
     }
 }
@@ -175,6 +179,7 @@ impl AsyncWrite for CreatedStream {
             // CreatedStream::Quic(x) => Pin::new(x).poll_write(cx, buf),
             CreatedStream::Tcp(x) => Pin::new(x).poll_write(cx, buf),
             CreatedStream::Kcp(x) => Pin::new(x).poll_write(cx, buf),
+            CreatedStream::Mptcp(x) => Pin::new(x).poll_write(cx, buf),
         }
     }
 
@@ -186,6 +191,7 @@ impl AsyncWrite for CreatedStream {
             // CreatedStream::Quic(x) => Pin::new(x).poll_flush(cx),
             CreatedStream::Tcp(x) => Pin::new(x).poll_flush(cx),
             CreatedStream::Kcp(x) => Pin::new(x).poll_flush(cx),
+            CreatedStream::Mptcp(x) => Pin::new(x).poll_flush(cx),
         }
     }
 
@@ -197,6 +203,7 @@ impl AsyncWrite for CreatedStream {
             // CreatedStream::Quic(x) => Pin::new(x).poll_shutdown(cx),
             CreatedStream::Tcp(x) => Pin::new(x).poll_shutdown(cx),
             CreatedStream::Kcp(x) => Pin::new(x).poll_shutdown(cx),
+            CreatedStream::Mptcp(x) => Pin::new(x).poll_shutdown(cx),
         }
     }
 }
@@ -211,6 +218,7 @@ impl AsyncRead for CreatedStream {
             // CreatedStream::Quic(x) => Pin::new(x).poll_read(cx, buf),
             CreatedStream::Tcp(x) => Pin::new(x).poll_read(cx, buf),
             CreatedStream::Kcp(x) => Pin::new(x).poll_read(cx, buf),
+            CreatedStream::Mptcp(x) => Pin::new(x).poll_read(cx, buf),
         }
     }
 }

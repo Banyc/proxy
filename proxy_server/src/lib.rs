@@ -2,7 +2,10 @@ use std::io;
 
 use common::{error::AnyResult, loading, stream::pool::Pool};
 use serde::Deserialize;
-use stream::{kcp::KcpProxyServerConfig, tcp::TcpProxyServerConfig, StreamProxy};
+use stream::{
+    kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, tcp::TcpProxyServerConfig,
+    StreamProxy,
+};
 use thiserror::Error;
 use udp::{UdpProxy, UdpProxyServerBuilder};
 
@@ -18,6 +21,8 @@ pub struct ProxyServerConfig {
     pub udp_server: Vec<UdpProxyServerBuilder>,
     #[serde(default)]
     pub kcp_server: Vec<KcpProxyServerConfig>,
+    #[serde(default)]
+    pub mptcp_server: Vec<MptcpProxyServerConfig>,
 }
 
 impl ProxyServerConfig {
@@ -26,6 +31,7 @@ impl ProxyServerConfig {
             tcp_server: Default::default(),
             udp_server: Default::default(),
             kcp_server: Default::default(),
+            mptcp_server: Default::default(),
         }
     }
 
@@ -59,6 +65,17 @@ impl ProxyServerConfig {
             )
             .await?;
 
+        loader
+            .mptcp_server
+            .load(
+                join_set,
+                self.mptcp_server
+                    .into_iter()
+                    .map(|s| s.into_builder(stream_pool.clone()))
+                    .collect(),
+            )
+            .await?;
+
         Ok(())
     }
 }
@@ -73,6 +90,7 @@ pub struct ProxyServerLoader {
     tcp_server: loading::Loader<StreamProxy>,
     udp_server: loading::Loader<UdpProxy>,
     kcp_server: loading::Loader<StreamProxy>,
+    mptcp_server: loading::Loader<StreamProxy>,
 }
 
 impl ProxyServerLoader {
@@ -81,6 +99,7 @@ impl ProxyServerLoader {
             tcp_server: loading::Loader::new(),
             udp_server: loading::Loader::new(),
             kcp_server: loading::Loader::new(),
+            mptcp_server: loading::Loader::new(),
         }
     }
 }

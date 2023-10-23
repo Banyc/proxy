@@ -141,6 +141,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "async_async_io"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f767e53004e8162f13f0f3869c14ff13620df3de93ce57f403e81a595c730414"
+dependencies = [
+ "async-trait",
+ "futures-core",
+ "reusable-box-future",
+ "tokio",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -339,6 +351,7 @@ dependencies = [
  "lockfree-object-pool",
  "lru",
  "metrics",
+ "mptcp",
  "once_cell",
  "pin-project-lite",
  "rand",
@@ -1030,6 +1043,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mptcp"
+version = "0.1.0"
+source = "git+https://github.com/Banyc/mptcp.git?rev=22e1c017121be93de56d49c83eab1f5c4a3f5e2a#22e1c017121be93de56d49c83eab1f5c4a3f5e2a"
+dependencies = [
+ "async-trait",
+ "async_async_io",
+ "bytes",
+ "rand",
+ "scopeguard",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "notify"
 version = "6.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1217,6 +1244,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "common",
+ "mptcp",
  "serde",
  "thiserror",
  "tokio",
@@ -1370,6 +1398,12 @@ name = "regex-syntax"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08c74e62047bb2de4ff487b251e4a92e24f48745648451635cec7d591162d9f"
+
+[[package]]
+name = "reusable-box-future"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e0e61cd21fbddd85fbd9367b775660a01d388c08a61c6d2824af480b0309bb9"
 
 [[package]]
 name = "rustc-demangle"

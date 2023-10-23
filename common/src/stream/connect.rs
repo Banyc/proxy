@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use thiserror::Error;
 
+use crate::stream::streams::mptcp::MptcpConnector;
+
 use super::{
     addr::{StreamAddr, StreamType},
     pool::Pool,
@@ -26,6 +28,7 @@ impl StreamConnectorTable {
         let inner = enum_map::enum_map! {
             StreamType::Tcp => Arc::new(TcpConnector) as _,
             StreamType::Kcp => Arc::new(KcpConnector) as _,
+            StreamType::Mptcp => Arc::new(MptcpConnector) as _,
         };
         Self { inner }
     }

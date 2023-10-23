@@ -143,7 +143,7 @@ impl TcpAccess {
     {
         let start = std::time::Instant::now();
 
-        let downstream_addr = downstream.peer_addr().map_err(ProxyError::DownstreamAddr)?;
+        let downstream_addr = downstream.peer_addr().ok();
 
         let proxy_chain = self.proxy_table.choose_chain();
         let upstream = establish(
@@ -167,7 +167,7 @@ impl TcpAccess {
                 start,
                 upstream_addr: upstream.addr,
                 upstream_sock_addr: upstream.sock_addr,
-                downstream_addr: Some(downstream_addr),
+                downstream_addr,
             };
             let _ = io_copy
                 .serve_as_access_server(destination, session_table, upstream_local, "TCP")

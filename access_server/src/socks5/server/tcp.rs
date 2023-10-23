@@ -208,7 +208,7 @@ impl Socks5ServerTcpAccess {
     {
         let start = std::time::Instant::now();
 
-        let downstream_addr = downstream.peer_addr().map_err(ProxyError::DownstreamAddr)?;
+        let downstream_addr = downstream.peer_addr().ok();
 
         let res = self.establish(downstream).await?;
         let (destination, downstream, upstream, payload_crypto) = match res {
@@ -237,7 +237,7 @@ impl Socks5ServerTcpAccess {
                             address: upstream_addr.clone(),
                         },
                         upstream_sock_addr,
-                        downstream_addr: Some(downstream_addr),
+                        downstream_addr,
                     };
                     let _ = io_copy
                         .serve_as_access_server(
@@ -281,7 +281,7 @@ impl Socks5ServerTcpAccess {
                 start,
                 upstream_addr: upstream.addr,
                 upstream_sock_addr: upstream.sock_addr,
-                downstream_addr: Some(downstream_addr),
+                downstream_addr,
             };
             let _ = io_copy
                 .serve_as_access_server(

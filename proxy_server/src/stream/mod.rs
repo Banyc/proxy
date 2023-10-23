@@ -21,6 +21,7 @@ use tracing::{error, info, instrument, warn};
 use crate::ListenerBindError;
 
 pub mod kcp;
+pub mod mptcp;
 pub mod tcp;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
@@ -110,9 +111,7 @@ impl StreamProxy {
     {
         let start = std::time::Instant::now();
 
-        let downstream_addr = downstream
-            .peer_addr()
-            .map_err(StreamProxyServerError::DownstreamAddr)?;
+        let downstream_addr = downstream.peer_addr().ok();
 
         // Establish proxy chain
         let upstream = match self.acceptor.establish(&mut downstream).await {
@@ -135,7 +134,7 @@ impl StreamProxy {
                 start,
                 upstream_addr: upstream.addr,
                 upstream_sock_addr: upstream.sock_addr,
-                downstream_addr: Some(downstream_addr),
+                downstream_addr,
             };
             let _ = io_copy.serve_as_proxy_server("Stream").await;
         });
