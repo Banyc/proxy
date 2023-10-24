@@ -1045,7 +1045,7 @@ dependencies = [
 [[package]]
 name = "mptcp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/mptcp.git?rev=e3c50c017ccecbc39f2c38cdc6d59696821ea0ff#e3c50c017ccecbc39f2c38cdc6d59696821ea0ff"
+source = "git+https://github.com/Banyc/mptcp.git?rev=f95cdecc29b680821cd11f62096206ea6a0a7a5a#f95cdecc29b680821cd11f62096206ea6a0a7a5a"
 dependencies = [
  "async-trait",
  "async_async_io",
