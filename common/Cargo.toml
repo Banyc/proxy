@@ -19,7 +19,7 @@ futures-core = "0.3.28"
 lockfree-object-pool = "0.1.4"
 lru = "0.12.0"
 metrics = "0.21.1"
-mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "f95cdecc29b680821cd11f62096206ea6a0a7a5a" }
+mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "20be57c25ba223dc9070364405ba729684e530ee" }
 once_cell = "1.18.0"
 pin-project-lite = "0.2.13"
 # quinn = "0.10.1"

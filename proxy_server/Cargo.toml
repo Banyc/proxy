@@ -10,7 +10,7 @@ async-speed-limit = { version = "0.4.1", features = ["tokio"] }
 async-trait = "0.1.73"
 bincode = "1.3.3"
 common = { path = "../common" }
-mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "f95cdecc29b680821cd11f62096206ea6a0a7a5a" }
+mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "20be57c25ba223dc9070364405ba729684e530ee" }
 serde = { version = "1.0.188", features = ["derive"] }
 thiserror = "1.0.50"
 tokio = { version = "1.33.0", features = ["full"] }
