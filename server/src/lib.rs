@@ -106,7 +106,7 @@ where
         .read_config()
         .await
         .map_err(ServeError::Config)?;
-    load(
+    load_and_clean(
         config,
         server_tasks,
         access_server_loader,
@@ -131,7 +131,7 @@ pub enum ServeError {
     ServerTask(#[source] AnyError),
 }
 
-pub async fn load(
+pub async fn load_and_clean(
     config: ServerConfig,
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     access_server_loader: &mut AccessServerLoader,
@@ -145,7 +145,7 @@ pub async fn load(
 
     config
         .access_server
-        .spawn_and_kill(
+        .spawn_and_clean(
             server_tasks,
             access_server_loader,
             &stream_pool,
@@ -156,7 +156,7 @@ pub async fn load(
         .await?;
     config
         .proxy_server
-        .spawn_and_kill(server_tasks, proxy_server_loader, &stream_pool)
+        .load_and_clean(server_tasks, proxy_server_loader, &stream_pool)
         .await?;
     Ok(())
 }

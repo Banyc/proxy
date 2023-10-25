@@ -35,7 +35,7 @@ impl ProxyServerConfig {
         }
     }
 
-    pub async fn spawn_and_kill(
+    pub async fn load_and_clean(
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut ProxyServerLoader,
@@ -43,7 +43,7 @@ impl ProxyServerConfig {
     ) -> AnyResult {
         loader
             .tcp_server
-            .load(
+            .load_and_clean(
                 join_set,
                 self.tcp_server
                     .into_iter()
@@ -52,11 +52,14 @@ impl ProxyServerConfig {
             )
             .await?;
 
-        loader.udp_server.load(join_set, self.udp_server).await?;
+        loader
+            .udp_server
+            .load_and_clean(join_set, self.udp_server)
+            .await?;
 
         loader
             .kcp_server
-            .load(
+            .load_and_clean(
                 join_set,
                 self.kcp_server
                     .into_iter()
@@ -67,7 +70,7 @@ impl ProxyServerConfig {
 
         loader
             .mptcp_server
-            .load(
+            .load_and_clean(
                 join_set,
                 self.mptcp_server
                     .into_iter()

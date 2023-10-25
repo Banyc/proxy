@@ -64,7 +64,7 @@ impl AccessServerConfig {
         }
     }
 
-    pub async fn spawn_and_kill(
+    pub async fn spawn_and_clean(
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut AccessServerLoader,
@@ -105,7 +105,10 @@ impl AccessServerConfig {
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
-        loader.tcp_server.load(join_set, tcp_server).await?;
+        loader
+            .tcp_server
+            .load_and_clean(join_set, tcp_server)
+            .await?;
 
         // UDP servers
         let udp_server = self
@@ -119,7 +122,10 @@ impl AccessServerConfig {
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
-        loader.udp_server.load(join_set, udp_server).await?;
+        loader
+            .udp_server
+            .load_and_clean(join_set, udp_server)
+            .await?;
 
         // HTTP servers
         let http_server = self
@@ -135,7 +141,10 @@ impl AccessServerConfig {
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
-        loader.http_server.load(join_set, http_server).await?;
+        loader
+            .http_server
+            .load_and_clean(join_set, http_server)
+            .await?;
 
         // SOCKS5 TCP servers
         let socks5_tcp_server = self
@@ -153,7 +162,7 @@ impl AccessServerConfig {
             .collect::<Result<Vec<_>, _>>()?;
         loader
             .socks5_tcp_server
-            .load(join_set, socks5_tcp_server)
+            .load_and_clean(join_set, socks5_tcp_server)
             .await?;
 
         // SOCKS5 UDP servers
@@ -170,7 +179,7 @@ impl AccessServerConfig {
             .collect::<Result<Vec<_>, _>>()?;
         loader
             .socks5_udp_server
-            .load(join_set, socks5_udp_server)
+            .load_and_clean(join_set, socks5_udp_server)
             .await?;
 
         Ok(())

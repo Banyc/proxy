@@ -24,7 +24,7 @@ where
         }
     }
 
-    pub async fn load<S, B>(
+    pub async fn load_and_clean<S, B>(
         &mut self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         builders: Vec<B>,
