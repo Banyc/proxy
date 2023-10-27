@@ -229,6 +229,7 @@ impl HttpAccess {
 
         let _session_guard = self.session_table.set_scope(Session {
             start: SystemTime::now(),
+            end: None,
             destination: StreamAddr {
                 address: addr.clone(),
                 stream_type: StreamType::Tcp,

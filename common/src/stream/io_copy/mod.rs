@@ -1,6 +1,6 @@
 use std::{
     net::SocketAddr,
-    time::{Instant, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use async_speed_limit::Limiter;
@@ -18,6 +18,8 @@ use super::{
 };
 
 pub mod tokio_io;
+
+const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
 
 pub struct CopyBidirectional<DS, US> {
     pub downstream: DS,
@@ -60,8 +62,9 @@ where
         upstream_local: Option<SocketAddr>,
         log_prefix: &str,
     ) -> (StreamProxyMetrics, Result<(), tokio_io::CopyBiErrorKind>) {
-        let _session_guard = session_table.set_scope(Session {
+        let session_guard = session_table.set_scope_owned(Session {
             start: SystemTime::now(),
+            end: None,
             destination: destination.clone(),
             upstream_local,
         });
@@ -81,6 +84,14 @@ where
                 info!(?e, %metrics, "{log_prefix}: I/O copy error");
             }
         }
+
+        session_guard.inspect_mut(|session| {
+            session.end = Some(SystemTime::now());
+        });
+        tokio::spawn(async move {
+            let _session_guard = session_guard;
+            tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
+        });
 
         (metrics, res)
     }

@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use slotmap::{new_key_type, HopSlotMap};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SessionTable<T> {
     map: Arc<RwLock<HopSlotMap<SessionKey, T>>>,
     enabled: bool,
@@ -28,6 +28,14 @@ impl<T> SessionTable<T> {
     pub fn set_scope(&self, session: T) -> SessionGuard<T> {
         let key = self.insert(session);
         SessionGuard { table: self, key }
+    }
+
+    pub fn set_scope_owned(&self, session: T) -> SessionOwnedGuard<T> {
+        let key = self.insert(session);
+        SessionOwnedGuard {
+            table: self.clone(),
+            key,
+        }
     }
 
     #[must_use]
@@ -60,16 +68,55 @@ impl<T> Default for SessionTable<T> {
     }
 }
 
+impl<T> Clone for SessionTable<T> {
+    fn clone(&self) -> Self {
+        Self {
+            map: self.map.clone(),
+            enabled: self.enabled,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct SessionGuard<'table, T> {
     table: &'table SessionTable<T>,
     key: SessionKey,
 }
 
+impl<T> SessionGuard<'_, T> {
+    pub fn inspect_mut<O>(&self, f: fn(&mut T) -> O) -> O {
+        inspect_mut(self.table, self.key, f)
+    }
+}
+
 impl<T> Drop for SessionGuard<'_, T> {
     fn drop(&mut self) {
         self.table.remove(self.key);
     }
+}
+
+#[derive(Debug)]
+pub struct SessionOwnedGuard<T> {
+    table: SessionTable<T>,
+    key: SessionKey,
+}
+
+impl<T> SessionOwnedGuard<T> {
+    pub fn inspect_mut<O>(&self, f: fn(&mut T) -> O) -> O {
+        inspect_mut(&self.table, self.key, f)
+    }
+}
+
+impl<T> Drop for SessionOwnedGuard<T> {
+    fn drop(&mut self) {
+        self.table.remove(self.key);
+    }
+}
+
+fn inspect_mut<T, O>(table: &SessionTable<T>, key: SessionKey, f: fn(&mut T) -> O) -> O {
+    let mut map = table.map.write().unwrap();
+    let session = map.get_mut(key).unwrap();
+    f(session)
 }
 
 #[derive(Debug)]

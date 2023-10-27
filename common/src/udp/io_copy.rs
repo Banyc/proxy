@@ -5,7 +5,7 @@ use std::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock,
     },
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use async_speed_limit::Limiter;
@@ -27,6 +27,8 @@ use super::{
     Flow, FlowMetrics, FlowOwnedGuard, Packet, UdpDownstreamWriter, ACTIVITY_CHECK_INTERVAL,
     BUFFER_LENGTH,
 };
+
+const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
 
 #[async_trait]
 pub trait UdpRecv {
@@ -68,14 +70,24 @@ where
         upstream_local: Option<SocketAddr>,
         log_prefix: &str,
     ) -> Result<FlowMetrics, CopyBiError> {
-        let _session_guard: crate::session_table::SessionGuard<'_, Session> = session_table
-            .set_scope(Session {
-                start: SystemTime::now(),
-                destination: self.flow.flow().upstream.0.clone(),
-                upstream_local,
-            });
+        let session_guard = session_table.set_scope_owned(Session {
+            start: SystemTime::now(),
+            end: None,
+            destination: self.flow.flow().upstream.0.clone(),
+            upstream_local,
+        });
 
-        self.serve_as_proxy_server(log_prefix).await
+        let res = self.serve_as_proxy_server(log_prefix).await;
+
+        session_guard.inspect_mut(|session| {
+            session.end = Some(SystemTime::now());
+        });
+        tokio::spawn(async move {
+            let _session_guard = session_guard;
+            tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
+        });
+
+        res
     }
 
     pub async fn serve_as_proxy_server(self, log_prefix: &str) -> Result<FlowMetrics, CopyBiError> {
