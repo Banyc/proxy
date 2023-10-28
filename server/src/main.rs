@@ -11,6 +11,7 @@ use server::{
     config::multi_file_config::{spawn_watch_tasks, MultiFileConfigReader},
     serve,
 };
+use tabled::Table;
 use tracing::info;
 
 #[derive(Debug, Parser)]
@@ -56,10 +57,11 @@ async fn main() -> AnyResult {
                     .cloned()
                     .collect::<Vec<_>>();
                 sessions.sort_by_key(|session| session.start);
-                for session in sessions {
-                    text.push_str(&session.to_string());
-                    text.push('\n');
-                }
+                let sessions = Table::new(sessions)
+                    .with(tabled::settings::Style::blank())
+                    .to_string();
+                text.push_str(&sessions);
+                text.push('\n');
 
                 text.push_str("UDP:\n");
                 let mut sessions = udp_session_table
@@ -68,10 +70,11 @@ async fn main() -> AnyResult {
                     .cloned()
                     .collect::<Vec<_>>();
                 sessions.sort_by_key(|session| session.start);
-                for session in sessions {
-                    text.push_str(&session.to_string());
-                    text.push('\n');
-                }
+                let sessions = Table::new(sessions)
+                    .with(tabled::settings::Style::blank())
+                    .to_string();
+                text.push_str(&sessions);
+                text.push('\n');
 
                 text
             }

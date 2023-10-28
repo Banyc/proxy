@@ -1,9 +1,10 @@
 use std::{
     borrow::Cow,
-    fmt,
     net::SocketAddr,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use tabled::Tabled;
 
 use crate::{addr::InternetAddr, session_table::SessionTable};
 
@@ -17,22 +18,45 @@ pub struct Session {
     pub upstream_local: Option<SocketAddr>,
 }
 
-impl fmt::Display for Session {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let upstream_local: Cow<str> = match self.upstream_local {
+impl Tabled for Session {
+    const LENGTH: usize = 4;
+
+    fn fields(&self) -> Vec<Cow<'_, str>> {
+        let start_unix = self.start.duration_since(UNIX_EPOCH).unwrap();
+        let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+
+        let start = start_unix.as_secs().to_string().into();
+        let upstream_local = match self.upstream_local {
             Some(upstream_local) => upstream_local.to_string().into(),
-            None => "?".into(),
+            None => "".into(),
         };
-        write!(
-            f,
-            "{}: {} -> {}",
-            self.start.duration_since(UNIX_EPOCH).unwrap().as_secs(),
-            upstream_local,
-            self.destination
-        )?;
-        if let Some(end) = self.end {
-            write!(f, ", {}", end.duration_since(UNIX_EPOCH).unwrap().as_secs())?;
+        let destination = self.destination.to_string().into();
+        let duration = match self.end {
+            Some(end) => end
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .saturating_sub(start_unix),
+            None => now_unix.saturating_sub(start_unix),
+        };
+        let duration = if duration.as_secs() == 0 {
+            format!("{} ms", duration.as_millis())
+        } else if duration.as_secs() / 60 == 0 {
+            format!("{} s", duration.as_secs())
+        } else if duration.as_secs() / 60 / 60 == 0 {
+            format!("{} min", duration.as_secs() / 60)
+        } else {
+            format!("{} h", duration.as_secs() / 60 / 60)
         }
-        Ok(())
+        .into();
+        vec![destination, duration, start, upstream_local]
+    }
+
+    fn headers() -> Vec<Cow<'static, str>> {
+        vec![
+            "destination".into(),
+            "duration".into(),
+            "start".into(),
+            "upstream_local".into(),
+        ]
     }
 }

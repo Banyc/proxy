@@ -21,6 +21,7 @@ metrics-exporter-prometheus = "0.12.1"
 notify = "6.1.1"
 proxy_server = { path = "../proxy_server" }
 serde = { version = "1.0.188", features = ["derive"] }
+tabled = "0.14.0"
 thiserror = "1.0.50"
 tokio = { version = "1.33.0", features = ["full"] }
 tokio-util = "0.7.9"
