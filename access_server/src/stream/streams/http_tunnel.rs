@@ -13,9 +13,10 @@ use common::{
     config::SharableConfig,
     filter::{self, Filter, FilterBuilder},
     loading,
+    session_table::SessionOwnedGuard,
     stream::{
         addr::{StreamAddr, StreamType},
-        io_copy::CopyBidirectional,
+        io_copy::{CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
         pool::Pool,
         proxy_table::StreamProxyTable,
         session_table::{Session, StreamSessionTable},
@@ -209,7 +210,16 @@ impl HttpAccess {
                 let upstream = tokio::net::TcpStream::connect(addr)
                     .await
                     .map_err(TunnelError::Direct)?;
-                let res = tls_http(upstream, req).await;
+                let session_guard = self.session_table.set_scope_owned(Session {
+                    start: SystemTime::now(),
+                    end: None,
+                    destination: StreamAddr {
+                        address: addr.into(),
+                        stream_type: StreamType::Tcp,
+                    },
+                    upstream_local: upstream.local_addr().ok(),
+                });
+                let res = tls_http(upstream, req, session_guard).await;
                 info!(?addr, "Direct {} finished", method);
                 return res;
             }
@@ -227,7 +237,7 @@ impl HttpAccess {
         )
         .await?;
 
-        let _session_guard = self.session_table.set_scope(Session {
+        let session_guard = self.session_table.set_scope_owned(Session {
             start: SystemTime::now(),
             end: None,
             destination: StreamAddr {
@@ -241,9 +251,9 @@ impl HttpAccess {
                 // Establish encrypted stream
                 let xor_stream = XorStream::upgrade(upstream.stream, crypto);
 
-                tls_http(xor_stream, req).await
+                tls_http(xor_stream, req, session_guard).await
             }
-            None => tls_http(upstream.stream, req).await,
+            None => tls_http(upstream.stream, req, session_guard).await,
         };
 
         let end = std::time::Instant::now();
@@ -320,6 +330,7 @@ impl HttpAccess {
 async fn tls_http<S>(
     upstream: S,
     req: Request<Incoming>,
+    session_guard: SessionOwnedGuard<Session>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>
 where
     S: AsyncWrite + AsyncRead + Send + Unpin + 'static,
@@ -345,6 +356,13 @@ where
         warn!(?e, "Failed to send HTTP/1 request to upstream");
         e
     })?;
+
+    session_guard.inspect_mut(|session| session.end = Some(SystemTime::now()));
+    tokio::spawn(async move {
+        let _session_guard = session_guard;
+        tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
+    });
+
     Ok(resp.map(|b| b.boxed()))
 }
 

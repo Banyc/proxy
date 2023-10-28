@@ -19,7 +19,7 @@ use super::{
 
 pub mod tokio_io;
 
-const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
+pub const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
 
 pub struct CopyBidirectional<DS, US> {
     pub downstream: DS,
