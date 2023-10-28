@@ -4,8 +4,8 @@ use common::{
     error::AnyResult,
     filter::{self, FilterBuilder, MatcherBuilder},
     loading,
-    stream::{pool::Pool, session_table::StreamSessionTable},
-    udp::session_table::UdpSessionTable,
+    session_table::BothSessionTables,
+    stream::pool::Pool,
 };
 use serde::{Deserialize, Serialize};
 use socks5::server::{
@@ -70,8 +70,7 @@ impl AccessServerConfig {
         loader: &mut AccessServerLoader,
         stream_pool: &Pool,
         cancellation: CancellationToken,
-        stream_session_table: StreamSessionTable,
-        udp_session_table: UdpSessionTable,
+        session_table: BothSessionTables,
     ) -> AnyResult {
         // Shared
         let stream_proxy_tables = self
@@ -101,7 +100,7 @@ impl AccessServerConfig {
                     stream_pool.clone(),
                     &stream_proxy_tables,
                     cancellation.clone(),
-                    stream_session_table.clone(),
+                    session_table.stream().clone(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -118,7 +117,7 @@ impl AccessServerConfig {
                 c.into_builder(
                     &udp_proxy_tables,
                     cancellation.clone(),
-                    udp_session_table.clone(),
+                    session_table.udp().clone(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -137,7 +136,7 @@ impl AccessServerConfig {
                     &stream_proxy_tables,
                     &filters,
                     cancellation.clone(),
-                    stream_session_table.clone(),
+                    session_table.stream().clone(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -156,7 +155,7 @@ impl AccessServerConfig {
                     &stream_proxy_tables,
                     &filters,
                     cancellation.clone(),
-                    stream_session_table.clone(),
+                    session_table.stream().clone(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -173,7 +172,7 @@ impl AccessServerConfig {
                 c.into_builder(
                     &udp_proxy_tables,
                     cancellation.clone(),
-                    udp_session_table.clone(),
+                    session_table.udp().clone(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;

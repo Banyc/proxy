@@ -2,10 +2,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use axum::{extract::State, routing::get, Router};
 use clap::Parser;
-use common::{
-    error::AnyResult, stream::session_table::StreamSessionTable,
-    udp::session_table::UdpSessionTable,
-};
+use common::{error::AnyResult, session_table::BothSessionTables};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use server::{
     config::multi_file_config::{spawn_watch_tasks, MultiFileConfigReader},
@@ -30,28 +27,21 @@ async fn main() -> AnyResult {
     let args = Args::parse();
 
     // Monitoring
-    let stream_session_table: StreamSessionTable;
-    let udp_session_table: UdpSessionTable;
+    let session_table: BothSessionTables;
     if let Some(monitor_addr) = args.monitor {
         let metrics_handle = PrometheusBuilder::new().install_recorder().unwrap();
-        stream_session_table = StreamSessionTable::new();
-        udp_session_table = UdpSessionTable::new();
-        let stream_session_table = stream_session_table.clone();
-        let udp_session_table = udp_session_table.clone();
+        session_table = BothSessionTables::new();
+        let session_table = session_table.clone();
         tokio::spawn(async move {
             async fn metrics(metrics_handle: State<PrometheusHandle>) -> String {
                 metrics_handle.render()
             }
-            async fn sessions(
-                State((stream_session_table, udp_session_table)): State<(
-                    StreamSessionTable,
-                    UdpSessionTable,
-                )>,
-            ) -> String {
+            async fn sessions(State(session_table): State<BothSessionTables>) -> String {
                 let mut text = String::new();
 
                 text.push_str("Stream:\n");
-                let mut sessions = stream_session_table
+                let mut sessions = session_table
+                    .stream()
                     .sessions()
                     .iter()
                     .cloned()
@@ -64,7 +54,8 @@ async fn main() -> AnyResult {
                 text.push('\n');
 
                 text.push_str("UDP:\n");
-                let mut sessions = udp_session_table
+                let mut sessions = session_table
+                    .udp()
                     .sessions()
                     .iter()
                     .cloned()
@@ -82,7 +73,7 @@ async fn main() -> AnyResult {
                 .route("/", get(metrics))
                 .with_state(metrics_handle)
                 .route("/sessions", get(sessions))
-                .with_state((stream_session_table, udp_session_table))
+                .with_state(session_table)
                 .route("/health", get(|| async { Ok::<_, ()>(()) }));
             let server = axum::Server::bind(&monitor_addr).serve(router.into_make_service());
             info!(
@@ -92,18 +83,12 @@ async fn main() -> AnyResult {
             server.await.unwrap();
         });
     } else {
-        stream_session_table = StreamSessionTable::new_disabled();
-        udp_session_table = UdpSessionTable::new_disabled();
+        session_table = BothSessionTables::new_disabled();
     }
 
     let notify_rx = spawn_watch_tasks(&args.config_file_paths);
     let config_reader = MultiFileConfigReader::new(args.config_file_paths.into());
-    serve(
-        notify_rx,
-        config_reader,
-        stream_session_table,
-        udp_session_table,
-    )
-    .await
-    .map_err(|e| e.into())
+    serve(notify_rx, config_reader, session_table)
+        .await
+        .map_err(|e| e.into())
 }

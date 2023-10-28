@@ -2,6 +2,48 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use slotmap::{new_key_type, HopSlotMap};
 
+use crate::{stream::session_table::StreamSessionTable, udp::session_table::UdpSessionTable};
+
+#[derive(Debug, Clone)]
+pub struct BothSessionTables {
+    stream: StreamSessionTable,
+    udp: UdpSessionTable,
+}
+
+impl BothSessionTables {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            stream: StreamSessionTable::new(),
+            udp: UdpSessionTable::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn new_disabled() -> Self {
+        Self {
+            stream: StreamSessionTable::new_disabled(),
+            udp: UdpSessionTable::new_disabled(),
+        }
+    }
+
+    #[must_use]
+    pub fn stream(&self) -> &StreamSessionTable {
+        &self.stream
+    }
+
+    #[must_use]
+    pub fn udp(&self) -> &UdpSessionTable {
+        &self.udp
+    }
+}
+
+impl Default for BothSessionTables {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug)]
 pub struct SessionTable<T> {
     map: Arc<RwLock<HopSlotMap<SessionKey, T>>>,

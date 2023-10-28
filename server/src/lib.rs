@@ -3,11 +3,8 @@ use std::sync::Arc;
 use access_server::{AccessServerConfig, AccessServerLoader};
 use common::{
     error::{AnyError, AnyResult},
-    stream::{
-        pool::{Pool, PoolBuilder},
-        session_table::StreamSessionTable,
-    },
-    udp::session_table::UdpSessionTable,
+    session_table::BothSessionTables,
+    stream::pool::{Pool, PoolBuilder},
 };
 use config::ConfigReader;
 use proxy_server::{ProxyServerConfig, ProxyServerLoader};
@@ -21,14 +18,15 @@ pub mod config;
 pub async fn serve<CR>(
     notify_rx: Arc<tokio::sync::Notify>,
     config_reader: CR,
-    stream_session_table: StreamSessionTable,
-    udp_session_table: UdpSessionTable,
+    session_table: BothSessionTables,
 ) -> Result<(), ServeError>
 where
     CR: ConfigReader<Config = ServerConfig>,
 {
-    let mut access_server_loader = AccessServerLoader::new();
-    let mut proxy_server_loader = ProxyServerLoader::new();
+    let mut server_loader = ServerLoader {
+        access_server: AccessServerLoader::new(),
+        proxy_server: ProxyServerLoader::new(),
+    };
     let mut server_tasks = tokio::task::JoinSet::new();
 
     // Make sure there is always `Some(res)` from `join_next`
@@ -44,12 +42,10 @@ where
     read_and_load_config(
         &config_reader,
         &mut server_tasks,
-        &mut access_server_loader,
-        &mut proxy_server_loader,
+        &mut server_loader,
         stream_pool.clone(),
         cancellation.clone(),
-        stream_session_table.clone(),
-        udp_session_table.clone(),
+        session_table.clone(),
     )
     .await?;
 
@@ -72,12 +68,10 @@ where
                 if let Err(e) = read_and_load_config(
                     &config_reader,
                     &mut server_tasks,
-                    &mut access_server_loader,
-                    &mut proxy_server_loader,
+                    &mut server_loader,
                     stream_pool.clone(),
                     cancellation.clone(),
-                    stream_session_table.clone(),
-                    udp_session_table.clone(),
+                    session_table.clone(),
                 ).await {
                     warn!(?e, "Failed to read and load config");
                     continue;
@@ -89,15 +83,18 @@ where
     }
 }
 
+pub struct ServerLoader {
+    pub access_server: AccessServerLoader,
+    pub proxy_server: ProxyServerLoader,
+}
+
 async fn read_and_load_config<CR>(
     config_reader: &CR,
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
-    access_server_loader: &mut AccessServerLoader,
-    proxy_server_loader: &mut ProxyServerLoader,
+    server_loader: &mut ServerLoader,
     stream_pool: Pool,
     cancellation: CancellationToken,
-    stream_session_table: StreamSessionTable,
-    udp_session_table: UdpSessionTable,
+    session_table: BothSessionTables,
 ) -> Result<(), ServeError>
 where
     CR: ConfigReader<Config = ServerConfig>,
@@ -109,12 +106,10 @@ where
     load_and_clean(
         config,
         server_tasks,
-        access_server_loader,
-        proxy_server_loader,
+        server_loader,
         stream_pool,
         cancellation,
-        stream_session_table,
-        udp_session_table,
+        session_table,
     )
     .await
     .map_err(ServeError::Load)?;
@@ -134,12 +129,10 @@ pub enum ServeError {
 pub async fn load_and_clean(
     config: ServerConfig,
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
-    access_server_loader: &mut AccessServerLoader,
-    proxy_server_loader: &mut ProxyServerLoader,
+    server_loader: &mut ServerLoader,
     stream_pool: Pool,
     cancellation: CancellationToken,
-    stream_session_table: StreamSessionTable,
-    udp_session_table: UdpSessionTable,
+    session_table: BothSessionTables,
 ) -> AnyResult {
     stream_pool.replaced_by(config.global.stream_pool.build()?);
 
@@ -147,16 +140,15 @@ pub async fn load_and_clean(
         .access_server
         .spawn_and_clean(
             server_tasks,
-            access_server_loader,
+            &mut server_loader.access_server,
             &stream_pool,
             cancellation,
-            stream_session_table,
-            udp_session_table,
+            session_table,
         )
         .await?;
     config
         .proxy_server
-        .load_and_clean(server_tasks, proxy_server_loader, &stream_pool)
+        .load_and_clean(server_tasks, &mut server_loader.proxy_server, &stream_pool)
         .await?;
     Ok(())
 }
