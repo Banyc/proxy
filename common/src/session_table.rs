@@ -84,7 +84,7 @@ pub struct SessionGuard<'table, T> {
 }
 
 impl<T> SessionGuard<'_, T> {
-    pub fn inspect_mut<O>(&self, f: fn(&mut T) -> O) -> O {
+    pub fn inspect_mut(&self, f: fn(&mut T)) {
         inspect_mut(self.table, self.key, f)
     }
 }
@@ -102,7 +102,7 @@ pub struct SessionOwnedGuard<T> {
 }
 
 impl<T> SessionOwnedGuard<T> {
-    pub fn inspect_mut<O>(&self, f: fn(&mut T) -> O) -> O {
+    pub fn inspect_mut(&self, f: fn(&mut T)) {
         inspect_mut(&self.table, self.key, f)
     }
 }
@@ -113,9 +113,11 @@ impl<T> Drop for SessionOwnedGuard<T> {
     }
 }
 
-fn inspect_mut<T, O>(table: &SessionTable<T>, key: SessionKey, f: fn(&mut T) -> O) -> O {
+fn inspect_mut<T>(table: &SessionTable<T>, key: SessionKey, f: fn(&mut T)) {
     let mut map = table.map.write().unwrap();
-    let session = map.get_mut(key).unwrap();
+    let Some(session) = map.get_mut(key) else {
+        return;
+    };
     f(session)
 }
 
