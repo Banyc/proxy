@@ -40,6 +40,10 @@ use tracing::{error, info, instrument, trace, warn};
 
 use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder};
 
+use self::tokio_io::TokioIo;
+
+mod tokio_io;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HttpAccessServerConfig {
@@ -174,7 +178,10 @@ impl HttpAccess {
         hyper::server::conn::http1::Builder::new()
             .preserve_header_case(true)
             .title_case_headers(true)
-            .serve_connection(downstream, service_fn(move |req| self.proxy_svc(req)))
+            .serve_connection(
+                TokioIo::new(downstream),
+                service_fn(|req| self.proxy_svc(req)),
+            )
             .with_upgrades()
             .await?;
         Ok(())
@@ -339,7 +346,7 @@ where
     let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
         .preserve_header_case(true)
         .title_case_headers(true)
-        .handshake(upstream)
+        .handshake(TokioIo::new(upstream))
         .await
         .map_err(|e| {
             warn!(?e, "Failed to establish HTTP/1 handshake to upstream");
@@ -415,7 +422,7 @@ async fn upgrade(
 
     let upstream_local = upstream.local_addr().ok();
     let io_copy = CopyBidirectional {
-        downstream: upgraded,
+        downstream: TokioIo::new(upgraded),
         upstream,
         payload_crypto: None,
         speed_limiter,
@@ -516,7 +523,7 @@ impl HttpConnect {
         tokio::spawn(async move {
             let upstream_local = upstream.stream.local_addr().ok();
             let io_copy = CopyBidirectional {
-                downstream: upgraded,
+                downstream: TokioIo::new(upgraded),
                 upstream: upstream.stream,
                 payload_crypto,
                 speed_limiter,

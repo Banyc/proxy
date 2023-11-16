@@ -9,8 +9,9 @@ async-speed-limit = { version = "0.4.1", features = ["tokio"] }
 async-trait = "0.1.73"
 bytes = "1.5.0"
 common = { path = "../common" }
-http-body-util = "=0.1.0-rc.2"
-hyper = { version = "=1.0.0-rc.3", features = ["full"] }
+http-body-util = "0.1.0"
+hyper = { version = "1.0.0", features = ["full"] }
+pin-project-lite = "0.2.13"
 proxy_client = { path = "../proxy_client" }
 serde = { version = "1.0.188", features = ["derive"] }
 thiserror = "1.0.50"
