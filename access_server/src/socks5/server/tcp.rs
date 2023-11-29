@@ -307,6 +307,42 @@ impl Socks5ServerTcpAccess {
             .await
             .map_err(EstablishError::Negotiate)?;
 
+        let local_addr = stream.local_addr()?;
+
+        let (relay_response, res) = self.request(relay_request, local_addr).await;
+        relay_response.encode(&mut stream).await?;
+
+        Ok(match res? {
+            RequestResult::Blocked { destination } => EstablishResult::Blocked { destination },
+            RequestResult::Direct {
+                upstream,
+                upstream_addr,
+                upstream_sock_addr,
+            } => EstablishResult::Direct {
+                downstream: stream,
+                upstream,
+                upstream_addr,
+                upstream_sock_addr,
+            },
+            RequestResult::Udp {} => EstablishResult::Udp { downstream: stream },
+            RequestResult::Proxy {
+                destination,
+                upstream,
+                payload_crypto,
+            } => EstablishResult::Proxy {
+                destination,
+                downstream: stream,
+                upstream,
+                payload_crypto,
+            },
+        })
+    }
+
+    async fn request(
+        &self,
+        relay_request: RelayRequest,
+        local_addr: SocketAddr,
+    ) -> (RelayResponse, Result<RequestResult, EstablishError>) {
         // Filter
         let action = self.filter.filter(&relay_request.destination);
         if matches!(action, filter::Action::Block) {
@@ -314,10 +350,12 @@ impl Socks5ServerTcpAccess {
                 reply: Reply::ConnectionNotAllowedByRuleset,
                 bind: InternetAddr::zero_ipv4_addr(),
             };
-            relay_response.encode(&mut stream).await?;
-            return Ok(EstablishResult::Blocked {
-                destination: relay_request.destination,
-            });
+            return (
+                relay_response,
+                Ok(RequestResult::Blocked {
+                    destination: relay_request.destination,
+                }),
+            );
         }
 
         match relay_request.command {
@@ -327,8 +365,7 @@ impl Socks5ServerTcpAccess {
                     reply: Reply::CommandNotSupported,
                     bind: InternetAddr::zero_ipv4_addr(),
                 };
-                relay_response.encode(&mut stream).await?;
-                return Err(EstablishError::CmdBindNotSupported);
+                return (relay_response, Err(EstablishError::CmdBindNotSupported));
             }
             Command::UdpAssociate => match &self.udp_listen_addr {
                 Some(addr) => {
@@ -336,46 +373,62 @@ impl Socks5ServerTcpAccess {
                         reply: Reply::Succeeded,
                         bind: addr.clone(),
                     };
-                    relay_response.encode(&mut stream).await?;
-                    return Ok(EstablishResult::Udp { downstream: stream });
+                    return (relay_response, Ok(RequestResult::Udp {}));
                 }
                 None => {
                     let relay_response = RelayResponse {
                         reply: Reply::CommandNotSupported,
                         bind: InternetAddr::zero_ipv4_addr(),
                     };
-                    relay_response.encode(&mut stream).await?;
-                    return Err(EstablishError::NoUdpServerAvailable);
+                    return (relay_response, Err(EstablishError::NoUdpServerAvailable));
                 }
             },
         }
 
+        fn general_socks_server_failure() -> RelayResponse {
+            RelayResponse {
+                reply: Reply::GeneralSocksServerFailure,
+                bind: InternetAddr::zero_ipv4_addr(),
+            }
+        }
+
         if matches!(action, filter::Action::Direct) {
-            let sock_addr = relay_request
-                .destination
-                .to_socket_addr()
-                .await
-                .map_err(|e| EstablishError::DirectConnect {
-                    source: e,
-                    destination: relay_request.destination.clone(),
-                })?;
-            let upstream = tokio::net::TcpStream::connect(sock_addr)
-                .await
-                .map_err(|e| EstablishError::DirectConnect {
-                    source: e,
-                    destination: relay_request.destination.clone(),
-                })?;
+            let sock_addr = match relay_request.destination.to_socket_addr().await {
+                Ok(sock_addr) => sock_addr,
+                Err(e) => {
+                    return (
+                        general_socks_server_failure(),
+                        Err(EstablishError::DirectConnect {
+                            source: e,
+                            destination: relay_request.destination.clone(),
+                        }),
+                    );
+                }
+            };
+            let upstream = match tokio::net::TcpStream::connect(sock_addr).await {
+                Ok(upstream) => upstream,
+                Err(e) => {
+                    return (
+                        general_socks_server_failure(),
+                        Err(EstablishError::DirectConnect {
+                            source: e,
+                            destination: relay_request.destination.clone(),
+                        }),
+                    );
+                }
+            };
             let relay_response = RelayResponse {
                 reply: Reply::Succeeded,
-                bind: InternetAddr::zero_ipv4_addr(),
+                bind: local_addr.into(),
             };
-            relay_response.encode(&mut stream).await?;
-            return Ok(EstablishResult::Direct {
-                downstream: stream,
-                upstream,
-                upstream_addr: relay_request.destination,
-                upstream_sock_addr: sock_addr,
-            });
+            return (
+                relay_response,
+                Ok(RequestResult::Direct {
+                    upstream,
+                    upstream_addr: relay_request.destination,
+                    upstream_sock_addr: sock_addr,
+                }),
+            );
         }
 
         let (upstream, payload_crypto) = match self
@@ -384,25 +437,21 @@ impl Socks5ServerTcpAccess {
         {
             Ok(res) => res,
             Err(e) => {
-                let relay_response = RelayResponse {
-                    reply: Reply::GeneralSocksServerFailure,
-                    bind: InternetAddr::zero_ipv4_addr(),
-                };
-                relay_response.encode(&mut stream).await?;
-                return Err(e.into());
+                return (general_socks_server_failure(), Err(e.into()));
             }
         };
         let relay_response = RelayResponse {
             reply: Reply::Succeeded,
-            bind: InternetAddr::zero_ipv4_addr(),
+            bind: local_addr.into(),
         };
-        relay_response.encode(&mut stream).await?;
-        Ok(EstablishResult::Proxy {
-            destination: relay_request.destination,
-            downstream: stream,
-            upstream,
-            payload_crypto,
-        })
+        (
+            relay_response,
+            Ok(RequestResult::Proxy {
+                destination: relay_request.destination,
+                upstream,
+                payload_crypto,
+            }),
+        )
     }
 
     async fn steer<S>(&self, stream: S) -> io::Result<(S, RelayRequest)>
@@ -535,6 +584,23 @@ pub enum EstablishResult<S> {
     Proxy {
         destination: InternetAddr,
         downstream: S,
+        upstream: CreatedStreamAndAddr,
+        payload_crypto: Option<XorCrypto>,
+    },
+}
+
+enum RequestResult {
+    Blocked {
+        destination: InternetAddr,
+    },
+    Direct {
+        upstream: tokio::net::TcpStream,
+        upstream_addr: InternetAddr,
+        upstream_sock_addr: SocketAddr,
+    },
+    Udp {},
+    Proxy {
+        destination: InternetAddr,
         upstream: CreatedStreamAndAddr,
         payload_crypto: Option<XorCrypto>,
     },
