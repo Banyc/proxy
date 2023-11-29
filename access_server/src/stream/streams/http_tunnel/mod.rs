@@ -28,6 +28,7 @@ use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::{
     body::Incoming, http, service::service_fn, upgrade::Upgraded, Method, Request, Response,
 };
+use hyper_util::rt::TokioIo;
 use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -39,10 +40,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, instrument, trace, warn};
 
 use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder};
-
-use self::tokio_io::TokioIo;
-
-mod tokio_io;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
