@@ -15,14 +15,23 @@ pub struct XorCryptoBuilder(pub String);
 
 impl XorCryptoBuilder {
     pub fn build(&self) -> Result<XorCrypto, XorCryptoBuildError> {
-        let key = BASE64_STANDARD_NO_PAD.decode(&self.0)?;
+        let key = BASE64_STANDARD_NO_PAD
+            .decode(&self.0)
+            .map_err(|e| XorCryptoBuildError {
+                source: e,
+                key: self.0.clone(),
+            })?;
         Ok(XorCrypto::new(key.into()))
     }
 }
 
 #[derive(Debug, Error)]
-#[error("{0}")]
-pub struct XorCryptoBuildError(#[from] pub base64::DecodeError);
+#[error("{source}, key = `{key}`")]
+pub struct XorCryptoBuildError {
+    #[source]
+    pub source: base64::DecodeError,
+    pub key: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct XorCrypto {
