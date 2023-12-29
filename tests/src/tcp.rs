@@ -6,8 +6,12 @@ mod tests {
         loading::Server,
         proxy_table::ProxyConfig,
         stream::{
-            addr::{StreamAddr, StreamType},
-            concrete::{created_stream::CreatedStreamAndAddr, pool::Pool},
+            addr::StreamAddr,
+            concrete::{
+                addr::{ConcreteStreamAddr, ConcreteStreamType},
+                created_stream::CreatedStreamAndAddr,
+                pool::Pool,
+            },
             proxy_table::StreamProxyConfig,
         },
     };
@@ -27,12 +31,12 @@ mod tests {
     async fn spawn_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
-        ty: StreamType,
-    ) -> StreamProxyConfig {
+        ty: ConcreteStreamType,
+    ) -> StreamProxyConfig<ConcreteStreamType> {
         let crypto = create_random_crypto();
         let proxy = StreamProxy::new(crypto.clone(), None, Pool::empty());
         let proxy_addr = match ty {
-            StreamType::Tcp => {
+            ConcreteStreamType::Tcp => {
                 let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
                 let proxy_addr = server.listener().local_addr().unwrap();
                 join_set.spawn(async move {
@@ -41,7 +45,7 @@ mod tests {
                 });
                 proxy_addr
             }
-            StreamType::Kcp => {
+            ConcreteStreamType::Kcp => {
                 let server = build_kcp_proxy_server(addr, proxy).await.unwrap();
                 let proxy_addr = server.listener().local_addr().unwrap();
                 join_set.spawn(async move {
@@ -50,7 +54,7 @@ mod tests {
                 });
                 proxy_addr
             }
-            StreamType::Mptcp => {
+            ConcreteStreamType::Mptcp => {
                 let server = build_mptcp_proxy_server(addr, proxy).await.unwrap();
                 let proxy_addr = server.listener().local_addr().unwrap();
                 join_set.spawn(async move {
@@ -72,15 +76,15 @@ mod tests {
     async fn spawn_tcp_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
-    ) -> StreamProxyConfig {
-        spawn_proxy(join_set, addr, StreamType::Tcp).await
+    ) -> StreamProxyConfig<ConcreteStreamType> {
+        spawn_proxy(join_set, addr, ConcreteStreamType::Tcp).await
     }
 
     async fn spawn_kcp_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
-    ) -> StreamProxyConfig {
-        spawn_proxy(join_set, addr, StreamType::Kcp).await
+    ) -> StreamProxyConfig<ConcreteStreamType> {
+        spawn_proxy(join_set, addr, ConcreteStreamType::Kcp).await
     }
 
     async fn spawn_greet(
@@ -89,7 +93,7 @@ mod tests {
         req: &[u8],
         resp: &[u8],
         accepts: usize,
-    ) -> StreamAddr {
+    ) -> ConcreteStreamAddr {
         let listener = TcpListener::bind(addr).await.unwrap();
         let greet_addr = listener.local_addr().unwrap();
         let req = req.to_vec();
@@ -114,7 +118,7 @@ mod tests {
         });
         StreamAddr {
             address: greet_addr.into(),
-            stream_type: StreamType::Tcp,
+            stream_type: ConcreteStreamType::Tcp,
         }
     }
 
@@ -210,31 +214,31 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn stress_test_tcp() {
-        stress_test(StreamType::Tcp).await
+        stress_test(ConcreteStreamType::Tcp).await
     }
 
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn stress_test_kcp() {
-        stress_test(StreamType::Kcp).await
+        stress_test(ConcreteStreamType::Kcp).await
     }
 
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn stress_test_mptcp() {
-        stress_test(StreamType::Mptcp).await
+        stress_test(ConcreteStreamType::Mptcp).await
     }
 
-    async fn stress_test(ty: StreamType) {
+    async fn stress_test(ty: ConcreteStreamType) {
         let mut join_set = tokio::task::JoinSet::new();
 
         // Start proxy servers
         let mut proxies = Vec::new();
         for _ in 0..STRESS_CHAINS {
             let proxy_config = match ty {
-                StreamType::Tcp => spawn_tcp_proxy(&mut join_set, "0.0.0.0:0").await,
-                StreamType::Kcp => spawn_kcp_proxy(&mut join_set, "0.0.0.0:0").await,
-                StreamType::Mptcp => spawn_kcp_proxy(&mut join_set, "0.0.0.0:0").await,
+                ConcreteStreamType::Tcp => spawn_tcp_proxy(&mut join_set, "0.0.0.0:0").await,
+                ConcreteStreamType::Kcp => spawn_kcp_proxy(&mut join_set, "0.0.0.0:0").await,
+                ConcreteStreamType::Mptcp => spawn_kcp_proxy(&mut join_set, "0.0.0.0:0").await,
             };
             proxies.push(proxy_config);
         }

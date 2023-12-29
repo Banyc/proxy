@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     net::SocketAddr,
     time::{Duration, Instant, SystemTime},
 };
@@ -21,26 +22,27 @@ pub mod tokio_io;
 
 pub const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
 
-pub struct CopyBidirectional<DS, US> {
+pub struct CopyBidirectional<DS, US, ST> {
     pub downstream: DS,
     pub upstream: US,
     pub payload_crypto: Option<XorCrypto>,
     pub speed_limiter: Limiter,
     pub start: Instant,
-    pub upstream_addr: StreamAddr,
+    pub upstream_addr: StreamAddr<ST>,
     pub upstream_sock_addr: SocketAddr,
     pub downstream_addr: Option<SocketAddr>,
 }
 
-impl<DS, US> CopyBidirectional<DS, US>
+impl<DS, US, ST> CopyBidirectional<DS, US, ST>
 where
     US: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     DS: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    ST: Clone + fmt::Display + Sync + Send + 'static,
 {
     pub async fn serve_as_proxy_server(
         self,
         log_prefix: &str,
-    ) -> (StreamMetrics, Result<(), tokio_io::CopyBiErrorKind>) {
+    ) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
         let (metrics, res) = self.serve_as_proxy_server_no_logs().await;
 
         match &res {
@@ -57,11 +59,14 @@ where
 
     pub async fn serve_as_access_server(
         self,
-        destination: StreamAddr,
-        session_table: StreamSessionTable,
+        destination: StreamAddr<ST>,
+        session_table: StreamSessionTable<ST>,
         upstream_local: Option<SocketAddr>,
         log_prefix: &str,
-    ) -> (StreamProxyMetrics, Result<(), tokio_io::CopyBiErrorKind>) {
+    ) -> (
+        StreamProxyMetrics<ST>,
+        Result<(), tokio_io::CopyBiErrorKind>,
+    ) {
         let session_guard = session_table.set_scope_owned(Session {
             start: SystemTime::now(),
             end: None,
@@ -98,7 +103,7 @@ where
 
     async fn serve_as_proxy_server_no_logs(
         self,
-    ) -> (StreamMetrics, Result<(), tokio_io::CopyBiErrorKind>) {
+    ) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
         let res = copy_bidirectional_with_payload_crypto(
             self.downstream,
             self.upstream,
@@ -142,13 +147,13 @@ where
     }
 }
 
-pub fn get_metrics_from_copy_result(
+pub fn get_metrics_from_copy_result<ST>(
     start: Instant,
-    upstream_addr: StreamAddr,
+    upstream_addr: StreamAddr<ST>,
     upstream_sock_addr: SocketAddr,
     downstream_addr: Option<SocketAddr>,
     result: tokio_io::TimedCopyBidirectionalResult,
-) -> (StreamMetrics, Result<(), tokio_io::CopyBiErrorKind>) {
+) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
     let (bytes_uplink, bytes_downlink) = result.amounts;
 
     counter!("stream.bytes_uplink", bytes_uplink);

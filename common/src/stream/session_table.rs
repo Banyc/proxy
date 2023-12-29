@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    fmt,
     net::SocketAddr,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -10,17 +11,17 @@ use crate::session_table::SessionTable;
 
 use super::addr::StreamAddr;
 
-pub type StreamSessionTable = SessionTable<Session>;
+pub type StreamSessionTable<ST> = SessionTable<Session<ST>>;
 
 #[derive(Debug, Clone)]
-pub struct Session {
+pub struct Session<ST> {
     pub start: SystemTime,
     pub end: Option<SystemTime>,
-    pub destination: StreamAddr,
+    pub destination: StreamAddr<ST>,
     pub upstream_local: Option<SocketAddr>,
 }
 
-impl Tabled for Session {
+impl<ST: fmt::Display> Tabled for Session<ST> {
     const LENGTH: usize = 4;
 
     fn fields(&self) -> Vec<Cow<'_, str>> {

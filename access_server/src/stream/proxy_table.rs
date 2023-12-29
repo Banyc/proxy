@@ -3,7 +3,10 @@ use std::num::NonZeroUsize;
 use common::{
     proxy_table::{ProxyTable, ProxyTableError},
     stream::{
-        concrete::pool::Pool,
+        concrete::{
+            addr::{ConcreteStreamAddrStr, ConcreteStreamType},
+            pool::Pool,
+        },
         proxy_table::{
             StreamProxyConfigBuildError, StreamProxyTable, StreamWeightedProxyChainBuilder,
         },
@@ -17,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamProxyTableBuilder {
-    pub chains: Vec<StreamWeightedProxyChainBuilder>,
+    pub chains: Vec<StreamWeightedProxyChainBuilder<ConcreteStreamAddrStr>>,
     pub trace_rtt: bool,
     pub active_chains: Option<NonZeroUsize>,
 }
@@ -27,7 +30,7 @@ impl StreamProxyTableBuilder {
         self,
         stream_pool: &Pool,
         cancellation: CancellationToken,
-    ) -> Result<StreamProxyTable, StreamProxyTableBuildError> {
+    ) -> Result<StreamProxyTable<ConcreteStreamType>, StreamProxyTableBuildError> {
         let chains = self
             .chains
             .into_iter()

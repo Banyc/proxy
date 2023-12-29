@@ -1,6 +1,7 @@
 use std::{net::SocketAddr, time::Duration};
 
 use metrics::counter;
+use serde::de::DeserializeOwned;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 
@@ -17,10 +18,10 @@ use super::{addr::StreamAddr, header::StreamRequestHeader, IoAddr, IoStream};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
-pub async fn steer<S>(
+pub async fn steer<S, ST: std::fmt::Debug + DeserializeOwned>(
     downstream: &mut S,
     crypto: &XorCrypto,
-) -> Result<Option<StreamAddr>, SteerError>
+) -> Result<Option<StreamAddr<ST>>, SteerError>
 where
     S: IoStream + IoAddr + std::fmt::Debug,
 {
@@ -37,7 +38,7 @@ where
 
     // Decode header
     let mut read_crypto_cursor = XorCryptoCursor::new(crypto);
-    let header: StreamRequestHeader =
+    let header: StreamRequestHeader<ST> =
         timed_read_header_async(downstream, &mut read_crypto_cursor, IO_TIMEOUT)
             .await
             .map_err(|e| {

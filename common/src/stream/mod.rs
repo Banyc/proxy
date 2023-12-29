@@ -34,38 +34,38 @@ pub trait StreamServerHook: loading::Hook {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StreamMetrics {
+pub struct StreamMetrics<ST> {
     pub start: std::time::Instant,
     pub end: std::time::Instant,
     pub bytes_uplink: u64,
     pub bytes_downlink: u64,
-    pub upstream_addr: StreamAddr,
+    pub upstream_addr: StreamAddr<ST>,
     pub upstream_sock_addr: SocketAddr,
     pub downstream_addr: Option<SocketAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SimplifiedStreamMetrics {
+pub struct SimplifiedStreamMetrics<ST> {
     pub start: std::time::Instant,
     pub end: std::time::Instant,
-    pub upstream_addr: StreamAddr,
+    pub upstream_addr: StreamAddr<ST>,
     pub upstream_sock_addr: SocketAddr,
     pub downstream_addr: Option<SocketAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StreamProxyMetrics {
-    pub stream: StreamMetrics,
+pub struct StreamProxyMetrics<ST> {
+    pub stream: StreamMetrics<ST>,
     pub destination: InternetAddr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SimplifiedStreamProxyMetrics {
-    pub stream: SimplifiedStreamMetrics,
+pub struct SimplifiedStreamProxyMetrics<ST> {
+    pub stream: SimplifiedStreamMetrics<ST>,
     pub destination: InternetAddr,
 }
 
-impl Display for StreamMetrics {
+impl<ST: Display> Display for StreamMetrics<ST> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let duration = self.end - self.start;
         let duration = duration.as_secs_f64();
@@ -94,7 +94,7 @@ impl Display for StreamMetrics {
     }
 }
 
-impl Display for SimplifiedStreamMetrics {
+impl<ST: Display> Display for SimplifiedStreamMetrics<ST> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let duration = self.end - self.start;
         let duration = duration.as_secs_f64();
@@ -112,7 +112,7 @@ impl Display for SimplifiedStreamMetrics {
     }
 }
 
-impl Display for StreamProxyMetrics {
+impl<ST: Display> Display for StreamProxyMetrics<ST> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.stream.to_string())?;
         write!(f, ",dt:{}", self.destination)?;
@@ -120,7 +120,7 @@ impl Display for StreamProxyMetrics {
     }
 }
 
-impl Display for SimplifiedStreamProxyMetrics {
+impl<ST: Display> Display for SimplifiedStreamProxyMetrics<ST> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.stream.to_string())?;
         write!(f, ",dt:{}", self.destination)?;

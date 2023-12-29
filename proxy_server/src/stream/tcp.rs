@@ -88,8 +88,7 @@ mod tests {
         header::{codec::write_header_async, heartbeat},
         loading::Server,
         stream::{
-            addr::{StreamAddr, StreamType},
-            header::StreamRequestHeader,
+            addr::StreamAddr, concrete::addr::ConcreteStreamType, header::StreamRequestHeader,
         },
     };
     use tokio::{
@@ -145,7 +144,7 @@ mod tests {
             let header = StreamRequestHeader {
                 upstream: Some(StreamAddr {
                     address: origin_addr.into(),
-                    stream_type: StreamType::Tcp,
+                    stream_type: ConcreteStreamType::Tcp,
                 }),
             };
             let mut crypto_cursor = XorCryptoCursor::new(&crypto);

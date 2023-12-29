@@ -8,8 +8,11 @@ use common::{
     filter::{self, Filter, FilterBuilder},
     loading::{self, Hook},
     stream::{
-        addr::{StreamAddr, StreamType},
-        concrete::{created_stream::CreatedStreamAndAddr, pool::Pool, streams::tcp::TcpServer},
+        addr::StreamAddr,
+        concrete::{
+            addr::ConcreteStreamType, created_stream::CreatedStreamAndAddr, pool::Pool,
+            streams::tcp::TcpServer,
+        },
         io_copy::CopyBidirectional,
         proxy_table::StreamProxyTable,
         session_table::StreamSessionTable,
@@ -50,10 +53,10 @@ impl Socks5ServerTcpAccessServerConfig {
     pub fn into_builder(
         self,
         stream_pool: Pool,
-        proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
+        proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         filters: &HashMap<Arc<str>, Filter>,
         cancellation: CancellationToken,
-        session_table: StreamSessionTable,
+        session_table: StreamSessionTable<ConcreteStreamType>,
     ) -> Result<Socks5ServerTcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -110,13 +113,13 @@ pub enum BuildError {
 #[derive(Debug, Clone)]
 pub struct Socks5ServerTcpAccessServerBuilder {
     listen_addr: Arc<str>,
-    proxy_table: StreamProxyTable,
+    proxy_table: StreamProxyTable<ConcreteStreamType>,
     stream_pool: Pool,
     filter: Filter,
     speed_limit: f64,
     udp_server_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-    session_table: StreamSessionTable,
+    session_table: StreamSessionTable<ConcreteStreamType>,
 }
 
 impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
@@ -151,13 +154,13 @@ impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
 
 #[derive(Debug)]
 pub struct Socks5ServerTcpAccess {
-    proxy_table: StreamProxyTable,
+    proxy_table: StreamProxyTable<ConcreteStreamType>,
     stream_pool: Pool,
     filter: Filter,
     speed_limiter: Limiter,
     udp_listen_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-    session_table: StreamSessionTable,
+    session_table: StreamSessionTable<ConcreteStreamType>,
 }
 
 impl Hook for Socks5ServerTcpAccess {}
@@ -179,13 +182,13 @@ impl StreamServerHook for Socks5ServerTcpAccess {
 
 impl Socks5ServerTcpAccess {
     pub fn new(
-        proxy_table: StreamProxyTable,
+        proxy_table: StreamProxyTable<ConcreteStreamType>,
         stream_pool: Pool,
         filter: Filter,
         speed_limit: f64,
         udp_listen_addr: Option<InternetAddr>,
         users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-        session_table: StreamSessionTable,
+        session_table: StreamSessionTable<ConcreteStreamType>,
     ) -> Self {
         Self {
             proxy_table,
@@ -229,7 +232,7 @@ impl Socks5ServerTcpAccess {
                         speed_limiter,
                         start,
                         upstream_addr: StreamAddr {
-                            stream_type: StreamType::Tcp,
+                            stream_type: ConcreteStreamType::Tcp,
                             address: upstream_addr.clone(),
                         },
                         upstream_sock_addr,
@@ -238,7 +241,7 @@ impl Socks5ServerTcpAccess {
                     let _ = io_copy
                         .serve_as_access_server(
                             StreamAddr {
-                                stream_type: StreamType::Tcp,
+                                stream_type: ConcreteStreamType::Tcp,
                                 address: upstream_addr,
                             },
                             session_table,
@@ -282,7 +285,7 @@ impl Socks5ServerTcpAccess {
             let _ = io_copy
                 .serve_as_access_server(
                     StreamAddr {
-                        stream_type: StreamType::Tcp,
+                        stream_type: ConcreteStreamType::Tcp,
                         address: destination.clone(),
                     },
                     session_table,
@@ -555,7 +558,7 @@ impl Socks5ServerTcpAccess {
             &proxy_chain.chain,
             StreamAddr {
                 address: destination,
-                stream_type: StreamType::Tcp,
+                stream_type: ConcreteStreamType::Tcp,
             },
             &self.stream_pool,
         )

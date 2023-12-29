@@ -2,7 +2,9 @@ use std::{net::SocketAddr, sync::Arc};
 
 use axum::{extract::State, routing::get, Router};
 use clap::Parser;
-use common::{error::AnyResult, session_table::BothSessionTables};
+use common::{
+    error::AnyResult, session_table::BothSessionTables, stream::concrete::addr::ConcreteStreamType,
+};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use server::{
     config::multi_file_config::{spawn_watch_tasks, MultiFileConfigReader},
@@ -27,7 +29,7 @@ async fn main() -> AnyResult {
     let args = Args::parse();
 
     // Monitoring
-    let session_table: BothSessionTables;
+    let session_table: BothSessionTables<ConcreteStreamType>;
     if let Some(monitor_addr) = args.monitor {
         let metrics_handle = PrometheusBuilder::new().install_recorder().unwrap();
         session_table = BothSessionTables::new();
@@ -36,7 +38,9 @@ async fn main() -> AnyResult {
             async fn metrics(metrics_handle: State<PrometheusHandle>) -> String {
                 metrics_handle.render()
             }
-            async fn sessions(State(session_table): State<BothSessionTables>) -> String {
+            async fn sessions(
+                State(session_table): State<BothSessionTables<ConcreteStreamType>>,
+            ) -> String {
                 let mut text = String::new();
 
                 text.push_str("Stream:\n");

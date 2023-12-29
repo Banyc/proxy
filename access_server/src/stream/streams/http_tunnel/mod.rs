@@ -14,8 +14,8 @@ use common::{
     loading,
     session_table::SessionOwnedGuard,
     stream::{
-        addr::{StreamAddr, StreamType},
-        concrete::{pool::Pool, streams::tcp::TcpServer},
+        addr::StreamAddr,
+        concrete::{addr::ConcreteStreamType, pool::Pool, streams::tcp::TcpServer},
         io_copy::{CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
         proxy_table::StreamProxyTable,
         session_table::{Session, StreamSessionTable},
@@ -53,10 +53,10 @@ impl HttpAccessServerConfig {
     pub fn into_builder(
         self,
         stream_pool: Pool,
-        proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
+        proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         filters: &HashMap<Arc<str>, Filter>,
         cancellation: CancellationToken,
-        session_table: StreamSessionTable,
+        session_table: StreamSessionTable<ConcreteStreamType>,
     ) -> Result<HttpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -99,11 +99,11 @@ pub enum BuildError {
 #[derive(Debug, Clone)]
 pub struct HttpAccessServerBuilder {
     listen_addr: Arc<str>,
-    proxy_table: StreamProxyTable,
+    proxy_table: StreamProxyTable<ConcreteStreamType>,
     stream_pool: Pool,
     filter: Filter,
     speed_limit: f64,
-    session_table: StreamSessionTable,
+    session_table: StreamSessionTable<ConcreteStreamType>,
 }
 
 impl loading::Builder for HttpAccessServerBuilder {
@@ -136,20 +136,20 @@ impl loading::Builder for HttpAccessServerBuilder {
 
 #[derive(Debug)]
 pub struct HttpAccess {
-    proxy_table: Arc<StreamProxyTable>,
+    proxy_table: Arc<StreamProxyTable<ConcreteStreamType>>,
     stream_pool: Pool,
     filter: Filter,
     speed_limiter: Limiter,
-    session_table: StreamSessionTable,
+    session_table: StreamSessionTable<ConcreteStreamType>,
 }
 
 impl HttpAccess {
     pub fn new(
-        proxy_table: StreamProxyTable,
+        proxy_table: StreamProxyTable<ConcreteStreamType>,
         stream_pool: Pool,
         filter: Filter,
         speed_limit: f64,
-        session_table: StreamSessionTable,
+        session_table: StreamSessionTable<ConcreteStreamType>,
     ) -> Self {
         Self {
             proxy_table: Arc::new(proxy_table),
@@ -217,7 +217,7 @@ impl HttpAccess {
                     end: None,
                     destination: StreamAddr {
                         address: addr.into(),
-                        stream_type: StreamType::Tcp,
+                        stream_type: ConcreteStreamType::Tcp,
                     },
                     upstream_local: upstream.local_addr().ok(),
                 });
@@ -233,7 +233,7 @@ impl HttpAccess {
             &proxy_chain.chain,
             StreamAddr {
                 address: addr.clone(),
-                stream_type: StreamType::Tcp,
+                stream_type: ConcreteStreamType::Tcp,
             },
             &self.stream_pool,
         )
@@ -244,7 +244,7 @@ impl HttpAccess {
             end: None,
             destination: StreamAddr {
                 address: addr.clone(),
-                stream_type: StreamType::Tcp,
+                stream_type: ConcreteStreamType::Tcp,
             },
             upstream_local: upstream.stream.local_addr().ok(),
         });
@@ -332,7 +332,7 @@ impl HttpAccess {
 async fn tls_http<S>(
     upstream: S,
     req: Request<Incoming>,
-    session_guard: SessionOwnedGuard<Session>,
+    session_guard: SessionOwnedGuard<Session<ConcreteStreamType>>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>
 where
     S: AsyncWrite + AsyncRead + Send + Unpin + 'static,
@@ -373,7 +373,7 @@ async fn upgrade(
     addr: InternetAddr,
     http_connect: Option<HttpConnect>,
     speed_limiter: Limiter,
-    session_table: StreamSessionTable,
+    session_table: StreamSessionTable<ConcreteStreamType>,
 ) {
     let upgraded = match hyper::upgrade::on(req).await {
         Ok(upgraded) => upgraded,
@@ -423,7 +423,7 @@ async fn upgrade(
         speed_limiter,
         start,
         upstream_addr: StreamAddr {
-            stream_type: StreamType::Tcp,
+            stream_type: ConcreteStreamType::Tcp,
             address: addr.clone(),
         },
         upstream_sock_addr: sock_addr,
@@ -432,7 +432,7 @@ async fn upgrade(
     let _ = io_copy
         .serve_as_access_server(
             StreamAddr {
-                stream_type: StreamType::Tcp,
+                stream_type: ConcreteStreamType::Tcp,
                 address: addr,
             },
             session_table,
@@ -472,18 +472,18 @@ impl StreamServerHook for HttpAccess {
 }
 
 struct HttpConnect {
-    proxy_table: Arc<StreamProxyTable>,
+    proxy_table: Arc<StreamProxyTable<ConcreteStreamType>>,
     stream_pool: Pool,
     speed_limiter: Limiter,
-    session_table: StreamSessionTable,
+    session_table: StreamSessionTable<ConcreteStreamType>,
 }
 
 impl HttpConnect {
     pub fn new(
-        proxy_table: Arc<StreamProxyTable>,
+        proxy_table: Arc<StreamProxyTable<ConcreteStreamType>>,
         stream_pool: Pool,
         speed_limiter: Limiter,
-        session_table: StreamSessionTable,
+        session_table: StreamSessionTable<ConcreteStreamType>,
     ) -> Self {
         Self {
             proxy_table,
@@ -506,7 +506,7 @@ impl HttpConnect {
         // Establish proxy chain
         let destination = StreamAddr {
             address: address.clone(),
-            stream_type: StreamType::Tcp,
+            stream_type: ConcreteStreamType::Tcp,
         };
         let proxy_chain = self.proxy_table.choose_chain();
         let upstream = establish(&proxy_chain.chain, destination, &self.stream_pool).await?;
@@ -530,7 +530,7 @@ impl HttpConnect {
                 .serve_as_access_server(
                     StreamAddr {
                         address: address.clone(),
-                        stream_type: StreamType::Tcp,
+                        stream_type: ConcreteStreamType::Tcp,
                     },
                     session_table,
                     upstream_local,

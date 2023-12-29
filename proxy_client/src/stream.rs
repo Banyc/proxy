@@ -10,8 +10,8 @@ use common::{
     },
     proxy_table::{convert_proxies_to_header_crypto_pairs, Tracer},
     stream::{
-        addr::StreamAddr,
         concrete::{
+            addr::{ConcreteStreamAddr, ConcreteStreamType},
             created_stream::CreatedStreamAndAddr,
             pool::{connect_with_pool, ConnectError, Pool},
         },
@@ -26,8 +26,8 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[instrument(skip(proxies, stream_pool))]
 pub async fn establish(
-    proxies: &StreamProxyChain,
-    destination: StreamAddr,
+    proxies: &StreamProxyChain<ConcreteStreamType>,
+    destination: ConcreteStreamAddr,
     stream_pool: &Pool,
 ) -> Result<CreatedStreamAndAddr, StreamEstablishError> {
     // If there are no proxy configs, just connect to the destination
@@ -110,13 +110,13 @@ pub enum StreamEstablishError {
     WriteHeartbeatUpgrade {
         #[source]
         source: HeartbeatError,
-        upstream_addr: StreamAddr,
+        upstream_addr: ConcreteStreamAddr,
     },
     #[error("Failed to read stream request header to upstream: {source}, {upstream_addr}")]
     WriteStreamRequestHeader {
         #[source]
         source: CodecError,
-        upstream_addr: StreamAddr,
+        upstream_addr: ConcreteStreamAddr,
     },
 }
 
@@ -132,9 +132,12 @@ impl StreamTracer {
 }
 
 impl Tracer for StreamTracer {
-    type Address = StreamAddr;
+    type Address = ConcreteStreamAddr;
 
-    async fn trace_rtt(&self, chain: &StreamProxyChain) -> Result<Duration, AnyError> {
+    async fn trace_rtt(
+        &self,
+        chain: &StreamProxyChain<ConcreteStreamType>,
+    ) -> Result<Duration, AnyError> {
         trace_rtt(chain, &self.stream_pool)
             .await
             .map_err(|e| e.into())
@@ -142,7 +145,7 @@ impl Tracer for StreamTracer {
 }
 
 pub async fn trace_rtt(
-    proxies: &StreamProxyChain,
+    proxies: &StreamProxyChain<ConcreteStreamType>,
     stream_pool: &Pool,
 ) -> Result<Duration, TraceError> {
     if proxies.is_empty() {

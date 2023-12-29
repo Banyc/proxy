@@ -2,9 +2,8 @@ use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use once_cell::sync::Lazy;
 
-use crate::stream::addr::StreamType;
-
 use super::{
+    addr::ConcreteStreamType,
     connect::{StreamConnect, StreamConnectExt},
     created_stream::CreatedStream,
     streams::{kcp::KcpConnector, mptcp::MptcpConnector, tcp::TcpConnector},
@@ -31,26 +30,26 @@ impl StreamConnectorTable {
 
     pub async fn connect(
         &self,
-        stream_type: StreamType,
+        stream_type: ConcreteStreamType,
         addr: SocketAddr,
     ) -> io::Result<CreatedStream> {
         match stream_type {
-            StreamType::Tcp => self.tcp.connect(addr).await,
-            StreamType::Kcp => self.kcp.connect(addr).await,
-            StreamType::Mptcp => self.mptcp.connect(addr).await,
+            ConcreteStreamType::Tcp => self.tcp.connect(addr).await,
+            ConcreteStreamType::Kcp => self.kcp.connect(addr).await,
+            ConcreteStreamType::Mptcp => self.mptcp.connect(addr).await,
         }
     }
 
     pub async fn timed_connect(
         &self,
-        stream_type: StreamType,
+        stream_type: ConcreteStreamType,
         addr: SocketAddr,
         timeout: Duration,
     ) -> io::Result<CreatedStream> {
         match stream_type {
-            StreamType::Tcp => self.tcp.timed_connect(addr, timeout).await,
-            StreamType::Kcp => self.kcp.timed_connect(addr, timeout).await,
-            StreamType::Mptcp => self.mptcp.timed_connect(addr, timeout).await,
+            ConcreteStreamType::Tcp => self.tcp.timed_connect(addr, timeout).await,
+            ConcreteStreamType::Kcp => self.kcp.timed_connect(addr, timeout).await,
+            ConcreteStreamType::Mptcp => self.mptcp.timed_connect(addr, timeout).await,
         }
     }
 }

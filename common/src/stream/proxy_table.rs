@@ -10,15 +10,18 @@ use super::{addr::StreamAddrStr, StreamAddr};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StreamProxyConfigBuilder {
-    pub address: StreamAddrStr,
+pub struct StreamProxyConfigBuilder<SAS> {
+    pub address: SAS,
     pub xor_key: XorCryptoBuilder,
 }
 
-impl StreamProxyConfigBuilder {
-    pub fn build(self) -> Result<StreamProxyConfig, StreamProxyConfigBuildError> {
+impl<SAS> StreamProxyConfigBuilder<SAS> {
+    pub fn build<ST>(self) -> Result<StreamProxyConfig<ST>, StreamProxyConfigBuildError>
+    where
+        SAS: StreamAddrStr<StreamType = ST>,
+    {
         let crypto = self.xor_key.build()?;
-        let address = self.address.0;
+        let address = self.address.into_inner();
         Ok(ProxyConfig { address, crypto })
     }
 }
@@ -31,14 +34,17 @@ pub enum StreamProxyConfigBuildError {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StreamWeightedProxyChainBuilder {
+pub struct StreamWeightedProxyChainBuilder<SAS> {
     pub weight: usize,
-    pub chain: Vec<StreamProxyConfigBuilder>,
+    pub chain: Vec<StreamProxyConfigBuilder<SAS>>,
     pub payload_xor_key: Option<XorCryptoBuilder>,
 }
 
-impl StreamWeightedProxyChainBuilder {
-    pub fn build(self) -> Result<StreamWeightedProxyChain, StreamProxyConfigBuildError> {
+impl<SAS> StreamWeightedProxyChainBuilder<SAS> {
+    pub fn build<ST>(self) -> Result<StreamWeightedProxyChain<ST>, StreamProxyConfigBuildError>
+    where
+        SAS: StreamAddrStr<StreamType = ST>,
+    {
         let payload_crypto = match self.payload_xor_key {
             Some(c) => Some(c.build()?),
             None => None,
@@ -56,7 +62,7 @@ impl StreamWeightedProxyChainBuilder {
     }
 }
 
-pub type StreamProxyConfig = ProxyConfig<StreamAddr>;
-pub type StreamProxyChain = [StreamProxyConfig];
-pub type StreamWeightedProxyChain = WeightedProxyChain<StreamAddr>;
-pub type StreamProxyTable = ProxyTable<StreamAddr>;
+pub type StreamProxyConfig<ST> = ProxyConfig<StreamAddr<ST>>;
+pub type StreamProxyChain<ST> = [StreamProxyConfig<ST>];
+pub type StreamWeightedProxyChain<ST> = WeightedProxyChain<StreamAddr<ST>>;
+pub type StreamProxyTable<ST> = ProxyTable<StreamAddr<ST>>;

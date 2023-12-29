@@ -4,7 +4,10 @@ use access_server::{AccessServerConfig, AccessServerLoader};
 use common::{
     error::{AnyError, AnyResult},
     session_table::BothSessionTables,
-    stream::concrete::pool::{Pool, PoolBuilder},
+    stream::concrete::{
+        addr::ConcreteStreamType,
+        pool::{Pool, PoolBuilder},
+    },
 };
 use config::ConfigReader;
 use proxy_server::{ProxyServerConfig, ProxyServerLoader};
@@ -18,7 +21,7 @@ pub mod config;
 pub async fn serve<CR>(
     notify_rx: Arc<tokio::sync::Notify>,
     config_reader: CR,
-    session_table: BothSessionTables,
+    session_table: BothSessionTables<ConcreteStreamType>,
 ) -> Result<(), ServeError>
 where
     CR: ConfigReader<Config = ServerConfig>,
@@ -94,7 +97,7 @@ async fn read_and_load_config<CR>(
     server_loader: &mut ServerLoader,
     stream_pool: Pool,
     cancellation: CancellationToken,
-    session_table: BothSessionTables,
+    session_table: BothSessionTables<ConcreteStreamType>,
 ) -> Result<(), ServeError>
 where
     CR: ConfigReader<Config = ServerConfig>,
@@ -132,7 +135,7 @@ pub async fn load_and_clean(
     server_loader: &mut ServerLoader,
     stream_pool: Pool,
     cancellation: CancellationToken,
-    session_table: BothSessionTables,
+    session_table: BothSessionTables<ConcreteStreamType>,
 ) -> AnyResult {
     stream_pool.replaced_by(config.global.stream_pool.build()?);
 

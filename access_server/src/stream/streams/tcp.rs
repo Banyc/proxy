@@ -5,8 +5,11 @@ use common::{
     config::SharableConfig,
     loading,
     stream::{
-        addr::{StreamAddr, StreamAddrStr},
-        concrete::{pool::Pool, streams::tcp::TcpServer},
+        concrete::{
+            addr::{ConcreteStreamAddr, ConcreteStreamAddrStr, ConcreteStreamType},
+            pool::Pool,
+            streams::tcp::TcpServer,
+        },
         io_copy::CopyBidirectional,
         proxy_table::StreamProxyTable,
         session_table::StreamSessionTable,
@@ -26,7 +29,7 @@ use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBui
 #[serde(deny_unknown_fields)]
 pub struct TcpAccessServerConfig {
     pub listen_addr: Arc<str>,
-    pub destination: StreamAddrStr,
+    pub destination: ConcreteStreamAddrStr,
     pub proxy_table: SharableConfig<StreamProxyTableBuilder>,
     pub speed_limit: Option<f64>,
 }
@@ -35,9 +38,9 @@ impl TcpAccessServerConfig {
     pub fn into_builder(
         self,
         stream_pool: Pool,
-        proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
+        proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         cancellation: CancellationToken,
-        session_table: StreamSessionTable,
+        session_table: StreamSessionTable<ConcreteStreamType>,
     ) -> Result<TcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -69,11 +72,11 @@ pub enum BuildError {
 #[derive(Debug, Clone)]
 pub struct TcpAccessServerBuilder {
     listen_addr: Arc<str>,
-    destination: StreamAddrStr,
-    proxy_table: StreamProxyTable,
+    destination: ConcreteStreamAddrStr,
+    proxy_table: StreamProxyTable<ConcreteStreamType>,
     stream_pool: Pool,
     speed_limit: f64,
-    session_table: StreamSessionTable,
+    session_table: StreamSessionTable<ConcreteStreamType>,
 }
 
 impl loading::Builder for TcpAccessServerBuilder {
@@ -105,20 +108,20 @@ impl loading::Builder for TcpAccessServerBuilder {
 
 #[derive(Debug)]
 pub struct TcpAccess {
-    proxy_table: StreamProxyTable,
-    destination: StreamAddr,
+    proxy_table: StreamProxyTable<ConcreteStreamType>,
+    destination: ConcreteStreamAddr,
     stream_pool: Pool,
     speed_limiter: Limiter,
-    session_table: StreamSessionTable,
+    session_table: StreamSessionTable<ConcreteStreamType>,
 }
 
 impl TcpAccess {
     pub fn new(
-        proxy_table: StreamProxyTable,
-        destination: StreamAddr,
+        proxy_table: StreamProxyTable<ConcreteStreamType>,
+        destination: ConcreteStreamAddr,
         stream_pool: Pool,
         speed_limit: f64,
-        session_table: StreamSessionTable,
+        session_table: StreamSessionTable<ConcreteStreamType>,
     ) -> Self {
         Self {
             proxy_table,

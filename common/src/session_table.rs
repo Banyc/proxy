@@ -5,12 +5,12 @@ use slotmap::{new_key_type, HopSlotMap};
 use crate::{stream::session_table::StreamSessionTable, udp::session_table::UdpSessionTable};
 
 #[derive(Debug, Clone)]
-pub struct BothSessionTables {
-    stream: StreamSessionTable,
+pub struct BothSessionTables<ST> {
+    stream: StreamSessionTable<ST>,
     udp: UdpSessionTable,
 }
 
-impl BothSessionTables {
+impl<ST> BothSessionTables<ST> {
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -28,7 +28,7 @@ impl BothSessionTables {
     }
 
     #[must_use]
-    pub fn stream(&self) -> &StreamSessionTable {
+    pub fn stream(&self) -> &StreamSessionTable<ST> {
         &self.stream
     }
 
@@ -38,7 +38,7 @@ impl BothSessionTables {
     }
 }
 
-impl Default for BothSessionTables {
+impl<ST> Default for BothSessionTables<ST> {
     fn default() -> Self {
         Self::new()
     }

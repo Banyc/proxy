@@ -5,7 +5,7 @@ use common::{
     filter::{self, FilterBuilder, MatcherBuilder},
     loading,
     session_table::BothSessionTables,
-    stream::concrete::pool::Pool,
+    stream::concrete::{addr::ConcreteStreamType, pool::Pool},
 };
 use serde::{Deserialize, Serialize};
 use socks5::server::{
@@ -70,7 +70,7 @@ impl AccessServerConfig {
         loader: &mut AccessServerLoader,
         stream_pool: &Pool,
         cancellation: CancellationToken,
-        session_table: BothSessionTables,
+        session_table: BothSessionTables<ConcreteStreamType>,
     ) -> AnyResult {
         // Shared
         let stream_proxy_tables = self

@@ -6,9 +6,9 @@ use tokio::{
     net::TcpStream,
 };
 
-use crate::stream::{addr::StreamAddr, IoAddr, IoStream};
+use crate::stream::{IoAddr, IoStream};
 
-use super::streams::kcp::AddressedKcpStream;
+use super::{addr::ConcreteStreamAddr, streams::kcp::AddressedKcpStream};
 
 #[derive(Debug)]
 pub enum CreatedStream {
@@ -96,6 +96,6 @@ impl AsyncRead for CreatedStream {
 #[derive(Debug)]
 pub struct CreatedStreamAndAddr {
     pub stream: CreatedStream,
-    pub addr: StreamAddr,
+    pub addr: ConcreteStreamAddr,
     pub sock_addr: SocketAddr,
 }

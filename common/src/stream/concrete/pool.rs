@@ -17,13 +17,14 @@ use tracing::warn;
 use crate::{
     addr::ParseInternetAddrError,
     header::heartbeat::{send_noop, HeartbeatError},
-    stream::{
-        addr::{StreamAddr, StreamAddrStr},
-        IoAddr,
-    },
+    stream::IoAddr,
 };
 
-use super::{connector_table::STREAM_CONNECTOR_TABLE, created_stream::CreatedStream};
+use super::{
+    addr::{ConcreteStreamAddr, ConcreteStreamAddrStr},
+    connector_table::STREAM_CONNECTOR_TABLE,
+    created_stream::CreatedStream,
+};
 
 const QUEUE_LEN: usize = 16;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
@@ -31,7 +32,7 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PoolBuilder(#[serde(default)] pub Vec<StreamAddrStr>);
+pub struct PoolBuilder(#[serde(default)] pub Vec<ConcreteStreamAddrStr>);
 
 impl PoolBuilder {
     pub fn new() -> Self {
@@ -57,7 +58,10 @@ struct SocketCell {
 }
 
 impl SocketCell {
-    pub async fn create(addr: StreamAddr, heartbeat_interval: Duration) -> io::Result<Self> {
+    pub async fn create(
+        addr: ConcreteStreamAddr,
+        heartbeat_interval: Duration,
+    ) -> io::Result<Self> {
         let sock_addr = addr.address.to_socket_addr().await?;
         let stream = STREAM_CONNECTOR_TABLE
             .timed_connect(addr.stream_type, sock_addr, HEARTBEAT_INTERVAL)
@@ -132,7 +136,7 @@ impl SocketQueue {
 
     async fn insert(
         queue: Arc<RwLock<VecDeque<SocketCell>>>,
-        addr: StreamAddr,
+        addr: ConcreteStreamAddr,
         heartbeat_interval: Duration,
     ) -> io::Result<()> {
         let cell = SocketCell::create(addr, heartbeat_interval).await?;
@@ -141,7 +145,7 @@ impl SocketQueue {
         Ok(())
     }
 
-    pub fn spawn_insert(&mut self, addr: StreamAddr, heartbeat_interval: Duration) {
+    pub fn spawn_insert(&mut self, addr: ConcreteStreamAddr, heartbeat_interval: Duration) {
         let queue = self.queue.clone();
         self.task_handles.spawn(async move {
             loop {
@@ -158,7 +162,7 @@ impl SocketQueue {
 
     pub fn try_swap(
         &mut self,
-        addr: &StreamAddr,
+        addr: &ConcreteStreamAddr,
         heartbeat_interval: Duration,
     ) -> Option<CreatedStream> {
         let res = {
@@ -203,14 +207,17 @@ impl Pool {
 
     pub fn new<I>(addrs: I) -> Self
     where
-        I: Iterator<Item = StreamAddr>,
+        I: Iterator<Item = ConcreteStreamAddr>,
     {
         Self {
             pool: Arc::new(Arc::new(PoolInner::new(addrs)).into()),
         }
     }
 
-    pub async fn open_stream(&self, addr: &StreamAddr) -> Option<(CreatedStream, SocketAddr)> {
+    pub async fn open_stream(
+        &self,
+        addr: &ConcreteStreamAddr,
+    ) -> Option<(CreatedStream, SocketAddr)> {
         self.pool.load().open_stream(addr).await
     }
 
@@ -221,7 +228,7 @@ impl Pool {
 
 #[derive(Debug)]
 struct PoolInner {
-    pool: HashMap<StreamAddr, Mutex<SocketQueue>>,
+    pool: HashMap<ConcreteStreamAddr, Mutex<SocketQueue>>,
 }
 
 impl PoolInner {
@@ -233,7 +240,7 @@ impl PoolInner {
 
     pub fn new<I>(addrs: I) -> Self
     where
-        I: Iterator<Item = StreamAddr>,
+        I: Iterator<Item = ConcreteStreamAddr>,
     {
         let mut pool = HashMap::new();
         addrs.for_each(|addr| {
@@ -247,7 +254,10 @@ impl PoolInner {
         Self { pool }
     }
 
-    pub async fn open_stream(&self, addr: &StreamAddr) -> Option<(CreatedStream, SocketAddr)> {
+    pub async fn open_stream(
+        &self,
+        addr: &ConcreteStreamAddr,
+    ) -> Option<(CreatedStream, SocketAddr)> {
         let stream = {
             let mut queue = match self.pool.get(addr).and_then(|queue| queue.try_lock().ok()) {
                 Some(queue) => queue,
@@ -269,7 +279,7 @@ impl PoolInner {
 }
 
 pub async fn connect_with_pool(
-    addr: &StreamAddr,
+    addr: &ConcreteStreamAddr,
     stream_pool: &Pool,
     allow_loopback: bool,
     timeout: Duration,
@@ -313,18 +323,18 @@ pub enum ConnectError {
     ResolveAddr {
         #[source]
         source: io::Error,
-        addr: StreamAddr,
+        addr: ConcreteStreamAddr,
     },
     #[error("Refused to connect to loopback address: {addr}, {sock_addr}")]
     Loopback {
-        addr: StreamAddr,
+        addr: ConcreteStreamAddr,
         sock_addr: SocketAddr,
     },
     #[error("Failed to connect to address: {source}, {addr}, {sock_addr}")]
     ConnectAddr {
         #[source]
         source: io::Error,
-        addr: StreamAddr,
+        addr: ConcreteStreamAddr,
         sock_addr: SocketAddr,
     },
 }
@@ -333,7 +343,7 @@ pub enum ConnectError {
 mod tests {
     use tokio::{io::AsyncReadExt, net::TcpListener, task::JoinSet};
 
-    use crate::stream::addr::StreamType;
+    use crate::stream::{addr::StreamAddr, concrete::addr::ConcreteStreamType};
 
     use super::*;
 
@@ -361,7 +371,7 @@ mod tests {
         let addr = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
         let addr = StreamAddr {
             address: addr.into(),
-            stream_type: StreamType::Tcp,
+            stream_type: ConcreteStreamType::Tcp,
         };
         let pool = Pool::new(vec![addr.clone()].into_iter());
         let mut join_set = JoinSet::new();
@@ -380,7 +390,7 @@ mod tests {
         let addr = spawn_listener().await;
         let addr = StreamAddr {
             address: addr.into(),
-            stream_type: StreamType::Tcp,
+            stream_type: ConcreteStreamType::Tcp,
         };
         let pool = Pool::new(vec![addr.clone()].into_iter());
         for _ in 0..10 {
