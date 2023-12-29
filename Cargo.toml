@@ -13,6 +13,7 @@ members = [
 metrics = "0.22.0"
 metrics-exporter-prometheus = "0.13.0"
 mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "44b3d6366e6580e80f70607263ed6065b493b78f" }
+openssl = { version = "0.10", features = ["vendored"] }
 serde = "1.0.193"
 tabled = "0.15.0"
 tokio = "1.35.1"
