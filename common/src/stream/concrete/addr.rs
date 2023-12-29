@@ -9,7 +9,7 @@ use crate::{
 
 pub type ConcreteStreamAddr = StreamAddr<ConcreteStreamType>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, enum_map::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConcreteStreamType {
     Tcp,

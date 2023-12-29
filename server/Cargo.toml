@@ -11,20 +11,20 @@ path = "src/main.rs"
 
 [dependencies]
 access_server = { path = "../access_server" }
-axum = { version = "0.7.2" }
-clap = { version = "4.4.6", features = ["derive"] }
+axum = { version = "0.7" }
+clap = { version = "4", features = ["derive"] }
 common = { path = "../common" }
-file_watcher_tokio = "0.3.0"
+file_watcher_tokio = "0.3"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
-notify = "6.1.1"
+notify = "6"
 proxy_server = { path = "../proxy_server" }
 serde = { workspace = true, features = ["derive"] }
 tabled = { workspace = true }
-thiserror = "1.0.50"
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true }
-toml = "0.8.0"
+toml = "0.8"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 openssl = { workspace = true }

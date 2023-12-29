@@ -5,16 +5,16 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-speed-limit = { version = "0.4.1", features = ["tokio"] }
-bytes = "1.5.0"
+async-speed-limit = { workspace = true }
+bytes = { workspace = true }
 common = { path = "../common" }
-http-body-util = "0.1.0"
-hyper = { version = "1.0.0", features = ["full"] }
-hyper-util = { version = "0.1.1", features = ["tokio"] }
-pin-project-lite = "0.2.13"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+pin-project-lite = "0.2"
 proxy_client = { path = "../proxy_client" }
 serde = { workspace = true, features = ["derive"] }
-thiserror = "1.0.50"
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
