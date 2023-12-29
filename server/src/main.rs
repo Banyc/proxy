@@ -79,11 +79,10 @@ async fn main() -> AnyResult {
                 .route("/sessions", get(sessions))
                 .with_state(session_table)
                 .route("/health", get(|| async { Ok::<_, ()>(()) }));
-            let server = axum::Server::bind(&monitor_addr).serve(router.into_make_service());
-            info!(
-                "Monitoring HTTP server listening addr: {}",
-                server.local_addr()
-            );
+            let listener = tokio::net::TcpListener::bind(&monitor_addr).await.unwrap();
+            let listen_addr = listener.local_addr().unwrap();
+            let server = axum::serve(listener, router.into_make_service());
+            info!("Monitoring HTTP server listening addr: {listen_addr}");
             server.await.unwrap();
         });
     } else {

@@ -182,7 +182,7 @@ pub async fn trace_rtt(
 
     let end = Instant::now();
 
-    counter!("stream.traces", 1);
+    counter!("stream.traces").increment(1);
     Ok(end.duration_since(start))
 }
 

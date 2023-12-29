@@ -44,7 +44,7 @@ pub async fn steer(
                     );
                 };
             });
-            counter!("udp.echoes", 1);
+            counter!("udp.echoes").increment(1);
             Ok(None)
         }
         Err(err) => {

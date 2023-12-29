@@ -8,3 +8,15 @@ members = [
     "server",
     "tests",
 ]
+
+[workspace.dependencies]
+metrics = "0.22.0"
+metrics-exporter-prometheus = "0.13.0"
+mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "44b3d6366e6580e80f70607263ed6065b493b78f" }
+serde = "1.0.193"
+tabled = "0.15.0"
+tokio = "1.35.1"
+tokio-util = "0.7.10"
+tokio_kcp = "0.9.6"
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"

@@ -356,7 +356,7 @@ pub async fn trace_rtt(proxies: &UdpProxyChain) -> Result<Duration, TraceError> 
         }
     }
 
-    counter!("udp.traces", 1);
+    counter!("udp.traces").increment(1);
     Ok(end.duration_since(start))
 }
 

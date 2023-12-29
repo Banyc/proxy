@@ -68,7 +68,7 @@ impl SocketCell {
             .await?;
         let cell = Arc::new(TokioRwLock::new(Some(stream)));
         let mut task_handle = JoinSet::new();
-        counter!("stream_pool.put_streams", 1);
+        counter!("stream_pool.put_streams").increment(1);
         task_handle.spawn({
             let cell = Arc::clone(&cell);
             async move {
@@ -85,7 +85,7 @@ impl SocketCell {
                             warn!(?e, %addr, "Stream pool failed to send noop heartbeat");
                             // Drop the stream
                             cell.take();
-                            counter!("stream_pool.dead_streams", 1);
+                            counter!("stream_pool.dead_streams").increment(1);
                             return Err(e);
                         }
                     }
@@ -106,7 +106,7 @@ impl SocketCell {
         };
         match cell.take() {
             Some(stream) => {
-                counter!("stream_pool.taken_streams", 1);
+                counter!("stream_pool.taken_streams").increment(1);
                 TryTake::Ok(stream)
             }
             None => TryTake::Killed,
@@ -273,7 +273,7 @@ impl PoolInner {
             Ok(x) => x,
             Err(_) => return None,
         };
-        counter!("stream_pool.opened_streams", 1);
+        counter!("stream_pool.opened_streams").increment(1);
         Some((stream, peer_addr))
     }
 }

@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_speed_limit::Limiter;
-use metrics::{counter, decrement_gauge, increment_gauge};
+use metrics::{counter, gauge};
 use scopeguard::defer;
 use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
@@ -129,9 +129,9 @@ where
     R: UdpRecv + Send + 'static,
     W: UdpSend + Send + 'static,
 {
-    counter!("udp.io_copies", 1);
-    increment_gauge!("udp.current_io_copies", 1.);
-    defer!(decrement_gauge!("udp.current_io_copies", 1.));
+    counter!("udp.io_copies").increment(1);
+    gauge!("udp.current_io_copies").increment(1.);
+    defer!(gauge!("udp.current_io_copies").decrement(1.));
 
     let start = std::time::Instant::now();
 
@@ -284,22 +284,11 @@ where
         *last_downlink_packet.read().unwrap(),
         *last_uplink_packet.read().unwrap(),
     );
-    counter!(
-        "udp.io_copy.bytes_uplink",
-        bytes_uplink.load(Ordering::Relaxed)
-    );
-    counter!(
-        "udp.io_copy.bytes_downlink",
-        bytes_downlink.load(Ordering::Relaxed)
-    );
-    counter!(
-        "udp.io_copy.packets_uplink",
-        packets_uplink.load(Ordering::Relaxed) as _
-    );
-    counter!(
-        "udp.io_copy.packets_downlink",
-        packets_downlink.load(Ordering::Relaxed) as _
-    );
+    counter!("udp.io_copy.bytes_uplink").increment(bytes_uplink.load(Ordering::Relaxed));
+    counter!("udp.io_copy.bytes_downlink").increment(bytes_downlink.load(Ordering::Relaxed));
+    counter!("udp.io_copy.packets_uplink").increment(packets_uplink.load(Ordering::Relaxed) as _);
+    counter!("udp.io_copy.packets_downlink")
+        .increment(packets_downlink.load(Ordering::Relaxed) as _);
     Ok(FlowMetrics {
         flow,
         start,

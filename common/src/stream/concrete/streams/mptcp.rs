@@ -82,7 +82,7 @@ where
                             continue;
                         }
                     };
-                    counter!("stream.mptcp.accepts", 1);
+                    counter!("stream.mptcp.accepts").increment(1);
                     // Arc hook
                     let hook = Arc::clone(&hook);
                     tokio::spawn(async move {
@@ -141,7 +141,7 @@ pub struct MptcpConnector;
 impl StreamConnect for MptcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
         let stream = MptcpStream::connect(addr, NonZeroUsize::new(STREAMS).unwrap()).await?;
-        counter!("stream.mptcp.connects", 1);
+        counter!("stream.mptcp.connects").increment(1);
         Ok(CreatedStream::Mptcp(stream))
     }
 }

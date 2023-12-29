@@ -83,7 +83,7 @@ where
                             continue;
                         }
                     };
-                    counter!("stream.tcp.accepts", 1);
+                    counter!("stream.tcp.accepts").increment(1);
                     // Arc hook
                     let hook = Arc::clone(&hook);
                     tokio::spawn(async move {
@@ -132,7 +132,7 @@ pub struct TcpConnector;
 impl StreamConnect for TcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
         let stream = TcpStream::connect(addr).await?;
-        counter!("stream.tcp.connects", 1);
+        counter!("stream.tcp.connects").increment(1);
         Ok(CreatedStream::Tcp(stream))
     }
 }

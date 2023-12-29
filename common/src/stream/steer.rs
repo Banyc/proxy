@@ -66,7 +66,7 @@ where
                 })?;
             let _ = tokio::time::timeout(IO_TIMEOUT, downstream.flush()).await;
 
-            counter!("stream.echoes", 1);
+            counter!("stream.echoes").increment(1);
             return Ok(None);
         }
     };
