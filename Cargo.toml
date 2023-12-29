@@ -14,7 +14,7 @@ async-speed-limit = { version = "0.4", features = ["tokio"] }
 bincode = "1"
 bytes = "1"
 metrics = "0.22"
-metrics-exporter-prometheus = "0.13"
+metrics-exporter-prometheus = { version = "0.13", default-features = false }
 mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "44b3d6366e6580e80f70607263ed6065b493b78f" }
 openssl = "0.10"
 serde = "1"
