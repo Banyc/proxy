@@ -1,17 +1,15 @@
 use std::{collections::HashMap, io, sync::Arc};
 
 use async_speed_limit::Limiter;
-use async_trait::async_trait;
 use common::{
     config::SharableConfig,
     loading,
     stream::{
         addr::{StreamAddr, StreamAddrStr},
+        concrete::{pool::Pool, streams::tcp::TcpServer},
         io_copy::CopyBidirectional,
-        pool::Pool,
         proxy_table::StreamProxyTable,
         session_table::StreamSessionTable,
-        streams::tcp::TcpServer,
         IoAddr, IoStream, StreamServerHook,
     },
 };
@@ -78,7 +76,6 @@ pub struct TcpAccessServerBuilder {
     session_table: StreamSessionTable,
 }
 
-#[async_trait]
 impl loading::Builder for TcpAccessServerBuilder {
     type Hook = TcpAccess;
     type Server = TcpServer<Self::Hook>;
@@ -187,7 +184,6 @@ pub enum ProxyError {
 
 impl loading::Hook for TcpAccess {}
 
-#[async_trait]
 impl StreamServerHook for TcpAccess {
     #[instrument(skip(self, stream))]
     async fn handle_stream<S>(&self, stream: S)

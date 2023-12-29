@@ -6,7 +6,6 @@ edition = "2021"
 
 [dependencies]
 async-speed-limit = { version = "0.4.1", features = ["tokio"] }
-async-trait = "0.1.73"
 bytes = "1.5.0"
 common = { path = "../common" }
 http-body-util = "0.1.0"

@@ -1,6 +1,6 @@
 use std::io;
 
-use common::{error::AnyResult, loading, stream::pool::Pool};
+use common::{error::AnyResult, loading, stream::concrete::pool::Pool};
 use serde::Deserialize;
 use stream::{
     kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, tcp::TcpProxyServerConfig,

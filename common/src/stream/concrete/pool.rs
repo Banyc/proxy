@@ -10,20 +10,20 @@ use std::{
 use arc_swap::ArcSwap;
 use metrics::counter;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tokio::{sync::RwLock as TokioRwLock, task::JoinSet};
 use tracing::warn;
 
 use crate::{
-    addr::{InternetAddr, ParseInternetAddrError},
+    addr::ParseInternetAddrError,
     header::heartbeat::{send_noop, HeartbeatError},
-    stream::CreatedStream,
+    stream::{
+        addr::{StreamAddr, StreamAddrStr},
+        IoAddr,
+    },
 };
 
-use super::{
-    addr::StreamAddrStr,
-    connect::{ArcStreamConnect, STREAM_CONNECTOR_TABLE},
-    IoAddr, StreamAddr,
-};
+use super::{connector_table::STREAM_CONNECTOR_TABLE, created_stream::CreatedStream};
 
 const QUEUE_LEN: usize = 16;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
@@ -57,14 +57,10 @@ struct SocketCell {
 }
 
 impl SocketCell {
-    pub async fn create(
-        connector: &ArcStreamConnect,
-        addr: InternetAddr,
-        heartbeat_interval: Duration,
-    ) -> io::Result<Self> {
-        let sock_addr = addr.to_socket_addr().await?;
-        let stream = connector
-            .timed_connect(sock_addr, HEARTBEAT_INTERVAL)
+    pub async fn create(addr: StreamAddr, heartbeat_interval: Duration) -> io::Result<Self> {
+        let sock_addr = addr.address.to_socket_addr().await?;
+        let stream = STREAM_CONNECTOR_TABLE
+            .timed_connect(addr.stream_type, sock_addr, HEARTBEAT_INTERVAL)
             .await?;
         let cell = Arc::new(TokioRwLock::new(Some(stream)));
         let mut task_handle = JoinSet::new();
@@ -136,27 +132,21 @@ impl SocketQueue {
 
     async fn insert(
         queue: Arc<RwLock<VecDeque<SocketCell>>>,
-        connector: &ArcStreamConnect,
-        addr: InternetAddr,
+        addr: StreamAddr,
         heartbeat_interval: Duration,
     ) -> io::Result<()> {
-        let cell = SocketCell::create(connector, addr, heartbeat_interval).await?;
+        let cell = SocketCell::create(addr, heartbeat_interval).await?;
         let mut queue = queue.write().unwrap();
         queue.push_back(cell);
         Ok(())
     }
 
-    pub fn spawn_insert(
-        &mut self,
-        connector: ArcStreamConnect,
-        addr: InternetAddr,
-        heartbeat_interval: Duration,
-    ) {
+    pub fn spawn_insert(&mut self, addr: StreamAddr, heartbeat_interval: Duration) {
         let queue = self.queue.clone();
         self.task_handles.spawn(async move {
             loop {
                 let queue = queue.clone();
-                match Self::insert(queue, &connector, addr.clone(), heartbeat_interval).await {
+                match Self::insert(queue, addr.clone(), heartbeat_interval).await {
                     Ok(()) => break,
                     Err(_e) => {
                         tokio::time::sleep(RETRY_INTERVAL).await;
@@ -168,8 +158,7 @@ impl SocketQueue {
 
     pub fn try_swap(
         &mut self,
-        connector: &ArcStreamConnect,
-        addr: &InternetAddr,
+        addr: &StreamAddr,
         heartbeat_interval: Duration,
     ) -> Option<CreatedStream> {
         let res = {
@@ -194,7 +183,7 @@ impl SocketQueue {
         };
 
         // Replenish
-        self.spawn_insert(Arc::clone(connector), addr.clone(), heartbeat_interval);
+        self.spawn_insert(addr.clone(), heartbeat_interval);
 
         res
     }
@@ -246,24 +235,14 @@ impl PoolInner {
     where
         I: Iterator<Item = StreamAddr>,
     {
-        fn add_queue(pool: &mut HashMap<StreamAddr, Mutex<SocketQueue>>, addr: StreamAddr) {
+        let mut pool = HashMap::new();
+        addrs.for_each(|addr| {
             let mut queue = SocketQueue::new();
-            let connector = {
-                let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type);
-                Arc::clone(connector)
-            };
             for _ in 0..QUEUE_LEN {
-                queue.spawn_insert(
-                    Arc::clone(&connector),
-                    addr.address.clone(),
-                    HEARTBEAT_INTERVAL,
-                );
+                queue.spawn_insert(addr.clone(), HEARTBEAT_INTERVAL);
             }
             pool.insert(addr, Mutex::new(queue));
-        }
-
-        let mut pool = HashMap::new();
-        addrs.for_each(|addr| add_queue(&mut pool, addr));
+        });
 
         Self { pool }
     }
@@ -274,8 +253,7 @@ impl PoolInner {
                 Some(queue) => queue,
                 None => return None,
             };
-            let connector = STREAM_CONNECTOR_TABLE.get(addr.stream_type);
-            queue.try_swap(connector, &addr.address, HEARTBEAT_INTERVAL)
+            queue.try_swap(addr, HEARTBEAT_INTERVAL)
         };
         let stream = match stream {
             Some(x) => x,
@@ -288,6 +266,67 @@ impl PoolInner {
         counter!("stream_pool.opened_streams", 1);
         Some((stream, peer_addr))
     }
+}
+
+pub async fn connect_with_pool(
+    addr: &StreamAddr,
+    stream_pool: &Pool,
+    allow_loopback: bool,
+    timeout: Duration,
+) -> Result<(CreatedStream, SocketAddr), ConnectError> {
+    let stream = stream_pool.open_stream(addr).await;
+    let ret = match stream {
+        Some((stream, sock_addr)) => (stream, sock_addr),
+        None => {
+            let sock_addr =
+                addr.address
+                    .to_socket_addr()
+                    .await
+                    .map_err(|e| ConnectError::ResolveAddr {
+                        source: e,
+                        addr: addr.clone(),
+                    })?;
+            if !allow_loopback && sock_addr.ip().is_loopback() {
+                // Prevent connections to localhost
+                return Err(ConnectError::Loopback {
+                    addr: addr.clone(),
+                    sock_addr,
+                });
+            }
+            let stream = STREAM_CONNECTOR_TABLE
+                .timed_connect(addr.stream_type, sock_addr, timeout)
+                .await
+                .map_err(|e| ConnectError::ConnectAddr {
+                    source: e,
+                    addr: addr.clone(),
+                    sock_addr,
+                })?;
+            (stream, sock_addr)
+        }
+    };
+    Ok(ret)
+}
+
+#[derive(Debug, Error)]
+pub enum ConnectError {
+    #[error("Failed to resolve address: {source}, {addr}")]
+    ResolveAddr {
+        #[source]
+        source: io::Error,
+        addr: StreamAddr,
+    },
+    #[error("Refused to connect to loopback address: {addr}, {sock_addr}")]
+    Loopback {
+        addr: StreamAddr,
+        sock_addr: SocketAddr,
+    },
+    #[error("Failed to connect to address: {source}, {addr}, {sock_addr}")]
+    ConnectAddr {
+        #[source]
+        source: io::Error,
+        addr: StreamAddr,
+        sock_addr: SocketAddr,
+    },
 }
 
 #[cfg(test)]

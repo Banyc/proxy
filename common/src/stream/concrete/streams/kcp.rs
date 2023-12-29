@@ -1,6 +1,5 @@
 use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
 
-use async_trait::async_trait;
 use metrics::counter;
 use thiserror::Error;
 use tokio::{
@@ -14,8 +13,10 @@ use crate::{
     addr::any_addr,
     error::AnyResult,
     loading,
-    stream::{connect::StreamConnect, CreatedStream, IoAddr, IoStream, StreamServerHook},
+    stream::{IoAddr, IoStream, StreamServerHook},
 };
+
+use super::super::{connect::StreamConnect, created_stream::CreatedStream};
 
 #[derive(Debug)]
 pub struct KcpServer<H> {
@@ -45,7 +46,6 @@ impl<H> KcpServer<H> {
     }
 }
 
-#[async_trait]
 impl<H> loading::Server for KcpServer<H>
 where
     H: StreamServerHook + Send + Sync + 'static,
@@ -177,7 +177,6 @@ impl AsyncWrite for AddressedKcpStream {
 #[derive(Debug)]
 pub struct KcpConnector;
 
-#[async_trait]
 impl StreamConnect for KcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
         let config = fast_kcp_config();

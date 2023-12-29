@@ -1,9 +1,8 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
-use async_trait::async_trait;
 use common::{
     loading,
-    stream::{pool::Pool, streams::mptcp::MptcpServer},
+    stream::concrete::{pool::Pool, streams::mptcp::MptcpServer},
 };
 use mptcp::MptcpListener;
 use serde::Deserialize;
@@ -41,7 +40,6 @@ pub struct MptcpProxyServerBuilder {
     pub inner: StreamProxyBuilder,
 }
 
-#[async_trait]
 impl loading::Builder for MptcpProxyServerBuilder {
     type Hook = StreamProxy;
     type Server = MptcpServer<Self::Hook>;

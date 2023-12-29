@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use common::{
     proxy_table::{ProxyTable, ProxyTableError},
     stream::{
-        pool::Pool,
+        concrete::pool::Pool,
         proxy_table::{
             StreamProxyConfigBuildError, StreamProxyTable, StreamWeightedProxyChainBuilder,
         },

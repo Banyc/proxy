@@ -7,9 +7,8 @@ mod tests {
         proxy_table::ProxyConfig,
         stream::{
             addr::{StreamAddr, StreamType},
-            pool::Pool,
+            concrete::{created_stream::CreatedStreamAndAddr, pool::Pool},
             proxy_table::StreamProxyConfig,
-            CreatedStreamAndAddr,
         },
     };
     use proxy_client::stream::{establish, trace_rtt};

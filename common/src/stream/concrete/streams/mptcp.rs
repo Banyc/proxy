@@ -1,6 +1,5 @@
 use std::{io, net::SocketAddr, num::NonZeroUsize, sync::Arc};
 
-use async_trait::async_trait;
 use metrics::counter;
 use mptcp::{listen::MptcpListener, stream::MptcpStream};
 use thiserror::Error;
@@ -10,8 +9,10 @@ use tracing::{info, instrument, trace, warn};
 use crate::{
     error::AnyResult,
     loading,
-    stream::{connect::StreamConnect, CreatedStream, IoAddr, IoStream, StreamServerHook},
+    stream::{IoAddr, IoStream, StreamServerHook},
 };
+
+use super::super::{connect::StreamConnect, created_stream::CreatedStream};
 
 const STREAMS: usize = 4;
 
@@ -43,7 +44,6 @@ impl<H> MptcpServer<H> {
     }
 }
 
-#[async_trait]
 impl<H> loading::Server for MptcpServer<H>
 where
     H: StreamServerHook + Send + Sync + 'static,
@@ -138,7 +138,6 @@ impl IoAddr for MptcpStream {
 #[derive(Debug, Clone, Copy)]
 pub struct MptcpConnector;
 
-#[async_trait]
 impl StreamConnect for MptcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
         let stream = MptcpStream::connect(addr, NonZeroUsize::new(STREAMS).unwrap()).await?;

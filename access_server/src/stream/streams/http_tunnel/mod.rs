@@ -6,7 +6,6 @@ use std::{
 };
 
 use async_speed_limit::Limiter;
-use async_trait::async_trait;
 use bytes::Bytes;
 use common::{
     addr::{InternetAddr, ParseInternetAddrError},
@@ -16,11 +15,11 @@ use common::{
     session_table::SessionOwnedGuard,
     stream::{
         addr::{StreamAddr, StreamType},
+        concrete::{pool::Pool, streams::tcp::TcpServer},
         io_copy::{CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
-        pool::Pool,
         proxy_table::StreamProxyTable,
         session_table::{Session, StreamSessionTable},
-        streams::{tcp::TcpServer, xor::XorStream},
+        xor::XorStream,
         IoAddr, IoStream, SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics, StreamServerHook,
     },
 };
@@ -107,7 +106,6 @@ pub struct HttpAccessServerBuilder {
     session_table: StreamSessionTable,
 }
 
-#[async_trait]
 impl loading::Builder for HttpAccessServerBuilder {
     type Hook = HttpAccess;
     type Server = TcpServer<Self::Hook>;
@@ -460,7 +458,6 @@ pub enum TunnelError {
 
 impl loading::Hook for HttpAccess {}
 
-#[async_trait]
 impl StreamServerHook for HttpAccess {
     #[instrument(skip(self, stream))]
     async fn handle_stream<S>(&self, stream: S)

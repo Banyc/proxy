@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use common::{
     loading,
-    stream::{
+    stream::concrete::{
         pool::Pool,
         streams::kcp::{fast_kcp_config, KcpServer},
     },
@@ -40,7 +39,6 @@ pub struct KcpProxyServerBuilder {
     pub inner: StreamProxyBuilder,
 }
 
-#[async_trait]
 impl loading::Builder for KcpProxyServerBuilder {
     type Hook = StreamProxy;
     type Server = KcpServer<Self::Hook>;

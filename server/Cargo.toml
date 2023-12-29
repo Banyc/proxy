@@ -11,11 +11,10 @@ path = "src/main.rs"
 
 [dependencies]
 access_server = { path = "../access_server" }
-async-trait = "0.1.73"
 axum = "0.6.20"
 clap = { version = "4.4.6", features = ["derive"] }
 common = { path = "../common" }
-file_watcher_tokio = "0.2.0"
+file_watcher_tokio = "0.3.0"
 metrics = "0.21.1"
 metrics-exporter-prometheus = "0.12.1"
 notify = "6.1.1"

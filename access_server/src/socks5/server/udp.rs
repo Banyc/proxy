@@ -1,7 +1,6 @@
 use std::{collections::HashMap, io, sync::Arc};
 
 use async_speed_limit::Limiter;
-use async_trait::async_trait;
 use common::{
     config::SharableConfig,
     loading,
@@ -72,7 +71,6 @@ pub struct Socks5ServerUdpAccessServerBuilder {
     session_table: UdpSessionTable,
 }
 
-#[async_trait]
 impl loading::Builder for Socks5ServerUdpAccessServerBuilder {
     type Hook = Socks5ServerUdpAccess;
     type Server = UdpServer<Self::Hook>;
@@ -182,7 +180,6 @@ pub enum AccessProxyError {
     Establish(#[from] EstablishError),
 }
 
-#[async_trait]
 impl UdpServerHook for Socks5ServerUdpAccess {
     async fn parse_upstream_addr(
         &self,

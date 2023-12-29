@@ -5,7 +5,6 @@ use std::{
     time::Duration,
 };
 
-use async_trait::async_trait;
 use rand::Rng;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -371,8 +370,10 @@ where
     }
 }
 
-#[async_trait]
 pub trait Tracer {
     type Address;
-    async fn trace_rtt(&self, chain: &ProxyChain<Self::Address>) -> Result<Duration, AnyError>;
+    fn trace_rtt(
+        &self,
+        chain: &ProxyChain<Self::Address>,
+    ) -> impl std::future::Future<Output = Result<Duration, AnyError>> + Send;
 }

@@ -1,6 +1,5 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use async_trait::async_trait;
 use common::error::AnyError;
 use serde::Deserialize;
 
@@ -33,7 +32,6 @@ impl<C> MultiFileConfigReader<C> {
     }
 }
 
-#[async_trait]
 impl<C> ConfigReader for MultiFileConfigReader<C>
 where
     for<'de> C: Deserialize<'de> + Send + Sync + 'static,

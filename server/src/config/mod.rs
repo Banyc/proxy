@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use common::error::AnyError;
 use file_watcher_tokio::EventActor;
 
 pub mod multi_file_config;
 
-#[async_trait]
 pub trait ConfigReader {
     type Config;
-    async fn read_config(&self) -> Result<Self::Config, AnyError>;
+    fn read_config(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Self::Config, AnyError>> + Send;
 }
 
 pub struct ConfigWatcher {
@@ -33,7 +33,6 @@ impl Default for ConfigWatcher {
     }
 }
 
-#[async_trait]
 impl EventActor for ConfigWatcher {
     async fn notify(&self, _event: notify::Event) {
         self.tx.notify_one();

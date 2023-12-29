@@ -1,6 +1,5 @@
 use std::time::{Duration, Instant};
 
-use async_trait::async_trait;
 use common::{
     crypto::XorCryptoCursor,
     error::AnyError,
@@ -12,10 +11,11 @@ use common::{
     proxy_table::{convert_proxies_to_header_crypto_pairs, Tracer},
     stream::{
         addr::StreamAddr,
-        connect::{connect_with_pool, ConnectError},
-        pool::Pool,
+        concrete::{
+            created_stream::CreatedStreamAndAddr,
+            pool::{connect_with_pool, ConnectError, Pool},
+        },
         proxy_table::StreamProxyChain,
-        CreatedStreamAndAddr,
     },
 };
 use metrics::counter;
@@ -131,7 +131,6 @@ impl StreamTracer {
     }
 }
 
-#[async_trait]
 impl Tracer for StreamTracer {
     type Address = StreamAddr;
 

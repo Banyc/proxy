@@ -9,7 +9,6 @@ use std::{
 };
 
 use async_speed_limit::Limiter;
-use async_trait::async_trait;
 use metrics::{counter, decrement_gauge, increment_gauge};
 use scopeguard::defer;
 use thiserror::Error;
@@ -30,14 +29,18 @@ use super::{
 
 const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
 
-#[async_trait]
 pub trait UdpRecv {
-    async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError>;
+    fn trait_recv(
+        &mut self,
+        buf: &mut [u8],
+    ) -> impl std::future::Future<Output = Result<usize, AnyError>> + Send;
 }
 
-#[async_trait]
 pub trait UdpSend {
-    async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError>;
+    fn trait_send(
+        &mut self,
+        buf: &[u8],
+    ) -> impl std::future::Future<Output = Result<usize, AnyError>> + Send;
 }
 
 pub struct UpstreamParts<R, W> {
@@ -322,14 +325,12 @@ pub enum CopyBiError {
     },
 }
 
-#[async_trait]
 impl UdpSend for Arc<UdpSocket> {
     async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
         UdpSocket::send(self, buf).await.map_err(|e| e.into())
     }
 }
 
-#[async_trait]
 impl UdpRecv for Arc<UdpSocket> {
     async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
         UdpSocket::recv(self, buf).await.map_err(|e| e.into())

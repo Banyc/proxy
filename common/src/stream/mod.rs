@@ -1,35 +1,24 @@
-use std::{
-    fmt::Display,
-    io,
-    net::SocketAddr,
-    ops::{Deref, DerefMut},
-    pin::Pin,
-};
+use std::{fmt::Display, io, net::SocketAddr, ops::Deref};
 
-use async_trait::async_trait;
 use bytesize::ByteSize;
-use mptcp::MptcpStream;
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::TcpStream,
-};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{
     addr::{InternetAddr, InternetAddrKind},
     loading,
 };
 
-use self::{addr::StreamAddr, streams::kcp::AddressedKcpStream};
+use self::addr::StreamAddr;
 
 pub mod addr;
-pub mod connect;
 pub mod header;
 pub mod io_copy;
-pub mod pool;
+// pub mod pool;
+pub mod concrete;
 pub mod proxy_table;
 pub mod session_table;
 pub mod steer;
-pub mod streams;
+pub mod xor;
 
 pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static {}
 
@@ -38,9 +27,8 @@ pub trait IoAddr {
     fn local_addr(&self) -> io::Result<SocketAddr>;
 }
 
-#[async_trait]
 pub trait StreamServerHook: loading::Hook {
-    async fn handle_stream<S>(&self, stream: S)
+    fn handle_stream<S>(&self, stream: S) -> impl std::future::Future<Output = ()> + Send
     where
         S: IoStream + IoAddr + std::fmt::Debug;
 }
@@ -138,94 +126,4 @@ impl Display for SimplifiedStreamProxyMetrics {
         write!(f, ",dt:{}", self.destination)?;
         Ok(())
     }
-}
-
-#[derive(Debug)]
-pub enum CreatedStream {
-    // Quic(QuicIoStream),
-    Tcp(TcpStream),
-    Kcp(AddressedKcpStream),
-    Mptcp(MptcpStream),
-}
-
-impl IoStream for CreatedStream {}
-impl IoAddr for CreatedStream {
-    fn peer_addr(&self) -> io::Result<SocketAddr> {
-        match self {
-            // CreatedStream::Quic(x) => x.peer_addr(),
-            CreatedStream::Tcp(x) => x.peer_addr(),
-            CreatedStream::Kcp(x) => x.peer_addr(),
-            CreatedStream::Mptcp(x) => IoAddr::peer_addr(x),
-        }
-    }
-
-    fn local_addr(&self) -> io::Result<SocketAddr> {
-        match self {
-            // CreatedStream::Quic(x) => x.local_addr(),
-            CreatedStream::Tcp(x) => x.local_addr(),
-            CreatedStream::Kcp(x) => x.local_addr(),
-            CreatedStream::Mptcp(x) => IoAddr::local_addr(x),
-        }
-    }
-}
-
-impl AsyncWrite for CreatedStream {
-    fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<Result<usize, io::Error>> {
-        match self.deref_mut() {
-            // CreatedStream::Quic(x) => Pin::new(x).poll_write(cx, buf),
-            CreatedStream::Tcp(x) => Pin::new(x).poll_write(cx, buf),
-            CreatedStream::Kcp(x) => Pin::new(x).poll_write(cx, buf),
-            CreatedStream::Mptcp(x) => Pin::new(x).poll_write(cx, buf),
-        }
-    }
-
-    fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
-        match self.deref_mut() {
-            // CreatedStream::Quic(x) => Pin::new(x).poll_flush(cx),
-            CreatedStream::Tcp(x) => Pin::new(x).poll_flush(cx),
-            CreatedStream::Kcp(x) => Pin::new(x).poll_flush(cx),
-            CreatedStream::Mptcp(x) => Pin::new(x).poll_flush(cx),
-        }
-    }
-
-    fn poll_shutdown(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
-        match self.deref_mut() {
-            // CreatedStream::Quic(x) => Pin::new(x).poll_shutdown(cx),
-            CreatedStream::Tcp(x) => Pin::new(x).poll_shutdown(cx),
-            CreatedStream::Kcp(x) => Pin::new(x).poll_shutdown(cx),
-            CreatedStream::Mptcp(x) => Pin::new(x).poll_shutdown(cx),
-        }
-    }
-}
-
-impl AsyncRead for CreatedStream {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<io::Result<()>> {
-        match self.deref_mut() {
-            // CreatedStream::Quic(x) => Pin::new(x).poll_read(cx, buf),
-            CreatedStream::Tcp(x) => Pin::new(x).poll_read(cx, buf),
-            CreatedStream::Kcp(x) => Pin::new(x).poll_read(cx, buf),
-            CreatedStream::Mptcp(x) => Pin::new(x).poll_read(cx, buf),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct CreatedStreamAndAddr {
-    pub stream: CreatedStream,
-    pub addr: StreamAddr,
-    pub sock_addr: SocketAddr,
 }

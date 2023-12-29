@@ -9,7 +9,7 @@ use scopeguard::defer;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::info;
 
-use crate::{crypto::XorCrypto, stream::streams::xor::XorStream};
+use crate::{crypto::XorCrypto, stream::xor::XorStream};
 
 use super::{
     addr::StreamAddr,

@@ -5,7 +5,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use async_trait::async_trait;
 use common::{
     addr::{any_addr, InternetAddr},
     crypto::XorCryptoCursor,
@@ -152,7 +151,6 @@ pub struct UdpProxyClientWriteHalf {
     write_buf: Vec<u8>,
 }
 
-#[async_trait]
 impl UdpSend for UdpProxyClientWriteHalf {
     async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
         Self::send(self, buf).await.map_err(|e| e.into())
@@ -211,7 +209,6 @@ pub struct UdpProxyClientReadHalf {
     read_buf: Vec<u8>,
 }
 
-#[async_trait]
 impl UdpRecv for UdpProxyClientReadHalf {
     async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
         Self::recv(self, buf).await.map_err(|e| e.into())
@@ -302,7 +299,6 @@ impl Default for UdpTracer {
     }
 }
 
-#[async_trait]
 impl Tracer for UdpTracer {
     type Address = InternetAddr;
 

@@ -4,7 +4,6 @@ use std::{
     sync::Arc,
 };
 
-use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use crate::error::AnyResult;
@@ -72,20 +71,20 @@ where
 
 pub trait Hook {}
 
-#[async_trait]
 pub trait Builder {
     type Hook: Hook;
     type Server: Server<Hook = Self::Hook>;
     type Err: std::error::Error + Send + Sync + 'static;
-    async fn build_server(self) -> Result<Self::Server, Self::Err>;
+    fn build_server(
+        self,
+    ) -> impl std::future::Future<Output = Result<Self::Server, Self::Err>> + Send;
     fn build_hook(self) -> Result<Self::Hook, Self::Err>;
     fn key(&self) -> &Arc<str>;
 }
 
-#[async_trait]
 pub trait Server {
     type Hook: Hook;
     fn handle(&self) -> mpsc::Sender<Self::Hook>;
     /// Server ends if the caller does not hold a handle to the server.
-    async fn serve(self) -> AnyResult;
+    fn serve(self) -> impl std::future::Future<Output = AnyResult> + Send;
 }

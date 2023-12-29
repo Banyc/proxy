@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 async-speed-limit = { version = "0.4.1", features = ["tokio"] }
-async-trait = "0.1.73"
 bincode = "1.3.3"
 common = { path = "../common" }
 mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "44b3d6366e6580e80f70607263ed6065b493b78f" }

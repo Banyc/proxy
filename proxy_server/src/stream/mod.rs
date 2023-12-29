@@ -1,17 +1,18 @@
 use std::{io, net::SocketAddr, time::Duration};
 
 use async_speed_limit::Limiter;
-use async_trait::async_trait;
 use common::{
     addr::ParseInternetAddrError,
     crypto::{XorCrypto, XorCryptoBuildError, XorCryptoBuilder},
     loading,
     stream::{
-        connect::{connect_with_pool, ConnectError},
+        concrete::{
+            created_stream::CreatedStreamAndAddr,
+            pool::{connect_with_pool, ConnectError, Pool},
+        },
         io_copy::CopyBidirectional,
-        pool::Pool,
         steer::{steer, SteerError},
-        CreatedStreamAndAddr, IoAddr, IoStream, StreamServerHook,
+        IoAddr, IoStream, StreamServerHook,
     },
 };
 use serde::Deserialize;
@@ -164,7 +165,6 @@ impl StreamProxy {
 
 impl loading::Hook for StreamProxy {}
 
-#[async_trait]
 impl StreamServerHook for StreamProxy {
     #[instrument(skip(self))]
     async fn handle_stream<S>(&self, stream: S)

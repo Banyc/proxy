@@ -1,7 +1,6 @@
 use std::{io, net::SocketAddr, sync::Arc};
 
 use async_speed_limit::Limiter;
-use async_trait::async_trait;
 use common::{
     addr::{any_addr, InternetAddr},
     crypto::{XorCrypto, XorCryptoBuildError, XorCryptoBuilder, XorCryptoCursor},
@@ -35,7 +34,6 @@ pub struct UdpProxyServerBuilder {
     pub payload_xor_key: Option<XorCryptoBuilder>,
 }
 
-#[async_trait]
 impl loading::Builder for UdpProxyServerBuilder {
     type Hook = UdpProxy;
     type Server = UdpServer<Self::Hook>;
@@ -240,7 +238,6 @@ fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
 
 impl loading::Hook for UdpProxy {}
 
-#[async_trait]
 impl UdpServerHook for UdpProxy {
     async fn parse_upstream_addr(
         &self,

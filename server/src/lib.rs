@@ -4,7 +4,7 @@ use access_server::{AccessServerConfig, AccessServerLoader};
 use common::{
     error::{AnyError, AnyResult},
     session_table::BothSessionTables,
-    stream::pool::{Pool, PoolBuilder},
+    stream::concrete::pool::{Pool, PoolBuilder},
 };
 use config::ConfigReader;
 use proxy_server::{ProxyServerConfig, ProxyServerLoader};

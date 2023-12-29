@@ -8,7 +8,6 @@ use std::{
     time::Duration,
 };
 
-use async_trait::async_trait;
 use bytes::BytesMut;
 use bytesize::ByteSize;
 use lockfree_object_pool::{LinearObjectPool, LinearOwnedReusable};
@@ -98,7 +97,6 @@ impl<H> UdpServer<H> {
     }
 }
 
-#[async_trait]
 impl<H> loading::Server for UdpServer<H>
 where
     H: UdpServerHook + Send + Sync + 'static,
@@ -268,20 +266,19 @@ impl Drop for FlowOwnedGuard {
     }
 }
 
-#[async_trait]
 pub trait UdpServerHook: loading::Hook {
-    async fn parse_upstream_addr(
+    fn parse_upstream_addr(
         &self,
         buf: &mut io::Cursor<&[u8]>,
         downstream_writer: &UdpDownstreamWriter,
-    ) -> Option<UpstreamAddr>;
+    ) -> impl std::future::Future<Output = Option<UpstreamAddr>> + Send;
 
-    async fn handle_flow(
+    fn handle_flow(
         &self,
         rx: mpsc::Receiver<Packet>,
         flow: FlowOwnedGuard,
         downstream_writer: UdpDownstreamWriter,
-    );
+    ) -> impl std::future::Future<Output = ()> + Send;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

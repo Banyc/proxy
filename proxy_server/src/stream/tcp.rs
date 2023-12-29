@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use common::{
     loading,
-    stream::{pool::Pool, streams::tcp::TcpServer},
+    stream::concrete::{pool::Pool, streams::tcp::TcpServer},
 };
 use serde::Deserialize;
 use thiserror::Error;
@@ -38,7 +37,6 @@ pub struct TcpProxyServerBuilder {
     pub inner: StreamProxyBuilder,
 }
 
-#[async_trait]
 impl loading::Builder for TcpProxyServerBuilder {
     type Hook = StreamProxy;
     type Server = TcpServer<Self::Hook>;
@@ -92,7 +90,6 @@ mod tests {
         stream::{
             addr::{StreamAddr, StreamType},
             header::StreamRequestHeader,
-            pool::Pool,
         },
     };
     use tokio::{

@@ -1,7 +1,6 @@
 use std::{collections::HashMap, io, net::SocketAddr, num::NonZeroU8, sync::Arc};
 
 use async_speed_limit::Limiter;
-use async_trait::async_trait;
 use common::{
     addr::{InternetAddr, InternetAddrStr},
     config::SharableConfig,
@@ -10,12 +9,11 @@ use common::{
     loading::{self, Hook},
     stream::{
         addr::{StreamAddr, StreamType},
+        concrete::{created_stream::CreatedStreamAndAddr, pool::Pool, streams::tcp::TcpServer},
         io_copy::CopyBidirectional,
-        pool::Pool,
         proxy_table::StreamProxyTable,
         session_table::StreamSessionTable,
-        streams::tcp::TcpServer,
-        CreatedStreamAndAddr, IoAddr, IoStream, StreamServerHook,
+        IoAddr, IoStream, StreamServerHook,
     },
 };
 use proxy_client::stream::StreamEstablishError;
@@ -121,7 +119,6 @@ pub struct Socks5ServerTcpAccessServerBuilder {
     session_table: StreamSessionTable,
 }
 
-#[async_trait]
 impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
     type Hook = Socks5ServerTcpAccess;
     type Server = TcpServer<Self::Hook>;
@@ -165,7 +162,6 @@ pub struct Socks5ServerTcpAccess {
 
 impl Hook for Socks5ServerTcpAccess {}
 
-#[async_trait]
 impl StreamServerHook for Socks5ServerTcpAccess {
     async fn handle_stream<S>(&self, stream: S)
     where

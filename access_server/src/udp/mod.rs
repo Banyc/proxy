@@ -1,7 +1,6 @@
 use std::{collections::HashMap, io, sync::Arc};
 
 use async_speed_limit::Limiter;
-use async_trait::async_trait;
 use common::{
     addr::InternetAddr,
     addr::InternetAddrStr,
@@ -76,7 +75,6 @@ pub struct UdpAccessServerBuilder {
     session_table: UdpSessionTable,
 }
 
-#[async_trait]
 impl loading::Builder for UdpAccessServerBuilder {
     type Hook = UdpAccess;
     type Server = UdpServer<Self::Hook>;
@@ -181,7 +179,6 @@ pub enum AccessProxyError {
     Copy(#[from] CopyBiError),
 }
 
-#[async_trait]
 impl UdpServerHook for UdpAccess {
     async fn parse_upstream_addr(
         &self,

@@ -1,6 +1,5 @@
 use std::{io, net::SocketAddr, sync::Arc};
 
-use async_trait::async_trait;
 use metrics::counter;
 use thiserror::Error;
 use tokio::{
@@ -12,8 +11,10 @@ use tracing::{info, instrument, trace, warn};
 use crate::{
     error::AnyResult,
     loading,
-    stream::{connect::StreamConnect, CreatedStream, IoAddr, IoStream, StreamServerHook},
+    stream::{IoAddr, IoStream, StreamServerHook},
 };
+
+use super::super::{connect::StreamConnect, created_stream::CreatedStream};
 
 #[derive(Debug)]
 pub struct TcpServer<H> {
@@ -43,7 +44,6 @@ impl<H> TcpServer<H> {
     }
 }
 
-#[async_trait]
 impl<H> loading::Server for TcpServer<H>
 where
     H: StreamServerHook + Send + Sync + 'static,
@@ -129,7 +129,6 @@ impl IoAddr for TcpStream {
 #[derive(Debug, Clone, Copy)]
 pub struct TcpConnector;
 
-#[async_trait]
 impl StreamConnect for TcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
         let stream = TcpStream::connect(addr).await?;

@@ -5,7 +5,7 @@ use common::{
     filter::{self, FilterBuilder, MatcherBuilder},
     loading,
     session_table::BothSessionTables,
-    stream::pool::Pool,
+    stream::concrete::pool::Pool,
 };
 use serde::{Deserialize, Serialize};
 use socks5::server::{
