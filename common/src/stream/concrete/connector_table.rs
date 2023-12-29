@@ -1,4 +1,4 @@
-use std::{io, net::SocketAddr, sync::Arc, time::Duration};
+use std::{io, net::SocketAddr, time::Duration};
 
 use once_cell::sync::Lazy;
 
@@ -14,17 +14,17 @@ pub static STREAM_CONNECTOR_TABLE: Lazy<StreamConnectorTable> =
 
 #[derive(Debug)]
 pub struct StreamConnectorTable {
-    tcp: Arc<TcpConnector>,
-    kcp: Arc<KcpConnector>,
-    mptcp: Arc<MptcpConnector>,
+    tcp: TcpConnector,
+    kcp: KcpConnector,
+    mptcp: MptcpConnector,
 }
 
 impl StreamConnectorTable {
     fn new() -> Self {
         Self {
-            tcp: Arc::new(TcpConnector),
-            kcp: Arc::new(KcpConnector),
-            mptcp: Arc::new(MptcpConnector),
+            tcp: TcpConnector,
+            kcp: KcpConnector,
+            mptcp: MptcpConnector,
         }
     }
 
