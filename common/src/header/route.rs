@@ -39,23 +39,15 @@ pub enum RouteErrorKind {
 mod tests {
     use std::io;
 
-    use rand::Rng;
     use tracing::trace;
 
-    use crate::{
-        crypto::{XorCrypto, XorCryptoCursor},
-        header::codec::{read_header_async, write_header_async, MAX_HEADER_LEN},
-    };
+    use crate::header::codec::{read_header_async, write_header_async, MAX_HEADER_LEN};
 
     use super::*;
 
-    fn create_random_crypto() -> XorCrypto {
-        let mut rng = rand::thread_rng();
-        let mut key = Vec::new();
-        for _ in 0..MAX_HEADER_LEN {
-            key.push(rng.gen());
-        }
-        XorCrypto::new(key.into())
+    fn create_random_crypto() -> tokio_chacha20::config::Config {
+        let key: [u8; 32] = rand::random();
+        tokio_chacha20::config::Config::new(key.into())
     }
 
     #[tokio::test]
@@ -70,7 +62,7 @@ mod tests {
                 kind: RouteErrorKind::Io,
             }),
         };
-        let mut crypto_cursor = XorCryptoCursor::new(&crypto);
+        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
         write_header_async(&mut stream, &original_header, &mut crypto_cursor)
             .await
             .unwrap();
@@ -80,7 +72,7 @@ mod tests {
 
         // Decode header
         let mut stream = io::Cursor::new(buf);
-        let mut crypto_cursor = XorCryptoCursor::new(&crypto);
+        let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new(*crypto.key());
         let decoded_header = read_header_async(&mut stream, &mut crypto_cursor)
             .await
             .unwrap();

@@ -10,8 +10,6 @@ use scopeguard::defer;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::info;
 
-use crate::{crypto::XorCrypto, stream::xor::XorStream};
-
 use super::{
     addr::StreamAddr,
     session_table::{Session, StreamSessionTable},
@@ -25,7 +23,7 @@ pub const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
 pub struct CopyBidirectional<DS, US, ST> {
     pub downstream: DS,
     pub upstream: US,
-    pub payload_crypto: Option<XorCrypto>,
+    pub payload_crypto: Option<tokio_chacha20::config::Config>,
     pub speed_limiter: Limiter,
     pub start: Instant,
     pub upstream_addr: StreamAddr<ST>,
@@ -127,7 +125,7 @@ where
 pub async fn copy_bidirectional_with_payload_crypto<DS, US>(
     downstream: DS,
     upstream: US,
-    payload_crypto: Option<&XorCrypto>,
+    payload_crypto: Option<&tokio_chacha20::config::Config>,
     speed_limiter: Limiter,
 ) -> tokio_io::TimedCopyBidirectionalResult
 where
@@ -140,8 +138,10 @@ where
     match payload_crypto {
         Some(crypto) => {
             // Establish encrypted stream
-            let xor_stream = XorStream::upgrade(upstream, crypto);
-            tokio_io::timed_copy_bidirectional(downstream, xor_stream, speed_limiter).await
+            let (r, w) = tokio::io::split(upstream);
+            let upstream =
+                tokio_chacha20::stream::WholeStream::from_key_halves(*crypto.key(), r, w);
+            tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await
         }
         None => tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await,
     }

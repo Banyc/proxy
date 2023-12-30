@@ -3,7 +3,6 @@ use std::{io, net::SocketAddr, sync::Arc};
 use async_speed_limit::Limiter;
 use common::{
     addr::{any_addr, InternetAddr},
-    crypto::{XorCrypto, XorCryptoBuildError, XorCryptoBuilder, XorCryptoCursor},
     header::{
         codec::write_header,
         route::{RouteErrorKind, RouteResponse},
@@ -30,8 +29,8 @@ use crate::ListenerBindError;
 #[serde(deny_unknown_fields)]
 pub struct UdpProxyServerBuilder {
     pub listen_addr: Arc<str>,
-    pub header_xor_key: XorCryptoBuilder,
-    pub payload_xor_key: Option<XorCryptoBuilder>,
+    pub header_xor_key: tokio_chacha20::config::ConfigBuilder,
+    pub payload_xor_key: Option<tokio_chacha20::config::ConfigBuilder>,
 }
 
 impl loading::Builder for UdpProxyServerBuilder {
@@ -70,9 +69,9 @@ impl loading::Builder for UdpProxyServerBuilder {
 #[derive(Debug, Error)]
 pub enum UdpProxyBuildError {
     #[error("HeaderCrypto: {0}")]
-    HeaderCrypto(#[source] XorCryptoBuildError),
+    HeaderCrypto(#[source] tokio_chacha20::config::ConfigBuildError),
     #[error("PayloadCrypto: {0}")]
-    PayloadCrypto(#[source] XorCryptoBuildError),
+    PayloadCrypto(#[source] tokio_chacha20::config::ConfigBuildError),
 }
 
 #[derive(Debug, Error)]
@@ -85,12 +84,15 @@ pub enum UdpProxyServerBuildError {
 
 #[derive(Debug)]
 pub struct UdpProxy {
-    header_crypto: XorCrypto,
-    payload_crypto: Option<XorCrypto>,
+    header_crypto: tokio_chacha20::config::Config,
+    payload_crypto: Option<tokio_chacha20::config::Config>,
 }
 
 impl UdpProxy {
-    pub fn new(header_crypto: XorCrypto, payload_crypto: Option<XorCrypto>) -> Self {
+    pub fn new(
+        header_crypto: tokio_chacha20::config::Config,
+        payload_crypto: Option<tokio_chacha20::config::Config>,
+    ) -> Self {
         Self {
             header_crypto,
             payload_crypto,
@@ -151,7 +153,8 @@ impl UdpProxy {
             // Write header
             let mut wtr = Vec::new();
             let header = RouteResponse { result: Ok(()) };
-            let mut crypto_cursor = XorCryptoCursor::new(&self.header_crypto);
+            let mut crypto_cursor =
+                tokio_chacha20::cursor::EncryptCursor::new(*self.header_crypto.key());
             write_header(&mut wtr, &header, &mut crypto_cursor).unwrap();
             wtr.into()
         };

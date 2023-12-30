@@ -1,7 +1,6 @@
 use std::time::{Duration, Instant};
 
 use common::{
-    crypto::XorCryptoCursor,
     error::AnyError,
     header::{
         codec::{timed_read_header_async, timed_write_header_async, CodecError},
@@ -63,7 +62,7 @@ pub async fn establish(
                 source: e,
                 upstream_addr: addr.clone(),
             })?;
-        let mut crypto_cursor = XorCryptoCursor::new(crypto);
+        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
         timed_write_header_async(&mut stream, header, &mut crypto_cursor, IO_TIMEOUT)
             .await
             .map_err(|e| StreamEstablishError::WriteStreamRequestHeader {
@@ -168,12 +167,13 @@ pub async fn trace_rtt(
     // Write headers to stream
     for (header, crypto) in &pairs {
         heartbeat::send_upgrade(&mut stream, IO_TIMEOUT).await?;
-        let mut crypto_cursor = XorCryptoCursor::new(crypto);
+        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
         timed_write_header_async(&mut stream, header, &mut crypto_cursor, IO_TIMEOUT).await?;
     }
 
     // Read response
-    let mut crypto_cursor = XorCryptoCursor::new(pairs.last().unwrap().1);
+    let mut crypto_cursor =
+        tokio_chacha20::cursor::DecryptCursor::new(*pairs.last().unwrap().1.key());
     let resp: RouteResponse =
         timed_read_header_async(&mut stream, &mut crypto_cursor, IO_TIMEOUT).await?;
     if let Err(err) = resp.result {

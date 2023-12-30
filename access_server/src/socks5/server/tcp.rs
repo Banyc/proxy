@@ -4,7 +4,6 @@ use async_speed_limit::Limiter;
 use common::{
     addr::{InternetAddr, InternetAddrStr},
     config::SharableConfig,
-    crypto::XorCrypto,
     filter::{self, Filter, FilterBuilder},
     loading::{self, Hook},
     stream::{
@@ -552,7 +551,8 @@ impl Socks5ServerTcpAccess {
     async fn establish_proxy_chain(
         &self,
         destination: InternetAddr,
-    ) -> Result<(CreatedStreamAndAddr, Option<XorCrypto>), StreamEstablishError> {
+    ) -> Result<(CreatedStreamAndAddr, Option<tokio_chacha20::config::Config>), StreamEstablishError>
+    {
         let proxy_chain = self.proxy_table.choose_chain();
         let res = proxy_client::stream::establish(
             &proxy_chain.chain,
@@ -584,7 +584,7 @@ pub enum EstablishResult<S> {
         destination: InternetAddr,
         downstream: S,
         upstream: CreatedStreamAndAddr,
-        payload_crypto: Option<XorCrypto>,
+        payload_crypto: Option<tokio_chacha20::config::Config>,
     },
 }
 
@@ -601,7 +601,7 @@ enum RequestResult {
     Proxy {
         destination: InternetAddr,
         upstream: CreatedStreamAndAddr,
-        payload_crypto: Option<XorCrypto>,
+        payload_crypto: Option<tokio_chacha20::config::Config>,
     },
 }
 

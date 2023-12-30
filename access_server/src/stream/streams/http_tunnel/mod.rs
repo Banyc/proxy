@@ -19,7 +19,6 @@ use common::{
         io_copy::{CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
         proxy_table::StreamProxyTable,
         session_table::{Session, StreamSessionTable},
-        xor::XorStream,
         IoAddr, IoStream, SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics, StreamServerHook,
     },
 };
@@ -251,9 +250,11 @@ impl HttpAccess {
         let res = match &proxy_chain.payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
-                let xor_stream = XorStream::upgrade(upstream.stream, crypto);
+                let (r, w) = tokio::io::split(upstream.stream);
+                let upstream =
+                    tokio_chacha20::stream::WholeStream::from_key_halves(*crypto.key(), r, w);
 
-                tls_http(xor_stream, req, session_guard).await
+                tls_http(upstream, req, session_guard).await
             }
             None => tls_http(upstream.stream, req, session_guard).await,
         };

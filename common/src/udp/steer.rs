@@ -4,7 +4,6 @@ use metrics::counter;
 use tracing::{trace, warn};
 
 use crate::{
-    crypto::{XorCrypto, XorCryptoCursor},
     header::{
         codec::{read_header, write_header, CodecError},
         route::{RouteErrorKind, RouteResponse},
@@ -17,7 +16,7 @@ use super::{header::UdpRequestHeader, UdpDownstreamWriter, UpstreamAddr};
 pub async fn steer(
     buf: &mut io::Cursor<&[u8]>,
     downstream_writer: &UdpDownstreamWriter,
-    header_crypto: &XorCrypto,
+    header_crypto: &tokio_chacha20::config::Config,
 ) -> Result<Option<UpstreamAddr>, CodecError> {
     let res = decode_header(buf, header_crypto).await;
     match res {
@@ -30,7 +29,8 @@ pub async fn steer(
             // Echo
             let resp = RouteResponse { result: Ok(()) };
             let mut wtr = Vec::new();
-            let mut crypto_cursor = XorCryptoCursor::new(header_crypto);
+            let mut crypto_cursor =
+                tokio_chacha20::cursor::EncryptCursor::new(*header_crypto.key());
             write_header(&mut wtr, &resp, &mut crypto_cursor).unwrap();
             wtr.write_all(&buf.get_ref()[buf.position() as usize..])
                 .unwrap();
@@ -56,10 +56,10 @@ pub async fn steer(
 
 async fn decode_header(
     buf: &mut io::Cursor<&[u8]>,
-    header_crypto: &XorCrypto,
+    header_crypto: &tokio_chacha20::config::Config,
 ) -> Result<Option<UpstreamAddr>, CodecError> {
     // Decode header
-    let mut crypto_cursor = XorCryptoCursor::new(header_crypto);
+    let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new(*header_crypto.key());
     let header: UdpRequestHeader = read_header(buf, &mut crypto_cursor)?;
 
     Ok(header.upstream.map(UpstreamAddr))
@@ -68,7 +68,7 @@ async fn decode_header(
 async fn handle_steer_error(
     downstream_writer: &UdpDownstreamWriter,
     error: &CodecError,
-    header_crypto: &XorCrypto,
+    header_crypto: &tokio_chacha20::config::Config,
 ) {
     let peer_addr = downstream_writer.peer_addr();
     warn!(?error, ?peer_addr, "Failed to steer");

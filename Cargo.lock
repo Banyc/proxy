@@ -18,6 +18,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "tokio_chacha20",
  "tracing",
  "tracing-subscriber",
 ]
@@ -117,6 +118,18 @@ name = "arc-swap"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bddcadddf5e9015d310179a59bb28c4d4b9920ad0f11e8e14dbadf654890c9a6"
+
+[[package]]
+name = "arrayref"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b4930d2cb77ce62f89ee5d5289b4ac049559b1c45539271f5ed4fdc7db34545"
+
+[[package]]
+name = "arrayvec"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96d30a06541fbafbc7f82ed10c06164cfbd2c401138f6addd8404629c4b16711"
 
 [[package]]
 name = "async-speed-limit"
@@ -256,6 +269,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "327762f6e5a765692301e5bb513e0d9fef63be86bbc14528052b1cd3e6f03e07"
 
 [[package]]
+name = "blake3"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0231f06152bf547e9c2b5194f247cd97aacf6dcd8b15d8e5ec0663f64580da87"
+dependencies = [
+ "arrayref",
+ "arrayvec",
+ "cc",
+ "cfg-if",
+ "constant_time_eq",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -376,9 +402,16 @@ dependencies = [
  "tokio",
  "tokio-io-timeout",
  "tokio-util",
+ "tokio_chacha20",
  "tokio_kcp",
  "tracing",
 ]
+
+[[package]]
+name = "constant_time_eq"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7144d30dcf0fafbce74250a3963025d8d52177934239851c917d29f1df280c2"
 
 [[package]]
 name = "crossbeam-channel"
@@ -1181,6 +1214,7 @@ dependencies = [
  "metrics",
  "thiserror",
  "tokio",
+ "tokio_chacha20",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1196,6 +1230,7 @@ dependencies = [
  "serde",
  "thiserror",
  "tokio",
+ "tokio_chacha20",
  "tokio_kcp",
  "tracing",
  "tracing-subscriber",
@@ -1622,6 +1657,7 @@ dependencies = [
  "rand",
  "serial_test",
  "tokio",
+ "tokio_chacha20",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1708,6 +1744,20 @@ dependencies = [
  "pin-project-lite",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "tokio_chacha20"
+version = "0.1.0"
+source = "git+https://github.com/Banyc/tokio_chacha20.git?rev=f1eec351d7e36c7a665ef78f864f31d44ce32d7f#f1eec351d7e36c7a665ef78f864f31d44ce32d7f"
+dependencies = [
+ "arrayvec",
+ "base64",
+ "blake3",
+ "rand",
+ "serde",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
