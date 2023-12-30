@@ -1,4 +1,4 @@
-use std::{io, net::SocketAddr, pin::Pin};
+use std::{io, net::SocketAddr, pin::Pin, task::ready};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -58,29 +58,35 @@ where
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, io::Error>> {
-        // Take the inner buffer out with encoded data
-        let mut inner_buf = {
-            let mut inner_buf = self.buf.take().unwrap();
-            if inner_buf.is_empty() {
-                inner_buf.extend(buf);
-                self.write_crypto.xor(&mut inner_buf);
+        loop {
+            // Take the inner buffer out with encoded data
+            let mut inner_buf = {
+                let mut inner_buf = self.buf.take().unwrap();
+                if inner_buf.is_empty() {
+                    inner_buf.extend(buf);
+                    self.write_crypto.xor(&mut inner_buf);
+                }
+                inner_buf
+            };
+
+            // Write the encoded data to the stream
+            let ready = Pin::new(&mut self.async_stream).poll_write(cx, &inner_buf);
+
+            // Clean the inner buffer if the write is successful
+            if let std::task::Poll::Ready(Ok(n)) = &ready {
+                inner_buf.drain(..*n);
             }
-            inner_buf
-        };
 
-        // Write the encoded data to the stream
-        let ready = Pin::new(&mut self.async_stream).poll_write(cx, &inner_buf);
+            // Put the inner buffer back
+            self.buf = Some(inner_buf);
 
-        // Clean the inner buffer if the write is successful
-        if let std::task::Poll::Ready(Ok(n)) = &ready {
-            inner_buf.drain(..*n);
+            let _ = ready!(ready)?;
+
+            // Do not allow caller to switch buffers until the inner buffer is fully consumed
+            if self.buf.as_ref().unwrap().is_empty() {
+                return Ok(buf.len()).into();
+            }
         }
-
-        // Put the inner buffer back
-        self.buf = Some(inner_buf);
-
-        // Return the result
-        ready
     }
 
     fn poll_flush(
