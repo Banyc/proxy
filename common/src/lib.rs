@@ -3,7 +3,6 @@ extern crate test;
 
 pub mod addr;
 pub mod cache_cell;
-pub mod cha_cha_20;
 pub mod config;
 pub mod crypto;
 pub mod error;
