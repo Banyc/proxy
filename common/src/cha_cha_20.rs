@@ -4,6 +4,7 @@ use rayon::iter::{
 
 const CONSTANT: &[u8; 16] = b"expand 32-byte k";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamCipher {
     block: Block,
     leftover: Option<(State, usize)>,
@@ -29,7 +30,7 @@ impl StreamCipher {
     fn encrypt_(&mut self, buf: &mut [u8], xor: fn(&mut [u8], &[u8]) -> usize) {
         let mut pos = 0;
 
-        // Custom the leftover
+        // Consume the leftover
         if let Some((state, next)) = self.leftover.take() {
             let remaining = &state.byte_vec()[next..];
 
@@ -83,6 +84,7 @@ fn xor(buf: &mut [u8], other: &[u8]) -> usize {
     size
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
     constant: [u32; 4],
     nonce: [u32; 3],
