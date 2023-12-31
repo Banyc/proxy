@@ -14,11 +14,14 @@ pub enum HeartbeatRequest {
 
 impl Header for HeartbeatRequest {}
 
-pub async fn send_noop<S>(stream: &mut S, timeout: Duration) -> Result<(), HeartbeatError>
+pub async fn send_noop<S>(
+    stream: &mut S,
+    timeout: Duration,
+    crypto: &tokio_chacha20::config::Config,
+) -> Result<(), HeartbeatError>
 where
     S: AsyncWrite + Unpin,
 {
-    let crypto = tokio_chacha20::config::Config::new(vec![].into());
     let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
     let req = HeartbeatRequest::Noop;
     let res = tokio::time::timeout(
@@ -38,11 +41,14 @@ pub enum HeartbeatError {
     Timeout(Duration),
 }
 
-pub async fn send_upgrade<S>(stream: &mut S, timeout: Duration) -> Result<(), HeartbeatError>
+pub async fn send_upgrade<S>(
+    stream: &mut S,
+    timeout: Duration,
+    crypto: &tokio_chacha20::config::Config,
+) -> Result<(), HeartbeatError>
 where
     S: AsyncWrite + Unpin,
 {
-    let crypto = tokio_chacha20::config::Config::new(vec![].into());
     let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
     let req = HeartbeatRequest::Upgrade;
     let res = tokio::time::timeout(
@@ -54,11 +60,14 @@ where
     Ok(())
 }
 
-pub async fn wait_upgrade<S>(stream: &mut S, timeout: Duration) -> Result<(), HeartbeatError>
+pub async fn wait_upgrade<S>(
+    stream: &mut S,
+    timeout: Duration,
+    crypto: &tokio_chacha20::config::Config,
+) -> Result<(), HeartbeatError>
 where
     S: AsyncRead + Unpin,
 {
-    let crypto = tokio_chacha20::config::Config::new(vec![].into());
     loop {
         let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new(*crypto.key());
         let res =

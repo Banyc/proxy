@@ -29,8 +29,8 @@ use crate::ListenerBindError;
 #[serde(deny_unknown_fields)]
 pub struct UdpProxyServerBuilder {
     pub listen_addr: Arc<str>,
-    pub header_xor_key: tokio_chacha20::config::ConfigBuilder,
-    pub payload_xor_key: Option<tokio_chacha20::config::ConfigBuilder>,
+    pub header_key: tokio_chacha20::config::ConfigBuilder,
+    pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
 }
 
 impl loading::Builder for UdpProxyServerBuilder {
@@ -47,10 +47,10 @@ impl loading::Builder for UdpProxyServerBuilder {
 
     fn build_hook(self) -> Result<Self::Hook, Self::Err> {
         let header_crypto = self
-            .header_xor_key
+            .header_key
             .build()
             .map_err(UdpProxyBuildError::HeaderCrypto)?;
-        let payload_crypto = match self.payload_xor_key {
+        let payload_crypto = match self.payload_key {
             Some(payload_crypto) => Some(
                 payload_crypto
                     .build()

@@ -9,7 +9,7 @@ use super::{addr::StreamAddrStr, StreamAddr};
 #[serde(deny_unknown_fields)]
 pub struct StreamProxyConfigBuilder<SAS> {
     pub address: SAS,
-    pub xor_key: tokio_chacha20::config::ConfigBuilder,
+    pub header_key: tokio_chacha20::config::ConfigBuilder,
 }
 
 impl<SAS> StreamProxyConfigBuilder<SAS> {
@@ -17,7 +17,7 @@ impl<SAS> StreamProxyConfigBuilder<SAS> {
     where
         SAS: StreamAddrStr<StreamType = ST>,
     {
-        let crypto = self.xor_key.build()?;
+        let crypto = self.header_key.build()?;
         let address = self.address.into_inner();
         Ok(ProxyConfig { address, crypto })
     }
@@ -34,7 +34,7 @@ pub enum StreamProxyConfigBuildError {
 pub struct StreamWeightedProxyChainBuilder<SAS> {
     pub weight: usize,
     pub chain: Vec<StreamProxyConfigBuilder<SAS>>,
-    pub payload_xor_key: Option<tokio_chacha20::config::ConfigBuilder>,
+    pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
 }
 
 impl<SAS> StreamWeightedProxyChainBuilder<SAS> {
@@ -42,7 +42,7 @@ impl<SAS> StreamWeightedProxyChainBuilder<SAS> {
     where
         SAS: StreamAddrStr<StreamType = ST>,
     {
-        let payload_crypto = match self.payload_xor_key {
+        let payload_crypto = match self.payload_key {
             Some(c) => Some(c.build()?),
             None => None,
         };

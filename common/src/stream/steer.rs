@@ -23,7 +23,7 @@ where
     S: IoStream + IoAddr + std::fmt::Debug,
 {
     // Wait for heartbeat upgrade
-    heartbeat::wait_upgrade(downstream, IO_TIMEOUT)
+    heartbeat::wait_upgrade(downstream, IO_TIMEOUT, crypto)
         .await
         .map_err(|e| {
             let downstream_addr = downstream.peer_addr().ok();

@@ -136,7 +136,7 @@ mod tests {
 
         // Establish connection to origin server
         {
-            heartbeat::send_upgrade(&mut stream, Duration::from_secs(1))
+            heartbeat::send_upgrade(&mut stream, Duration::from_secs(1), &crypto)
                 .await
                 .unwrap();
             // Encode header

@@ -29,15 +29,15 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamProxyConfig {
-    pub header_xor_key: tokio_chacha20::config::ConfigBuilder,
-    pub payload_xor_key: Option<tokio_chacha20::config::ConfigBuilder>,
+    pub header_key: tokio_chacha20::config::ConfigBuilder,
+    pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
 }
 
 impl StreamProxyConfig {
     pub fn into_builder(self, stream_pool: Pool) -> StreamProxyBuilder {
         StreamProxyBuilder {
-            header_xor_key: self.header_xor_key,
-            payload_xor_key: self.payload_xor_key,
+            header_key: self.header_key,
+            payload_key: self.payload_key,
             stream_pool,
         }
     }
@@ -45,18 +45,18 @@ impl StreamProxyConfig {
 
 #[derive(Debug, Clone)]
 pub struct StreamProxyBuilder {
-    pub header_xor_key: tokio_chacha20::config::ConfigBuilder,
-    pub payload_xor_key: Option<tokio_chacha20::config::ConfigBuilder>,
+    pub header_key: tokio_chacha20::config::ConfigBuilder,
+    pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
     pub stream_pool: Pool,
 }
 
 impl StreamProxyBuilder {
     pub fn build(self) -> Result<StreamProxy, StreamProxyBuildError> {
         let header_crypto = self
-            .header_xor_key
+            .header_key
             .build()
             .map_err(StreamProxyBuildError::HeaderCrypto)?;
-        let payload_crypto = match self.payload_xor_key {
+        let payload_crypto = match self.payload_key {
             Some(key) => Some(key.build().map_err(StreamProxyBuildError::PayloadCrypto)?),
             None => None,
         };

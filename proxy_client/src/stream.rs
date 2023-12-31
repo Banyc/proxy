@@ -56,7 +56,7 @@ pub async fn establish(
     // Write headers to stream
     for (header, crypto) in &pairs {
         trace!(?header, "Writing headers to stream");
-        heartbeat::send_upgrade(&mut stream, IO_TIMEOUT)
+        heartbeat::send_upgrade(&mut stream, IO_TIMEOUT, crypto)
             .await
             .map_err(|e| StreamEstablishError::WriteHeartbeatUpgrade {
                 source: e,
@@ -166,7 +166,7 @@ pub async fn trace_rtt(
 
     // Write headers to stream
     for (header, crypto) in &pairs {
-        heartbeat::send_upgrade(&mut stream, IO_TIMEOUT).await?;
+        heartbeat::send_upgrade(&mut stream, IO_TIMEOUT, crypto).await?;
         let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
         timed_write_header_async(&mut stream, header, &mut crypto_cursor, IO_TIMEOUT).await?;
     }

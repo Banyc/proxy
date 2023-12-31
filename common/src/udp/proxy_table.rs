@@ -10,12 +10,12 @@ use crate::{
 #[serde(deny_unknown_fields)]
 pub struct UdpProxyConfigBuilder {
     pub address: InternetAddrStr,
-    pub xor_key: tokio_chacha20::config::ConfigBuilder,
+    pub header_key: tokio_chacha20::config::ConfigBuilder,
 }
 
 impl UdpProxyConfigBuilder {
     pub fn build(self) -> Result<UdpProxyConfig, UdpProxyConfigBuildError> {
-        let crypto = self.xor_key.build()?;
+        let crypto = self.header_key.build()?;
         let address = self.address.0;
         Ok(ProxyConfig { address, crypto })
     }
@@ -32,12 +32,12 @@ pub enum UdpProxyConfigBuildError {
 pub struct UdpWeightedProxyChainBuilder {
     pub weight: usize,
     pub chain: Vec<UdpProxyConfigBuilder>,
-    pub payload_xor_key: Option<tokio_chacha20::config::ConfigBuilder>,
+    pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
 }
 
 impl UdpWeightedProxyChainBuilder {
     pub fn build(self) -> Result<UdpWeightedProxyChain, UdpProxyConfigBuildError> {
-        let payload_crypto = match self.payload_xor_key {
+        let payload_crypto = match self.payload_key {
             Some(c) => Some(c.build()?),
             None => None,
         };
