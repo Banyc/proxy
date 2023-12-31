@@ -157,11 +157,10 @@ dependencies = [
 
 [[package]]
 name = "async_async_io"
-version = "0.1.5"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f767e53004e8162f13f0f3869c14ff13620df3de93ce57f403e81a595c730414"
+checksum = "28eee4e3d382de2cff2b8ada55acce932ab849bbe6d480517b0111ddeb84a4cc"
 dependencies = [
- "async-trait",
  "futures-core",
  "reusable-box-future",
  "tokio",
@@ -1019,9 +1018,8 @@ dependencies = [
 [[package]]
 name = "mptcp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/mptcp.git?rev=44b3d6366e6580e80f70607263ed6065b493b78f#44b3d6366e6580e80f70607263ed6065b493b78f"
+source = "git+https://github.com/Banyc/mptcp.git?rev=9f023f2db96fba80ae044d0101f7955975272dd5#9f023f2db96fba80ae044d0101f7955975272dd5"
 dependencies = [
- "async-trait",
  "async_async_io",
  "bytes",
  "rand",
