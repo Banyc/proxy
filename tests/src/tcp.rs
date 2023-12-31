@@ -26,7 +26,12 @@ mod tests {
         net::TcpListener,
     };
 
-    use crate::{create_random_crypto, STRESS_CHAINS, STRESS_PARALLEL, STRESS_SERIAL};
+    use crate::{STRESS_CHAINS, STRESS_PARALLEL, STRESS_SERIAL};
+
+    fn create_random_crypto() -> tokio_chacha20::config::Config {
+        let key: [u8; 32] = rand::random();
+        tokio_chacha20::config::Config::new(key.into())
+    }
 
     async fn spawn_proxy(
         join_set: &mut tokio::task::JoinSet<()>,

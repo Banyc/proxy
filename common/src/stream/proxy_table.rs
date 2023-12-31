@@ -1,10 +1,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{
-    crypto::{XorCryptoBuildError, XorCryptoBuilder},
-    proxy_table::{ProxyConfig, ProxyTable, WeightedProxyChain},
-};
+use crate::proxy_table::{ProxyConfig, ProxyTable, WeightedProxyChain};
 
 use super::{addr::StreamAddrStr, StreamAddr};
 
@@ -12,7 +9,7 @@ use super::{addr::StreamAddrStr, StreamAddr};
 #[serde(deny_unknown_fields)]
 pub struct StreamProxyConfigBuilder<SAS> {
     pub address: SAS,
-    pub xor_key: XorCryptoBuilder,
+    pub xor_key: tokio_chacha20::config::ConfigBuilder,
 }
 
 impl<SAS> StreamProxyConfigBuilder<SAS> {
@@ -29,7 +26,7 @@ impl<SAS> StreamProxyConfigBuilder<SAS> {
 #[derive(Debug, Error)]
 pub enum StreamProxyConfigBuildError {
     #[error("{0}")]
-    XorCrypto(#[from] XorCryptoBuildError),
+    Crypto(#[from] tokio_chacha20::config::ConfigBuildError),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,7 +34,7 @@ pub enum StreamProxyConfigBuildError {
 pub struct StreamWeightedProxyChainBuilder<SAS> {
     pub weight: usize,
     pub chain: Vec<StreamProxyConfigBuilder<SAS>>,
-    pub payload_xor_key: Option<XorCryptoBuilder>,
+    pub payload_xor_key: Option<tokio_chacha20::config::ConfigBuilder>,
 }
 
 impl<SAS> StreamWeightedProxyChainBuilder<SAS> {

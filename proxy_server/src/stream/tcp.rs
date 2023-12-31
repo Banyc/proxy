@@ -84,7 +84,6 @@ mod tests {
 
     use super::*;
     use common::{
-        crypto::{XorCrypto, XorCryptoCursor},
         header::{codec::write_header_async, heartbeat},
         loading::Server,
         stream::{
@@ -98,7 +97,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_proxy() {
-        let crypto = XorCrypto::new(vec![].into());
+        let crypto = tokio_chacha20::config::Config::new(vec![].into());
 
         // Start proxy server
         let proxy_addr = {
@@ -147,7 +146,7 @@ mod tests {
                     stream_type: ConcreteStreamType::Tcp,
                 }),
             };
-            let mut crypto_cursor = XorCryptoCursor::new(&crypto);
+            let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
             write_header_async(&mut stream, &header, &mut crypto_cursor)
                 .await
                 .unwrap();

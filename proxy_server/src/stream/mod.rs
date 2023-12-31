@@ -3,7 +3,6 @@ use std::{io, net::SocketAddr, time::Duration};
 use async_speed_limit::Limiter;
 use common::{
     addr::ParseInternetAddrError,
-    crypto::{XorCrypto, XorCryptoBuildError, XorCryptoBuilder},
     loading,
     stream::{
         concrete::{
@@ -30,8 +29,8 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamProxyConfig {
-    pub header_xor_key: XorCryptoBuilder,
-    pub payload_xor_key: Option<XorCryptoBuilder>,
+    pub header_xor_key: tokio_chacha20::config::ConfigBuilder,
+    pub payload_xor_key: Option<tokio_chacha20::config::ConfigBuilder>,
 }
 
 impl StreamProxyConfig {
@@ -46,8 +45,8 @@ impl StreamProxyConfig {
 
 #[derive(Debug, Clone)]
 pub struct StreamProxyBuilder {
-    pub header_xor_key: XorCryptoBuilder,
-    pub payload_xor_key: Option<XorCryptoBuilder>,
+    pub header_xor_key: tokio_chacha20::config::ConfigBuilder,
+    pub payload_xor_key: Option<tokio_chacha20::config::ConfigBuilder>,
     pub stream_pool: Pool,
 }
 
@@ -72,9 +71,9 @@ impl StreamProxyBuilder {
 #[derive(Debug, Error)]
 pub enum StreamProxyBuildError {
     #[error("HeaderCrypto: {0}")]
-    HeaderCrypto(#[source] XorCryptoBuildError),
+    HeaderCrypto(#[source] tokio_chacha20::config::ConfigBuildError),
     #[error("PayloadCrypto: {0}")]
-    PayloadCrypto(#[source] XorCryptoBuildError),
+    PayloadCrypto(#[source] tokio_chacha20::config::ConfigBuildError),
     #[error("Stream pool: {0}")]
     StreamPool(#[from] ParseInternetAddrError),
 }
@@ -90,13 +89,13 @@ pub enum StreamProxyServerBuildError {
 #[derive(Debug)]
 pub struct StreamProxy {
     acceptor: StreamProxyAcceptor,
-    payload_crypto: Option<XorCrypto>,
+    payload_crypto: Option<tokio_chacha20::config::Config>,
 }
 
 impl StreamProxy {
     pub fn new(
-        header_crypto: XorCrypto,
-        payload_crypto: Option<XorCrypto>,
+        header_crypto: tokio_chacha20::config::Config,
+        payload_crypto: Option<tokio_chacha20::config::Config>,
         stream_pool: Pool,
     ) -> Self {
         Self {
@@ -186,12 +185,12 @@ pub enum ProxyResult {
 
 #[derive(Debug)]
 pub struct StreamProxyAcceptor {
-    crypto: XorCrypto,
+    crypto: tokio_chacha20::config::Config,
     stream_pool: Pool,
 }
 
 impl StreamProxyAcceptor {
-    pub fn new(crypto: XorCrypto, stream_pool: Pool) -> Self {
+    pub fn new(crypto: tokio_chacha20::config::Config, stream_pool: Pool) -> Self {
         Self {
             crypto,
             stream_pool,

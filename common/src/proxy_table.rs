@@ -12,9 +12,7 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, trace};
 
-use crate::{
-    cache_cell::CacheCell, crypto::XorCrypto, error::AnyError, header::route::RouteRequest,
-};
+use crate::{cache_cell::CacheCell, error::AnyError, header::route::RouteRequest};
 
 const TRACE_INTERVAL: Duration = Duration::from_secs(30);
 const TRACE_DEAD_INTERVAL: Duration = Duration::from_secs(60 * 2);
@@ -27,7 +25,7 @@ pub type ProxyChain<A> = [ProxyConfig<A>];
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct ProxyConfig<A> {
     pub address: A,
-    pub crypto: XorCrypto,
+    pub crypto: tokio_chacha20::config::Config,
 }
 
 /// # Panic
@@ -36,7 +34,7 @@ pub struct ProxyConfig<A> {
 pub fn convert_proxies_to_header_crypto_pairs<A>(
     nodes: &ProxyChain<A>,
     destination: Option<A>,
-) -> Vec<(RouteRequest<A>, &XorCrypto)>
+) -> Vec<(RouteRequest<A>, &tokio_chacha20::config::Config)>
 where
     A: Clone + Sync + Send,
 {
@@ -214,7 +212,7 @@ struct Scores {
 pub struct WeightedProxyChain<A> {
     pub weight: usize,
     pub chain: Arc<ProxyChain<A>>,
-    pub payload_crypto: Option<XorCrypto>,
+    pub payload_crypto: Option<tokio_chacha20::config::Config>,
 }
 
 #[derive(Debug)]

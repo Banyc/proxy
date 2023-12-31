@@ -3,7 +3,6 @@ use thiserror::Error;
 
 use crate::{
     addr::{InternetAddr, InternetAddrStr},
-    crypto::{XorCryptoBuildError, XorCryptoBuilder},
     proxy_table::{ProxyConfig, ProxyTable, WeightedProxyChain},
 };
 
@@ -11,7 +10,7 @@ use crate::{
 #[serde(deny_unknown_fields)]
 pub struct UdpProxyConfigBuilder {
     pub address: InternetAddrStr,
-    pub xor_key: XorCryptoBuilder,
+    pub xor_key: tokio_chacha20::config::ConfigBuilder,
 }
 
 impl UdpProxyConfigBuilder {
@@ -25,7 +24,7 @@ impl UdpProxyConfigBuilder {
 #[derive(Debug, Error)]
 pub enum UdpProxyConfigBuildError {
     #[error("{0}")]
-    XorCrypto(#[from] XorCryptoBuildError),
+    Crypto(#[from] tokio_chacha20::config::ConfigBuildError),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,7 +32,7 @@ pub enum UdpProxyConfigBuildError {
 pub struct UdpWeightedProxyChainBuilder {
     pub weight: usize,
     pub chain: Vec<UdpProxyConfigBuilder>,
-    pub payload_xor_key: Option<XorCryptoBuilder>,
+    pub payload_xor_key: Option<tokio_chacha20::config::ConfigBuilder>,
 }
 
 impl UdpWeightedProxyChainBuilder {

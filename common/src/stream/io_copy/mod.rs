@@ -10,8 +10,6 @@ use scopeguard::defer;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::info;
 
-use crate::{crypto::XorCrypto, stream::xor::XorStream};
-
 use super::{
     addr::StreamAddr,
     session_table::{Session, StreamSessionTable},
@@ -25,7 +23,7 @@ pub const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
 pub struct CopyBidirectional<DS, US, ST> {
     pub downstream: DS,
     pub upstream: US,
-    pub payload_crypto: Option<XorCrypto>,
+    pub payload_crypto: Option<tokio_chacha20::config::Config>,
     pub speed_limiter: Limiter,
     pub start: Instant,
     pub upstream_addr: StreamAddr<ST>,
@@ -43,7 +41,9 @@ where
         self,
         log_prefix: &str,
     ) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
-        let (metrics, res) = self.serve_as_proxy_server_no_logs().await;
+        let (metrics, res) = self
+            .serve_as_proxy_server_no_logs(EncryptionDirection::Decrypt)
+            .await;
 
         match &res {
             Ok(()) => {
@@ -74,7 +74,9 @@ where
             upstream_local,
         });
 
-        let (metrics, res) = self.serve_as_proxy_server_no_logs().await;
+        let (metrics, res) = self
+            .serve_as_proxy_server_no_logs(EncryptionDirection::Encrypt)
+            .await;
 
         let metrics = StreamProxyMetrics {
             stream: metrics,
@@ -103,12 +105,14 @@ where
 
     async fn serve_as_proxy_server_no_logs(
         self,
+        en_dir: EncryptionDirection,
     ) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
         let res = copy_bidirectional_with_payload_crypto(
             self.downstream,
             self.upstream,
             self.payload_crypto.as_ref(),
             self.speed_limiter,
+            en_dir,
         )
         .await;
 
@@ -124,11 +128,17 @@ where
     }
 }
 
+pub enum EncryptionDirection {
+    Encrypt,
+    Decrypt,
+}
+
 pub async fn copy_bidirectional_with_payload_crypto<DS, US>(
     downstream: DS,
     upstream: US,
-    payload_crypto: Option<&XorCrypto>,
+    payload_crypto: Option<&tokio_chacha20::config::Config>,
     speed_limiter: Limiter,
+    en_dir: EncryptionDirection,
 ) -> tokio_io::TimedCopyBidirectionalResult
 where
     US: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -139,9 +149,24 @@ where
     defer!(gauge!("stream.current_io_copies").decrement(1.));
     match payload_crypto {
         Some(crypto) => {
-            // Establish encrypted stream
-            let xor_stream = XorStream::upgrade(upstream, crypto);
-            tokio_io::timed_copy_bidirectional(downstream, xor_stream, speed_limiter).await
+            match en_dir {
+                EncryptionDirection::Encrypt => {
+                    // Establish encrypted stream
+                    let (r, w) = tokio::io::split(upstream);
+                    let upstream =
+                        tokio_chacha20::stream::WholeStream::from_key_halves(*crypto.key(), r, w);
+
+                    tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await
+                }
+                EncryptionDirection::Decrypt => {
+                    // Establish encrypted stream
+                    let (r, w) = tokio::io::split(downstream);
+                    let downstream =
+                        tokio_chacha20::stream::WholeStream::from_key_halves(*crypto.key(), r, w);
+
+                    tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await
+                }
+            }
         }
         None => tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await,
     }

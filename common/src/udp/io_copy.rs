@@ -15,11 +15,7 @@ use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{info, trace, warn};
 
-use crate::{
-    crypto::{XorCrypto, XorCryptoCursor},
-    error::AnyError,
-    udp::TIMEOUT,
-};
+use crate::{error::AnyError, udp::TIMEOUT};
 
 use super::{
     session_table::{Session, UdpSessionTable},
@@ -58,7 +54,7 @@ pub struct CopyBidirectional<R, W> {
     pub upstream: UpstreamParts<R, W>,
     pub downstream: DownstreamParts,
     pub speed_limiter: Limiter,
-    pub payload_crypto: Option<XorCrypto>,
+    pub payload_crypto: Option<tokio_chacha20::config::Config>,
     pub response_header: Option<Arc<[u8]>>,
 }
 
@@ -80,7 +76,9 @@ where
             upstream_local,
         });
 
-        let res = self.serve_as_proxy_server(log_prefix).await;
+        let res = self
+            .serve_as_proxy_server_(log_prefix, EncryptionDirection::Encrypt)
+            .await;
 
         session_guard.inspect_mut(|session| {
             session.end = Some(SystemTime::now());
@@ -94,6 +92,15 @@ where
     }
 
     pub async fn serve_as_proxy_server(self, log_prefix: &str) -> Result<FlowMetrics, CopyBiError> {
+        self.serve_as_proxy_server_(log_prefix, EncryptionDirection::Decrypt)
+            .await
+    }
+
+    async fn serve_as_proxy_server_(
+        self,
+        log_prefix: &str,
+        en_dir: EncryptionDirection,
+    ) -> Result<FlowMetrics, CopyBiError> {
         let res = copy_bidirectional(
             self.flow.flow().clone(),
             self.upstream,
@@ -101,6 +108,7 @@ where
             self.speed_limiter,
             self.payload_crypto,
             self.response_header,
+            en_dir,
         )
         .await;
 
@@ -122,8 +130,9 @@ pub async fn copy_bidirectional<R, W>(
     mut upstream: UpstreamParts<R, W>,
     mut downstream: DownstreamParts,
     speed_limiter: Limiter,
-    payload_crypto: Option<XorCrypto>,
+    payload_crypto: Option<tokio_chacha20::config::Config>,
     response_header: Option<Arc<[u8]>>,
+    en_dir: EncryptionDirection,
 ) -> Result<FlowMetrics, CopyBiError>
 where
     R: UdpRecv + Send + 'static,
@@ -144,6 +153,8 @@ where
     let bytes_downlink = Arc::new(AtomicU64::new(0));
     let packets_uplink = Arc::new(AtomicUsize::new(0));
     let packets_downlink = Arc::new(AtomicUsize::new(0));
+
+    let mut en_dec_buf = [0; BUFFER_LENGTH];
 
     let mut io_copy_tasks = tokio::task::JoinSet::<Result<(), CopyBiError>>::new();
     io_copy_tasks.spawn({
@@ -167,20 +178,26 @@ where
                 // Limit speed
                 speed_limiter.consume(packet.slice().len()).await;
 
-                // Xor payload
-                if let Some(payload_crypto) = &payload_crypto {
-                    let mut crypto_cursor = XorCryptoCursor::new(payload_crypto);
-                    crypto_cursor.xor(packet.slice_mut());
-                }
+                // Encrypt/Decrypt payload
+                let packet = if let Some(payload_crypto) = &payload_crypto {
+                    let Some(pkt) =
+                        en_dec(packet.slice_mut(), &mut en_dec_buf, payload_crypto, en_dir)
+                    else {
+                        continue;
+                    };
+                    pkt
+                } else {
+                    packet.slice()
+                };
 
                 // Send packet to upstream
                 upstream
                     .write
-                    .trait_send(packet.slice())
+                    .trait_send(packet)
                     .await
                     .map_err(CopyBiError::SendUpstream)?;
 
-                bytes_uplink.fetch_add(packet.slice().len() as u64, Ordering::Relaxed);
+                bytes_uplink.fetch_add(packet.len() as u64, Ordering::Relaxed);
                 packets_uplink.fetch_add(1, Ordering::Relaxed);
                 *last_uplink_packet.write().unwrap() = std::time::Instant::now();
             }
@@ -214,11 +231,16 @@ where
                     continue;
                 }
 
-                // Xor payload
-                if let Some(payload_crypto) = &payload_crypto {
-                    let mut crypto_cursor = XorCryptoCursor::new(payload_crypto);
-                    crypto_cursor.xor(pkt);
-                }
+                // Encrypt/Decrypt payload
+                let pkt = if let Some(payload_crypto) = &payload_crypto {
+                    let Some(pkt) = en_dec(pkt, &mut en_dec_buf, payload_crypto, en_dir.flip())
+                    else {
+                        continue;
+                    };
+                    pkt
+                } else {
+                    pkt
+                };
 
                 let pkt = if let Some(response_header) = &response_header {
                     // Set up protocol buffer writer
@@ -324,4 +346,43 @@ impl UdpRecv for Arc<UdpSocket> {
     async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
         UdpSocket::recv(self, buf).await.map_err(|e| e.into())
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum EncryptionDirection {
+    Encrypt,
+    Decrypt,
+}
+impl EncryptionDirection {
+    pub fn flip(&self) -> Self {
+        match self {
+            Self::Encrypt => Self::Decrypt,
+            Self::Decrypt => Self::Encrypt,
+        }
+    }
+}
+
+fn en_dec<'buf>(
+    pkt: &'buf mut [u8],
+    buf: &'buf mut [u8],
+    config: &tokio_chacha20::config::Config,
+    en_dir: EncryptionDirection,
+) -> Option<&'buf [u8]> {
+    Some(match en_dir {
+        EncryptionDirection::Encrypt => {
+            let mut cursor = tokio_chacha20::cursor::EncryptCursor::new(*config.key());
+
+            let (f, t) = cursor.encrypt(pkt, buf);
+            if pkt.len() != f {
+                // Not fully copied.
+                return None;
+            }
+            &buf[..t]
+        }
+        EncryptionDirection::Decrypt => {
+            let mut cursor = tokio_chacha20::cursor::DecryptCursor::new(*config.key());
+            let i = cursor.decrypt(pkt).unwrap();
+            &pkt[i..]
+        }
+    })
 }

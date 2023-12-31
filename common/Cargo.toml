@@ -32,6 +32,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-io-timeout = "1"
 tokio-util = { workspace = true }
+tokio_chacha20 = { workspace = true }
 tokio_kcp = { workspace = true }
 tracing = { workspace = true }
 

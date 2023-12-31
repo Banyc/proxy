@@ -5,13 +5,10 @@ use serde::de::DeserializeOwned;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 
-use crate::{
-    crypto::{XorCrypto, XorCryptoCursor},
-    header::{
-        codec::{timed_read_header_async, timed_write_header_async, CodecError},
-        heartbeat::{self, HeartbeatError},
-        route::RouteResponse,
-    },
+use crate::header::{
+    codec::{timed_read_header_async, timed_write_header_async, CodecError},
+    heartbeat::{self, HeartbeatError},
+    route::RouteResponse,
 };
 
 use super::{addr::StreamAddr, header::StreamRequestHeader, IoAddr, IoStream};
@@ -20,7 +17,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub async fn steer<S, ST: std::fmt::Debug + DeserializeOwned>(
     downstream: &mut S,
-    crypto: &XorCrypto,
+    crypto: &tokio_chacha20::config::Config,
 ) -> Result<Option<StreamAddr<ST>>, SteerError>
 where
     S: IoStream + IoAddr + std::fmt::Debug,
@@ -37,7 +34,7 @@ where
         })?;
 
     // Decode header
-    let mut read_crypto_cursor = XorCryptoCursor::new(crypto);
+    let mut read_crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new(*crypto.key());
     let header: StreamRequestHeader<ST> =
         timed_read_header_async(downstream, &mut read_crypto_cursor, IO_TIMEOUT)
             .await
@@ -54,7 +51,7 @@ where
         Some(upstream) => upstream,
         None => {
             let resp = RouteResponse { result: Ok(()) };
-            let mut write_crypto_cursor = XorCryptoCursor::new(crypto);
+            let mut write_crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
             timed_write_header_async(downstream, &resp, &mut write_crypto_cursor, IO_TIMEOUT)
                 .await
                 .map_err(|e| {

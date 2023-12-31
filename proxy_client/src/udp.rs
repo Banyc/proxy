@@ -7,7 +7,6 @@ use std::{
 
 use common::{
     addr::{any_addr, InternetAddr},
-    crypto::XorCryptoCursor,
     error::AnyError,
     header::{
         codec::{read_header, write_header, CodecError},
@@ -95,7 +94,7 @@ impl UdpProxyClient {
         let mut writer = io::Cursor::new(&mut buf);
         for (header, crypto) in &pairs {
             trace!(?header, "Writing header to buffer");
-            let mut crypto_cursor = XorCryptoCursor::new(crypto);
+            let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
             write_header(&mut writer, header, &mut crypto_cursor).unwrap();
         }
 
@@ -247,7 +246,7 @@ impl UdpProxyClientReadHalf {
         // Decode and check headers
         for node in self.proxies.iter() {
             trace!(?node.address, "Reading response");
-            let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
+            let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new(*node.crypto.key());
             let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor)?;
             if let Err(err) = resp.result {
                 warn!(?err, %node.address, "Upstream responded with an error");
@@ -326,7 +325,7 @@ pub async fn trace_rtt(proxies: &UdpProxyChain) -> Result<Duration, TraceError> 
     let mut buf = Vec::new();
     let mut writer = io::Cursor::new(&mut buf);
     for (header, crypto) in &pairs {
-        let mut crypto_cursor = XorCryptoCursor::new(crypto);
+        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
         write_header(&mut writer, header, &mut crypto_cursor).unwrap();
     }
 
@@ -345,7 +344,7 @@ pub async fn trace_rtt(proxies: &UdpProxyChain) -> Result<Duration, TraceError> 
     let mut reader = io::Cursor::new(&buf[..n]);
     for node in proxies.iter() {
         trace!(?node.address, "Reading response");
-        let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
+        let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new(*node.crypto.key());
         let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor)?;
         if let Err(err) = resp.result {
             warn!(?err, %node.address, "Upstream responded with an error");
