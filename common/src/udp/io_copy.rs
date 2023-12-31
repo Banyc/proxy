@@ -76,7 +76,9 @@ where
             upstream_local,
         });
 
-        let res = self.serve_as_proxy_server(log_prefix).await;
+        let res = self
+            .serve_as_proxy_server_(log_prefix, EncryptionDirection::Encrypt)
+            .await;
 
         session_guard.inspect_mut(|session| {
             session.end = Some(SystemTime::now());
@@ -90,6 +92,15 @@ where
     }
 
     pub async fn serve_as_proxy_server(self, log_prefix: &str) -> Result<FlowMetrics, CopyBiError> {
+        self.serve_as_proxy_server_(log_prefix, EncryptionDirection::Decrypt)
+            .await
+    }
+
+    async fn serve_as_proxy_server_(
+        self,
+        log_prefix: &str,
+        en_dir: EncryptionDirection,
+    ) -> Result<FlowMetrics, CopyBiError> {
         let res = copy_bidirectional(
             self.flow.flow().clone(),
             self.upstream,
@@ -97,6 +108,7 @@ where
             self.speed_limiter,
             self.payload_crypto,
             self.response_header,
+            en_dir,
         )
         .await;
 
@@ -120,6 +132,7 @@ pub async fn copy_bidirectional<R, W>(
     speed_limiter: Limiter,
     payload_crypto: Option<tokio_chacha20::config::Config>,
     response_header: Option<Arc<[u8]>>,
+    en_dir: EncryptionDirection,
 ) -> Result<FlowMetrics, CopyBiError>
 where
     R: UdpRecv + Send + 'static,
@@ -141,6 +154,8 @@ where
     let packets_uplink = Arc::new(AtomicUsize::new(0));
     let packets_downlink = Arc::new(AtomicUsize::new(0));
 
+    let mut en_dec_buf = [0; BUFFER_LENGTH];
+
     let mut io_copy_tasks = tokio::task::JoinSet::<Result<(), CopyBiError>>::new();
     io_copy_tasks.spawn({
         let last_uplink_packet = Arc::clone(&last_uplink_packet);
@@ -148,12 +163,11 @@ where
         let packets_uplink = Arc::clone(&packets_uplink);
         let speed_limiter = speed_limiter.clone();
         let payload_crypto = payload_crypto.clone();
-        let mut buf = [0; BUFFER_LENGTH];
         async move {
             loop {
                 let res = downstream.rx.recv().await;
                 trace!("Received packet from downstream");
-                let packet = match res {
+                let mut packet = match res {
                     Some(packet) => packet,
                     None => {
                         // Channel closed
@@ -164,17 +178,14 @@ where
                 // Limit speed
                 speed_limiter.consume(packet.slice().len()).await;
 
-                // Encrypt payload
+                // Encrypt/Decrypt payload
                 let packet = if let Some(payload_crypto) = &payload_crypto {
-                    let mut crypto_cursor =
-                        tokio_chacha20::cursor::EncryptCursor::new(*payload_crypto.key());
-
-                    let (f, t) = crypto_cursor.encrypt(packet.slice(), &mut buf);
-                    if packet.slice().len() != f {
-                        // Not fully copied.
+                    let Some(pkt) =
+                        en_dec(packet.slice_mut(), &mut en_dec_buf, payload_crypto, en_dir)
+                    else {
                         continue;
-                    }
-                    &buf[..t]
+                    };
+                    pkt
                 } else {
                     packet.slice()
                 };
@@ -220,12 +231,13 @@ where
                     continue;
                 }
 
-                // Decrypt payload
+                // Encrypt/Decrypt payload
                 let pkt = if let Some(payload_crypto) = &payload_crypto {
-                    let mut crypto_cursor =
-                        tokio_chacha20::cursor::DecryptCursor::new(*payload_crypto.key());
-                    let i = crypto_cursor.decrypt(pkt).unwrap();
-                    &pkt[i..]
+                    let Some(pkt) = en_dec(pkt, &mut en_dec_buf, payload_crypto, en_dir.flip())
+                    else {
+                        continue;
+                    };
+                    pkt
                 } else {
                     pkt
                 };
@@ -334,4 +346,43 @@ impl UdpRecv for Arc<UdpSocket> {
     async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
         UdpSocket::recv(self, buf).await.map_err(|e| e.into())
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum EncryptionDirection {
+    Encrypt,
+    Decrypt,
+}
+impl EncryptionDirection {
+    pub fn flip(&self) -> Self {
+        match self {
+            Self::Encrypt => Self::Decrypt,
+            Self::Decrypt => Self::Encrypt,
+        }
+    }
+}
+
+fn en_dec<'buf>(
+    pkt: &'buf mut [u8],
+    buf: &'buf mut [u8],
+    config: &tokio_chacha20::config::Config,
+    en_dir: EncryptionDirection,
+) -> Option<&'buf [u8]> {
+    Some(match en_dir {
+        EncryptionDirection::Encrypt => {
+            let mut cursor = tokio_chacha20::cursor::EncryptCursor::new(*config.key());
+
+            let (f, t) = cursor.encrypt(pkt, buf);
+            if pkt.len() != f {
+                // Not fully copied.
+                return None;
+            }
+            &buf[..t]
+        }
+        EncryptionDirection::Decrypt => {
+            let mut cursor = tokio_chacha20::cursor::DecryptCursor::new(*config.key());
+            let i = cursor.decrypt(pkt).unwrap();
+            &pkt[i..]
+        }
+    })
 }
