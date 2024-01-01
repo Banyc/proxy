@@ -27,7 +27,7 @@ where
     R: reader_bounds,
     H: for<'de> Deserialize<'de> + std::fmt::Debug + Header,
 {
-    let mut buf = [0; MAX_HEADER_LEN];
+    let mut buf = [0; MAX_HEADER_LEN + 16];
 
     // Decode header length
     let len = {
@@ -39,21 +39,20 @@ where
     };
     trace!(len, "Read header length");
 
-    // Read header
+    // Read header and tag
     if len > MAX_HEADER_LEN {
         return Err(CodecError::Io(io::Error::new(
             io::ErrorKind::InvalidData,
             "Header too long",
         )));
     }
-    let hdr = &mut buf[..len];
-    let res = reader.read_exact(hdr);
+    let hdr_tag = &mut buf[..len + 16];
+    let res = reader.read_exact(hdr_tag);
     add_await([res])?;
+    let (hdr, tag) = hdr_tag.split_at_mut(len);
+    let tag: &[u8] = tag;
 
     // Check MAC
-    let mut tag = [0; 16];
-    let res = reader.read_exact(&mut tag);
-    add_await([res])?;
     let key = cursor.poly1305_key().unwrap();
     let expected_tag = tokio_chacha20::mac::poly1305_mac(key, hdr);
     if tag != expected_tag {
