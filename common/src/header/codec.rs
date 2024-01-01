@@ -39,17 +39,29 @@ where
     };
     trace!(len, "Read header length");
 
+    // Read header
+    if len > MAX_HEADER_LEN {
+        return Err(CodecError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Header too long",
+        )));
+    }
+    let hdr = &mut buf[..len];
+    let res = reader.read_exact(hdr);
+    add_await([res])?;
+
+    // Check MAC
+    let mut tag = [0; 16];
+    let res = reader.read_exact(&mut tag);
+    add_await([res])?;
+    let key = cursor.poly1305_key().unwrap();
+    let expected_tag = tokio_chacha20::mac::poly1305_mac(key, hdr);
+    if tag != expected_tag {
+        return Err(CodecError::Integrity);
+    }
+
     // Decode header
     let header = {
-        if len > MAX_HEADER_LEN {
-            return Err(CodecError::Io(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Header too long",
-            )));
-        }
-        let hdr = &mut buf[..len];
-        let res = reader.read_exact(hdr);
-        add_await([res])?;
         let i = cursor.decrypt(hdr).unwrap();
         assert_eq!(i, 0);
         bincode::deserialize(hdr)?
@@ -99,7 +111,14 @@ where
     // Write header
     let (f, t) = cursor.encrypt(hdr, &mut buf[n..]);
     assert_eq!(hdr.len(), f);
+    let encrypted_hdr = &buf[n..n + t];
     n += t;
+
+    // Write tag
+    let key = cursor.poly1305_key();
+    let tag = tokio_chacha20::mac::poly1305_mac(key, encrypted_hdr);
+    buf[n..n + tag.len()].copy_from_slice(&tag);
+    n += tag.len();
 
     add_await([writer.write_all(&buf[..n])])?;
 
@@ -151,4 +170,6 @@ pub enum CodecError {
     Io(#[from] io::Error),
     #[error("Serialization error: {0}")]
     Serialization(#[from] bincode::Error),
+    #[error("Data tempered")]
+    Integrity,
 }

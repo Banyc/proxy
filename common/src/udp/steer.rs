@@ -81,6 +81,6 @@ async fn handle_steer_error(
 fn error_kind_from_header_error(e: &CodecError) -> RouteErrorKind {
     match e {
         CodecError::Io(_) => RouteErrorKind::Io,
-        CodecError::Serialization(_) => RouteErrorKind::Codec,
+        CodecError::Serialization(_) | CodecError::Integrity => RouteErrorKind::Codec,
     }
 }
