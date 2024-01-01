@@ -27,7 +27,7 @@ where
     R: reader_bounds,
     H: for<'de> Deserialize<'de> + std::fmt::Debug + Header,
 {
-    let mut buf = [0; MAX_HEADER_LEN + 16];
+    let mut buf = [0; MAX_HEADER_LEN + tokio_chacha20::mac::BLOCK_BYTES];
 
     // Decode header length
     let len = {
@@ -46,7 +46,7 @@ where
             "Header too long",
         )));
     }
-    let hdr_tag = &mut buf[..len + 16];
+    let hdr_tag = &mut buf[..len + tokio_chacha20::mac::BLOCK_BYTES];
     let res = reader.read_exact(hdr_tag);
     add_await([res])?;
     let (hdr, tag) = hdr_tag.split_at_mut(len);

@@ -1779,7 +1779,7 @@ dependencies = [
 [[package]]
 name = "tokio_chacha20"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/tokio_chacha20.git?rev=246bc1df7c449d608c3a74d8d4ee79cd1d0b983f#246bc1df7c449d608c3a74d8d4ee79cd1d0b983f"
+source = "git+https://github.com/Banyc/tokio_chacha20.git?rev=40d2030f0ab6e7e32031e61618717d25f25e5509#40d2030f0ab6e7e32031e61618717d25f25e5509"
 dependencies = [
  "arrayvec",
  "base64",

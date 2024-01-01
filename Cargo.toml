@@ -22,7 +22,7 @@ tabled = "0.15"
 thiserror = "1"
 tokio = "1"
 tokio-util = "0.7"
-tokio_chacha20 = { git = "https://github.com/Banyc/tokio_chacha20.git", rev = "246bc1df7c449d608c3a74d8d4ee79cd1d0b983f" }
+tokio_chacha20 = { git = "https://github.com/Banyc/tokio_chacha20.git", rev = "40d2030f0ab6e7e32031e61618717d25f25e5509" }
 tokio_kcp = "0.9"
 tracing = "0.1"
 tracing-subscriber = "0.3"
