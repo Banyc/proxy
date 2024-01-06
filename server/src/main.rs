@@ -1,11 +1,16 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use axum::{extract::State, routing::get, Router};
+use axum::{
+    extract::{Query, State},
+    routing::get,
+    Router,
+};
 use clap::Parser;
 use common::{
     error::AnyResult, session_table::BothSessionTables, stream::concrete::addr::ConcreteStreamType,
 };
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use serde::Deserialize;
 use server::{
     config::multi_file_config::{spawn_watch_tasks, MultiFileConfigReader},
     serve,
@@ -38,15 +43,16 @@ async fn main() -> AnyResult {
                 metrics_handle.render()
             }
             async fn sessions(
+                Query(params): Query<SessionsParams>,
                 State(session_table): State<BothSessionTables<ConcreteStreamType>>,
             ) -> String {
                 let mut text = String::new();
 
-                const SQL: &str = "sort start_ms select destination duration";
+                let sql = &params.sql;
                 text.push_str("Stream:\n");
                 let sessions = session_table
                     .stream()
-                    .and_then(|s| s.to_view(SQL).map(|s| s.to_string()));
+                    .and_then(|s| s.to_view(sql).map(|s| s.to_string()));
                 if let Some(s) = sessions {
                     text.push_str(&s);
                 }
@@ -55,7 +61,7 @@ async fn main() -> AnyResult {
                 text.push_str("UDP:\n");
                 let sessions = session_table
                     .udp()
-                    .and_then(|s| s.to_view(SQL).map(|s| s.to_string()));
+                    .and_then(|s| s.to_view(sql).map(|s| s.to_string()));
                 if let Some(s) = sessions {
                     text.push_str(&s);
                 }
@@ -84,4 +90,14 @@ async fn main() -> AnyResult {
     serve(notify_rx, config_reader, session_table)
         .await
         .map_err(|e| e.into())
+}
+
+fn default_sql() -> String {
+    const SQL: &str = "sort start_ms select destination duration";
+    SQL.to_string()
+}
+#[derive(Debug, Deserialize)]
+struct SessionsParams {
+    #[serde(default = "default_sql")]
+    sql: String,
 }
