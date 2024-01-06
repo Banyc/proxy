@@ -60,18 +60,20 @@ where
     pub async fn serve_as_access_server(
         self,
         destination: StreamAddr<ST>,
-        session_table: StreamSessionTable<ST>,
+        session_table: Option<StreamSessionTable<ST>>,
         upstream_local: Option<SocketAddr>,
         log_prefix: &str,
     ) -> (
         StreamProxyMetrics<ST>,
         Result<(), tokio_io::CopyBiErrorKind>,
     ) {
-        let session_guard = session_table.set_scope_owned(Session {
-            start: SystemTime::now(),
-            end: None,
-            destination: destination.clone(),
-            upstream_local,
+        let session_guard = session_table.map(|s| {
+            s.set_scope_owned(Session {
+                start: SystemTime::now(),
+                end: None,
+                destination: destination.clone(),
+                upstream_local,
+            })
         });
 
         let (metrics, res) = self
@@ -92,9 +94,11 @@ where
             }
         }
 
-        session_guard.inspect_mut(|session| {
-            session.end = Some(SystemTime::now());
-        });
+        if let Some(s) = session_guard.as_ref() {
+            s.inspect_mut(|session| {
+                session.end = Some(SystemTime::now());
+            })
+        }
         tokio::spawn(async move {
             let _session_guard = session_guard;
             tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;

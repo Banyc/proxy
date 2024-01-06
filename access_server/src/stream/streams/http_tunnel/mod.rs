@@ -12,7 +12,6 @@ use common::{
     config::SharableConfig,
     filter::{self, Filter, FilterBuilder},
     loading,
-    session_table::SessionOwnedGuard,
     stream::{
         addr::StreamAddr,
         concrete::{addr::ConcreteStreamType, pool::Pool, streams::tcp::TcpServer},
@@ -27,6 +26,7 @@ use hyper::{
     body::Incoming, http, service::service_fn, upgrade::Upgraded, Method, Request, Response,
 };
 use hyper_util::rt::TokioIo;
+use monitor_table::table::RowOwnedGuard;
 use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -55,7 +55,7 @@ impl HttpAccessServerConfig {
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         filters: &HashMap<Arc<str>, Filter>,
         cancellation: CancellationToken,
-        session_table: StreamSessionTable<ConcreteStreamType>,
+        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     ) -> Result<HttpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -102,7 +102,7 @@ pub struct HttpAccessServerBuilder {
     stream_pool: Pool,
     filter: Filter,
     speed_limit: f64,
-    session_table: StreamSessionTable<ConcreteStreamType>,
+    session_table: Option<StreamSessionTable<ConcreteStreamType>>,
 }
 
 impl loading::Builder for HttpAccessServerBuilder {
@@ -139,7 +139,7 @@ pub struct HttpAccess {
     stream_pool: Pool,
     filter: Filter,
     speed_limiter: Limiter,
-    session_table: StreamSessionTable<ConcreteStreamType>,
+    session_table: Option<StreamSessionTable<ConcreteStreamType>>,
 }
 
 impl HttpAccess {
@@ -148,7 +148,7 @@ impl HttpAccess {
         stream_pool: Pool,
         filter: Filter,
         speed_limit: f64,
-        session_table: StreamSessionTable<ConcreteStreamType>,
+        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     ) -> Self {
         Self {
             proxy_table: Arc::new(proxy_table),
@@ -211,14 +211,16 @@ impl HttpAccess {
                 let upstream = tokio::net::TcpStream::connect(addr)
                     .await
                     .map_err(TunnelError::Direct)?;
-                let session_guard = self.session_table.set_scope_owned(Session {
-                    start: SystemTime::now(),
-                    end: None,
-                    destination: StreamAddr {
-                        address: addr.into(),
-                        stream_type: ConcreteStreamType::Tcp,
-                    },
-                    upstream_local: upstream.local_addr().ok(),
+                let session_guard = self.session_table.as_ref().map(|s| {
+                    s.set_scope_owned(Session {
+                        start: SystemTime::now(),
+                        end: None,
+                        destination: StreamAddr {
+                            address: addr.into(),
+                            stream_type: ConcreteStreamType::Tcp,
+                        },
+                        upstream_local: upstream.local_addr().ok(),
+                    })
                 });
                 let res = tls_http(upstream, req, session_guard).await;
                 info!(?addr, "Direct {} finished", method);
@@ -238,14 +240,16 @@ impl HttpAccess {
         )
         .await?;
 
-        let session_guard = self.session_table.set_scope_owned(Session {
-            start: SystemTime::now(),
-            end: None,
-            destination: StreamAddr {
-                address: addr.clone(),
-                stream_type: ConcreteStreamType::Tcp,
-            },
-            upstream_local: upstream.stream.local_addr().ok(),
+        let session_guard = self.session_table.as_ref().map(|s| {
+            s.set_scope_owned(Session {
+                start: SystemTime::now(),
+                end: None,
+                destination: StreamAddr {
+                    address: addr.clone(),
+                    stream_type: ConcreteStreamType::Tcp,
+                },
+                upstream_local: upstream.stream.local_addr().ok(),
+            })
         });
         let res = match &proxy_chain.payload_crypto {
             Some(crypto) => {
@@ -333,7 +337,7 @@ impl HttpAccess {
 async fn tls_http<S>(
     upstream: S,
     req: Request<Incoming>,
-    session_guard: SessionOwnedGuard<Session<ConcreteStreamType>>,
+    session_guard: Option<RowOwnedGuard<Session<ConcreteStreamType>>>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>
 where
     S: AsyncWrite + AsyncRead + Send + Unpin + 'static,
@@ -360,7 +364,9 @@ where
         e
     })?;
 
-    session_guard.inspect_mut(|session| session.end = Some(SystemTime::now()));
+    if let Some(s) = &session_guard {
+        s.inspect_mut(|session| session.end = Some(SystemTime::now()));
+    }
     tokio::spawn(async move {
         let _session_guard = session_guard;
         tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
@@ -374,7 +380,7 @@ async fn upgrade(
     addr: InternetAddr,
     http_connect: Option<HttpConnect>,
     speed_limiter: Limiter,
-    session_table: StreamSessionTable<ConcreteStreamType>,
+    session_table: Option<StreamSessionTable<ConcreteStreamType>>,
 ) {
     let upgraded = match hyper::upgrade::on(req).await {
         Ok(upgraded) => upgraded,
@@ -476,7 +482,7 @@ struct HttpConnect {
     proxy_table: Arc<StreamProxyTable<ConcreteStreamType>>,
     stream_pool: Pool,
     speed_limiter: Limiter,
-    session_table: StreamSessionTable<ConcreteStreamType>,
+    session_table: Option<StreamSessionTable<ConcreteStreamType>>,
 }
 
 impl HttpConnect {
@@ -484,7 +490,7 @@ impl HttpConnect {
         proxy_table: Arc<StreamProxyTable<ConcreteStreamType>>,
         stream_pool: Pool,
         speed_limiter: Limiter,
-        session_table: StreamSessionTable<ConcreteStreamType>,
+        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     ) -> Self {
         Self {
             proxy_table,

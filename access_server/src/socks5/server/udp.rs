@@ -36,7 +36,7 @@ impl Socks5ServerUdpAccessServerConfig {
         self,
         proxy_tables: &HashMap<Arc<str>, UdpProxyTable>,
         cancellation: CancellationToken,
-        session_table: UdpSessionTable,
+        session_table: Option<UdpSessionTable>,
     ) -> Result<Socks5ServerUdpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -68,7 +68,7 @@ pub struct Socks5ServerUdpAccessServerBuilder {
     listen_addr: Arc<str>,
     proxy_table: UdpProxyTable,
     speed_limit: f64,
-    session_table: UdpSessionTable,
+    session_table: Option<UdpSessionTable>,
 }
 
 impl loading::Builder for Socks5ServerUdpAccessServerBuilder {
@@ -100,7 +100,7 @@ impl loading::Builder for Socks5ServerUdpAccessServerBuilder {
 pub struct Socks5ServerUdpAccess {
     proxy_table: UdpProxyTable,
     speed_limiter: Limiter,
-    session_table: UdpSessionTable,
+    session_table: Option<UdpSessionTable>,
 }
 
 impl loading::Hook for Socks5ServerUdpAccess {}
@@ -109,7 +109,7 @@ impl Socks5ServerUdpAccess {
     pub fn new(
         proxy_table: UdpProxyTable,
         speed_limit: f64,
-        session_table: UdpSessionTable,
+        session_table: Option<UdpSessionTable>,
     ) -> Self {
         Self {
             proxy_table,

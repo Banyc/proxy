@@ -10,7 +10,6 @@ use server::{
     config::multi_file_config::{spawn_watch_tasks, MultiFileConfigReader},
     serve,
 };
-use tabled::Table;
 use tracing::info;
 
 #[derive(Debug, Parser)]
@@ -43,32 +42,23 @@ async fn main() -> AnyResult {
             ) -> String {
                 let mut text = String::new();
 
+                const SQL: &str = "sort start_ms select destination duration";
                 text.push_str("Stream:\n");
-                let mut sessions = session_table
+                let sessions = session_table
                     .stream()
-                    .sessions()
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>();
-                sessions.sort_by_key(|session| session.start);
-                let sessions = Table::new(sessions)
-                    .with(tabled::settings::Style::blank())
-                    .to_string();
-                text.push_str(&sessions);
+                    .and_then(|s| s.to_view(SQL).map(|s| s.to_string()));
+                if let Some(s) = sessions {
+                    text.push_str(&s);
+                }
                 text.push('\n');
 
                 text.push_str("UDP:\n");
-                let mut sessions = session_table
+                let sessions = session_table
                     .udp()
-                    .sessions()
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>();
-                sessions.sort_by_key(|session| session.start);
-                let sessions = Table::new(sessions)
-                    .with(tabled::settings::Style::blank())
-                    .to_string();
-                text.push_str(&sessions);
+                    .and_then(|s| s.to_view(SQL).map(|s| s.to_string()));
+                if let Some(s) = sessions {
+                    text.push_str(&s);
+                }
                 text.push('\n');
 
                 text
@@ -86,7 +76,7 @@ async fn main() -> AnyResult {
             server.await.unwrap();
         });
     } else {
-        session_table = BothSessionTables::new_disabled();
+        session_table = BothSessionTables::empty();
     }
 
     let notify_rx = spawn_watch_tasks(&args.config_file_paths);

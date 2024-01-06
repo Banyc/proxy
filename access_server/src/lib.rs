@@ -100,7 +100,7 @@ impl AccessServerConfig {
                     stream_pool.clone(),
                     &stream_proxy_tables,
                     cancellation.clone(),
-                    session_table.stream().clone(),
+                    session_table.stream().cloned(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -117,7 +117,7 @@ impl AccessServerConfig {
                 c.into_builder(
                     &udp_proxy_tables,
                     cancellation.clone(),
-                    session_table.udp().clone(),
+                    session_table.udp().cloned(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -136,7 +136,7 @@ impl AccessServerConfig {
                     &stream_proxy_tables,
                     &filters,
                     cancellation.clone(),
-                    session_table.stream().clone(),
+                    session_table.stream().cloned(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -155,7 +155,7 @@ impl AccessServerConfig {
                     &stream_proxy_tables,
                     &filters,
                     cancellation.clone(),
-                    session_table.stream().clone(),
+                    session_table.stream().cloned(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -172,7 +172,7 @@ impl AccessServerConfig {
                 c.into_builder(
                     &udp_proxy_tables,
                     cancellation.clone(),
-                    session_table.udp().clone(),
+                    session_table.udp().cloned(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;

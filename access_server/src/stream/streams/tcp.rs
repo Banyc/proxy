@@ -40,7 +40,7 @@ impl TcpAccessServerConfig {
         stream_pool: Pool,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         cancellation: CancellationToken,
-        session_table: StreamSessionTable<ConcreteStreamType>,
+        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     ) -> Result<TcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -76,7 +76,7 @@ pub struct TcpAccessServerBuilder {
     proxy_table: StreamProxyTable<ConcreteStreamType>,
     stream_pool: Pool,
     speed_limit: f64,
-    session_table: StreamSessionTable<ConcreteStreamType>,
+    session_table: Option<StreamSessionTable<ConcreteStreamType>>,
 }
 
 impl loading::Builder for TcpAccessServerBuilder {
@@ -112,7 +112,7 @@ pub struct TcpAccess {
     destination: ConcreteStreamAddr,
     stream_pool: Pool,
     speed_limiter: Limiter,
-    session_table: StreamSessionTable<ConcreteStreamType>,
+    session_table: Option<StreamSessionTable<ConcreteStreamType>>,
 }
 
 impl TcpAccess {
@@ -121,7 +121,7 @@ impl TcpAccess {
         destination: ConcreteStreamAddr,
         stream_pool: Pool,
         speed_limit: f64,
-        session_table: StreamSessionTable<ConcreteStreamType>,
+        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     ) -> Self {
         Self {
             proxy_table,

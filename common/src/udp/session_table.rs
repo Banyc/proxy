@@ -1,14 +1,16 @@
 use std::{
-    borrow::Cow,
     net::SocketAddr,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use tabled::Tabled;
+use monitor_table::{
+    row::{LiteralType, LiteralValue, TableRow},
+    table::Table,
+};
 
-use crate::{addr::InternetAddr, session_table::SessionTable};
+use crate::addr::InternetAddr;
 
-pub type UdpSessionTable = SessionTable<Session>;
+pub type UdpSessionTable = Table<Session>;
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -18,19 +20,21 @@ pub struct Session {
     pub upstream_local: Option<SocketAddr>,
 }
 
-impl Tabled for Session {
-    const LENGTH: usize = 4;
+impl TableRow for Session {
+    fn schema() -> Vec<(String, LiteralType)> {
+        vec![
+            (String::from("destination"), LiteralType::String),
+            (String::from("duration"), LiteralType::Int),
+            (String::from("start_ms"), LiteralType::Int),
+            (String::from("end_ms"), LiteralType::Int),
+            (String::from("upstream_local"), LiteralType::String),
+        ]
+    }
 
-    fn fields(&self) -> Vec<Cow<'_, str>> {
+    fn fields(&self) -> Vec<Option<LiteralValue>> {
         let start_unix = self.start.duration_since(UNIX_EPOCH).unwrap();
         let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
 
-        let start = start_unix.as_secs().to_string().into();
-        let upstream_local = match self.upstream_local {
-            Some(upstream_local) => upstream_local.to_string().into(),
-            None => "".into(),
-        };
-        let destination = self.destination.to_string().into();
         let duration = match self.end {
             Some(end) => end
                 .duration_since(UNIX_EPOCH)
@@ -38,25 +42,37 @@ impl Tabled for Session {
                 .saturating_sub(start_unix),
             None => now_unix.saturating_sub(start_unix),
         };
-        let duration = if duration.as_secs() == 0 {
-            format!("{} ms", duration.as_millis())
-        } else if duration.as_secs() / 60 == 0 {
-            format!("{} s", duration.as_secs())
-        } else if duration.as_secs() / 60 / 60 == 0 {
-            format!("{} min", duration.as_secs() / 60)
-        } else {
-            format!("{} h", duration.as_secs() / 60 / 60)
-        }
-        .into();
-        vec![destination, duration, start, upstream_local]
+
+        let destination = Some(self.destination.to_string().into());
+        let duration = Some((duration.as_millis() as i64).into());
+        let start = Some((start_unix.as_millis() as i64).into());
+        let end = self
+            .end
+            .map(|e| (e.duration_since(UNIX_EPOCH).unwrap().as_millis() as i64).into());
+        let upstream_local = self.upstream_local.map(|x| x.to_string().into());
+
+        vec![destination, duration, start, end, upstream_local]
     }
 
-    fn headers() -> Vec<Cow<'static, str>> {
-        vec![
-            "destination".into(),
-            "duration".into(),
-            "start".into(),
-            "upstream_local".into(),
-        ]
+    fn display_value(header: &str, value: Option<LiteralValue>) -> String {
+        let Some(v) = value else {
+            return String::new();
+        };
+        match header {
+            "duration" => {
+                let duration: i64 = v.try_into().unwrap();
+                let duration = Duration::from_millis(duration as _);
+                if duration.as_secs() == 0 {
+                    format!("{} ms", duration.as_millis())
+                } else if duration.as_secs() / 60 == 0 {
+                    format!("{} s", duration.as_secs())
+                } else if duration.as_secs() / 60 / 60 == 0 {
+                    format!("{} min", duration.as_secs() / 60)
+                } else {
+                    format!("{} h", duration.as_secs() / 60 / 60)
+                }
+            }
+            _ => v.to_string(),
+        }
     }
 }

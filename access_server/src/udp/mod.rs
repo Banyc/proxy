@@ -38,7 +38,7 @@ impl UdpAccessServerConfig {
         self,
         proxy_tables: &HashMap<Arc<str>, UdpProxyTable>,
         cancellation: CancellationToken,
-        session_table: UdpSessionTable,
+        session_table: Option<UdpSessionTable>,
     ) -> Result<UdpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -72,7 +72,7 @@ pub struct UdpAccessServerBuilder {
     destination: InternetAddrStr,
     proxy_table: UdpProxyTable,
     speed_limit: f64,
-    session_table: UdpSessionTable,
+    session_table: Option<UdpSessionTable>,
 }
 
 impl loading::Builder for UdpAccessServerBuilder {
@@ -106,7 +106,7 @@ pub struct UdpAccess {
     proxy_table: UdpProxyTable,
     destination: InternetAddr,
     speed_limiter: Limiter,
-    session_table: UdpSessionTable,
+    session_table: Option<UdpSessionTable>,
 }
 
 impl loading::Hook for UdpAccess {}
@@ -116,7 +116,7 @@ impl UdpAccess {
         proxy_table: UdpProxyTable,
         destination: InternetAddr,
         speed_limit: f64,
-        session_table: UdpSessionTable,
+        session_table: Option<UdpSessionTable>,
     ) -> Self {
         Self {
             proxy_table,

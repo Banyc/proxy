@@ -11,6 +11,7 @@ common = { path = "../common" }
 http-body-util = "0.1"
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
+monitor_table = { workspace = true }
 pin-project-lite = "0.2"
 proxy_client = { path = "../proxy_client" }
 serde = { workspace = true, features = ["derive"] }

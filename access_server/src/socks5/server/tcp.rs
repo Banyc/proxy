@@ -55,7 +55,7 @@ impl Socks5ServerTcpAccessServerConfig {
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         filters: &HashMap<Arc<str>, Filter>,
         cancellation: CancellationToken,
-        session_table: StreamSessionTable<ConcreteStreamType>,
+        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     ) -> Result<Socks5ServerTcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -118,7 +118,7 @@ pub struct Socks5ServerTcpAccessServerBuilder {
     speed_limit: f64,
     udp_server_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-    session_table: StreamSessionTable<ConcreteStreamType>,
+    session_table: Option<StreamSessionTable<ConcreteStreamType>>,
 }
 
 impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
@@ -159,7 +159,7 @@ pub struct Socks5ServerTcpAccess {
     speed_limiter: Limiter,
     udp_listen_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-    session_table: StreamSessionTable<ConcreteStreamType>,
+    session_table: Option<StreamSessionTable<ConcreteStreamType>>,
 }
 
 impl Hook for Socks5ServerTcpAccess {}
@@ -187,7 +187,7 @@ impl Socks5ServerTcpAccess {
         speed_limit: f64,
         udp_listen_addr: Option<InternetAddr>,
         users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-        session_table: StreamSessionTable<ConcreteStreamType>,
+        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     ) -> Self {
         Self {
             proxy_table,

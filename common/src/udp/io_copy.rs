@@ -65,24 +65,28 @@ where
 {
     pub async fn serve_as_access_server(
         self,
-        session_table: UdpSessionTable,
+        session_table: Option<UdpSessionTable>,
         upstream_local: Option<SocketAddr>,
         log_prefix: &str,
     ) -> Result<FlowMetrics, CopyBiError> {
-        let session_guard = session_table.set_scope_owned(Session {
-            start: SystemTime::now(),
-            end: None,
-            destination: self.flow.flow().upstream.0.clone(),
-            upstream_local,
+        let session_guard = session_table.as_ref().map(|s| {
+            s.set_scope_owned(Session {
+                start: SystemTime::now(),
+                end: None,
+                destination: self.flow.flow().upstream.0.clone(),
+                upstream_local,
+            })
         });
 
         let res = self
             .serve_as_proxy_server_(log_prefix, EncryptionDirection::Encrypt)
             .await;
 
-        session_guard.inspect_mut(|session| {
-            session.end = Some(SystemTime::now());
-        });
+        if let Some(s) = &session_guard {
+            s.inspect_mut(|session| {
+                session.end = Some(SystemTime::now());
+            });
+        }
         tokio::spawn(async move {
             let _session_guard = session_guard;
             tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
