@@ -231,7 +231,7 @@ impl HttpAccess {
                     })
                 });
                 let res = tls_http(upstream, req, session_guard).await;
-                info!(?addr, "Direct {} finished", method);
+                info!(%addr, "Direct {} finished", method);
                 return res;
             }
         }
