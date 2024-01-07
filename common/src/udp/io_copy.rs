@@ -67,13 +67,14 @@ where
     pub async fn serve_as_proxy_server(
         self,
         session_table: Option<UdpSessionTable>,
+        upstream_local: Option<SocketAddr>,
         log_prefix: &str,
     ) -> Result<FlowMetrics, CopyBiError> {
         let session = Session {
             start: SystemTime::now(),
             end: None,
             destination: None,
-            upstream_local: None,
+            upstream_local,
             upstream_remote: self.flow.flow().upstream.0.clone(),
             downstream_remote: self.flow.flow().downstream.0,
         };

@@ -40,13 +40,14 @@ where
     pub async fn serve_as_proxy_server(
         self,
         session_table: Option<StreamSessionTable<ST>>,
+        upstream_local: Option<SocketAddr>,
         log_prefix: &str,
     ) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
         let session = Session {
             start: SystemTime::now(),
             end: None,
             destination: None,
-            upstream_local: None,
+            upstream_local,
             upstream_remote: self.upstream_addr.clone(),
             downstream_remote: self.downstream_addr,
         };

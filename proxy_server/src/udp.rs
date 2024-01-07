@@ -177,6 +177,7 @@ impl UdpProxy {
         let header_crypto = self.header_crypto.clone();
         let payload_crypto = self.payload_crypto.clone();
         let session_table = self.session_table.clone();
+        let upstream_local = upstream.local_addr().ok();
         tokio::spawn(async move {
             let io_copy = CopyBidirectional {
                 flow,
@@ -192,7 +193,9 @@ impl UdpProxy {
                 payload_crypto,
                 response_header: Some(response_header),
             };
-            let res = io_copy.serve_as_proxy_server(session_table, "UDP").await;
+            let res = io_copy
+                .serve_as_proxy_server(session_table, upstream_local, "UDP")
+                .await;
             if res.is_err() {
                 let _ = respond_with_error(&downstream_writer, RouteErrorKind::Io, &header_crypto)
                     .await;

@@ -138,6 +138,7 @@ impl StreamProxy {
         // Copy data
         let payload_crypto = self.payload_crypto.clone();
         let session_table = self.session_table.clone();
+        let upstream_local = upstream.stream.local_addr().ok();
         tokio::spawn(async move {
             let io_copy = CopyBidirectional {
                 downstream,
@@ -149,7 +150,9 @@ impl StreamProxy {
                 upstream_sock_addr: upstream.sock_addr,
                 downstream_addr,
             };
-            let _ = io_copy.serve_as_proxy_server(session_table, "Stream").await;
+            let _ = io_copy
+                .serve_as_proxy_server(session_table, upstream_local, "Stream")
+                .await;
         });
         Ok(ProxyResult::IoCopy)
     }
