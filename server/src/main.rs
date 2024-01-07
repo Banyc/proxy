@@ -42,17 +42,18 @@ async fn main() -> AnyResult {
             async fn metrics(metrics_handle: State<PrometheusHandle>) -> String {
                 metrics_handle.render()
             }
-            async fn sessions(
+            fn sessions(
                 Query(params): Query<SessionsParams>,
                 State(session_table): State<BothSessionTables<ConcreteStreamType>>,
-            ) -> String {
+            ) -> anyhow::Result<String> {
                 let mut text = String::new();
 
                 let sql = &params.sql;
                 text.push_str("Stream:\n");
                 let sessions = session_table
                     .stream()
-                    .and_then(|s| s.to_view(sql).map(|s| s.to_string()));
+                    .map(|s| s.to_view(sql).map(|s| s.to_string()))
+                    .transpose()?;
                 if let Some(s) = sessions {
                     text.push_str(&s);
                 }
@@ -61,18 +62,24 @@ async fn main() -> AnyResult {
                 text.push_str("UDP:\n");
                 let sessions = session_table
                     .udp()
-                    .and_then(|s| s.to_view(sql).map(|s| s.to_string()));
+                    .map(|s| s.to_view(sql).map(|s| s.to_string()))
+                    .transpose()?;
                 if let Some(s) = sessions {
                     text.push_str(&s);
                 }
                 text.push('\n');
 
-                text
+                Ok(text)
             }
             let router = Router::new()
                 .route("/", get(metrics))
                 .with_state(metrics_handle)
-                .route("/sessions", get(sessions))
+                .route(
+                    "/sessions",
+                    get(|params, state| async {
+                        sessions(params, state).map_err(|e| format!("{e:#?}"))
+                    }),
+                )
                 .with_state(session_table)
                 .route("/health", get(|| async { Ok::<_, ()>(()) }));
             let listener = tokio::net::TcpListener::bind(&monitor_addr).await.unwrap();

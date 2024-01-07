@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 access_server = { path = "../access_server" }
+anyhow = "1"
 axum = { version = "0.7" }
 clap = { version = "4", features = ["derive"] }
 common = { path = "../common" }
