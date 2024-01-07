@@ -1,19 +1,22 @@
 use std::{
     fmt,
     net::SocketAddr,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::Mutex,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use bytesize::ByteSize;
 use monitor_table::{
     row::{LiteralType, LiteralValue, TableRow},
     table::Table,
 };
+use tokio_throughput::GaugeHandle;
 
 use super::addr::StreamAddr;
 
 pub type StreamSessionTable<ST> = Table<Session<ST>>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Session<ST> {
     pub start: SystemTime,
     pub end: Option<SystemTime>,
@@ -21,6 +24,8 @@ pub struct Session<ST> {
     pub upstream_local: Option<SocketAddr>,
     pub upstream_remote: StreamAddr<ST>,
     pub downstream_remote: Option<SocketAddr>,
+    pub up_gauge: Option<Mutex<GaugeHandle>>,
+    pub dn_gauge: Option<Mutex<GaugeHandle>>,
 }
 
 impl<ST: fmt::Display> TableRow for Session<ST> {
@@ -33,6 +38,10 @@ impl<ST: fmt::Display> TableRow for Session<ST> {
             (String::from("upstream_local"), LiteralType::String),
             (String::from("upstream_remote"), LiteralType::String),
             (String::from("downstream_remote"), LiteralType::String),
+            (String::from("up_thruput"), LiteralType::Float),
+            (String::from("dn_thruput"), LiteralType::Float),
+            (String::from("up_bytes"), LiteralType::Int),
+            (String::from("dn_bytes"), LiteralType::Int),
         ]
     }
 
@@ -57,6 +66,24 @@ impl<ST: fmt::Display> TableRow for Session<ST> {
         let upstream_local = self.upstream_local.map(|x| x.to_string().into());
         let upstream_remote = Some(self.upstream_remote.to_string().into());
         let downstream_remote = self.downstream_remote.map(|x| x.to_string().into());
+        let read_gauge = |g: &Mutex<tokio_throughput::GaugeHandle>| {
+            let mut g = g.lock().unwrap();
+            g.update(Instant::now());
+            (
+                Some(g.thruput().into()),
+                Some((g.total_bytes() as i64).into()),
+            )
+        };
+        let (up_thruput, up_total_bytes) = self
+            .up_gauge
+            .as_ref()
+            .map(read_gauge)
+            .unwrap_or((None, None));
+        let (dn_thruput, dn_total_bytes) = self
+            .dn_gauge
+            .as_ref()
+            .map(read_gauge)
+            .unwrap_or((None, None));
 
         vec![
             destination,
@@ -66,6 +93,10 @@ impl<ST: fmt::Display> TableRow for Session<ST> {
             upstream_local,
             upstream_remote,
             downstream_remote,
+            up_thruput,
+            dn_thruput,
+            up_total_bytes,
+            dn_total_bytes,
         ]
     }
 
@@ -75,7 +106,9 @@ impl<ST: fmt::Display> TableRow for Session<ST> {
         };
         match header {
             "duration" => {
-                let duration: i64 = v.try_into().unwrap();
+                let LiteralValue::Int(duration) = v else {
+                    return v.to_string();
+                };
                 let duration = Duration::from_millis(duration as _);
                 if duration.as_secs() == 0 {
                     format!("{} ms", duration.as_millis())
@@ -85,6 +118,26 @@ impl<ST: fmt::Display> TableRow for Session<ST> {
                     format!("{} min", duration.as_secs() / 60)
                 } else {
                     format!("{} h", duration.as_secs() / 60 / 60)
+                }
+            }
+            "up_bytes" | "dn_bytes" => {
+                let LiteralValue::Int(bytes) = v else {
+                    return v.to_string();
+                };
+                ByteSize(bytes as u64).to_string()
+            }
+            "up_thruput" | "dn_thruput" => {
+                let LiteralValue::Float(thruput) = v else {
+                    return v.to_string();
+                };
+                if thruput / 1024.0 < 1.0 {
+                    format!("{:.1} B/s", thruput)
+                } else if thruput / 1024.0 / 1024.0 < 1.0 {
+                    format!("{:.1} KB/s", thruput / 1024.0)
+                } else if thruput / 1024.0 / 1024.0 / 1024.0 < 1.0 {
+                    format!("{:.1} MB/s", thruput / 1024.0 / 1024.0)
+                } else {
+                    format!("{:.1} GB/s", thruput / 1024.0 / 1024.0 / 1024.0)
                 }
             }
             _ => v.to_string(),

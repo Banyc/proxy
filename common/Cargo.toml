@@ -28,12 +28,14 @@ regex = "1"
 scopeguard = "1"
 serde = { workspace = true, features = ["derive",  "rc"] }
 slotmap = "1"
+strict-num = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-io-timeout = "1"
 tokio-util = { workspace = true }
 tokio_chacha20 = { workspace = true }
 tokio_kcp = { workspace = true }
+tokio_throughput = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

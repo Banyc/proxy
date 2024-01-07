@@ -1,18 +1,21 @@
 use std::{
     net::SocketAddr,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::Mutex,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use bytesize::ByteSize;
 use monitor_table::{
     row::{LiteralType, LiteralValue, TableRow},
     table::Table,
 };
+use tokio_throughput::GaugeHandle;
 
 use crate::addr::InternetAddr;
 
 pub type UdpSessionTable = Table<Session>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Session {
     pub start: SystemTime,
     pub end: Option<SystemTime>,
@@ -20,6 +23,8 @@ pub struct Session {
     pub upstream_local: Option<SocketAddr>,
     pub upstream_remote: InternetAddr,
     pub downstream_remote: SocketAddr,
+    pub up_gauge: Mutex<GaugeHandle>,
+    pub dn_gauge: Mutex<GaugeHandle>,
 }
 
 impl TableRow for Session {
@@ -32,6 +37,10 @@ impl TableRow for Session {
             (String::from("upstream_local"), LiteralType::String),
             (String::from("upstream_remote"), LiteralType::String),
             (String::from("downstream_remote"), LiteralType::String),
+            (String::from("up_thruput"), LiteralType::Float),
+            (String::from("dn_thruput"), LiteralType::Float),
+            (String::from("up_bytes"), LiteralType::Int),
+            (String::from("dn_bytes"), LiteralType::Int),
         ]
     }
 
@@ -56,6 +65,16 @@ impl TableRow for Session {
         let upstream_local = self.upstream_local.map(|x| x.to_string().into());
         let upstream_remote = Some(self.upstream_remote.to_string().into());
         let downstream_remote = Some(self.downstream_remote.to_string().into());
+        let read_gauge = |g: &Mutex<tokio_throughput::GaugeHandle>| {
+            let mut g = g.lock().unwrap();
+            g.update(Instant::now());
+            (
+                Some(g.thruput().into()),
+                Some((g.total_bytes() as i64).into()),
+            )
+        };
+        let (up_thruput, up_total_bytes) = read_gauge(&self.up_gauge);
+        let (dn_thruput, dn_total_bytes) = read_gauge(&self.dn_gauge);
 
         vec![
             destination,
@@ -65,6 +84,10 @@ impl TableRow for Session {
             upstream_local,
             upstream_remote,
             downstream_remote,
+            up_thruput,
+            dn_thruput,
+            up_total_bytes,
+            dn_total_bytes,
         ]
     }
 
@@ -74,7 +97,9 @@ impl TableRow for Session {
         };
         match header {
             "duration" => {
-                let duration: i64 = v.try_into().unwrap();
+                let LiteralValue::Int(duration) = v else {
+                    return v.to_string();
+                };
                 let duration = Duration::from_millis(duration as _);
                 if duration.as_secs() == 0 {
                     format!("{} ms", duration.as_millis())
@@ -84,6 +109,26 @@ impl TableRow for Session {
                     format!("{} min", duration.as_secs() / 60)
                 } else {
                     format!("{} h", duration.as_secs() / 60 / 60)
+                }
+            }
+            "up_bytes" | "dn_bytes" => {
+                let LiteralValue::Int(bytes) = v else {
+                    return v.to_string();
+                };
+                ByteSize(bytes as u64).to_string()
+            }
+            "up_thruput" | "dn_thruput" => {
+                let LiteralValue::Float(thruput) = v else {
+                    return v.to_string();
+                };
+                if thruput / 1024.0 < 1.0 {
+                    format!("{:.1} B/s", thruput)
+                } else if thruput / 1024.0 / 1024.0 < 1.0 {
+                    format!("{:.1} KB/s", thruput / 1024.0)
+                } else if thruput / 1024.0 / 1024.0 / 1024.0 < 1.0 {
+                    format!("{:.1} MB/s", thruput / 1024.0 / 1024.0)
+                } else {
+                    format!("{:.1} GB/s", thruput / 1024.0 / 1024.0 / 1024.0)
                 }
             }
             _ => v.to_string(),

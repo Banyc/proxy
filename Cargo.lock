@@ -538,12 +538,14 @@ dependencies = [
  "serde",
  "serde_json",
  "slotmap",
+ "strict-num",
  "thiserror",
  "tokio",
  "tokio-io-timeout",
  "tokio-util",
  "tokio_chacha20",
  "tokio_kcp",
+ "tokio_throughput",
  "tracing",
 ]
 
@@ -2881,6 +2883,15 @@ dependencies = [
  "log",
  "rand",
  "spin",
+ "tokio",
+]
+
+[[package]]
+name = "tokio_throughput"
+version = "0.1.0"
+source = "git+https://github.com/Banyc/tokio_throughput.git?rev=e45535cfce6aa87d903ef5665c6f3d3b25a9d1ab#e45535cfce6aa87d903ef5665c6f3d3b25a9d1ab"
+dependencies = [
+ "strict-num",
  "tokio",
 ]
 

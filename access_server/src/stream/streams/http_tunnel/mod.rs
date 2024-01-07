@@ -228,6 +228,8 @@ impl HttpAccess {
                         upstream_local: upstream.local_addr().ok(),
                         upstream_remote: addr.clone(),
                         downstream_remote: None,
+                        up_gauge: None,
+                        dn_gauge: None,
                     })
                 });
                 let res = tls_http(upstream, req, session_guard).await;
@@ -248,6 +250,8 @@ impl HttpAccess {
                 upstream_local: upstream.stream.local_addr().ok(),
                 upstream_remote: upstream.addr.clone(),
                 downstream_remote: None,
+                up_gauge: None,
+                dn_gauge: None,
             })
         });
         let res = match &proxy_chain.payload_crypto {

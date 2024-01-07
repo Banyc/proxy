@@ -1,13 +1,16 @@
 use std::{
     fmt,
     net::SocketAddr,
+    sync::Mutex,
     time::{Duration, Instant, SystemTime},
 };
 
 use async_speed_limit::Limiter;
 use metrics::{counter, gauge};
 use scopeguard::defer;
+use strict_num::NormalizedF64;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_throughput::{ReadGauge, WriteGauge};
 use tracing::info;
 
 use super::{
@@ -19,6 +22,7 @@ use super::{
 pub mod tokio_io;
 
 pub const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
+const ALPHA: f64 = 0.1;
 
 pub struct CopyBidirectional<DS, US, ST> {
     pub downstream: DS,
@@ -43,15 +47,25 @@ where
         upstream_local: Option<SocketAddr>,
         log_prefix: &str,
     ) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
-        let session = Session {
-            start: SystemTime::now(),
-            end: None,
-            destination: None,
-            upstream_local,
-            upstream_remote: self.upstream_addr.clone(),
-            downstream_remote: self.downstream_addr,
-        };
-        let session = session_table.map(|s| s.set_scope_owned(session));
+        let session = session_table.map(|s| {
+            let (up_handle, up) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
+            let (dn_handle, dn) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
+            let r = ReadGauge(up);
+            let w = WriteGauge(dn);
+
+            let session = Session {
+                start: SystemTime::now(),
+                end: None,
+                destination: None,
+                upstream_local,
+                upstream_remote: self.upstream_addr.clone(),
+                downstream_remote: self.downstream_addr,
+                up_gauge: Some(Mutex::new(up_handle)),
+                dn_gauge: Some(Mutex::new(dn_handle)),
+            };
+            let session = s.set_scope_owned(session);
+            (session, r, w)
+        });
 
         let (metrics, res) = self
             .serve(session, EncryptionDirection::Decrypt, log_prefix)
@@ -70,15 +84,25 @@ where
         StreamProxyMetrics<ST>,
         Result<(), tokio_io::CopyBiErrorKind>,
     ) {
-        let session = Session {
-            start: SystemTime::now(),
-            end: None,
-            destination: Some(destination.clone()),
-            upstream_local,
-            upstream_remote: self.upstream_addr.clone(),
-            downstream_remote: self.downstream_addr,
-        };
-        let session = session_table.map(|s| s.set_scope_owned(session));
+        let session = session_table.map(|s| {
+            let (up_handle, up) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
+            let (dn_handle, dn) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
+            let r = ReadGauge(up);
+            let w = WriteGauge(dn);
+
+            let session = Session {
+                start: SystemTime::now(),
+                end: None,
+                destination: Some(destination.clone()),
+                upstream_local,
+                upstream_remote: self.upstream_addr.clone(),
+                downstream_remote: self.downstream_addr,
+                up_gauge: Some(Mutex::new(up_handle)),
+                dn_gauge: Some(Mutex::new(dn_handle)),
+            };
+            let session = s.set_scope_owned(session);
+            (session, r, w)
+        });
 
         let (metrics, res) = self
             .serve(session, EncryptionDirection::Encrypt, log_prefix)
@@ -94,28 +118,47 @@ where
 
     async fn serve(
         self,
-        session: Option<monitor_table::table::RowOwnedGuard<Session<ST>>>,
+        session: Option<(
+            monitor_table::table::RowOwnedGuard<Session<ST>>,
+            ReadGauge,
+            WriteGauge,
+        )>,
         en_dir: EncryptionDirection,
         log_prefix: &str,
     ) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
-        let res = copy_bidirectional_with_payload_crypto(
-            self.downstream,
-            self.upstream,
-            self.payload_crypto.as_ref(),
-            self.speed_limiter,
-            en_dir,
-        )
-        .await;
+        let res = match session {
+            Some((session, r, w)) => {
+                let downstream = tokio_throughput::WholeStream::new(self.downstream, r, w);
+                let res = copy_bidirectional_with_payload_crypto(
+                    downstream,
+                    self.upstream,
+                    self.payload_crypto.as_ref(),
+                    self.speed_limiter,
+                    en_dir,
+                )
+                .await;
 
-        if let Some(s) = session.as_ref() {
-            s.inspect_mut(|session| {
-                session.end = Some(SystemTime::now());
-            })
-        }
-        tokio::spawn(async move {
-            let _session = session;
-            tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
-        });
+                session.inspect_mut(|session| {
+                    session.end = Some(SystemTime::now());
+                });
+                tokio::spawn(async move {
+                    let _session = session;
+                    tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
+                });
+
+                res
+            }
+            None => {
+                copy_bidirectional_with_payload_crypto(
+                    self.downstream,
+                    self.upstream,
+                    self.payload_crypto.as_ref(),
+                    self.speed_limiter,
+                    en_dir,
+                )
+                .await
+            }
+        };
 
         let (metrics, res) = get_metrics_from_copy_result(
             self.start,

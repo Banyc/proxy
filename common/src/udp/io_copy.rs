@@ -3,17 +3,18 @@ use std::{
     net::SocketAddr,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
-        Arc, RwLock,
+        Arc, Mutex, RwLock,
     },
     time::{Duration, SystemTime},
 };
 
 use async_speed_limit::Limiter;
 use metrics::{counter, gauge};
-use monitor_table::table::RowOwnedGuard;
 use scopeguard::defer;
+use strict_num::NormalizedF64;
 use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
+use tokio_throughput::{ReadGauge, WriteGauge};
 use tracing::{info, trace, warn};
 
 use crate::{error::AnyError, udp::TIMEOUT};
@@ -25,6 +26,7 @@ use super::{
 };
 
 const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
+const ALPHA: f64 = 0.1;
 
 pub trait UdpRecv {
     fn trait_recv(
@@ -70,15 +72,25 @@ where
         upstream_local: Option<SocketAddr>,
         log_prefix: &str,
     ) -> Result<FlowMetrics, CopyBiError> {
-        let session = Session {
-            start: SystemTime::now(),
-            end: None,
-            destination: None,
-            upstream_local,
-            upstream_remote: self.flow.flow().upstream.0.clone(),
-            downstream_remote: self.flow.flow().downstream.0,
-        };
-        let session = session_table.as_ref().map(|s| s.set_scope_owned(session));
+        let session = session_table.as_ref().map(|s| {
+            let (up_handle, up) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
+            let (dn_handle, dn) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
+            let r = ReadGauge(up);
+            let w = WriteGauge(dn);
+
+            let session = Session {
+                start: SystemTime::now(),
+                end: None,
+                destination: None,
+                upstream_local,
+                upstream_remote: self.flow.flow().upstream.0.clone(),
+                downstream_remote: self.flow.flow().downstream.0,
+                up_gauge: Mutex::new(up_handle),
+                dn_gauge: Mutex::new(dn_handle),
+            };
+            let session = s.set_scope_owned(session);
+            (session, r, w)
+        });
 
         self.serve(session, log_prefix, EncryptionDirection::Decrypt)
             .await
@@ -90,15 +102,25 @@ where
         upstream_local: Option<SocketAddr>,
         log_prefix: &str,
     ) -> Result<FlowMetrics, CopyBiError> {
-        let session = Session {
-            start: SystemTime::now(),
-            end: None,
-            destination: Some(self.flow.flow().upstream.0.clone()),
-            upstream_local,
-            upstream_remote: self.flow.flow().upstream.0.clone(),
-            downstream_remote: self.flow.flow().downstream.0,
-        };
-        let session = session_table.as_ref().map(|s| s.set_scope_owned(session));
+        let session = session_table.as_ref().map(|s| {
+            let (up_handle, up) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
+            let (dn_handle, dn) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
+            let r = ReadGauge(up);
+            let w = WriteGauge(dn);
+
+            let session = Session {
+                start: SystemTime::now(),
+                end: None,
+                destination: Some(self.flow.flow().upstream.0.clone()),
+                upstream_local,
+                upstream_remote: self.flow.flow().upstream.0.clone(),
+                downstream_remote: self.flow.flow().downstream.0,
+                up_gauge: Mutex::new(up_handle),
+                dn_gauge: Mutex::new(dn_handle),
+            };
+            let session = s.set_scope_owned(session);
+            (session, r, w)
+        });
 
         self.serve(session, log_prefix, EncryptionDirection::Encrypt)
             .await
@@ -106,30 +128,50 @@ where
 
     async fn serve(
         self,
-        session: Option<RowOwnedGuard<Session>>,
+        session: Option<(
+            monitor_table::table::RowOwnedGuard<Session>,
+            ReadGauge,
+            WriteGauge,
+        )>,
         log_prefix: &str,
         en_dir: EncryptionDirection,
     ) -> Result<FlowMetrics, CopyBiError> {
-        let res = copy_bidirectional(
-            self.flow.flow().clone(),
-            self.upstream,
-            self.downstream,
-            self.speed_limiter,
-            self.payload_crypto,
-            self.response_header,
-            en_dir,
-        )
-        .await;
+        let res = match session {
+            Some((session, r, w)) => {
+                let res = copy_bidirectional(
+                    self.flow.flow().clone(),
+                    (self.upstream, self.downstream),
+                    self.speed_limiter,
+                    self.payload_crypto,
+                    self.response_header,
+                    en_dir,
+                    Some((r, w)),
+                )
+                .await;
 
-        if let Some(s) = &session {
-            s.inspect_mut(|session| {
-                session.end = Some(SystemTime::now());
-            });
-        }
-        tokio::spawn(async move {
-            let _session = session;
-            tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
-        });
+                session.inspect_mut(|session| {
+                    session.end = Some(SystemTime::now());
+                });
+                tokio::spawn(async move {
+                    let _session = session;
+                    tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
+                });
+
+                res
+            }
+            None => {
+                copy_bidirectional(
+                    self.flow.flow().clone(),
+                    (self.upstream, self.downstream),
+                    self.speed_limiter,
+                    self.payload_crypto,
+                    self.response_header,
+                    en_dir,
+                    None,
+                )
+                .await
+            }
+        };
 
         match &res {
             Ok(metrics) => {
@@ -146,12 +188,12 @@ where
 
 pub async fn copy_bidirectional<R, W>(
     flow: Flow,
-    mut upstream: UpstreamParts<R, W>,
-    mut downstream: DownstreamParts,
+    streams: (UpstreamParts<R, W>, DownstreamParts),
     speed_limiter: Limiter,
     payload_crypto: Option<tokio_chacha20::config::Config>,
     response_header: Option<Arc<[u8]>>,
     en_dir: EncryptionDirection,
+    gauges: Option<(ReadGauge, WriteGauge)>,
 ) -> Result<FlowMetrics, CopyBiError>
 where
     R: UdpRecv + Send + 'static,
@@ -162,6 +204,8 @@ where
     defer!(gauge!("udp.current_io_copies").decrement(1.));
 
     let start = std::time::Instant::now();
+
+    let (mut upstream, mut downstream) = streams;
 
     // Periodic check if the flow is still alive
     let mut activity_check = tokio::time::interval(ACTIVITY_CHECK_INTERVAL);
@@ -174,6 +218,10 @@ where
     let packets_downlink = Arc::new(AtomicUsize::new(0));
 
     let mut en_dec_buf = [0; BUFFER_LENGTH];
+
+    let (up_gauge, dn_gauge) = gauges
+        .map(|(r, w)| (Some(r.0), Some(w.0)))
+        .unwrap_or((None, None));
 
     let mut io_copy_tasks = tokio::task::JoinSet::<Result<(), CopyBiError>>::new();
     io_copy_tasks.spawn({
@@ -196,6 +244,11 @@ where
 
                 // Limit speed
                 speed_limiter.consume(packet.slice().len()).await;
+
+                // Gauge
+                if let Some(g) = &up_gauge {
+                    g.update(packet.slice().len() as u64);
+                }
 
                 // Encrypt/Decrypt payload
                 let packet = if let Some(payload_crypto) = &payload_crypto {
@@ -248,6 +301,11 @@ where
                         "Received downlink packet of size may be too large"
                     );
                     continue;
+                }
+
+                // Gauge
+                if let Some(g) = &dn_gauge {
+                    g.update(pkt.len() as u64);
                 }
 
                 // Encrypt/Decrypt payload
