@@ -1,13 +1,18 @@
 use std::io;
 
-use common::{error::AnyResult, loading, stream::concrete::pool::Pool};
+use common::{
+    error::AnyResult,
+    loading,
+    session_table::BothSessionTables,
+    stream::concrete::{addr::ConcreteStreamType, pool::Pool},
+};
 use serde::Deserialize;
 use stream::{
     kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, tcp::TcpProxyServerConfig,
     StreamProxy,
 };
 use thiserror::Error;
-use udp::{UdpProxy, UdpProxyServerBuilder};
+use udp::{UdpProxy, UdpProxyServerBuilder, UdpProxyServerConfig};
 
 pub mod stream;
 pub mod udp;
@@ -18,7 +23,7 @@ pub struct ProxyServerConfig {
     #[serde(default)]
     pub tcp_server: Vec<TcpProxyServerConfig>,
     #[serde(default)]
-    pub udp_server: Vec<UdpProxyServerBuilder>,
+    pub udp_server: Vec<UdpProxyServerConfig>,
     #[serde(default)]
     pub kcp_server: Vec<KcpProxyServerConfig>,
     #[serde(default)]
@@ -40,6 +45,7 @@ impl ProxyServerConfig {
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut ProxyServerLoader,
         stream_pool: &Pool,
+        session_table: &BothSessionTables<ConcreteStreamType>,
     ) -> AnyResult {
         loader
             .tcp_server
@@ -47,14 +53,23 @@ impl ProxyServerConfig {
                 join_set,
                 self.tcp_server
                     .into_iter()
-                    .map(|s| s.into_builder(stream_pool.clone()))
+                    .map(|s| s.into_builder(stream_pool.clone(), session_table.stream().cloned()))
                     .collect(),
             )
             .await?;
 
         loader
             .udp_server
-            .load_and_clean(join_set, self.udp_server)
+            .load_and_clean(
+                join_set,
+                self.udp_server
+                    .into_iter()
+                    .map(|config| UdpProxyServerBuilder {
+                        config,
+                        session_table: session_table.udp().cloned(),
+                    })
+                    .collect(),
+            )
             .await?;
 
         loader
@@ -63,7 +78,7 @@ impl ProxyServerConfig {
                 join_set,
                 self.kcp_server
                     .into_iter()
-                    .map(|s| s.into_builder(stream_pool.clone()))
+                    .map(|s| s.into_builder(stream_pool.clone(), session_table.stream().cloned()))
                     .collect(),
             )
             .await?;
@@ -74,7 +89,7 @@ impl ProxyServerConfig {
                 join_set,
                 self.mptcp_server
                     .into_iter()
-                    .map(|s| s.into_builder(stream_pool.clone()))
+                    .map(|s| s.into_builder(stream_pool.clone(), session_table.stream().cloned()))
                     .collect(),
             )
             .await?;

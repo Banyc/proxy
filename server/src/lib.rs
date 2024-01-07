@@ -48,7 +48,7 @@ where
         &mut server_loader,
         stream_pool.clone(),
         cancellation.clone(),
-        session_table.clone(),
+        &session_table,
     )
     .await?;
 
@@ -74,7 +74,7 @@ where
                     &mut server_loader,
                     stream_pool.clone(),
                     cancellation.clone(),
-                    session_table.clone(),
+                    &session_table,
                 ).await {
                     warn!(?e, "Failed to read and load config");
                     continue;
@@ -97,7 +97,7 @@ async fn read_and_load_config<CR>(
     server_loader: &mut ServerLoader,
     stream_pool: Pool,
     cancellation: CancellationToken,
-    session_table: BothSessionTables<ConcreteStreamType>,
+    session_table: &BothSessionTables<ConcreteStreamType>,
 ) -> Result<(), ServeError>
 where
     CR: ConfigReader<Config = ServerConfig>,
@@ -135,7 +135,7 @@ pub async fn load_and_clean(
     server_loader: &mut ServerLoader,
     stream_pool: Pool,
     cancellation: CancellationToken,
-    session_table: BothSessionTables<ConcreteStreamType>,
+    session_table: &BothSessionTables<ConcreteStreamType>,
 ) -> AnyResult {
     stream_pool.replaced_by(config.global.stream_pool.build()?);
 
@@ -151,7 +151,12 @@ pub async fn load_and_clean(
         .await?;
     config
         .proxy_server
-        .load_and_clean(server_tasks, &mut server_loader.proxy_server, &stream_pool)
+        .load_and_clean(
+            server_tasks,
+            &mut server_loader.proxy_server,
+            &stream_pool,
+            session_table,
+        )
         .await?;
     Ok(())
 }

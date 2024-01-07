@@ -198,8 +198,12 @@ impl HttpAccess {
         let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
         let port = req.uri().port_u16().unwrap_or(80);
         let addr = InternetAddr::from_host_and_port(host, port)?;
+        let addr = StreamAddr {
+            address: addr,
+            stream_type: ConcreteStreamType::Tcp,
+        };
 
-        let action = self.filter.filter(&addr);
+        let action = self.filter.filter(&addr.address);
         match action {
             filter::Action::Proxy => (),
             filter::Action::Block => {
@@ -207,19 +211,23 @@ impl HttpAccess {
                 return Ok(respond_with_rejection());
             }
             filter::Action::Direct => {
-                let addr = addr.to_socket_addr().await.map_err(TunnelError::Direct)?;
-                let upstream = tokio::net::TcpStream::connect(addr)
+                let sock_addr = addr
+                    .address
+                    .to_socket_addr()
+                    .await
+                    .map_err(TunnelError::Direct)?;
+
+                let upstream = tokio::net::TcpStream::connect(sock_addr)
                     .await
                     .map_err(TunnelError::Direct)?;
                 let session_guard = self.session_table.as_ref().map(|s| {
                     s.set_scope_owned(Session {
                         start: SystemTime::now(),
                         end: None,
-                        destination: StreamAddr {
-                            address: addr.into(),
-                            stream_type: ConcreteStreamType::Tcp,
-                        },
+                        destination: Some(addr.clone()),
                         upstream_local: upstream.local_addr().ok(),
+                        upstream_remote: addr.clone(),
+                        downstream_remote: None,
                     })
                 });
                 let res = tls_http(upstream, req, session_guard).await;
@@ -230,25 +238,16 @@ impl HttpAccess {
 
         // Establish proxy chain
         let proxy_chain = self.proxy_table.choose_chain();
-        let upstream = establish(
-            &proxy_chain.chain,
-            StreamAddr {
-                address: addr.clone(),
-                stream_type: ConcreteStreamType::Tcp,
-            },
-            &self.stream_pool,
-        )
-        .await?;
+        let upstream = establish(&proxy_chain.chain, addr.clone(), &self.stream_pool).await?;
 
         let session_guard = self.session_table.as_ref().map(|s| {
             s.set_scope_owned(Session {
                 start: SystemTime::now(),
                 end: None,
-                destination: StreamAddr {
-                    address: addr.clone(),
-                    stream_type: ConcreteStreamType::Tcp,
-                },
+                destination: Some(addr.clone()),
                 upstream_local: upstream.stream.local_addr().ok(),
+                upstream_remote: upstream.addr.clone(),
+                downstream_remote: None,
             })
         });
         let res = match &proxy_chain.payload_crypto {
@@ -272,7 +271,7 @@ impl HttpAccess {
                 upstream_sock_addr: upstream.sock_addr,
                 downstream_addr: None,
             },
-            destination: addr,
+            destination: addr.address,
         };
         info!(%metrics, "{} finished", method);
 

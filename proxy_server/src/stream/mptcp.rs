@@ -2,7 +2,10 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use common::{
     loading,
-    stream::concrete::{pool::Pool, streams::mptcp::MptcpServer},
+    stream::{
+        concrete::{addr::ConcreteStreamType, pool::Pool, streams::mptcp::MptcpServer},
+        session_table::StreamSessionTable,
+    },
 };
 use mptcp::MptcpListener;
 use serde::Deserialize;
@@ -25,8 +28,12 @@ pub struct MptcpProxyServerConfig {
 }
 
 impl MptcpProxyServerConfig {
-    pub fn into_builder(self, stream_pool: Pool) -> MptcpProxyServerBuilder {
-        let inner = self.inner.into_builder(stream_pool);
+    pub fn into_builder(
+        self,
+        stream_pool: Pool,
+        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+    ) -> MptcpProxyServerBuilder {
+        let inner = self.inner.into_builder(stream_pool, session_table);
         MptcpProxyServerBuilder {
             listen_addr: self.listen_addr,
             inner,

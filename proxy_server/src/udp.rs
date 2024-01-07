@@ -11,6 +11,7 @@ use common::{
     udp::{
         io_copy::{CopyBidirectional, DownstreamParts, UpstreamParts},
         respond::respond_with_error,
+        session_table::UdpSessionTable,
         steer::steer,
         FlowOwnedGuard, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
@@ -27,10 +28,16 @@ use crate::ListenerBindError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct UdpProxyServerBuilder {
+pub struct UdpProxyServerConfig {
     pub listen_addr: Arc<str>,
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UdpProxyServerBuilder {
+    pub config: UdpProxyServerConfig,
+    pub session_table: Option<UdpSessionTable>,
 }
 
 impl loading::Builder for UdpProxyServerBuilder {
@@ -39,7 +46,7 @@ impl loading::Builder for UdpProxyServerBuilder {
     type Err = UdpProxyServerBuildError;
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
-        let listen_addr = Arc::clone(&self.listen_addr);
+        let listen_addr = Arc::clone(&self.config.listen_addr);
         let udp_proxy = self.build_hook()?;
         let server = udp_proxy.build(listen_addr.as_ref()).await?;
         Ok(server)
@@ -47,10 +54,11 @@ impl loading::Builder for UdpProxyServerBuilder {
 
     fn build_hook(self) -> Result<Self::Hook, Self::Err> {
         let header_crypto = self
+            .config
             .header_key
             .build()
             .map_err(UdpProxyBuildError::HeaderCrypto)?;
-        let payload_crypto = match self.payload_key {
+        let payload_crypto = match self.config.payload_key {
             Some(payload_crypto) => Some(
                 payload_crypto
                     .build()
@@ -58,11 +66,15 @@ impl loading::Builder for UdpProxyServerBuilder {
             ),
             None => None,
         };
-        Ok(UdpProxy::new(header_crypto, payload_crypto))
+        Ok(UdpProxy::new(
+            header_crypto,
+            payload_crypto,
+            self.session_table,
+        ))
     }
 
     fn key(&self) -> &Arc<str> {
-        &self.listen_addr
+        &self.config.listen_addr
     }
 }
 
@@ -86,16 +98,19 @@ pub enum UdpProxyServerBuildError {
 pub struct UdpProxy {
     header_crypto: tokio_chacha20::config::Config,
     payload_crypto: Option<tokio_chacha20::config::Config>,
+    session_table: Option<UdpSessionTable>,
 }
 
 impl UdpProxy {
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
         payload_crypto: Option<tokio_chacha20::config::Config>,
+        session_table: Option<UdpSessionTable>,
     ) -> Self {
         Self {
             header_crypto,
             payload_crypto,
+            session_table,
         }
     }
 
@@ -161,6 +176,7 @@ impl UdpProxy {
 
         let header_crypto = self.header_crypto.clone();
         let payload_crypto = self.payload_crypto.clone();
+        let session_table = self.session_table.clone();
         tokio::spawn(async move {
             let io_copy = CopyBidirectional {
                 flow,
@@ -176,7 +192,7 @@ impl UdpProxy {
                 payload_crypto,
                 response_header: Some(response_header),
             };
-            let res = io_copy.serve_as_proxy_server("UDP").await;
+            let res = io_copy.serve_as_proxy_server(session_table, "UDP").await;
             if res.is_err() {
                 let _ = respond_with_error(&downstream_writer, RouteErrorKind::Io, &header_crypto)
                     .await;

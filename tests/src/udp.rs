@@ -20,7 +20,7 @@ mod tests {
 
     async fn spawn_proxy(join_set: &mut tokio::task::JoinSet<()>, addr: &str) -> UdpProxyConfig {
         let crypto = create_random_crypto();
-        let proxy = UdpProxy::new(crypto.clone(), None);
+        let proxy = UdpProxy::new(crypto.clone(), None, None);
         let server = proxy.build(addr).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         join_set.spawn(async move {

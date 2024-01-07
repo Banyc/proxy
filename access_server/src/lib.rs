@@ -70,7 +70,7 @@ impl AccessServerConfig {
         loader: &mut AccessServerLoader,
         stream_pool: &Pool,
         cancellation: CancellationToken,
-        session_table: BothSessionTables<ConcreteStreamType>,
+        session_table: &BothSessionTables<ConcreteStreamType>,
     ) -> AnyResult {
         // Shared
         let stream_proxy_tables = self

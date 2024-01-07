@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use common::{
     loading,
-    stream::concrete::{pool::Pool, streams::tcp::TcpServer},
+    stream::{
+        concrete::{addr::ConcreteStreamType, pool::Pool, streams::tcp::TcpServer},
+        session_table::StreamSessionTable,
+    },
 };
 use serde::Deserialize;
 use thiserror::Error;
@@ -22,8 +25,12 @@ pub struct TcpProxyServerConfig {
 }
 
 impl TcpProxyServerConfig {
-    pub fn into_builder(self, stream_pool: Pool) -> TcpProxyServerBuilder {
-        let inner = self.inner.into_builder(stream_pool);
+    pub fn into_builder(
+        self,
+        stream_pool: Pool,
+        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+    ) -> TcpProxyServerBuilder {
+        let inner = self.inner.into_builder(stream_pool, session_table);
         TcpProxyServerBuilder {
             listen_addr: self.listen_addr,
             inner,
@@ -101,7 +108,7 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy = StreamProxy::new(crypto.clone(), None, Pool::empty());
+            let proxy = StreamProxy::new(crypto.clone(), None, Pool::empty(), None);
 
             let server = build_tcp_proxy_server("localhost:0", proxy).await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();

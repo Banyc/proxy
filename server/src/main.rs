@@ -100,7 +100,7 @@ async fn main() -> AnyResult {
 }
 
 fn default_sql() -> String {
-    const SQL: &str = "sort start_ms select destination duration";
+    const SQL: &str = "sort start_ms select destination duration upstream_remote";
     SQL.to_string()
 }
 #[derive(Debug, Deserialize)]

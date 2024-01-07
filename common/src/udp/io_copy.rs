@@ -10,6 +10,7 @@ use std::{
 
 use async_speed_limit::Limiter;
 use metrics::{counter, gauge};
+use monitor_table::table::RowOwnedGuard;
 use scopeguard::defer;
 use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
@@ -63,45 +64,48 @@ where
     R: UdpRecv + Send + 'static,
     W: UdpSend + Send + 'static,
 {
+    pub async fn serve_as_proxy_server(
+        self,
+        session_table: Option<UdpSessionTable>,
+        log_prefix: &str,
+    ) -> Result<FlowMetrics, CopyBiError> {
+        let session = Session {
+            start: SystemTime::now(),
+            end: None,
+            destination: None,
+            upstream_local: None,
+            upstream_remote: self.flow.flow().upstream.0.clone(),
+            downstream_remote: self.flow.flow().downstream.0,
+        };
+        let session = session_table.as_ref().map(|s| s.set_scope_owned(session));
+
+        self.serve(session, log_prefix, EncryptionDirection::Decrypt)
+            .await
+    }
+
     pub async fn serve_as_access_server(
         self,
         session_table: Option<UdpSessionTable>,
         upstream_local: Option<SocketAddr>,
         log_prefix: &str,
     ) -> Result<FlowMetrics, CopyBiError> {
-        let session_guard = session_table.as_ref().map(|s| {
-            s.set_scope_owned(Session {
-                start: SystemTime::now(),
-                end: None,
-                destination: self.flow.flow().upstream.0.clone(),
-                upstream_local,
-            })
-        });
+        let session = Session {
+            start: SystemTime::now(),
+            end: None,
+            destination: Some(self.flow.flow().upstream.0.clone()),
+            upstream_local,
+            upstream_remote: self.flow.flow().upstream.0.clone(),
+            downstream_remote: self.flow.flow().downstream.0,
+        };
+        let session = session_table.as_ref().map(|s| s.set_scope_owned(session));
 
-        let res = self
-            .serve_as_proxy_server_(log_prefix, EncryptionDirection::Encrypt)
-            .await;
-
-        if let Some(s) = &session_guard {
-            s.inspect_mut(|session| {
-                session.end = Some(SystemTime::now());
-            });
-        }
-        tokio::spawn(async move {
-            let _session_guard = session_guard;
-            tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
-        });
-
-        res
-    }
-
-    pub async fn serve_as_proxy_server(self, log_prefix: &str) -> Result<FlowMetrics, CopyBiError> {
-        self.serve_as_proxy_server_(log_prefix, EncryptionDirection::Decrypt)
+        self.serve(session, log_prefix, EncryptionDirection::Encrypt)
             .await
     }
 
-    async fn serve_as_proxy_server_(
+    async fn serve(
         self,
+        session: Option<RowOwnedGuard<Session>>,
         log_prefix: &str,
         en_dir: EncryptionDirection,
     ) -> Result<FlowMetrics, CopyBiError> {
@@ -115,6 +119,16 @@ where
             en_dir,
         )
         .await;
+
+        if let Some(s) = &session {
+            s.inspect_mut(|session| {
+                session.end = Some(SystemTime::now());
+            });
+        }
+        tokio::spawn(async move {
+            let _session = session;
+            tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
+        });
 
         match &res {
             Ok(metrics) => {

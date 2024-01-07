@@ -39,20 +39,22 @@ where
 {
     pub async fn serve_as_proxy_server(
         self,
+        session_table: Option<StreamSessionTable<ST>>,
         log_prefix: &str,
     ) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
-        let (metrics, res) = self
-            .serve_as_proxy_server_no_logs(EncryptionDirection::Decrypt)
-            .await;
+        let session = Session {
+            start: SystemTime::now(),
+            end: None,
+            destination: None,
+            upstream_local: None,
+            upstream_remote: self.upstream_addr.clone(),
+            downstream_remote: self.downstream_addr,
+        };
+        let session = session_table.map(|s| s.set_scope_owned(session));
 
-        match &res {
-            Ok(()) => {
-                info!(%metrics, "{log_prefix}: I/O copy finished");
-            }
-            Err(e) => {
-                info!(?e, %metrics, "{log_prefix}: I/O copy error");
-            }
-        }
+        let (metrics, res) = self
+            .serve(session, EncryptionDirection::Decrypt, log_prefix)
+            .await;
 
         (metrics, res)
     }
@@ -67,17 +69,18 @@ where
         StreamProxyMetrics<ST>,
         Result<(), tokio_io::CopyBiErrorKind>,
     ) {
-        let session_guard = session_table.map(|s| {
-            s.set_scope_owned(Session {
-                start: SystemTime::now(),
-                end: None,
-                destination: destination.clone(),
-                upstream_local,
-            })
-        });
+        let session = Session {
+            start: SystemTime::now(),
+            end: None,
+            destination: Some(destination.clone()),
+            upstream_local,
+            upstream_remote: self.upstream_addr.clone(),
+            downstream_remote: self.downstream_addr,
+        };
+        let session = session_table.map(|s| s.set_scope_owned(session));
 
         let (metrics, res) = self
-            .serve_as_proxy_server_no_logs(EncryptionDirection::Encrypt)
+            .serve(session, EncryptionDirection::Encrypt, log_prefix)
             .await;
 
         let metrics = StreamProxyMetrics {
@@ -85,31 +88,14 @@ where
             destination: destination.address,
         };
 
-        match &res {
-            Ok(()) => {
-                info!(%metrics, "{log_prefix}: I/O copy finished");
-            }
-            Err(e) => {
-                info!(?e, %metrics, "{log_prefix}: I/O copy error");
-            }
-        }
-
-        if let Some(s) = session_guard.as_ref() {
-            s.inspect_mut(|session| {
-                session.end = Some(SystemTime::now());
-            })
-        }
-        tokio::spawn(async move {
-            let _session_guard = session_guard;
-            tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
-        });
-
         (metrics, res)
     }
 
-    async fn serve_as_proxy_server_no_logs(
+    async fn serve(
         self,
+        session: Option<monitor_table::table::RowOwnedGuard<Session<ST>>>,
         en_dir: EncryptionDirection,
+        log_prefix: &str,
     ) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
         let res = copy_bidirectional_with_payload_crypto(
             self.downstream,
@@ -120,6 +106,16 @@ where
         )
         .await;
 
+        if let Some(s) = session.as_ref() {
+            s.inspect_mut(|session| {
+                session.end = Some(SystemTime::now());
+            })
+        }
+        tokio::spawn(async move {
+            let _session = session;
+            tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
+        });
+
         let (metrics, res) = get_metrics_from_copy_result(
             self.start,
             self.upstream_addr,
@@ -127,6 +123,15 @@ where
             self.downstream_addr,
             res,
         );
+
+        match &res {
+            Ok(()) => {
+                info!(%metrics, "{log_prefix}: I/O copy finished");
+            }
+            Err(e) => {
+                info!(?e, %metrics, "{log_prefix}: I/O copy error");
+            }
+        }
 
         (metrics, res)
     }

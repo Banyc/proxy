@@ -17,8 +17,10 @@ pub type StreamSessionTable<ST> = Table<Session<ST>>;
 pub struct Session<ST> {
     pub start: SystemTime,
     pub end: Option<SystemTime>,
-    pub destination: StreamAddr<ST>,
+    pub destination: Option<StreamAddr<ST>>,
     pub upstream_local: Option<SocketAddr>,
+    pub upstream_remote: StreamAddr<ST>,
+    pub downstream_remote: Option<SocketAddr>,
 }
 
 impl<ST: fmt::Display> TableRow for Session<ST> {
@@ -29,6 +31,8 @@ impl<ST: fmt::Display> TableRow for Session<ST> {
             (String::from("start_ms"), LiteralType::Int),
             (String::from("end_ms"), LiteralType::Int),
             (String::from("upstream_local"), LiteralType::String),
+            (String::from("upstream_remote"), LiteralType::String),
+            (String::from("downstream_remote"), LiteralType::String),
         ]
     }
 
@@ -44,15 +48,25 @@ impl<ST: fmt::Display> TableRow for Session<ST> {
             None => now_unix.saturating_sub(start_unix),
         };
 
-        let destination = Some(self.destination.to_string().into());
+        let destination = self.destination.as_ref().map(|d| d.to_string().into());
         let duration = Some((duration.as_millis() as i64).into());
         let start = Some((start_unix.as_millis() as i64).into());
         let end = self
             .end
             .map(|e| (e.duration_since(UNIX_EPOCH).unwrap().as_millis() as i64).into());
         let upstream_local = self.upstream_local.map(|x| x.to_string().into());
+        let upstream_remote = Some(self.upstream_remote.to_string().into());
+        let downstream_remote = self.downstream_remote.map(|x| x.to_string().into());
 
-        vec![destination, duration, start, end, upstream_local]
+        vec![
+            destination,
+            duration,
+            start,
+            end,
+            upstream_local,
+            upstream_remote,
+            downstream_remote,
+        ]
     }
 
     fn display_value(header: &str, value: Option<LiteralValue>) -> String {

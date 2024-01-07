@@ -39,7 +39,7 @@ mod tests {
         ty: ConcreteStreamType,
     ) -> StreamProxyConfig<ConcreteStreamType> {
         let crypto = create_random_crypto();
-        let proxy = StreamProxy::new(crypto.clone(), None, Pool::empty());
+        let proxy = StreamProxy::new(crypto.clone(), None, Pool::empty(), None);
         let proxy_addr = match ty {
             ConcreteStreamType::Tcp => {
                 let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
