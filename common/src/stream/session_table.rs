@@ -105,11 +105,14 @@ impl<ST: fmt::Display> TableRow for Session<ST> {
             return String::new();
         };
         match header {
-            "duration" => {
-                let LiteralValue::Int(duration) = v else {
-                    return v.to_string();
+            "dur" | "duration" => {
+                let duration = match v {
+                    LiteralValue::Int(duration) => duration as u64,
+                    LiteralValue::UInt(duration) => duration,
+                    LiteralValue::Float(duration) => duration as u64,
+                    _ => return v.to_string(),
                 };
-                let duration = Duration::from_millis(duration as _);
+                let duration = Duration::from_millis(duration);
                 if duration.as_secs() == 0 {
                     format!("{} ms", duration.as_millis())
                 } else if duration.as_secs() / 60 == 0 {
@@ -120,15 +123,21 @@ impl<ST: fmt::Display> TableRow for Session<ST> {
                     format!("{} h", duration.as_secs() / 60 / 60)
                 }
             }
-            "up_bytes" | "dn_bytes" => {
-                let LiteralValue::Int(bytes) = v else {
-                    return v.to_string();
+            "bytes" | "up_bytes" | "dn_bytes" => {
+                let bytes = match v {
+                    LiteralValue::Int(bytes) => bytes as u64,
+                    LiteralValue::UInt(bytes) => bytes,
+                    LiteralValue::Float(bytes) => bytes as u64,
+                    _ => return v.to_string(),
                 };
-                ByteSize(bytes as u64).to_string()
+                ByteSize(bytes).to_string()
             }
-            "up_thruput" | "dn_thruput" => {
-                let LiteralValue::Float(thruput) = v else {
-                    return v.to_string();
+            "thruput" | "up_thruput" | "dn_thruput" => {
+                let thruput = match v {
+                    LiteralValue::Int(thruput) => thruput as f64,
+                    LiteralValue::UInt(thruput) => thruput as f64,
+                    LiteralValue::Float(thruput) => thruput,
+                    _ => return v.to_string(),
                 };
                 if thruput / 1024.0 < 1.0 {
                     format!("{:.1} B/s", thruput)
