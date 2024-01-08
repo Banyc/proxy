@@ -1325,7 +1325,7 @@ dependencies = [
 [[package]]
 name = "monitor_table"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/monitor_table.git?rev=728ea7ab767424ab3ddd2bc55a822cb6f15a0845#728ea7ab767424ab3ddd2bc55a822cb6f15a0845"
+source = "git+https://github.com/Banyc/monitor_table.git?rev=1fd644ca60d96342c8888f711626b19c1bf6032c#1fd644ca60d96342c8888f711626b19c1bf6032c"
 dependencies = [
  "anyhow",
  "dfsql",
@@ -2382,9 +2382,9 @@ dependencies = [
 
 [[package]]
 name = "strsim"
-version = "0.10.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccbca6f34534eb78dbee83f6b2c9442fea7113f43d9e80ea320f0972ae5dc08d"
+checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "strum"
