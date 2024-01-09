@@ -15,7 +15,7 @@ bincode = "1"
 bytes = "1"
 metrics = "0.22"
 metrics-exporter-prometheus = { version = "0.13", default-features = false }
-monitor_table = { git = "https://github.com/Banyc/monitor_table.git", rev = "f53a57c393b61356cc9b51c1ab48997e32a08d13" }
+monitor_table = { git = "https://github.com/Banyc/monitor_table.git", rev = "f9cbe7a0e792d793adbe5627402254b0c9eee46b" }
 mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "9f023f2db96fba80ae044d0101f7955975272dd5" }
 openssl = "0.10"
 serde = "1"

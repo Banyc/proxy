@@ -1317,7 +1317,7 @@ dependencies = [
 [[package]]
 name = "monitor_table"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/monitor_table.git?rev=f53a57c393b61356cc9b51c1ab48997e32a08d13#f53a57c393b61356cc9b51c1ab48997e32a08d13"
+source = "git+https://github.com/Banyc/monitor_table.git?rev=f9cbe7a0e792d793adbe5627402254b0c9eee46b#f9cbe7a0e792d793adbe5627402254b0c9eee46b"
 dependencies = [
  "anyhow",
  "dfsql",
