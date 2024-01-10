@@ -8,7 +8,6 @@ use std::{
 use async_speed_limit::Limiter;
 use metrics::{counter, gauge};
 use scopeguard::defer;
-use strict_num::NormalizedF64;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_throughput::{ReadGauge, WriteGauge};
 use tracing::info;
@@ -22,7 +21,6 @@ use super::{
 pub mod tokio_io;
 
 pub const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
-const ALPHA: f64 = 0.1;
 
 pub struct CopyBidirectional<DS, US, ST> {
     pub downstream: DS,
@@ -48,8 +46,8 @@ where
         log_prefix: &str,
     ) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
         let session = session_table.map(|s| {
-            let (up_handle, up) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
-            let (dn_handle, dn) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
+            let (up_handle, up) = tokio_throughput::gauge();
+            let (dn_handle, dn) = tokio_throughput::gauge();
             let r = ReadGauge(up);
             let w = WriteGauge(dn);
 
@@ -85,8 +83,8 @@ where
         Result<(), tokio_io::CopyBiErrorKind>,
     ) {
         let session = session_table.map(|s| {
-            let (up_handle, up) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
-            let (dn_handle, dn) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
+            let (up_handle, up) = tokio_throughput::gauge();
+            let (dn_handle, dn) = tokio_throughput::gauge();
             let r = ReadGauge(up);
             let w = WriteGauge(dn);
 

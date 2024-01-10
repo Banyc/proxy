@@ -11,7 +11,6 @@ use std::{
 use async_speed_limit::Limiter;
 use metrics::{counter, gauge};
 use scopeguard::defer;
-use strict_num::NormalizedF64;
 use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
 use tokio_throughput::{ReadGauge, WriteGauge};
@@ -26,7 +25,6 @@ use super::{
 };
 
 const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
-const ALPHA: f64 = 0.1;
 
 pub trait UdpRecv {
     fn trait_recv(
@@ -73,8 +71,8 @@ where
         log_prefix: &str,
     ) -> Result<FlowMetrics, CopyBiError> {
         let session = session_table.as_ref().map(|s| {
-            let (up_handle, up) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
-            let (dn_handle, dn) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
+            let (up_handle, up) = tokio_throughput::gauge();
+            let (dn_handle, dn) = tokio_throughput::gauge();
             let r = ReadGauge(up);
             let w = WriteGauge(dn);
 
@@ -103,8 +101,8 @@ where
         log_prefix: &str,
     ) -> Result<FlowMetrics, CopyBiError> {
         let session = session_table.as_ref().map(|s| {
-            let (up_handle, up) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
-            let (dn_handle, dn) = tokio_throughput::gauge(NormalizedF64::new(ALPHA).unwrap());
+            let (up_handle, up) = tokio_throughput::gauge();
+            let (dn_handle, dn) = tokio_throughput::gauge();
             let r = ReadGauge(up);
             let w = WriteGauge(dn);
 
