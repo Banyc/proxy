@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    fmt::Display,
     io,
     net::SocketAddr,
     ops::Deref,
@@ -9,7 +8,6 @@ use std::{
 };
 
 use bytes::BytesMut;
-use bytesize::ByteSize;
 use lockfree_object_pool::{LinearObjectPool, LinearOwnedReusable};
 use once_cell::sync::Lazy;
 use thiserror::Error;
@@ -20,6 +18,7 @@ use crate::{addr::InternetAddr, error::AnyResult, loading};
 
 pub mod header;
 pub mod io_copy;
+pub mod metrics;
 pub mod proxy_table;
 pub mod respond;
 pub mod session_table;
@@ -326,37 +325,3 @@ impl Packet {
 #[derive(Debug, Error)]
 #[error("Packet position advances out of range")]
 pub struct PacketPositionAdvancesOutOfRange;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FlowMetrics {
-    pub flow: Flow,
-    pub start: std::time::Instant,
-    pub end: std::time::Instant,
-    pub bytes_uplink: u64,
-    pub bytes_downlink: u64,
-    pub packets_uplink: usize,
-    pub packets_downlink: usize,
-}
-
-impl Display for FlowMetrics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let duration = self.end - self.start;
-        let duration = duration.as_secs_f64();
-        let uplink_speed = self.bytes_uplink as f64 / duration;
-        let downlink_speed = self.bytes_downlink as f64 / duration;
-        write!(
-            f,
-            "{:.1}s,up{{{},{},{}/s}},dn{{{},{},{}/s}},up:{},dn:{}",
-            duration,
-            self.packets_uplink,
-            ByteSize::b(self.bytes_uplink),
-            ByteSize::b(uplink_speed as u64),
-            self.packets_downlink,
-            ByteSize::b(self.bytes_downlink),
-            ByteSize::b(downlink_speed as u64),
-            self.flow.upstream.0,
-            self.flow.downstream.0,
-        )?;
-        Ok(())
-    }
-}

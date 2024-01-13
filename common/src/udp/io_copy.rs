@@ -16,12 +16,15 @@ use tokio::{net::UdpSocket, sync::mpsc};
 use tokio_throughput::{ReadGauge, WriteGauge};
 use tracing::{info, trace, warn};
 
-use crate::{error::AnyError, udp::TIMEOUT};
+use crate::{
+    error::AnyError,
+    udp::{metrics::FlowRecord, TIMEOUT},
+};
 
 use super::{
+    metrics::FlowMetrics,
     session_table::{Session, UdpSessionTable},
-    Flow, FlowMetrics, FlowOwnedGuard, Packet, UdpDownstreamWriter, ACTIVITY_CHECK_INTERVAL,
-    BUFFER_LENGTH,
+    Flow, FlowOwnedGuard, Packet, UdpDownstreamWriter, ACTIVITY_CHECK_INTERVAL, BUFFER_LENGTH,
 };
 
 const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
@@ -173,6 +176,9 @@ where
 
         match &res {
             Ok(metrics) => {
+                let record = FlowRecord(metrics);
+                table_log::log!(&record);
+
                 info!(%metrics, "{log_prefix}: I/O copy finished");
             }
             Err(e) => {
@@ -201,7 +207,7 @@ where
     gauge!("udp.current_io_copies").increment(1.);
     defer!(gauge!("udp.current_io_copies").decrement(1.));
 
-    let start = std::time::Instant::now();
+    let start = (std::time::Instant::now(), std::time::SystemTime::now());
 
     let (mut upstream, mut downstream) = streams;
 
