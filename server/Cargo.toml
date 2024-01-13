@@ -15,6 +15,7 @@ anyhow = "1"
 axum = { version = "0.7" }
 clap = { version = "4", features = ["derive"] }
 common = { path = "../common" }
+csv_logger = { workspace = true }
 file_watcher_tokio = "0.3"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }

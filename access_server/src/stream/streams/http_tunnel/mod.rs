@@ -1,9 +1,4 @@
-use std::{
-    collections::HashMap,
-    io,
-    sync::Arc,
-    time::{Instant, SystemTime},
-};
+use std::{collections::HashMap, io, sync::Arc, time::SystemTime};
 
 use async_speed_limit::Limiter;
 use bytes::Bytes;
@@ -16,9 +11,10 @@ use common::{
         addr::StreamAddr,
         concrete::{addr::ConcreteStreamType, pool::Pool, streams::tcp::TcpServer},
         io_copy::{CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
+        metrics::{SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics, StreamRecord},
         proxy_table::StreamProxyTable,
         session_table::{Session, StreamSessionTable},
-        IoAddr, IoStream, SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics, StreamServerHook,
+        IoAddr, IoStream, StreamServerHook,
     },
 };
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
@@ -192,7 +188,7 @@ impl HttpAccess {
             return self.proxy_connect(req).await;
         }
 
-        let start = std::time::Instant::now();
+        let start = (std::time::Instant::now(), std::time::SystemTime::now());
 
         let method = req.method().clone();
         let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
@@ -278,6 +274,8 @@ impl HttpAccess {
             destination: addr.address,
         };
         info!(%metrics, "{} finished", method);
+
+        table_log::log!(&StreamRecord::SimplifiedProxyMetrics(&metrics));
 
         res
     }
@@ -393,7 +391,7 @@ async fn upgrade(
         }
     };
 
-    let start = Instant::now();
+    let start = (std::time::Instant::now(), std::time::SystemTime::now());
 
     // Proxy
     if let Some(http_connect) = http_connect {
@@ -511,7 +509,7 @@ impl HttpConnect {
         upgraded: Upgraded,
         address: InternetAddr,
     ) -> Result<(), HttpConnectError> {
-        let start = Instant::now();
+        let start = (std::time::Instant::now(), std::time::SystemTime::now());
 
         // Establish proxy chain
         let destination = StreamAddr {

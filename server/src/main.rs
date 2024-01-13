@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use axum::{
     extract::{Query, State},
@@ -25,12 +25,25 @@ struct Args {
     /// Listen address for monitoring
     #[arg(short, long)]
     monitor: Option<SocketAddr>,
+
+    /// CSV log path
+    #[arg(short, long)]
+    csv_log_path: Option<PathBuf>,
 }
 
 #[tokio::main]
 async fn main() -> AnyResult {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
+    if let Some(path) = args.csv_log_path {
+        csv_logger::init(
+            path,
+            csv_logger::RotationPolicy {
+                max_records: 1024 * 64,
+                max_epochs: 4,
+            },
+        );
+    };
 
     // Monitoring
     let session_table: BothSessionTables<ConcreteStreamType>;

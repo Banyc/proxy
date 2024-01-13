@@ -141,7 +141,7 @@ impl TcpAccess {
     where
         S: IoStream + IoAddr,
     {
-        let start = std::time::Instant::now();
+        let start = (std::time::Instant::now(), std::time::SystemTime::now());
 
         let downstream_addr = downstream.peer_addr().ok();
 

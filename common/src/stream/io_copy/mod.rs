@@ -14,8 +14,8 @@ use tracing::info;
 
 use super::{
     addr::StreamAddr,
+    metrics::{StreamMetrics, StreamProxyMetrics, StreamRecord},
     session_table::{Session, StreamSessionTable},
-    StreamMetrics, StreamProxyMetrics,
 };
 
 pub mod tokio_io;
@@ -27,7 +27,7 @@ pub struct CopyBidirectional<DS, US, ST> {
     pub upstream: US,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
     pub speed_limiter: Limiter,
-    pub start: Instant,
+    pub start: (Instant, SystemTime),
     pub upstream_addr: StreamAddr<ST>,
     pub upstream_sock_addr: SocketAddr,
     pub downstream_addr: Option<SocketAddr>,
@@ -37,7 +37,7 @@ impl<DS, US, ST> CopyBidirectional<DS, US, ST>
 where
     US: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     DS: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    ST: Clone + fmt::Display + Sync + Send + 'static,
+    ST: Clone + fmt::Display + Sync + Send + 'static + serde::Serialize,
 {
     pub async fn serve_as_proxy_server(
         self,
@@ -68,6 +68,8 @@ where
         let (metrics, res) = self
             .serve(session, EncryptionDirection::Decrypt, log_prefix)
             .await;
+
+        table_log::log!(&StreamRecord::Metrics(&metrics));
 
         (metrics, res)
     }
@@ -110,6 +112,8 @@ where
             stream: metrics,
             destination: destination.address,
         };
+
+        table_log::log!(&StreamRecord::ProxyMetrics(&metrics));
 
         (metrics, res)
     }
@@ -224,7 +228,7 @@ where
 }
 
 pub fn get_metrics_from_copy_result<ST>(
-    start: Instant,
+    start: (Instant, SystemTime),
     upstream_addr: StreamAddr<ST>,
     upstream_sock_addr: SocketAddr,
     downstream_addr: Option<SocketAddr>,

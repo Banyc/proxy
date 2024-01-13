@@ -121,7 +121,7 @@ impl StreamProxy {
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
-        let start = std::time::Instant::now();
+        let start = (std::time::Instant::now(), std::time::SystemTime::now());
 
         let downstream_addr = downstream.peer_addr().ok();
 

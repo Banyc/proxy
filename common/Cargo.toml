@@ -29,6 +29,7 @@ scopeguard = "1"
 serde = { workspace = true, features = ["derive",  "rc"] }
 slotmap = "1"
 strict-num = { workspace = true }
+table_log = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-io-timeout = "1"

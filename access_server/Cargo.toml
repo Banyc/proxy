@@ -15,6 +15,7 @@ monitor_table = { workspace = true }
 pin-project-lite = "0.2"
 proxy_client = { path = "../proxy_client" }
 serde = { workspace = true, features = ["derive"] }
+table_log = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio_chacha20 = { workspace = true }
