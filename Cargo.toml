@@ -13,7 +13,7 @@ members = [
 async-speed-limit = { version = "0.4", features = ["tokio"] }
 bincode = "1"
 bytes = "1"
-csv_logger = { git = "https://github.com/Banyc/csv_logger.git", rev = "191c1bfbe1dfa613daad299373993f6b717f034f" }
+csv_logger = { git = "https://github.com/Banyc/csv_logger.git", rev = "48e4e8fb4ddfeb97e7ea919da25231c0d8fb8e7b" }
 metrics = "0.22"
 metrics-exporter-prometheus = { version = "0.13", default-features = false }
 monitor_table = { git = "https://github.com/Banyc/monitor_table.git", rev = "f9cbe7a0e792d793adbe5627402254b0c9eee46b" }
