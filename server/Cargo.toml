@@ -16,6 +16,7 @@ axum = { version = "0.7" }
 clap = { version = "4", features = ["derive"] }
 common = { path = "../common" }
 csv_logger = { workspace = true }
+dhat = { version = "0.3", optional = true }
 file_watcher_tokio = "0.3"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
@@ -31,3 +32,4 @@ tracing-subscriber = { workspace = true }
 
 [features]
 default = []
+dhat-heap = ["dhat"]

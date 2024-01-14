@@ -17,6 +17,10 @@ use server::{
 };
 use tracing::info;
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 #[derive(Debug, Parser)]
 struct Args {
     /// Paths to the configuration files.
@@ -44,6 +48,9 @@ async fn main() -> AnyResult {
             },
         );
     };
+
+    #[cfg(feature = "dhat-heap")]
+    let profiler = dhat::Profiler::new_heap();
 
     // Monitoring
     let session_table: BothSessionTables<ConcreteStreamType>;
@@ -97,6 +104,21 @@ async fn main() -> AnyResult {
                 )
                 .with_state(session_table)
                 .route("/health", get(|| async { Ok::<_, ()>(()) }));
+            #[cfg(feature = "dhat-heap")]
+            let router = router
+                .route(
+                    "/profile",
+                    get(
+                        |State(profiler): State<
+                            std::sync::Arc<std::sync::Mutex<Option<dhat::Profiler>>>,
+                        >| async move {
+                            let mut profiler = profiler.lock().unwrap();
+                            drop(profiler.take().unwrap());
+                            std::process::exit(0);
+                        },
+                    ),
+                )
+                .with_state(std::sync::Arc::new(std::sync::Mutex::new(Some(profiler))));
             let listener = tokio::net::TcpListener::bind(&monitor_addr).await.unwrap();
             let listen_addr = listener.local_addr().unwrap();
             let server = axum::serve(listener, router.into_make_service());

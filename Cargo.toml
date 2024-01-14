@@ -17,7 +17,7 @@ csv_logger = { git = "https://github.com/Banyc/csv_logger.git", rev = "d63ac71c4
 metrics = "0.22"
 metrics-exporter-prometheus = { version = "0.13", default-features = false }
 monitor_table = { git = "https://github.com/Banyc/monitor_table.git", rev = "f9cbe7a0e792d793adbe5627402254b0c9eee46b" }
-mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "9f023f2db96fba80ae044d0101f7955975272dd5" }
+mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "8c0b8ee35bc7d570de272f5da7af6742b460e23a" }
 openssl = "0.10"
 serde = "1"
 strict-num = "0.2"
@@ -30,3 +30,6 @@ tokio_kcp = "0.9"
 tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", rev = "80cbf0572623762665caff07781cee3e0d97cfc7" }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+
+[profile.release]
+debug = true
