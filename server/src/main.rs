@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 use axum::{
     extract::{Query, State},
@@ -39,7 +39,7 @@ async fn main() -> AnyResult {
         csv_logger::init(
             path,
             csv_logger::RotationPolicy {
-                max_records: 1024 * 64,
+                max_records: NonZeroUsize::new(1024 * 64).unwrap(),
                 max_epochs: 4,
             },
         );

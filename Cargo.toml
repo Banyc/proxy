@@ -13,7 +13,7 @@ members = [
 async-speed-limit = { version = "0.4", features = ["tokio"] }
 bincode = "1"
 bytes = "1"
-csv_logger = { git = "https://github.com/Banyc/csv_logger.git", rev = "48e4e8fb4ddfeb97e7ea919da25231c0d8fb8e7b" }
+csv_logger = { git = "https://github.com/Banyc/csv_logger.git", rev = "d63ac71c4eeb55268102695b095fb6bf13b7ee8f" }
 metrics = "0.22"
 metrics-exporter-prometheus = { version = "0.13", default-features = false }
 monitor_table = { git = "https://github.com/Banyc/monitor_table.git", rev = "f9cbe7a0e792d793adbe5627402254b0c9eee46b" }
@@ -21,7 +21,7 @@ mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "9f023f2db96fba80ae0
 openssl = "0.10"
 serde = "1"
 strict-num = "0.2"
-table_log = { git = "https://github.com/Banyc/table_log.git", rev = "26a3806ba29a2748c9e5b5b7bf1f75a0b417a898" }
+table_log = { git = "https://github.com/Banyc/table_log.git", rev = "eb936cc4521dd62854a1272da6908f7d70261c2c" }
 thiserror = "1"
 tokio = "1"
 tokio-util = "0.7"
