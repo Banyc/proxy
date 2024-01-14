@@ -141,6 +141,7 @@ impl UdpAccess {
         let proxy_chain = self.proxy_table.choose_chain();
         let upstream =
             UdpProxyClient::establish(proxy_chain.chain.clone(), self.destination.clone()).await?;
+        let upstream_remote = upstream.remote_addr().clone();
 
         let (upstream_read, upstream_write) = upstream.into_split();
 
@@ -164,7 +165,7 @@ impl UdpAccess {
                 response_header: None,
             };
             let _ = io_copy
-                .serve_as_access_server(session_table, upstream_local, "UDP")
+                .serve_as_access_server(session_table, upstream_local, upstream_remote, "UDP")
                 .await;
         });
         Ok(())

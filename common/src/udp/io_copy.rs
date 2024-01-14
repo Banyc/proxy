@@ -17,6 +17,7 @@ use tokio_throughput::{ReadGauge, WriteGauge};
 use tracing::{info, trace, warn};
 
 use crate::{
+    addr::InternetAddr,
     error::AnyError,
     udp::{metrics::FlowRecord, TIMEOUT},
 };
@@ -101,6 +102,7 @@ where
         self,
         session_table: Option<UdpSessionTable>,
         upstream_local: Option<SocketAddr>,
+        upstream_remote: InternetAddr,
         log_prefix: &str,
     ) -> Result<FlowMetrics, CopyBiError> {
         let session = session_table.as_ref().map(|s| {
@@ -114,7 +116,7 @@ where
                 end: None,
                 destination: Some(self.flow.flow().upstream.0.clone()),
                 upstream_local,
-                upstream_remote: self.flow.flow().upstream.0.clone(),
+                upstream_remote,
                 downstream_remote: self.flow.flow().downstream.0,
                 up_gauge: Mutex::new(up_handle),
                 dn_gauge: Mutex::new(dn_handle),

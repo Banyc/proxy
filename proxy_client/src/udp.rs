@@ -28,6 +28,7 @@ use tracing::{error, instrument, trace, warn};
 pub struct UdpProxyClient {
     write: UdpProxyClientWriteHalf,
     read: UdpProxyClientReadHalf,
+    upstream_addr: InternetAddr,
 }
 
 impl UdpProxyClient {
@@ -60,11 +61,15 @@ impl UdpProxyClient {
             let upstream = Arc::new(upstream);
             let write = UdpProxyClientWriteHalf::new(upstream.clone(), Vec::new().into());
             let read = UdpProxyClientReadHalf::new(upstream, Vec::new().into(), proxies);
-            return Ok(UdpProxyClient { write, read });
+            return Ok(UdpProxyClient {
+                write,
+                read,
+                upstream_addr: destination,
+            });
         }
 
         // Connect to upstream
-        let proxy_addr = &proxies[0].address;
+        let proxy_addr = proxies[0].address.clone();
         let addr =
             proxy_addr
                 .to_socket_addr()
@@ -103,11 +108,19 @@ impl UdpProxyClient {
         let header_bytes: Arc<[_]> = buf.into();
         let write = UdpProxyClientWriteHalf::new(upstream.clone(), header_bytes.clone());
         let read = UdpProxyClientReadHalf::new(upstream, header_bytes, proxies);
-        Ok(UdpProxyClient { write, read })
+        Ok(UdpProxyClient {
+            write,
+            read,
+            upstream_addr: proxy_addr,
+        })
     }
 
     pub fn into_split(self) -> (UdpProxyClientReadHalf, UdpProxyClientWriteHalf) {
         (self.read, self.write)
+    }
+
+    pub fn remote_addr(&self) -> &InternetAddr {
+        &self.upstream_addr
     }
 }
 

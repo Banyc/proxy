@@ -134,6 +134,7 @@ impl Socks5ServerUdpAccess {
         let upstream =
             UdpProxyClient::establish(proxy_chain.chain.clone(), flow.flow().upstream.0.clone())
                 .await?;
+        let upstream_remote = upstream.remote_addr().clone();
 
         let (upstream_read, upstream_write) = upstream.into_split();
 
@@ -167,7 +168,7 @@ impl Socks5ServerUdpAccess {
                 response_header: Some(response_header),
             };
             let _ = io_copy
-                .serve_as_access_server(session_table, upstream_local, "SOCKS UDP")
+                .serve_as_access_server(session_table, upstream_local, upstream_remote, "SOCKS UDP")
                 .await;
         });
         Ok(())
