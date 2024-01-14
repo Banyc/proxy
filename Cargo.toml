@@ -31,5 +31,6 @@ tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", rev 
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
-[profile.release]
+[profile.profiling]
+inherits = "release"
 debug = true
