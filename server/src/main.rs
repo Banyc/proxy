@@ -60,28 +60,30 @@ async fn main() -> AnyResult {
                 State(session_table): State<BothSessionTables<ConcreteStreamType>>,
             ) -> anyhow::Result<String> {
                 let mut text = String::new();
-
-                let sql = &params.sql;
-                text.push_str("Stream:\n");
-                let sessions = session_table
-                    .stream()
-                    .map(|s| s.to_view(sql).map(|s| s.to_string()))
-                    .transpose()?;
-                if let Some(s) = sessions {
-                    text.push_str(&s);
+                {
+                    let sql = &params.stream_sql;
+                    text.push_str("Stream:\n");
+                    let sessions = session_table
+                        .stream()
+                        .map(|s| s.to_view(sql).map(|s| s.to_string()))
+                        .transpose()?;
+                    if let Some(s) = sessions {
+                        text.push_str(&s);
+                    }
+                    text.push('\n');
                 }
-                text.push('\n');
-
-                text.push_str("UDP:\n");
-                let sessions = session_table
-                    .udp()
-                    .map(|s| s.to_view(sql).map(|s| s.to_string()))
-                    .transpose()?;
-                if let Some(s) = sessions {
-                    text.push_str(&s);
+                {
+                    let sql = &params.udp_sql;
+                    text.push_str("UDP:\n");
+                    let sessions = session_table
+                        .udp()
+                        .map(|s| s.to_view(sql).map(|s| s.to_string()))
+                        .transpose()?;
+                    if let Some(s) = sessions {
+                        text.push_str(&s);
+                    }
+                    text.push('\n');
                 }
-                text.push('\n');
-
                 Ok(text)
             }
             let router = Router::new()
@@ -119,5 +121,7 @@ fn default_sql() -> String {
 #[derive(Debug, Deserialize)]
 struct SessionsParams {
     #[serde(default = "default_sql")]
-    sql: String,
+    stream_sql: String,
+    #[serde(default = "default_sql")]
+    udp_sql: String,
 }
