@@ -509,7 +509,6 @@ dependencies = [
  "once_cell",
  "pin-project-lite",
  "rand",
- "rayon",
  "regex",
  "scopeguard",
  "serde",

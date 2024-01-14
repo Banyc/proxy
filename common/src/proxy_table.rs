@@ -6,7 +6,6 @@ use std::{
 };
 
 use rand::Rng;
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
@@ -40,7 +39,6 @@ where
 {
     assert!(!nodes.is_empty());
     let mut pairs = (0..nodes.len() - 1)
-        .into_par_iter()
         .map(|i| {
             let node = &nodes[i];
             let next_node = &nodes[i + 1];
@@ -78,7 +76,7 @@ where
     where
         T: Tracer<Address = A> + Send + Sync + 'static,
     {
-        let cum_weight = chains.par_iter().map(|c| c.weight).sum();
+        let cum_weight = chains.iter().map(|c| c.weight).sum();
         if cum_weight == 0 {
             return Err(ProxyTableError::ZeroAccumulatedWeight);
         }
@@ -119,7 +117,7 @@ where
             None => {
                 let scores: Arc<[_]> = self.scores().into();
                 info!(?scores, "Calculated scores");
-                let sum = scores.par_iter().map(|(_, s)| *s).sum::<f64>();
+                let sum = scores.iter().map(|(_, s)| *s).sum::<f64>();
                 let scores = Scores { scores, sum };
                 self.score_store.write().unwrap().set(scores.clone());
                 scores
@@ -144,18 +142,18 @@ where
     fn scores(&self) -> Vec<(usize, f64)> {
         let weights_hat = self
             .chains
-            .par_iter()
+            .iter()
             .map(|c| c.weighted().weight as f64 / self.cum_weight.get() as f64)
             .collect::<Vec<_>>();
 
         let rtt = self
             .chains
-            .par_iter()
+            .iter()
             .map(|c| c.rtt().map(|r| r.as_secs_f64()))
             .collect::<Vec<_>>();
         let rtt_hat = normalize(&rtt);
 
-        let losses = self.chains.par_iter().map(|c| c.loss()).collect::<Vec<_>>();
+        let losses = self.chains.iter().map(|c| c.loss()).collect::<Vec<_>>();
         let losses_hat = normalize(&losses);
 
         let mut scores = (0..self.chains.len())
@@ -177,8 +175,8 @@ pub enum ProxyTableError {
 }
 
 fn normalize(list: &[Option<f64>]) -> Vec<f64> {
-    let sum_some: f64 = list.par_iter().map(|x| x.unwrap_or(0.)).sum();
-    let count_some = list.par_iter().map(|x| x.map(|_| 1).unwrap_or(0)).sum();
+    let sum_some: f64 = list.iter().map(|x| x.unwrap_or(0.)).sum();
+    let count_some = list.iter().map(|x| x.map(|_| 1).unwrap_or(0)).sum();
     let hat = match count_some {
         0 => {
             let hat_mean = 1. / list.len() as f64;
@@ -186,12 +184,12 @@ fn normalize(list: &[Option<f64>]) -> Vec<f64> {
         }
         _ => {
             let mean = sum_some / count_some as f64;
-            let sum: f64 = list.par_iter().map(|x| x.unwrap_or(mean)).sum();
+            let sum: f64 = list.iter().map(|x| x.unwrap_or(mean)).sum();
             if sum == 0. {
                 (0..list.len()).map(|_| 0.).collect::<Vec<_>>()
             } else {
                 let hat_mean = mean / sum;
-                list.par_iter()
+                list.iter()
                     .map(|x| x.map(|x| x / sum).unwrap_or(hat_mean))
                     .collect::<Vec<_>>()
             }
