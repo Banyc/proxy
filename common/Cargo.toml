@@ -19,6 +19,7 @@ lru = "0.12"
 metrics = { workspace = true }
 monitor_table = { workspace = true }
 mptcp = { workspace = true }
+noop-waker = "0.1.0"
 once_cell = "1"
 pin-project-lite = "0.2"
 # quinn = "0.10.1"

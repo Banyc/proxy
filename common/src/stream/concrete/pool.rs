@@ -199,8 +199,21 @@ impl SocketQueue {
             }
         };
 
+        // Remove the completed task to avoid memory leak
+        {
+            let waker = noop_waker::noop_waker();
+            let mut cx = std::task::Context::from_waker(&waker);
+            let ready = self.task_handles.poll_join_next(&mut cx);
+            let ready = match ready {
+                std::task::Poll::Ready(r) => r,
+                std::task::Poll::Pending => panic!(),
+            };
+            assert!(matches!(ready, Some(Ok(()))));
+        }
+
         // Replenish
         self.spawn_insert(heartbeat_interval);
+        assert_eq!(self.task_handles.len(), QUEUE_LEN);
 
         res
     }
