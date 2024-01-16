@@ -208,7 +208,7 @@ impl SocketQueue {
                 std::task::Poll::Ready(r) => r,
                 std::task::Poll::Pending => panic!(),
             };
-            assert!(matches!(ready, Some(Ok(()))));
+            ready.unwrap().expect("Pool task panicked");
         }
 
         // Replenish
