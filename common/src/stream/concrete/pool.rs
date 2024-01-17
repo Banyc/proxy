@@ -150,24 +150,24 @@ impl SocketQueue {
         }
     }
 
-    async fn insert(
-        queue: Arc<RwLock<VecDeque<SocketCell>>>,
-        proxy_config: ProxyConfig<ConcreteStreamAddr>,
-        heartbeat_interval: Duration,
-    ) -> io::Result<()> {
-        let cell = SocketCell::create(proxy_config, heartbeat_interval).await?;
-        let mut queue = queue.write().unwrap();
-        queue.push_back(cell);
-        Ok(())
-    }
-
     pub fn spawn_insert(&mut self, heartbeat_interval: Duration) {
+        async fn insert(
+            queue: Arc<RwLock<VecDeque<SocketCell>>>,
+            proxy_config: ProxyConfig<ConcreteStreamAddr>,
+            heartbeat_interval: Duration,
+        ) -> io::Result<()> {
+            let cell = SocketCell::create(proxy_config, heartbeat_interval).await?;
+            let mut queue = queue.write().unwrap();
+            queue.push_back(cell);
+            Ok(())
+        }
+
         let queue = self.queue.clone();
         let proxy_config = self.proxy_config.clone();
         self.task_handles.spawn(async move {
             loop {
                 let queue = queue.clone();
-                match Self::insert(queue, proxy_config.clone(), heartbeat_interval).await {
+                match insert(queue, proxy_config.clone(), heartbeat_interval).await {
                     Ok(()) => break,
                     Err(_e) => {
                         tokio::time::sleep(RETRY_INTERVAL).await;
