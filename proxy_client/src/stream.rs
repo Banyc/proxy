@@ -12,7 +12,7 @@ use common::{
         concrete::{
             addr::{ConcreteStreamAddr, ConcreteStreamType},
             created_stream::CreatedStreamAndAddr,
-            pool::{connect_with_pool, ConnectError, Pool},
+            pool::{connect_with_pool, ConcreteConnPool, ConnectError},
         },
         proxy_table::StreamProxyChain,
     },
@@ -27,7 +27,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 pub async fn establish(
     proxies: &StreamProxyChain<ConcreteStreamType>,
     destination: ConcreteStreamAddr,
-    stream_pool: &Pool,
+    stream_pool: &ConcreteConnPool,
 ) -> Result<CreatedStreamAndAddr, StreamEstablishError> {
     // If there are no proxy configs, just connect to the destination
     if proxies.is_empty() {
@@ -121,11 +121,11 @@ pub enum StreamEstablishError {
 
 #[derive(Debug, Clone)]
 pub struct StreamTracer {
-    stream_pool: Pool,
+    stream_pool: ConcreteConnPool,
 }
 
 impl StreamTracer {
-    pub fn new(stream_pool: Pool) -> Self {
+    pub fn new(stream_pool: ConcreteConnPool) -> Self {
         Self { stream_pool }
     }
 }
@@ -145,7 +145,7 @@ impl Tracer for StreamTracer {
 
 pub async fn trace_rtt(
     proxies: &StreamProxyChain<ConcreteStreamType>,
-    stream_pool: &Pool,
+    stream_pool: &ConcreteConnPool,
 ) -> Result<Duration, TraceError> {
     if proxies.is_empty() {
         return Ok(Duration::from_secs(0));

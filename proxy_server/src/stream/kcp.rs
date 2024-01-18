@@ -5,7 +5,7 @@ use common::{
     stream::{
         concrete::{
             addr::ConcreteStreamType,
-            pool::Pool,
+            pool::ConcreteConnPool,
             streams::kcp::{fast_kcp_config, KcpServer},
         },
         session_table::StreamSessionTable,
@@ -30,7 +30,7 @@ pub struct KcpProxyServerConfig {
 impl KcpProxyServerConfig {
     pub fn into_builder(
         self,
-        stream_pool: Pool,
+        stream_pool: ConcreteConnPool,
         session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     ) -> KcpProxyServerBuilder {
         let inner = self.inner.into_builder(stream_pool, session_table);

@@ -6,7 +6,7 @@ use common::{
     session_table::BothSessionTables,
     stream::concrete::{
         addr::ConcreteStreamType,
-        pool::{Pool, PoolBuilder},
+        pool::{ConcreteConnPool, PoolBuilder},
     },
 };
 use config::ConfigReader;
@@ -39,7 +39,7 @@ where
         unreachable!()
     });
 
-    let stream_pool = Pool::empty();
+    let stream_pool = ConcreteConnPool::empty();
 
     let cancellation = CancellationToken::new();
     read_and_load_config(
@@ -95,7 +95,7 @@ async fn read_and_load_config<CR>(
     config_reader: &CR,
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
-    stream_pool: Pool,
+    stream_pool: ConcreteConnPool,
     cancellation: CancellationToken,
     session_table: &BothSessionTables<ConcreteStreamType>,
 ) -> Result<(), ServeError>
@@ -133,7 +133,7 @@ pub async fn load_and_clean(
     config: ServerConfig,
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
-    stream_pool: Pool,
+    stream_pool: ConcreteConnPool,
     cancellation: CancellationToken,
     session_table: &BothSessionTables<ConcreteStreamType>,
 ) -> AnyResult {

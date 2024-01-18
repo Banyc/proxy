@@ -9,7 +9,7 @@ use common::{
     loading,
     stream::{
         addr::StreamAddr,
-        concrete::{addr::ConcreteStreamType, pool::Pool, streams::tcp::TcpServer},
+        concrete::{addr::ConcreteStreamType, pool::ConcreteConnPool, streams::tcp::TcpServer},
         io_copy::{CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
         metrics::{SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics, StreamRecord},
         proxy_table::StreamProxyTable,
@@ -47,7 +47,7 @@ pub struct HttpAccessServerConfig {
 impl HttpAccessServerConfig {
     pub fn into_builder(
         self,
-        stream_pool: Pool,
+        stream_pool: ConcreteConnPool,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         filters: &HashMap<Arc<str>, Filter>,
         cancellation: CancellationToken,
@@ -95,7 +95,7 @@ pub enum BuildError {
 pub struct HttpAccessServerBuilder {
     listen_addr: Arc<str>,
     proxy_table: StreamProxyTable<ConcreteStreamType>,
-    stream_pool: Pool,
+    stream_pool: ConcreteConnPool,
     filter: Filter,
     speed_limit: f64,
     session_table: Option<StreamSessionTable<ConcreteStreamType>>,
@@ -132,7 +132,7 @@ impl loading::Builder for HttpAccessServerBuilder {
 #[derive(Debug)]
 pub struct HttpAccess {
     proxy_table: Arc<StreamProxyTable<ConcreteStreamType>>,
-    stream_pool: Pool,
+    stream_pool: ConcreteConnPool,
     filter: Filter,
     speed_limiter: Limiter,
     session_table: Option<StreamSessionTable<ConcreteStreamType>>,
@@ -141,7 +141,7 @@ pub struct HttpAccess {
 impl HttpAccess {
     pub fn new(
         proxy_table: StreamProxyTable<ConcreteStreamType>,
-        stream_pool: Pool,
+        stream_pool: ConcreteConnPool,
         filter: Filter,
         speed_limit: f64,
         session_table: Option<StreamSessionTable<ConcreteStreamType>>,
@@ -481,7 +481,7 @@ impl StreamServerHook for HttpAccess {
 
 struct HttpConnect {
     proxy_table: Arc<StreamProxyTable<ConcreteStreamType>>,
-    stream_pool: Pool,
+    stream_pool: ConcreteConnPool,
     speed_limiter: Limiter,
     session_table: Option<StreamSessionTable<ConcreteStreamType>>,
 }
@@ -489,7 +489,7 @@ struct HttpConnect {
 impl HttpConnect {
     pub fn new(
         proxy_table: Arc<StreamProxyTable<ConcreteStreamType>>,
-        stream_pool: Pool,
+        stream_pool: ConcreteConnPool,
         speed_limiter: Limiter,
         session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     ) -> Self {

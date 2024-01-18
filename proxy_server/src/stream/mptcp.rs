@@ -3,7 +3,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 use common::{
     loading,
     stream::{
-        concrete::{addr::ConcreteStreamType, pool::Pool, streams::mptcp::MptcpServer},
+        concrete::{addr::ConcreteStreamType, pool::ConcreteConnPool, streams::mptcp::MptcpServer},
         session_table::StreamSessionTable,
     },
 };
@@ -30,7 +30,7 @@ pub struct MptcpProxyServerConfig {
 impl MptcpProxyServerConfig {
     pub fn into_builder(
         self,
-        stream_pool: Pool,
+        stream_pool: ConcreteConnPool,
         session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     ) -> MptcpProxyServerBuilder {
         let inner = self.inner.into_builder(stream_pool, session_table);

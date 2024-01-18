@@ -3,7 +3,7 @@ use std::sync::Arc;
 use common::{
     loading,
     stream::{
-        concrete::{addr::ConcreteStreamType, pool::Pool, streams::tcp::TcpServer},
+        concrete::{addr::ConcreteStreamType, pool::ConcreteConnPool, streams::tcp::TcpServer},
         session_table::StreamSessionTable,
     },
 };
@@ -27,7 +27,7 @@ pub struct TcpProxyServerConfig {
 impl TcpProxyServerConfig {
     pub fn into_builder(
         self,
-        stream_pool: Pool,
+        stream_pool: ConcreteConnPool,
         session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     ) -> TcpProxyServerBuilder {
         let inner = self.inner.into_builder(stream_pool, session_table);
@@ -94,7 +94,9 @@ mod tests {
         header::{codec::write_header_async, heartbeat},
         loading::Server,
         stream::{
-            addr::StreamAddr, concrete::addr::ConcreteStreamType, header::StreamRequestHeader,
+            addr::StreamAddr,
+            concrete::{addr::ConcreteStreamType, pool::ConcreteConnPool},
+            header::StreamRequestHeader,
         },
     };
     use tokio::{
@@ -108,7 +110,7 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy = StreamProxy::new(crypto.clone(), None, Pool::empty(), None);
+            let proxy = StreamProxy::new(crypto.clone(), None, ConcreteConnPool::empty(), None);
 
             let server = build_tcp_proxy_server("localhost:0", proxy).await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();

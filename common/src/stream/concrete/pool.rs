@@ -1,21 +1,12 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    io,
-    net::SocketAddr,
-    ops::DerefMut,
-    sync::{Arc, Mutex, RwLock},
-    time::Duration,
-};
+use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
-use arc_swap::ArcSwap;
-use metrics::counter;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{sync::RwLock as TokioRwLock, task::JoinSet};
-use tracing::warn;
+use tokio_conn_pool::{ConnPool, ConnPoolEntry};
 
 use crate::{
-    header::heartbeat::{send_noop, HeartbeatError},
+    header::heartbeat::send_noop,
     proxy_table::ProxyConfig,
     stream::{
         proxy_table::{StreamProxyConfigBuildError, StreamProxyConfigBuilder},
@@ -29,292 +20,101 @@ use super::{
     created_stream::CreatedStream,
 };
 
-const QUEUE_LEN: usize = 16;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
-const RETRY_INTERVAL: Duration = Duration::from_secs(30);
+
+pub type ConcreteConnPool = ConnPool<ConcreteStreamAddr, CreatedStream>;
+type ConcreteConnPoolEntry = ConnPoolEntry<ConcreteStreamAddr, CreatedStream>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PoolBuilder(#[serde(default)] pub Vec<StreamProxyConfigBuilder<ConcreteStreamAddrStr>>);
-
 impl PoolBuilder {
     pub fn new() -> Self {
         Self(vec![])
     }
 
-    pub fn build(self) -> Result<Pool, StreamProxyConfigBuildError> {
+    pub fn build(self) -> Result<ConcreteConnPool, StreamProxyConfigBuildError> {
         let c = self
             .0
             .into_iter()
             .map(|c| c.build())
             .collect::<Result<Vec<_>, _>>()?;
-        let pool = Pool::new(c.into_iter());
+        let entries = pool_entries_from_proxy_configs(c.into_iter());
+        let pool = ConcreteConnPool::new(entries);
         Ok(pool)
     }
 }
-
 impl Default for PoolBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[derive(Debug)]
-struct SocketCell {
-    cell: Arc<TokioRwLock<Option<CreatedStream>>>,
-    _task_handle: JoinSet<Result<(), HeartbeatError>>,
+fn pool_entries_from_proxy_configs(
+    proxy_configs: impl Iterator<Item = ProxyConfig<ConcreteStreamAddr>>,
+) -> impl Iterator<Item = ConcreteConnPoolEntry> {
+    proxy_configs.map(|c| ConcreteConnPoolEntry {
+        key: c.address.clone(),
+        connect: Arc::new(PoolConnector {
+            proxy_config: c.clone(),
+        }),
+        heartbeat: Arc::new(PoolHeartbeat {
+            proxy_config: c.clone(),
+        }),
+    })
 }
 
-impl SocketCell {
-    pub async fn create(
-        proxy_config: ProxyConfig<ConcreteStreamAddr>,
-        heartbeat_interval: Duration,
-    ) -> io::Result<Self> {
-        let addr = proxy_config.address.clone();
-        let sock_addr = addr.address.to_socket_addr().await?;
-        let stream = STREAM_CONNECTOR_TABLE
+#[derive(Debug)]
+struct PoolConnector {
+    proxy_config: ProxyConfig<ConcreteStreamAddr>,
+}
+#[async_trait]
+impl tokio_conn_pool::Connect for PoolConnector {
+    type Connection = CreatedStream;
+    async fn connect(&self) -> Option<Self::Connection> {
+        let addr = self.proxy_config.address.clone();
+        let sock_addr = addr.address.to_socket_addr().await.ok()?;
+        STREAM_CONNECTOR_TABLE
             .timed_connect(
-                proxy_config.address.stream_type,
+                self.proxy_config.address.stream_type,
                 sock_addr,
                 HEARTBEAT_INTERVAL,
             )
-            .await?;
-        let cell = Arc::new(TokioRwLock::new(Some(stream)));
-        let mut task_handle = JoinSet::new();
-        counter!("stream_pool.put_streams").increment(1);
-        task_handle.spawn({
-            let cell = Arc::clone(&cell);
-            async move {
-                loop {
-                    tokio::time::sleep(heartbeat_interval).await;
-                    let mut cell = cell.write().await;
-                    let stream = match cell.deref_mut() {
-                        Some(x) => x,
-                        None => break,
-                    };
-                    match send_noop(stream, HEARTBEAT_INTERVAL, &proxy_config.crypto.clone()).await
-                    {
-                        Ok(()) => (),
-                        Err(e) => {
-                            warn!(?e, %addr, "Stream pool failed to send noop heartbeat");
-                            // Drop the stream
-                            cell.take();
-                            counter!("stream_pool.dead_streams").increment(1);
-                            return Err(e);
-                        }
-                    }
-                }
-                Result::<(), HeartbeatError>::Ok(())
-            }
-        });
-        Ok(Self {
-            cell,
-            _task_handle: task_handle,
-        })
+            .await
+            .ok()
     }
-
-    pub fn try_take(&self) -> TryTake {
-        let mut cell = match self.cell.try_write() {
-            Ok(x) => x,
-            Err(_) => return TryTake::Occupied,
-        };
-        match cell.take() {
-            Some(stream) => {
-                counter!("stream_pool.taken_streams").increment(1);
-                TryTake::Ok(stream)
-            }
-            None => TryTake::Killed,
-        }
-    }
-}
-
-enum TryTake {
-    Ok(CreatedStream),
-    Occupied,
-    Killed,
 }
 
 #[derive(Debug)]
-struct SocketQueue {
-    queue: Arc<RwLock<VecDeque<SocketCell>>>,
-    task_handles: JoinSet<()>,
+struct PoolHeartbeat {
     proxy_config: ProxyConfig<ConcreteStreamAddr>,
 }
-
-impl SocketQueue {
-    pub fn new(proxy_config: ProxyConfig<ConcreteStreamAddr>) -> Self {
-        Self {
-            queue: Default::default(),
-            task_handles: Default::default(),
-            proxy_config,
-        }
-    }
-
-    pub fn spawn_insert(&mut self, heartbeat_interval: Duration) {
-        async fn insert(
-            queue: Arc<RwLock<VecDeque<SocketCell>>>,
-            proxy_config: ProxyConfig<ConcreteStreamAddr>,
-            heartbeat_interval: Duration,
-        ) -> io::Result<()> {
-            let cell = SocketCell::create(proxy_config, heartbeat_interval).await?;
-            let mut queue = queue.write().unwrap();
-            queue.push_back(cell);
-            Ok(())
-        }
-
-        let queue = self.queue.clone();
-        let proxy_config = self.proxy_config.clone();
-        self.task_handles.spawn(async move {
-            loop {
-                let queue = queue.clone();
-                match insert(queue, proxy_config.clone(), heartbeat_interval).await {
-                    Ok(()) => break,
-                    Err(_e) => {
-                        tokio::time::sleep(RETRY_INTERVAL).await;
-                    }
-                }
-            }
-        });
-    }
-
-    pub fn try_swap(&mut self, heartbeat_interval: Duration) -> Option<CreatedStream> {
-        let res = {
-            let mut queue = match self.queue.try_write() {
-                Ok(x) => x,
-                // The queue is being occupied
-                Err(_) => return None,
-            };
-            let front = match queue.pop_front() {
-                Some(x) => x,
-                // The queue is empty
-                None => return None,
-            };
-            match front.try_take() {
-                TryTake::Ok(tcp) => Some(tcp),
-                TryTake::Occupied => {
-                    queue.push_back(front);
-                    return None;
-                }
-                TryTake::Killed => None,
-            }
-        };
-
-        // Remove the completed task to avoid memory leak
-        {
-            let waker = noop_waker::noop_waker();
-            let mut cx = std::task::Context::from_waker(&waker);
-            let ready = self.task_handles.poll_join_next(&mut cx);
-            let ready = match ready {
-                std::task::Poll::Ready(r) => r,
-                std::task::Poll::Pending => panic!(),
-            };
-            ready.unwrap().expect("Pool task panicked");
-        }
-
-        // Replenish
-        self.spawn_insert(heartbeat_interval);
-        assert_eq!(self.task_handles.len(), QUEUE_LEN);
-
-        res
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Pool {
-    pool: Arc<ArcSwap<PoolInner>>,
-}
-
-impl Pool {
-    pub fn empty() -> Self {
-        Self {
-            pool: Arc::new(Arc::new(PoolInner::empty()).into()),
-        }
-    }
-
-    pub fn new<I>(proxy_configs: I) -> Self
-    where
-        I: Iterator<Item = ProxyConfig<ConcreteStreamAddr>>,
-    {
-        Self {
-            pool: Arc::new(Arc::new(PoolInner::new(proxy_configs)).into()),
-        }
-    }
-
-    pub async fn open_stream(
-        &self,
-        addr: &ConcreteStreamAddr,
-    ) -> Option<(CreatedStream, SocketAddr)> {
-        self.pool.load().open_stream(addr).await
-    }
-
-    pub fn replaced_by(&self, new: Self) {
-        self.pool.store(new.pool.load_full());
-    }
-}
-
-#[derive(Debug)]
-struct PoolInner {
-    pool: HashMap<ConcreteStreamAddr, Mutex<SocketQueue>>,
-}
-
-impl PoolInner {
-    pub fn empty() -> Self {
-        Self {
-            pool: Default::default(),
-        }
-    }
-
-    pub fn new<I>(proxy_configs: I) -> Self
-    where
-        I: Iterator<Item = ProxyConfig<ConcreteStreamAddr>>,
-    {
-        let mut pool = HashMap::new();
-        proxy_configs.for_each(|c| {
-            let addr = c.address.clone();
-            let mut queue = SocketQueue::new(c);
-            for _ in 0..QUEUE_LEN {
-                queue.spawn_insert(HEARTBEAT_INTERVAL);
-            }
-            pool.insert(addr, Mutex::new(queue));
-        });
-
-        Self { pool }
-    }
-
-    pub async fn open_stream(
-        &self,
-        addr: &ConcreteStreamAddr,
-    ) -> Option<(CreatedStream, SocketAddr)> {
-        let stream = {
-            let mut queue = match self.pool.get(addr).and_then(|queue| queue.try_lock().ok()) {
-                Some(queue) => queue,
-                None => return None,
-            };
-            queue.try_swap(HEARTBEAT_INTERVAL)
-        };
-        let stream = match stream {
-            Some(x) => x,
-            None => return None,
-        };
-        let peer_addr = match stream.peer_addr() {
-            Ok(x) => x,
-            Err(_) => return None,
-        };
-        counter!("stream_pool.opened_streams").increment(1);
-        Some((stream, peer_addr))
+#[async_trait]
+impl tokio_conn_pool::Heartbeat for PoolHeartbeat {
+    type Connection = CreatedStream;
+    async fn heartbeat(&self, mut conn: Self::Connection) -> Option<Self::Connection> {
+        send_noop(
+            &mut conn,
+            HEARTBEAT_INTERVAL,
+            &self.proxy_config.crypto.clone(),
+        )
+        .await
+        .ok()?;
+        Some(conn)
     }
 }
 
 pub async fn connect_with_pool(
     addr: &ConcreteStreamAddr,
-    stream_pool: &Pool,
+    stream_pool: &ConcreteConnPool,
     allow_loopback: bool,
     timeout: Duration,
 ) -> Result<(CreatedStream, SocketAddr), ConnectError> {
-    let stream = stream_pool.open_stream(addr).await;
-    let ret = match stream {
-        Some((stream, sock_addr)) => (stream, sock_addr),
-        None => {
+    let stream = stream_pool.pull(addr);
+    let sock_addr = stream.as_ref().and_then(|s| s.peer_addr().ok());
+    let ret = match (stream, sock_addr) {
+        (Some(stream), Some(sock_addr)) => (stream, sock_addr),
+        _ => {
             let sock_addr =
                 addr.address
                     .to_socket_addr()
@@ -409,13 +209,14 @@ mod tests {
             address: addr.clone(),
             crypto: create_random_crypto(),
         };
-        let pool = Pool::new(vec![proxy_config].into_iter());
+        let entries = pool_entries_from_proxy_configs([proxy_config].into_iter());
+        let pool = ConcreteConnPool::new(entries);
         let mut join_set = JoinSet::new();
         for _ in 0..100 {
             let pool = pool.clone();
             let addr = addr.clone();
             join_set.spawn(async move {
-                let res = pool.open_stream(&addr).await;
+                let res = pool.pull(&addr);
                 assert!(res.is_none());
             });
         }
@@ -432,12 +233,13 @@ mod tests {
             address: addr.clone(),
             crypto: create_random_crypto(),
         };
-        let pool = Pool::new(vec![proxy_config].into_iter());
+        let entries = pool_entries_from_proxy_configs([proxy_config].into_iter());
+        let pool = ConcreteConnPool::new(entries);
         for _ in 0..10 {
             tokio::time::sleep(Duration::from_millis(500)).await;
-            for _ in 0..QUEUE_LEN {
+            for _ in 0..1 {
                 let addr = addr.clone();
-                let res = pool.open_stream(&addr).await;
+                let res = pool.pull(&addr);
                 assert!(res.is_some());
             }
         }

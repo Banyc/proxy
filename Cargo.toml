@@ -11,6 +11,7 @@ members = [
 
 [workspace.dependencies]
 async-speed-limit = { version = "0.4", features = ["tokio"] }
+async-trait = "0.1"
 bincode = "1"
 bytes = "1"
 csv_logger = { git = "https://github.com/Banyc/csv_logger.git", rev = "d63ac71c4eeb55268102695b095fb6bf13b7ee8f" }
@@ -26,6 +27,7 @@ thiserror = "1"
 tokio = "1"
 tokio-util = "0.7"
 tokio_chacha20 = { git = "https://github.com/Banyc/tokio_chacha20.git", rev = "40d2030f0ab6e7e32031e61618717d25f25e5509" }
+tokio_conn_pool = { git = "https://github.com/Banyc/tokio_conn_pool.git", rev = "4645bdddcfc22b118d1a5cd90d9e7303e01712a6" }
 tokio_kcp = "0.9"
 tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", rev = "80cbf0572623762665caff07781cee3e0d97cfc7" }
 tracing = "0.1"

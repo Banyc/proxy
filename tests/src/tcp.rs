@@ -10,7 +10,7 @@ mod tests {
             concrete::{
                 addr::{ConcreteStreamAddr, ConcreteStreamType},
                 created_stream::CreatedStreamAndAddr,
-                pool::Pool,
+                pool::ConcreteConnPool,
             },
             proxy_table::StreamProxyConfig,
         },
@@ -39,7 +39,7 @@ mod tests {
         ty: ConcreteStreamType,
     ) -> StreamProxyConfig<ConcreteStreamType> {
         let crypto = create_random_crypto();
-        let proxy = StreamProxy::new(crypto.clone(), None, Pool::empty(), None);
+        let proxy = StreamProxy::new(crypto.clone(), None, ConcreteConnPool::empty(), None);
         let proxy_addr = match ty {
             ConcreteStreamType::Tcp => {
                 let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
@@ -157,7 +157,7 @@ mod tests {
 
         // Connect to proxy server
         let CreatedStreamAndAddr { mut stream, .. } =
-            establish(&proxies, greet_addr, &Pool::empty())
+            establish(&proxies, greet_addr, &ConcreteConnPool::empty())
                 .await
                 .unwrap();
 
@@ -168,7 +168,9 @@ mod tests {
         read_response(&mut stream, resp_msg).await.unwrap();
 
         // Trace
-        let rtt = trace_rtt(&proxies, &Pool::empty()).await.unwrap();
+        let rtt = trace_rtt(&proxies, &ConcreteConnPool::empty())
+            .await
+            .unwrap();
         assert!(rtt > Duration::from_secs(0));
         assert!(rtt < Duration::from_secs(1));
     }
@@ -199,7 +201,7 @@ mod tests {
             handles.spawn(async move {
                 // Connect to proxy server
                 let CreatedStreamAndAddr { mut stream, .. } =
-                    establish(&proxies, greet_addr, &Pool::empty())
+                    establish(&proxies, greet_addr, &ConcreteConnPool::empty())
                         .await
                         .unwrap();
 
@@ -265,7 +267,7 @@ mod tests {
                     let greet_addr = greet_addr.clone();
                     // Connect to proxy server
                     let CreatedStreamAndAddr { mut stream, .. } =
-                        establish(&proxies, greet_addr, &Pool::empty())
+                        establish(&proxies, greet_addr, &ConcreteConnPool::empty())
                             .await
                             .unwrap();
 
@@ -300,7 +302,7 @@ mod tests {
     //     let err = establish(
     //         &[proxy_1_config.clone(), proxy_2_config, proxy_3_config],
     //         greet_addr,
-    //         &Pool::empty(),
+    //         &ConcreteConnPool::empty(),
     //     )
     //     .await
     //     .unwrap_err();
@@ -331,7 +333,9 @@ mod tests {
 
         // Connect to proxy server
         let CreatedStreamAndAddr { mut stream, .. } =
-            establish(&[], greet_addr, &Pool::empty()).await.unwrap();
+            establish(&[], greet_addr, &ConcreteConnPool::empty())
+                .await
+                .unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();
