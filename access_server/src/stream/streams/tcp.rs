@@ -7,7 +7,7 @@ use common::{
     stream::{
         concrete::{
             addr::{ConcreteStreamAddr, ConcreteStreamAddrStr, ConcreteStreamType},
-            pool::ConcreteConnPool,
+            pool::SharedConcreteConnPool,
             streams::tcp::TcpServer,
         },
         io_copy::CopyBidirectional,
@@ -37,7 +37,7 @@ pub struct TcpAccessServerConfig {
 impl TcpAccessServerConfig {
     pub fn into_builder(
         self,
-        stream_pool: ConcreteConnPool,
+        stream_pool: SharedConcreteConnPool,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         cancellation: CancellationToken,
         session_table: Option<StreamSessionTable<ConcreteStreamType>>,
@@ -74,7 +74,7 @@ pub struct TcpAccessServerBuilder {
     listen_addr: Arc<str>,
     destination: ConcreteStreamAddrStr,
     proxy_table: StreamProxyTable<ConcreteStreamType>,
-    stream_pool: ConcreteConnPool,
+    stream_pool: SharedConcreteConnPool,
     speed_limit: f64,
     session_table: Option<StreamSessionTable<ConcreteStreamType>>,
 }
@@ -110,7 +110,7 @@ impl loading::Builder for TcpAccessServerBuilder {
 pub struct TcpAccess {
     proxy_table: StreamProxyTable<ConcreteStreamType>,
     destination: ConcreteStreamAddr,
-    stream_pool: ConcreteConnPool,
+    stream_pool: SharedConcreteConnPool,
     speed_limiter: Limiter,
     session_table: Option<StreamSessionTable<ConcreteStreamType>>,
 }
@@ -119,7 +119,7 @@ impl TcpAccess {
     pub fn new(
         proxy_table: StreamProxyTable<ConcreteStreamType>,
         destination: ConcreteStreamAddr,
-        stream_pool: ConcreteConnPool,
+        stream_pool: SharedConcreteConnPool,
         speed_limit: f64,
         session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     ) -> Self {

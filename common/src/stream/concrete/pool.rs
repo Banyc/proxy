@@ -2,6 +2,7 @@ use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use swap::Swap;
 use thiserror::Error;
 use tokio_conn_pool::{ConnPool, ConnPoolEntry};
 
@@ -23,6 +24,7 @@ use super::{
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 pub type ConcreteConnPool = ConnPool<ConcreteStreamAddr, CreatedStream>;
+pub type SharedConcreteConnPool = Swap<ConcreteConnPool>;
 type ConcreteConnPoolEntry = ConnPoolEntry<ConcreteStreamAddr, CreatedStream>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,7 +42,7 @@ impl PoolBuilder {
             .map(|c| c.build())
             .collect::<Result<Vec<_>, _>>()?;
         let entries = pool_entries_from_proxy_configs(c.into_iter());
-        let pool = ConcreteConnPool::new(entries);
+        let pool = ConnPool::new(entries);
         Ok(pool)
     }
 }
@@ -106,11 +108,11 @@ impl tokio_conn_pool::Heartbeat for PoolHeartbeat {
 
 pub async fn connect_with_pool(
     addr: &ConcreteStreamAddr,
-    stream_pool: &ConcreteConnPool,
+    stream_pool: &SharedConcreteConnPool,
     allow_loopback: bool,
     timeout: Duration,
 ) -> Result<(CreatedStream, SocketAddr), ConnectError> {
-    let stream = stream_pool.pull(addr);
+    let stream = stream_pool.inner().pull(addr);
     let sock_addr = stream.as_ref().and_then(|s| s.peer_addr().ok());
     let ret = match (stream, sock_addr) {
         (Some(stream), Some(sock_addr)) => (stream, sock_addr),
@@ -210,13 +212,13 @@ mod tests {
             crypto: create_random_crypto(),
         };
         let entries = pool_entries_from_proxy_configs([proxy_config].into_iter());
-        let pool = ConcreteConnPool::new(entries);
+        let pool = Swap::new(ConnPool::<ConcreteStreamAddr, CreatedStream>::new(entries));
         let mut join_set = JoinSet::new();
         for _ in 0..100 {
             let pool = pool.clone();
             let addr = addr.clone();
             join_set.spawn(async move {
-                let res = pool.pull(&addr);
+                let res = pool.inner().pull(&addr);
                 assert!(res.is_none());
             });
         }
@@ -234,7 +236,7 @@ mod tests {
             crypto: create_random_crypto(),
         };
         let entries = pool_entries_from_proxy_configs([proxy_config].into_iter());
-        let pool = ConcreteConnPool::new(entries);
+        let pool = ConnPool::<ConcreteStreamAddr, CreatedStream>::new(entries);
         for _ in 0..10 {
             tokio::time::sleep(Duration::from_millis(500)).await;
             for _ in 0..1 {

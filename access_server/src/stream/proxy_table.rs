@@ -5,7 +5,7 @@ use common::{
     stream::{
         concrete::{
             addr::{ConcreteStreamAddrStr, ConcreteStreamType},
-            pool::ConcreteConnPool,
+            pool::SharedConcreteConnPool,
         },
         proxy_table::{
             StreamProxyConfigBuildError, StreamProxyTable, StreamWeightedProxyChainBuilder,
@@ -28,7 +28,7 @@ pub struct StreamProxyTableBuilder {
 impl StreamProxyTableBuilder {
     pub fn build(
         self,
-        stream_pool: &ConcreteConnPool,
+        stream_pool: &SharedConcreteConnPool,
         cancellation: CancellationToken,
     ) -> Result<StreamProxyTable<ConcreteStreamType>, StreamProxyTableBuildError> {
         let chains = self

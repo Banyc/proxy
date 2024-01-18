@@ -11,6 +11,7 @@ bincode = { workspace = true }
 common = { path = "../common" }
 mptcp = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+swap = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio_chacha20 = { workspace = true }

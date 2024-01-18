@@ -23,6 +23,7 @@ metrics-exporter-prometheus = { workspace = true }
 notify = "6"
 proxy_server = { path = "../proxy_server" }
 serde = { workspace = true, features = ["derive"] }
+swap = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true }

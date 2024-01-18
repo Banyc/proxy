@@ -516,6 +516,7 @@ dependencies = [
  "serde_json",
  "slotmap",
  "strict-num",
+ "swap",
  "table_log",
  "thiserror",
  "tokio",
@@ -2004,6 +2005,7 @@ dependencies = [
  "common",
  "mptcp",
  "serde",
+ "swap",
  "thiserror",
  "tokio",
  "tokio_chacha20",
@@ -2306,9 +2308,9 @@ dependencies = [
 
 [[package]]
 name = "serial_test"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e56dd856803e253c8f298af3f4d7eb0ae5e23a737252cd90bb4f3b435033b2d"
+checksum = "953ad9342b3aaca7cb43c45c097dd008d4907070394bd0751a0aa8817e5a018d"
 dependencies = [
  "dashmap",
  "futures",
@@ -2320,9 +2322,9 @@ dependencies = [
 
 [[package]]
 name = "serial_test_derive"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91d129178576168c589c9ec973feedf7d3126c01ac2bf08795109aa35b69fb8f"
+checksum = "b93fb4adc70021ac1b47f7d45e8cc4169baaa7ea58483bc5b721d19a26202212"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2346,6 +2348,7 @@ dependencies = [
  "notify",
  "proxy_server",
  "serde",
+ "swap",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -2514,6 +2517,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "swap"
+version = "0.1.0"
+source = "git+https://github.com/Banyc/swap.git?rev=d10a8b5b10503fa6ebac523cfcaa4d62135a665f#d10a8b5b10503fa6ebac523cfcaa4d62135a665f"
+dependencies = [
+ "arc-swap",
+]
+
+[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2592,6 +2603,7 @@ dependencies = [
  "proxy_server",
  "rand",
  "serial_test",
+ "swap",
  "tokio",
  "tokio_chacha20",
  "tracing",
@@ -2707,7 +2719,7 @@ dependencies = [
 [[package]]
 name = "tokio_conn_pool"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/tokio_conn_pool.git?rev=4645bdddcfc22b118d1a5cd90d9e7303e01712a6#4645bdddcfc22b118d1a5cd90d9e7303e01712a6"
+source = "git+https://github.com/Banyc/tokio_conn_pool.git?rev=fe3ca233f081d2355bd8a7d730fa8e9bc0b35d35#fe3ca233f081d2355bd8a7d730fa8e9bc0b35d35"
 dependencies = [
  "arc-swap",
  "async-trait",

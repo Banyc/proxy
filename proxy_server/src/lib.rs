@@ -4,7 +4,7 @@ use common::{
     error::AnyResult,
     loading,
     session_table::BothSessionTables,
-    stream::concrete::{addr::ConcreteStreamType, pool::ConcreteConnPool},
+    stream::concrete::{addr::ConcreteStreamType, pool::SharedConcreteConnPool},
 };
 use serde::Deserialize;
 use stream::{
@@ -44,7 +44,7 @@ impl ProxyServerConfig {
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut ProxyServerLoader,
-        stream_pool: &ConcreteConnPool,
+        stream_pool: &SharedConcreteConnPool,
         session_table: &BothSessionTables<ConcreteStreamType>,
     ) -> AnyResult {
         loader

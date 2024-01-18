@@ -8,7 +8,7 @@ use common::{
         concrete::{
             addr::ConcreteStreamType,
             created_stream::CreatedStreamAndAddr,
-            pool::{connect_with_pool, ConcreteConnPool, ConnectError},
+            pool::{connect_with_pool, ConnectError, SharedConcreteConnPool},
         },
         io_copy::CopyBidirectional,
         session_table::StreamSessionTable,
@@ -38,7 +38,7 @@ pub struct StreamProxyConfig {
 impl StreamProxyConfig {
     pub fn into_builder(
         self,
-        stream_pool: ConcreteConnPool,
+        stream_pool: SharedConcreteConnPool,
         session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     ) -> StreamProxyBuilder {
         StreamProxyBuilder {
@@ -54,7 +54,7 @@ impl StreamProxyConfig {
 pub struct StreamProxyBuilder {
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
-    pub stream_pool: ConcreteConnPool,
+    pub stream_pool: SharedConcreteConnPool,
     pub session_table: Option<StreamSessionTable<ConcreteStreamType>>,
 }
 
@@ -106,7 +106,7 @@ impl StreamProxy {
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
         payload_crypto: Option<tokio_chacha20::config::Config>,
-        stream_pool: ConcreteConnPool,
+        stream_pool: SharedConcreteConnPool,
         session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     ) -> Self {
         Self {
@@ -202,11 +202,14 @@ pub enum ProxyResult {
 #[derive(Debug)]
 pub struct StreamProxyAcceptor {
     crypto: tokio_chacha20::config::Config,
-    stream_pool: ConcreteConnPool,
+    stream_pool: SharedConcreteConnPool,
 }
 
 impl StreamProxyAcceptor {
-    pub fn new(crypto: tokio_chacha20::config::Config, stream_pool: ConcreteConnPool) -> Self {
+    pub fn new(
+        crypto: tokio_chacha20::config::Config,
+        stream_pool: SharedConcreteConnPool,
+    ) -> Self {
         Self {
             crypto,
             stream_pool,

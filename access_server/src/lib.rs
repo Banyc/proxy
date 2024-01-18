@@ -5,7 +5,7 @@ use common::{
     filter::{self, FilterBuilder, MatcherBuilder},
     loading,
     session_table::BothSessionTables,
-    stream::concrete::{addr::ConcreteStreamType, pool::ConcreteConnPool},
+    stream::concrete::{addr::ConcreteStreamType, pool::SharedConcreteConnPool},
 };
 use serde::{Deserialize, Serialize};
 use socks5::server::{
@@ -68,7 +68,7 @@ impl AccessServerConfig {
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut AccessServerLoader,
-        stream_pool: &ConcreteConnPool,
+        stream_pool: &SharedConcreteConnPool,
         cancellation: CancellationToken,
         session_table: &BothSessionTables<ConcreteStreamType>,
     ) -> AnyResult {

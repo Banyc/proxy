@@ -9,8 +9,8 @@ use common::{
     stream::{
         addr::StreamAddr,
         concrete::{
-            addr::ConcreteStreamType, created_stream::CreatedStreamAndAddr, pool::ConcreteConnPool,
-            streams::tcp::TcpServer,
+            addr::ConcreteStreamType, created_stream::CreatedStreamAndAddr,
+            pool::SharedConcreteConnPool, streams::tcp::TcpServer,
         },
         io_copy::CopyBidirectional,
         proxy_table::StreamProxyTable,
@@ -51,7 +51,7 @@ pub struct Socks5ServerTcpAccessServerConfig {
 impl Socks5ServerTcpAccessServerConfig {
     pub fn into_builder(
         self,
-        stream_pool: ConcreteConnPool,
+        stream_pool: SharedConcreteConnPool,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         filters: &HashMap<Arc<str>, Filter>,
         cancellation: CancellationToken,
@@ -113,7 +113,7 @@ pub enum BuildError {
 pub struct Socks5ServerTcpAccessServerBuilder {
     listen_addr: Arc<str>,
     proxy_table: StreamProxyTable<ConcreteStreamType>,
-    stream_pool: ConcreteConnPool,
+    stream_pool: SharedConcreteConnPool,
     filter: Filter,
     speed_limit: f64,
     udp_server_addr: Option<InternetAddr>,
@@ -154,7 +154,7 @@ impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
 #[derive(Debug)]
 pub struct Socks5ServerTcpAccess {
     proxy_table: StreamProxyTable<ConcreteStreamType>,
-    stream_pool: ConcreteConnPool,
+    stream_pool: SharedConcreteConnPool,
     filter: Filter,
     speed_limiter: Limiter,
     udp_listen_addr: Option<InternetAddr>,
@@ -182,7 +182,7 @@ impl StreamServerHook for Socks5ServerTcpAccess {
 impl Socks5ServerTcpAccess {
     pub fn new(
         proxy_table: StreamProxyTable<ConcreteStreamType>,
-        stream_pool: ConcreteConnPool,
+        stream_pool: SharedConcreteConnPool,
         filter: Filter,
         speed_limit: f64,
         udp_listen_addr: Option<InternetAddr>,
