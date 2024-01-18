@@ -114,36 +114,34 @@ pub async fn connect_with_pool(
 ) -> Result<(CreatedStream, SocketAddr), ConnectError> {
     let stream = stream_pool.inner().pull(addr);
     let sock_addr = stream.as_ref().and_then(|s| s.peer_addr().ok());
-    let ret = match (stream, sock_addr) {
-        (Some(stream), Some(sock_addr)) => (stream, sock_addr),
-        _ => {
-            let sock_addr =
-                addr.address
-                    .to_socket_addr()
-                    .await
-                    .map_err(|e| ConnectError::ResolveAddr {
-                        source: e,
-                        addr: addr.clone(),
-                    })?;
-            if !allow_loopback && sock_addr.ip().is_loopback() {
-                // Prevent connections to localhost
-                return Err(ConnectError::Loopback {
-                    addr: addr.clone(),
-                    sock_addr,
-                });
-            }
-            let stream = STREAM_CONNECTOR_TABLE
-                .timed_connect(addr.stream_type, sock_addr, timeout)
-                .await
-                .map_err(|e| ConnectError::ConnectAddr {
-                    source: e,
-                    addr: addr.clone(),
-                    sock_addr,
-                })?;
-            (stream, sock_addr)
-        }
-    };
-    Ok(ret)
+    if let (Some(stream), Some(sock_addr)) = (stream, sock_addr) {
+        return Ok((stream, sock_addr));
+    }
+
+    let sock_addr = addr
+        .address
+        .to_socket_addr()
+        .await
+        .map_err(|e| ConnectError::ResolveAddr {
+            source: e,
+            addr: addr.clone(),
+        })?;
+    if !allow_loopback && sock_addr.ip().is_loopback() {
+        // Prevent connections to localhost
+        return Err(ConnectError::Loopback {
+            addr: addr.clone(),
+            sock_addr,
+        });
+    }
+    let stream = STREAM_CONNECTOR_TABLE
+        .timed_connect(addr.stream_type, sock_addr, timeout)
+        .await
+        .map_err(|e| ConnectError::ConnectAddr {
+            source: e,
+            addr: addr.clone(),
+            sock_addr,
+        })?;
+    Ok((stream, sock_addr))
 }
 
 #[derive(Debug, Error)]
