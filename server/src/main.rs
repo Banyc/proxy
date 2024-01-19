@@ -1,19 +1,12 @@
 use std::{net::SocketAddr, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
-use axum::{
-    extract::{Query, State},
-    routing::get,
-    Router,
-};
+use axum::Router;
 use clap::Parser;
-use common::{
-    error::AnyResult, session_table::BothSessionTables, stream::concrete::addr::ConcreteStreamType,
-};
-use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
-use serde::Deserialize;
+use common::error::AnyResult;
 use server::{
     config::multi_file_config::{spawn_watch_tasks, MultiFileConfigReader},
-    serve,
+    monitor::monitor_router,
+    serve, ServeContext,
 };
 use tracing::info;
 
@@ -53,97 +46,38 @@ async fn main() -> AnyResult {
     let profiler = dhat::Profiler::new_heap();
 
     // Monitoring
-    let session_table: BothSessionTables<ConcreteStreamType>;
+    let serve_context: ServeContext;
     if let Some(monitor_addr) = args.monitor {
-        let metrics_handle = PrometheusBuilder::new().install_recorder().unwrap();
-        session_table = BothSessionTables::new();
-        let session_table = session_table.clone();
+        let router = Router::new();
+
+        let (session_tables, monitor_router) = monitor_router();
+        let router = router.nest("/", monitor_router);
+
+        #[cfg(feature = "dhat-heap")]
+        let router = router.nest("/", server::profiling::profiler_router(profiler));
+
+        let listener = tokio::net::TcpListener::bind(&monitor_addr).await.unwrap();
+        let listen_addr = listener.local_addr().unwrap();
+        let server = axum::serve(listener, router.into_make_service());
+        info!("Monitoring HTTP server listening addr: {listen_addr}");
         tokio::spawn(async move {
-            async fn metrics(metrics_handle: State<PrometheusHandle>) -> String {
-                metrics_handle.render()
-            }
-            fn sessions(
-                Query(params): Query<SessionsParams>,
-                State(session_table): State<BothSessionTables<ConcreteStreamType>>,
-            ) -> anyhow::Result<String> {
-                let mut text = String::new();
-                {
-                    let sql = &params.stream_sql;
-                    text.push_str("Stream:\n");
-                    let sessions = session_table
-                        .stream()
-                        .map(|s| s.to_view(sql).map(|s| s.to_string()))
-                        .transpose()?;
-                    if let Some(s) = sessions {
-                        text.push_str(&s);
-                    }
-                    text.push('\n');
-                }
-                {
-                    let sql = &params.udp_sql;
-                    text.push_str("UDP:\n");
-                    let sessions = session_table
-                        .udp()
-                        .map(|s| s.to_view(sql).map(|s| s.to_string()))
-                        .transpose()?;
-                    if let Some(s) = sessions {
-                        text.push_str(&s);
-                    }
-                    text.push('\n');
-                }
-                Ok(text)
-            }
-            let router = Router::new()
-                .route("/", get(metrics))
-                .with_state(metrics_handle)
-                .route(
-                    "/sessions",
-                    get(|params, state| async {
-                        sessions(params, state).map_err(|e| format!("{e:#?}"))
-                    }),
-                )
-                .with_state(session_table)
-                .route("/health", get(|| async { Ok::<_, ()>(()) }));
-            #[cfg(feature = "dhat-heap")]
-            let router = router
-                .route(
-                    "/profile",
-                    get(
-                        |State(profiler): State<
-                            std::sync::Arc<std::sync::Mutex<Option<dhat::Profiler>>>,
-                        >| async move {
-                            let mut profiler = profiler.lock().unwrap();
-                            drop(profiler.take().unwrap());
-                            std::process::exit(0);
-                        },
-                    ),
-                )
-                .with_state(std::sync::Arc::new(std::sync::Mutex::new(Some(profiler))));
-            let listener = tokio::net::TcpListener::bind(&monitor_addr).await.unwrap();
-            let listen_addr = listener.local_addr().unwrap();
-            let server = axum::serve(listener, router.into_make_service());
-            info!("Monitoring HTTP server listening addr: {listen_addr}");
             server.await.unwrap();
         });
+
+        serve_context = ServeContext {
+            stream_session_table: Some(session_tables.stream),
+            udp_session_table: Some(session_tables.udp),
+        };
     } else {
-        session_table = BothSessionTables::empty();
+        serve_context = ServeContext {
+            stream_session_table: None,
+            udp_session_table: None,
+        };
     }
 
     let notify_rx = spawn_watch_tasks(&args.config_file_paths);
     let config_reader = MultiFileConfigReader::new(args.config_file_paths.into());
-    serve(notify_rx, config_reader, session_table)
+    serve(notify_rx, config_reader, serve_context)
         .await
         .map_err(|e| e.into())
-}
-
-fn default_sql() -> String {
-    const SQL: &str = "sort start_ms select destination duration upstream_remote";
-    SQL.to_string()
-}
-#[derive(Debug, Deserialize)]
-struct SessionsParams {
-    #[serde(default = "default_sql")]
-    stream_sql: String,
-    #[serde(default = "default_sql")]
-    udp_sql: String,
 }

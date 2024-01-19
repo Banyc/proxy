@@ -2,13 +2,9 @@ use std::sync::Arc;
 
 use common::{
     loading,
-    stream::{
-        concrete::{
-            addr::ConcreteStreamType,
-            pool::SharedConcreteConnPool,
-            streams::kcp::{fast_kcp_config, KcpServer},
-        },
-        session_table::StreamSessionTable,
+    stream::concrete::{
+        context::StreamContext,
+        streams::kcp::{fast_kcp_config, KcpServer},
     },
 };
 use serde::Deserialize;
@@ -28,12 +24,8 @@ pub struct KcpProxyServerConfig {
 }
 
 impl KcpProxyServerConfig {
-    pub fn into_builder(
-        self,
-        stream_pool: SharedConcreteConnPool,
-        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
-    ) -> KcpProxyServerBuilder {
-        let inner = self.inner.into_builder(stream_pool, session_table);
+    pub fn into_builder(self, stream_context: StreamContext) -> KcpProxyServerBuilder {
+        let inner = self.inner.into_builder(stream_context);
         KcpProxyServerBuilder {
             listen_addr: self.listen_addr,
             inner,

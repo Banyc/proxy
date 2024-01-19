@@ -5,9 +5,9 @@ use common::{
     config::SharableConfig,
     loading,
     udp::{
+        context::UdpContext,
         io_copy::{CopyBidirectional, DownstreamParts, UpstreamParts},
         proxy_table::UdpProxyTable,
-        session_table::UdpSessionTable,
         FlowOwnedGuard, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
@@ -36,7 +36,7 @@ impl Socks5ServerUdpAccessServerConfig {
         self,
         proxy_tables: &HashMap<Arc<str>, UdpProxyTable>,
         cancellation: CancellationToken,
-        session_table: Option<UdpSessionTable>,
+        udp_context: UdpContext,
     ) -> Result<Socks5ServerUdpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -50,7 +50,7 @@ impl Socks5ServerUdpAccessServerConfig {
             listen_addr: self.listen_addr,
             proxy_table,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
-            session_table,
+            udp_context,
         })
     }
 }
@@ -68,7 +68,7 @@ pub struct Socks5ServerUdpAccessServerBuilder {
     listen_addr: Arc<str>,
     proxy_table: UdpProxyTable,
     speed_limit: f64,
-    session_table: Option<UdpSessionTable>,
+    udp_context: UdpContext,
 }
 
 impl loading::Builder for Socks5ServerUdpAccessServerBuilder {
@@ -91,7 +91,7 @@ impl loading::Builder for Socks5ServerUdpAccessServerBuilder {
         Ok(Socks5ServerUdpAccess::new(
             self.proxy_table,
             self.speed_limit,
-            self.session_table,
+            self.udp_context,
         ))
     }
 }
@@ -100,21 +100,17 @@ impl loading::Builder for Socks5ServerUdpAccessServerBuilder {
 pub struct Socks5ServerUdpAccess {
     proxy_table: UdpProxyTable,
     speed_limiter: Limiter,
-    session_table: Option<UdpSessionTable>,
+    udp_context: UdpContext,
 }
 
 impl loading::Hook for Socks5ServerUdpAccess {}
 
 impl Socks5ServerUdpAccess {
-    pub fn new(
-        proxy_table: UdpProxyTable,
-        speed_limit: f64,
-        session_table: Option<UdpSessionTable>,
-    ) -> Self {
+    pub fn new(proxy_table: UdpProxyTable, speed_limit: f64, udp_context: UdpContext) -> Self {
         Self {
             proxy_table,
             speed_limiter: Limiter::new(speed_limit),
-            session_table,
+            udp_context,
         }
     }
 
@@ -150,7 +146,7 @@ impl Socks5ServerUdpAccess {
 
         let speed_limiter = self.speed_limiter.clone();
         let payload_crypto = proxy_chain.payload_crypto.clone();
-        let session_table = self.session_table.clone();
+        let session_table = self.udp_context.session_table.clone();
         let upstream_local = upstream_read.inner().local_addr().ok();
         tokio::spawn(async move {
             let io_copy = CopyBidirectional {

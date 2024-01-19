@@ -9,6 +9,7 @@ mod tests {
             addr::StreamAddr,
             concrete::{
                 addr::{ConcreteStreamAddr, ConcreteStreamType},
+                context::StreamContext,
                 created_stream::CreatedStreamAndAddr,
                 pool::ConcreteConnPool,
             },
@@ -43,8 +44,10 @@ mod tests {
         let proxy = StreamProxy::new(
             crypto.clone(),
             None,
-            Swap::new(ConcreteConnPool::empty()),
-            None,
+            StreamContext {
+                session_table: None,
+                pool: Swap::new(ConcreteConnPool::empty()),
+            },
         );
         let proxy_addr = match ty {
             ConcreteStreamType::Tcp => {

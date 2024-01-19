@@ -6,12 +6,11 @@ use common::{
     loading,
     stream::{
         concrete::{
-            addr::ConcreteStreamType,
+            context::StreamContext,
             created_stream::CreatedStreamAndAddr,
             pool::{connect_with_pool, ConnectError, SharedConcreteConnPool},
         },
         io_copy::CopyBidirectional,
-        session_table::StreamSessionTable,
         steer::{steer, SteerError},
         IoAddr, IoStream, StreamServerHook,
     },
@@ -36,16 +35,11 @@ pub struct StreamProxyConfig {
 }
 
 impl StreamProxyConfig {
-    pub fn into_builder(
-        self,
-        stream_pool: SharedConcreteConnPool,
-        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
-    ) -> StreamProxyBuilder {
+    pub fn into_builder(self, stream_context: StreamContext) -> StreamProxyBuilder {
         StreamProxyBuilder {
             header_key: self.header_key,
             payload_key: self.payload_key,
-            stream_pool,
-            session_table,
+            stream_context,
         }
     }
 }
@@ -54,8 +48,7 @@ impl StreamProxyConfig {
 pub struct StreamProxyBuilder {
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
-    pub stream_pool: SharedConcreteConnPool,
-    pub session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+    pub stream_context: StreamContext,
 }
 
 impl StreamProxyBuilder {
@@ -71,8 +64,7 @@ impl StreamProxyBuilder {
         Ok(StreamProxy::new(
             header_crypto,
             payload_crypto,
-            self.stream_pool,
-            self.session_table,
+            self.stream_context,
         ))
     }
 }
@@ -99,20 +91,19 @@ pub enum StreamProxyServerBuildError {
 pub struct StreamProxy {
     acceptor: StreamProxyAcceptor,
     payload_crypto: Option<tokio_chacha20::config::Config>,
-    session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+    stream_context: StreamContext,
 }
 
 impl StreamProxy {
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
         payload_crypto: Option<tokio_chacha20::config::Config>,
-        stream_pool: SharedConcreteConnPool,
-        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+        stream_context: StreamContext,
     ) -> Self {
         Self {
-            acceptor: StreamProxyAcceptor::new(header_crypto, stream_pool),
+            acceptor: StreamProxyAcceptor::new(header_crypto, stream_context.pool.clone()),
             payload_crypto,
-            session_table,
+            stream_context,
         }
     }
 
@@ -137,7 +128,7 @@ impl StreamProxy {
 
         // Copy data
         let payload_crypto = self.payload_crypto.clone();
-        let session_table = self.session_table.clone();
+        let session_table = self.stream_context.session_table.clone();
         let upstream_local = upstream.stream.local_addr().ok();
         tokio::spawn(async move {
             let io_copy = CopyBidirectional {

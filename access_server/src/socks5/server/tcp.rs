@@ -9,12 +9,11 @@ use common::{
     stream::{
         addr::StreamAddr,
         concrete::{
-            addr::ConcreteStreamType, created_stream::CreatedStreamAndAddr,
-            pool::SharedConcreteConnPool, streams::tcp::TcpServer,
+            addr::ConcreteStreamType, context::StreamContext, created_stream::CreatedStreamAndAddr,
+            streams::tcp::TcpServer,
         },
         io_copy::CopyBidirectional,
         proxy_table::StreamProxyTable,
-        session_table::StreamSessionTable,
         IoAddr, IoStream, StreamServerHook,
     },
 };
@@ -51,18 +50,17 @@ pub struct Socks5ServerTcpAccessServerConfig {
 impl Socks5ServerTcpAccessServerConfig {
     pub fn into_builder(
         self,
-        stream_pool: SharedConcreteConnPool,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         filters: &HashMap<Arc<str>, Filter>,
         cancellation: CancellationToken,
-        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+        stream_context: StreamContext,
     ) -> Result<Socks5ServerTcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(&stream_pool, cancellation)?,
+            SharableConfig::Private(x) => x.build(&stream_context.pool, cancellation)?,
         };
         let filter = match self.filter {
             SharableConfig::SharingKey(key) => filters
@@ -80,12 +78,11 @@ impl Socks5ServerTcpAccessServerConfig {
         Ok(Socks5ServerTcpAccessServerBuilder {
             listen_addr: self.listen_addr,
             proxy_table,
-            stream_pool,
             filter,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
             udp_server_addr: self.udp_server_addr.map(|a| a.0),
             users,
-            session_table,
+            stream_context,
         })
     }
 }
@@ -113,12 +110,11 @@ pub enum BuildError {
 pub struct Socks5ServerTcpAccessServerBuilder {
     listen_addr: Arc<str>,
     proxy_table: StreamProxyTable<ConcreteStreamType>,
-    stream_pool: SharedConcreteConnPool,
     filter: Filter,
     speed_limit: f64,
     udp_server_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-    session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+    stream_context: StreamContext,
 }
 
 impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
@@ -140,12 +136,11 @@ impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
     fn build_hook(self) -> Result<Self::Hook, Self::Err> {
         let access = Socks5ServerTcpAccess::new(
             self.proxy_table,
-            self.stream_pool,
             self.filter,
             self.speed_limit,
             self.udp_server_addr,
             self.users,
-            self.session_table,
+            self.stream_context,
         );
         Ok(access)
     }
@@ -154,12 +149,11 @@ impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
 #[derive(Debug)]
 pub struct Socks5ServerTcpAccess {
     proxy_table: StreamProxyTable<ConcreteStreamType>,
-    stream_pool: SharedConcreteConnPool,
     filter: Filter,
     speed_limiter: Limiter,
     udp_listen_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-    session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+    stream_context: StreamContext,
 }
 
 impl Hook for Socks5ServerTcpAccess {}
@@ -182,21 +176,19 @@ impl StreamServerHook for Socks5ServerTcpAccess {
 impl Socks5ServerTcpAccess {
     pub fn new(
         proxy_table: StreamProxyTable<ConcreteStreamType>,
-        stream_pool: SharedConcreteConnPool,
         filter: Filter,
         speed_limit: f64,
         udp_listen_addr: Option<InternetAddr>,
         users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+        stream_context: StreamContext,
     ) -> Self {
         Self {
             proxy_table,
-            stream_pool,
             filter,
             speed_limiter: Limiter::new(speed_limit),
             udp_listen_addr,
             users,
-            session_table,
+            stream_context,
         }
     }
 
@@ -221,7 +213,7 @@ impl Socks5ServerTcpAccess {
                 upstream_sock_addr,
             } => {
                 let speed_limiter = self.speed_limiter.clone();
-                let session_table = self.session_table.clone();
+                let session_table = self.stream_context.session_table.clone();
                 tokio::spawn(async move {
                     let upstream_local = upstream.local_addr().ok();
                     let io_copy = CopyBidirectional {
@@ -268,7 +260,7 @@ impl Socks5ServerTcpAccess {
         };
 
         let speed_limiter = self.speed_limiter.clone();
-        let session_table = self.session_table.clone();
+        let session_table = self.stream_context.session_table.clone();
         tokio::spawn(async move {
             let upstream_local = upstream.stream.local_addr().ok();
             let io_copy = CopyBidirectional {
@@ -560,7 +552,7 @@ impl Socks5ServerTcpAccess {
                 address: destination,
                 stream_type: ConcreteStreamType::Tcp,
             },
-            &self.stream_pool,
+            &self.stream_context.pool,
         )
         .await?;
         Ok((res, proxy_chain.payload_crypto.clone()))

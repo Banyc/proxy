@@ -9,9 +9,9 @@ use common::{
     },
     loading,
     udp::{
+        context::UdpContext,
         io_copy::{CopyBidirectional, DownstreamParts, UpstreamParts},
         respond::respond_with_error,
-        session_table::UdpSessionTable,
         steer::steer,
         FlowOwnedGuard, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
@@ -37,7 +37,7 @@ pub struct UdpProxyServerConfig {
 #[derive(Debug, Clone)]
 pub struct UdpProxyServerBuilder {
     pub config: UdpProxyServerConfig,
-    pub session_table: Option<UdpSessionTable>,
+    pub udp_context: UdpContext,
 }
 
 impl loading::Builder for UdpProxyServerBuilder {
@@ -69,7 +69,7 @@ impl loading::Builder for UdpProxyServerBuilder {
         Ok(UdpProxy::new(
             header_crypto,
             payload_crypto,
-            self.session_table,
+            self.udp_context,
         ))
     }
 
@@ -98,19 +98,19 @@ pub enum UdpProxyServerBuildError {
 pub struct UdpProxy {
     header_crypto: tokio_chacha20::config::Config,
     payload_crypto: Option<tokio_chacha20::config::Config>,
-    session_table: Option<UdpSessionTable>,
+    udp_context: UdpContext,
 }
 
 impl UdpProxy {
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
         payload_crypto: Option<tokio_chacha20::config::Config>,
-        session_table: Option<UdpSessionTable>,
+        udp_context: UdpContext,
     ) -> Self {
         Self {
             header_crypto,
             payload_crypto,
-            session_table,
+            udp_context,
         }
     }
 
@@ -176,7 +176,7 @@ impl UdpProxy {
 
         let header_crypto = self.header_crypto.clone();
         let payload_crypto = self.payload_crypto.clone();
-        let session_table = self.session_table.clone();
+        let session_table = self.udp_context.session_table.clone();
         let upstream_local = upstream.local_addr().ok();
         tokio::spawn(async move {
             let io_copy = CopyBidirectional {

@@ -1,11 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use common::{
+    context::Context,
     error::AnyResult,
     filter::{self, FilterBuilder, MatcherBuilder},
     loading,
-    session_table::BothSessionTables,
-    stream::concrete::{addr::ConcreteStreamType, pool::SharedConcreteConnPool},
 };
 use serde::{Deserialize, Serialize};
 use socks5::server::{
@@ -68,18 +67,19 @@ impl AccessServerConfig {
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut AccessServerLoader,
-        stream_pool: &SharedConcreteConnPool,
         cancellation: CancellationToken,
-        session_table: &BothSessionTables<ConcreteStreamType>,
+        context: Context,
     ) -> AnyResult {
         // Shared
         let stream_proxy_tables = self
             .stream_proxy_tables
             .into_iter()
-            .map(|(k, v)| match v.build(stream_pool, cancellation.clone()) {
-                Ok(v) => Ok((k, v)),
-                Err(e) => Err(e),
-            })
+            .map(
+                |(k, v)| match v.build(&context.stream.pool, cancellation.clone()) {
+                    Ok(v) => Ok((k, v)),
+                    Err(e) => Err(e),
+                },
+            )
             .collect::<Result<HashMap<_, _>, _>>()?;
         let udp_proxy_tables = self
             .udp_proxy_tables
@@ -97,10 +97,9 @@ impl AccessServerConfig {
             .into_iter()
             .map(|c| {
                 c.into_builder(
-                    stream_pool.clone(),
                     &stream_proxy_tables,
                     cancellation.clone(),
-                    session_table.stream().cloned(),
+                    context.stream.clone(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -113,13 +112,7 @@ impl AccessServerConfig {
         let udp_server = self
             .udp_server
             .into_iter()
-            .map(|c| {
-                c.into_builder(
-                    &udp_proxy_tables,
-                    cancellation.clone(),
-                    session_table.udp().cloned(),
-                )
-            })
+            .map(|c| c.into_builder(&udp_proxy_tables, cancellation.clone(), context.udp.clone()))
             .collect::<Result<Vec<_>, _>>()?;
         loader
             .udp_server
@@ -132,11 +125,10 @@ impl AccessServerConfig {
             .into_iter()
             .map(|c| {
                 c.into_builder(
-                    stream_pool.clone(),
                     &stream_proxy_tables,
                     &filters,
                     cancellation.clone(),
-                    session_table.stream().cloned(),
+                    context.stream.clone(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -151,11 +143,10 @@ impl AccessServerConfig {
             .into_iter()
             .map(|c| {
                 c.into_builder(
-                    stream_pool.clone(),
                     &stream_proxy_tables,
                     &filters,
                     cancellation.clone(),
-                    session_table.stream().cloned(),
+                    context.stream.clone(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -168,13 +159,7 @@ impl AccessServerConfig {
         let socks5_udp_server = self
             .socks5_udp_server
             .into_iter()
-            .map(|c| {
-                c.into_builder(
-                    &udp_proxy_tables,
-                    cancellation.clone(),
-                    session_table.udp().cloned(),
-                )
-            })
+            .map(|c| c.into_builder(&udp_proxy_tables, cancellation.clone(), context.udp.clone()))
             .collect::<Result<Vec<_>, _>>()?;
         loader
             .socks5_udp_server

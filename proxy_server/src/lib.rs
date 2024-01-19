@@ -1,11 +1,6 @@
 use std::io;
 
-use common::{
-    error::AnyResult,
-    loading,
-    session_table::BothSessionTables,
-    stream::concrete::{addr::ConcreteStreamType, pool::SharedConcreteConnPool},
-};
+use common::{context::Context, error::AnyResult, loading};
 use serde::Deserialize;
 use stream::{
     kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, tcp::TcpProxyServerConfig,
@@ -44,8 +39,7 @@ impl ProxyServerConfig {
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut ProxyServerLoader,
-        stream_pool: &SharedConcreteConnPool,
-        session_table: &BothSessionTables<ConcreteStreamType>,
+        context: Context,
     ) -> AnyResult {
         loader
             .tcp_server
@@ -53,7 +47,7 @@ impl ProxyServerConfig {
                 join_set,
                 self.tcp_server
                     .into_iter()
-                    .map(|s| s.into_builder(stream_pool.clone(), session_table.stream().cloned()))
+                    .map(|s| s.into_builder(context.stream.clone()))
                     .collect(),
             )
             .await?;
@@ -66,7 +60,7 @@ impl ProxyServerConfig {
                     .into_iter()
                     .map(|config| UdpProxyServerBuilder {
                         config,
-                        session_table: session_table.udp().cloned(),
+                        udp_context: context.udp.clone(),
                     })
                     .collect(),
             )
@@ -78,7 +72,7 @@ impl ProxyServerConfig {
                 join_set,
                 self.kcp_server
                     .into_iter()
-                    .map(|s| s.into_builder(stream_pool.clone(), session_table.stream().cloned()))
+                    .map(|s| s.into_builder(context.stream.clone()))
                     .collect(),
             )
             .await?;
@@ -89,7 +83,7 @@ impl ProxyServerConfig {
                 join_set,
                 self.mptcp_server
                     .into_iter()
-                    .map(|s| s.into_builder(stream_pool.clone(), session_table.stream().cloned()))
+                    .map(|s| s.into_builder(context.stream.clone()))
                     .collect(),
             )
             .await?;

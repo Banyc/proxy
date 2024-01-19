@@ -7,9 +7,9 @@ use common::{
     config::SharableConfig,
     loading,
     udp::{
+        context::UdpContext,
         io_copy::{CopyBiError, CopyBidirectional, DownstreamParts, UpstreamParts},
         proxy_table::UdpProxyTable,
-        session_table::UdpSessionTable,
         FlowOwnedGuard, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
@@ -38,7 +38,7 @@ impl UdpAccessServerConfig {
         self,
         proxy_tables: &HashMap<Arc<str>, UdpProxyTable>,
         cancellation: CancellationToken,
-        session_table: Option<UdpSessionTable>,
+        udp_context: UdpContext,
     ) -> Result<UdpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -53,7 +53,7 @@ impl UdpAccessServerConfig {
             destination: self.destination,
             proxy_table,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
-            session_table,
+            udp_context,
         })
     }
 }
@@ -72,7 +72,7 @@ pub struct UdpAccessServerBuilder {
     destination: InternetAddrStr,
     proxy_table: UdpProxyTable,
     speed_limit: f64,
-    session_table: Option<UdpSessionTable>,
+    udp_context: UdpContext,
 }
 
 impl loading::Builder for UdpAccessServerBuilder {
@@ -96,7 +96,7 @@ impl loading::Builder for UdpAccessServerBuilder {
             self.proxy_table,
             self.destination.0,
             self.speed_limit,
-            self.session_table,
+            self.udp_context,
         ))
     }
 }
@@ -106,7 +106,7 @@ pub struct UdpAccess {
     proxy_table: UdpProxyTable,
     destination: InternetAddr,
     speed_limiter: Limiter,
-    session_table: Option<UdpSessionTable>,
+    udp_context: UdpContext,
 }
 
 impl loading::Hook for UdpAccess {}
@@ -116,13 +116,13 @@ impl UdpAccess {
         proxy_table: UdpProxyTable,
         destination: InternetAddr,
         speed_limit: f64,
-        session_table: Option<UdpSessionTable>,
+        udp_context: UdpContext,
     ) -> Self {
         Self {
             proxy_table,
             destination,
             speed_limiter: Limiter::new(speed_limit),
-            session_table,
+            udp_context,
         }
     }
 
@@ -147,7 +147,7 @@ impl UdpAccess {
 
         let speed_limiter = self.speed_limiter.clone();
         let payload_crypto = proxy_chain.payload_crypto.clone();
-        let session_table = self.session_table.clone();
+        let session_table = self.udp_context.session_table.clone();
         let upstream_local = upstream_read.inner().local_addr().ok();
         tokio::spawn(async move {
             let io_copy = CopyBidirectional {

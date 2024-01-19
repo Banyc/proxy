@@ -2,12 +2,17 @@ use std::sync::Arc;
 
 use access_server::{AccessServerConfig, AccessServerLoader};
 use common::{
+    context::Context,
     error::{AnyError, AnyResult},
-    session_table::BothSessionTables,
-    stream::concrete::{
-        addr::ConcreteStreamType,
-        pool::{ConcreteConnPool, PoolBuilder, SharedConcreteConnPool},
+    stream::{
+        concrete::{
+            addr::ConcreteStreamType,
+            context::StreamContext,
+            pool::{ConcreteConnPool, PoolBuilder},
+        },
+        session_table::StreamSessionTable,
     },
+    udp::{context::UdpContext, session_table::UdpSessionTable},
 };
 use config::ConfigReader;
 use proxy_server::{ProxyServerConfig, ProxyServerLoader};
@@ -18,11 +23,18 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 pub mod config;
+pub mod monitor;
+pub mod profiling;
+
+pub struct ServeContext {
+    pub stream_session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+    pub udp_session_table: Option<UdpSessionTable>,
+}
 
 pub async fn serve<CR>(
     notify_rx: Arc<tokio::sync::Notify>,
     config_reader: CR,
-    session_table: BothSessionTables<ConcreteStreamType>,
+    serve_context: ServeContext,
 ) -> Result<(), ServeError>
 where
     CR: ConfigReader<Config = ServerConfig>,
@@ -42,14 +54,23 @@ where
 
     let stream_pool = Swap::new(ConcreteConnPool::empty());
 
+    let context = Context {
+        stream: StreamContext {
+            session_table: serve_context.stream_session_table,
+            pool: stream_pool,
+        },
+        udp: UdpContext {
+            session_table: serve_context.udp_session_table,
+        },
+    };
+
     let cancellation = CancellationToken::new();
     read_and_load_config(
         &config_reader,
         &mut server_tasks,
         &mut server_loader,
-        stream_pool.clone(),
         cancellation.clone(),
-        &session_table,
+        context.clone(),
     )
     .await?;
 
@@ -73,9 +94,8 @@ where
                     &config_reader,
                     &mut server_tasks,
                     &mut server_loader,
-                    stream_pool.clone(),
                     cancellation.clone(),
-                    &session_table,
+                    context.clone(),
                 ).await {
                     warn!(?e, "Failed to read and load config");
                     continue;
@@ -96,9 +116,8 @@ async fn read_and_load_config<CR>(
     config_reader: &CR,
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
-    stream_pool: SharedConcreteConnPool,
     cancellation: CancellationToken,
-    session_table: &BothSessionTables<ConcreteStreamType>,
+    context: Context,
 ) -> Result<(), ServeError>
 where
     CR: ConfigReader<Config = ServerConfig>,
@@ -107,16 +126,9 @@ where
         .read_config()
         .await
         .map_err(ServeError::Config)?;
-    load_and_clean(
-        config,
-        server_tasks,
-        server_loader,
-        stream_pool,
-        cancellation,
-        session_table,
-    )
-    .await
-    .map_err(ServeError::Load)?;
+    load_and_clean(config, server_tasks, server_loader, cancellation, context)
+        .await
+        .map_err(ServeError::Load)?;
     Ok(())
 }
 
@@ -134,20 +146,21 @@ pub async fn load_and_clean(
     config: ServerConfig,
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
-    stream_pool: SharedConcreteConnPool,
     cancellation: CancellationToken,
-    session_table: &BothSessionTables<ConcreteStreamType>,
+    context: Context,
 ) -> AnyResult {
-    stream_pool.replaced_by(config.global.stream_pool.build()?);
+    context
+        .stream
+        .pool
+        .replaced_by(config.global.stream_pool.build()?);
 
     config
         .access_server
         .spawn_and_clean(
             server_tasks,
             &mut server_loader.access_server,
-            &stream_pool,
             cancellation,
-            session_table,
+            context.clone(),
         )
         .await?;
     config
@@ -155,8 +168,7 @@ pub async fn load_and_clean(
         .load_and_clean(
             server_tasks,
             &mut server_loader.proxy_server,
-            &stream_pool,
-            session_table,
+            context.clone(),
         )
         .await?;
     Ok(())

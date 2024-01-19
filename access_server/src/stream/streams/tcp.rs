@@ -7,12 +7,11 @@ use common::{
     stream::{
         concrete::{
             addr::{ConcreteStreamAddr, ConcreteStreamAddrStr, ConcreteStreamType},
-            pool::SharedConcreteConnPool,
+            context::StreamContext,
             streams::tcp::TcpServer,
         },
         io_copy::CopyBidirectional,
         proxy_table::StreamProxyTable,
-        session_table::StreamSessionTable,
         IoAddr, IoStream, StreamServerHook,
     },
 };
@@ -37,26 +36,24 @@ pub struct TcpAccessServerConfig {
 impl TcpAccessServerConfig {
     pub fn into_builder(
         self,
-        stream_pool: SharedConcreteConnPool,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         cancellation: CancellationToken,
-        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+        stream_context: StreamContext,
     ) -> Result<TcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(&stream_pool, cancellation)?,
+            SharableConfig::Private(x) => x.build(&stream_context.pool, cancellation)?,
         };
 
         Ok(TcpAccessServerBuilder {
             listen_addr: self.listen_addr,
             destination: self.destination,
             proxy_table,
-            stream_pool,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
-            session_table,
+            stream_context,
         })
     }
 }
@@ -74,9 +71,8 @@ pub struct TcpAccessServerBuilder {
     listen_addr: Arc<str>,
     destination: ConcreteStreamAddrStr,
     proxy_table: StreamProxyTable<ConcreteStreamType>,
-    stream_pool: SharedConcreteConnPool,
     speed_limit: f64,
-    session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+    stream_context: StreamContext,
 }
 
 impl loading::Builder for TcpAccessServerBuilder {
@@ -99,9 +95,8 @@ impl loading::Builder for TcpAccessServerBuilder {
         Ok(TcpAccess::new(
             self.proxy_table,
             self.destination.0,
-            self.stream_pool,
             self.speed_limit,
-            self.session_table,
+            self.stream_context,
         ))
     }
 }
@@ -110,25 +105,22 @@ impl loading::Builder for TcpAccessServerBuilder {
 pub struct TcpAccess {
     proxy_table: StreamProxyTable<ConcreteStreamType>,
     destination: ConcreteStreamAddr,
-    stream_pool: SharedConcreteConnPool,
     speed_limiter: Limiter,
-    session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+    stream_context: StreamContext,
 }
 
 impl TcpAccess {
     pub fn new(
         proxy_table: StreamProxyTable<ConcreteStreamType>,
         destination: ConcreteStreamAddr,
-        stream_pool: SharedConcreteConnPool,
         speed_limit: f64,
-        session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+        stream_context: StreamContext,
     ) -> Self {
         Self {
             proxy_table,
             destination,
-            stream_pool,
             speed_limiter: Limiter::new(speed_limit),
-            session_table,
+            stream_context,
         }
     }
 
@@ -149,13 +141,13 @@ impl TcpAccess {
         let upstream = establish(
             &proxy_chain.chain,
             self.destination.clone(),
-            &self.stream_pool,
+            &self.stream_context.pool,
         )
         .await?;
 
         let speed_limiter = self.speed_limiter.clone();
         let destination = self.destination.clone();
-        let session_table = self.session_table.clone();
+        let session_table = self.stream_context.session_table.clone();
         let payload_crypto = proxy_chain.payload_crypto.clone();
         tokio::spawn(async move {
             let upstream_local = upstream.stream.local_addr().ok();
