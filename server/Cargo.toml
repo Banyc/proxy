@@ -21,6 +21,7 @@ file_watcher_tokio = "0.3"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 notify = "6"
+protocol = { path = "../protocol" }
 proxy_server = { path = "../proxy_server" }
 serde = { workspace = true, features = ["derive"] }
 swap = { workspace = true }

@@ -1,38 +1,39 @@
 use std::{io, net::SocketAddr, time::Duration};
 
-use once_cell::sync::Lazy;
+use common::stream::connect::{StreamConnect, StreamConnectExt, StreamConnectorTable};
 
 use super::{
     addr::ConcreteStreamType,
-    connect::{StreamConnect, StreamConnectExt},
-    created_stream::CreatedStream,
+    connection::Connection,
     streams::{kcp::KcpConnector, mptcp::MptcpConnector, tcp::TcpConnector},
 };
 
-pub static STREAM_CONNECTOR_TABLE: Lazy<StreamConnectorTable> =
-    Lazy::new(StreamConnectorTable::new);
-
-#[derive(Debug)]
-pub struct StreamConnectorTable {
+#[derive(Debug, Clone)]
+pub struct ConcreteStreamConnectorTable {
     tcp: TcpConnector,
     kcp: KcpConnector,
     mptcp: MptcpConnector,
 }
 
-impl StreamConnectorTable {
-    fn new() -> Self {
+impl ConcreteStreamConnectorTable {
+    pub fn new() -> Self {
         Self {
             tcp: TcpConnector,
             kcp: KcpConnector,
             mptcp: MptcpConnector,
         }
     }
+}
 
-    pub async fn connect(
+impl StreamConnectorTable for ConcreteStreamConnectorTable {
+    type Connection = Connection;
+    type StreamType = ConcreteStreamType;
+
+    async fn connect(
         &self,
-        stream_type: ConcreteStreamType,
+        stream_type: &ConcreteStreamType,
         addr: SocketAddr,
-    ) -> io::Result<CreatedStream> {
+    ) -> io::Result<Connection> {
         match stream_type {
             ConcreteStreamType::Tcp => self.tcp.connect(addr).await,
             ConcreteStreamType::Kcp => self.kcp.connect(addr).await,
@@ -40,12 +41,12 @@ impl StreamConnectorTable {
         }
     }
 
-    pub async fn timed_connect(
+    async fn timed_connect(
         &self,
-        stream_type: ConcreteStreamType,
+        stream_type: &ConcreteStreamType,
         addr: SocketAddr,
         timeout: Duration,
-    ) -> io::Result<CreatedStream> {
+    ) -> io::Result<Connection> {
         match stream_type {
             ConcreteStreamType::Tcp => self.tcp.timed_connect(addr, timeout).await,
             ConcreteStreamType::Kcp => self.kcp.timed_connect(addr, timeout).await,
@@ -54,7 +55,7 @@ impl StreamConnectorTable {
     }
 }
 
-impl Default for StreamConnectorTable {
+impl Default for ConcreteStreamConnectorTable {
     fn default() -> Self {
         Self::new()
     }

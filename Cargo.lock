@@ -14,6 +14,7 @@ dependencies = [
  "hyper-util",
  "monitor_table",
  "pin-project-lite",
+ "protocol",
  "proxy_client",
  "serde",
  "table_log",
@@ -493,7 +494,6 @@ dependencies = [
 name = "common"
 version = "0.1.0"
 dependencies = [
- "arc-swap",
  "async-speed-limit",
  "async-trait",
  "base64",
@@ -506,7 +506,6 @@ dependencies = [
  "lru",
  "metrics",
  "monitor_table",
- "mptcp",
  "once_cell",
  "pin-project-lite",
  "rand",
@@ -524,7 +523,6 @@ dependencies = [
  "tokio-util",
  "tokio_chacha20",
  "tokio_conn_pool",
- "tokio_kcp",
  "tokio_throughput",
  "tracing",
 ]
@@ -1983,12 +1981,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "protocol"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "common",
+ "metrics",
+ "mptcp",
+ "once_cell",
+ "rand",
+ "serde",
+ "serde_json",
+ "swap",
+ "thiserror",
+ "tokio",
+ "tokio_chacha20",
+ "tokio_conn_pool",
+ "tokio_kcp",
+ "tracing",
+]
+
+[[package]]
 name = "proxy_client"
 version = "0.1.0"
 dependencies = [
  "bytes",
  "common",
  "metrics",
+ "protocol",
  "thiserror",
  "tokio",
  "tokio_chacha20",
@@ -2004,6 +2024,7 @@ dependencies = [
  "bincode",
  "common",
  "mptcp",
+ "protocol",
  "serde",
  "swap",
  "thiserror",
@@ -2346,6 +2367,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "notify",
+ "protocol",
  "proxy_server",
  "serde",
  "swap",
@@ -2407,9 +2429,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.13.0"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b187f0231d56fe41bfb12034819dd2bf336422a5866de41bc3fec4b2e3883e8"
+checksum = "e6ecd384b10a64542d77071bd64bd7b231f4ed5940fba55e98c3de13824cf3d7"
 
 [[package]]
 name = "smartstring"
@@ -2599,6 +2621,7 @@ name = "tests"
 version = "0.1.0"
 dependencies = [
  "common",
+ "protocol",
  "proxy_client",
  "proxy_server",
  "rand",

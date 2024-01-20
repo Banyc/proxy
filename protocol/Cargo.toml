@@ -1,21 +1,25 @@
 [package]
-name = "proxy_server"
+name = "protocol"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-speed-limit = { workspace = true }
-bincode = { workspace = true }
+async-trait = { workspace = true }
 common = { path = "../common" }
+metrics = { workspace = true }
 mptcp = { workspace = true }
-protocol = { path = "../protocol" }
-serde = { workspace = true, features = ["derive"] }
+once_cell = { workspace = true }
+rand = "0.8"
+serde = { workspace = true }
 swap = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true }
 tokio_chacha20 = { workspace = true }
+tokio_conn_pool = { workspace = true }
 tokio_kcp = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[dev-dependencies]
+serde_json = "1"

@@ -9,6 +9,7 @@ edition = "2021"
 bytes = { workspace = true }
 common = { path = "../common" }
 metrics = { workspace = true }
+protocol = { path = "../protocol" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio_chacha20 = { workspace = true }

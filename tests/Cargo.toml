@@ -10,6 +10,7 @@ common = { path = "../common" }
 rand = "0.8"
 
 [dev-dependencies]
+protocol = { path = "../protocol" }
 proxy_client = { path = "../proxy_client" }
 proxy_server = { path = "../proxy_server" }
 serial_test = "3"

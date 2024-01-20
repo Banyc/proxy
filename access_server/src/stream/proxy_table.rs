@@ -2,15 +2,13 @@ use std::num::NonZeroUsize;
 
 use common::{
     proxy_table::{ProxyTable, ProxyTableError},
-    stream::{
-        concrete::{
-            addr::{ConcreteStreamAddrStr, ConcreteStreamType},
-            pool::SharedConcreteConnPool,
-        },
-        proxy_table::{
-            StreamProxyConfigBuildError, StreamProxyTable, StreamWeightedProxyChainBuilder,
-        },
+    stream::proxy_table::{
+        StreamProxyConfigBuildError, StreamProxyTable, StreamWeightedProxyChainBuilder,
     },
+};
+use protocol::stream::{
+    addr::{ConcreteStreamAddrStr, ConcreteStreamType},
+    context::ConcreteStreamContext,
 };
 use proxy_client::stream::StreamTracer;
 use serde::{Deserialize, Serialize};
@@ -28,7 +26,7 @@ pub struct StreamProxyTableBuilder {
 impl StreamProxyTableBuilder {
     pub fn build(
         self,
-        stream_pool: &SharedConcreteConnPool,
+        stream_context: &ConcreteStreamContext,
         cancellation: CancellationToken,
     ) -> Result<StreamProxyTable<ConcreteStreamType>, StreamProxyTableBuildError> {
         let chains = self
@@ -38,7 +36,7 @@ impl StreamProxyTableBuilder {
             .collect::<Result<_, _>>()
             .map_err(StreamProxyTableBuildError::ChainConfig)?;
         let tracer = match self.trace_rtt {
-            true => Some(StreamTracer::new(stream_pool.clone())),
+            true => Some(StreamTracer::new(stream_context.clone())),
             false => None,
         };
         Ok(ProxyTable::new(

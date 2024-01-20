@@ -5,7 +5,17 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crate::addr::{InternetAddr, ParseInternetAddrError};
 
 pub trait StreamType:
-    Clone + Display + FromStr<Err = ParseInternetAddrError> + Serialize + DeserializeOwned
+    Clone
+    + Display
+    + FromStr<Err = ParseInternetAddrError>
+    + Serialize
+    + DeserializeOwned
+    + std::hash::Hash
+    + Eq
+    + std::fmt::Debug
+    + Sync
+    + Send
+    + 'static
 {
 }
 

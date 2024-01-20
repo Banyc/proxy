@@ -2,7 +2,7 @@ use std::{fmt, str::FromStr};
 
 use serde::{de::Visitor, Deserialize, Serialize};
 
-use crate::{
+use common::{
     addr::ParseInternetAddrError,
     stream::addr::{StreamAddr, StreamAddrStr, StreamType},
 };
@@ -17,7 +17,6 @@ pub enum ConcreteStreamType {
     Mptcp,
 }
 impl StreamType for ConcreteStreamType {}
-
 impl fmt::Display for ConcreteStreamType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -27,7 +26,6 @@ impl fmt::Display for ConcreteStreamType {
         }
     }
 }
-
 impl FromStr for ConcreteStreamType {
     type Err = ParseInternetAddrError;
 
@@ -52,7 +50,6 @@ impl StreamAddrStr for ConcreteStreamAddrStr {
         self.0
     }
 }
-
 impl Serialize for ConcreteStreamAddrStr {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -61,7 +58,6 @@ impl Serialize for ConcreteStreamAddrStr {
         serializer.serialize_str(&self.0.to_string())
     }
 }
-
 impl<'de> Deserialize<'de> for ConcreteStreamAddrStr {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -72,7 +68,6 @@ impl<'de> Deserialize<'de> for ConcreteStreamAddrStr {
 }
 
 struct ConcreteStreamAddrStrVisitor;
-
 impl<'de> Visitor<'de> for ConcreteStreamAddrStrVisitor {
     type Value = ConcreteStreamAddrStr;
 
@@ -93,7 +88,7 @@ impl<'de> Visitor<'de> for ConcreteStreamAddrStrVisitor {
 mod tests {
     use std::{net::SocketAddr, ops::Deref};
 
-    use crate::{addr::InternetAddrKind, stream::concrete::addr::ConcreteStreamType};
+    use common::addr::InternetAddrKind;
 
     use super::*;
 

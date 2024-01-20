@@ -1,11 +1,9 @@
 use std::sync::Arc;
 
-use common::{
-    loading,
-    stream::concrete::{
-        context::StreamContext,
-        streams::kcp::{fast_kcp_config, KcpServer},
-    },
+use common::loading;
+use protocol::stream::{
+    context::ConcreteStreamContext,
+    streams::kcp::{fast_kcp_config, KcpServer},
 };
 use serde::Deserialize;
 use tokio::net::ToSocketAddrs;
@@ -24,7 +22,7 @@ pub struct KcpProxyServerConfig {
 }
 
 impl KcpProxyServerConfig {
-    pub fn into_builder(self, stream_context: StreamContext) -> KcpProxyServerBuilder {
+    pub fn into_builder(self, stream_context: ConcreteStreamContext) -> KcpProxyServerBuilder {
         let inner = self.inner.into_builder(stream_context);
         KcpProxyServerBuilder {
             listen_addr: self.listen_addr,

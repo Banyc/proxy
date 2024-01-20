@@ -4,17 +4,19 @@ use access_server::{AccessServerConfig, AccessServerLoader};
 use common::{
     context::Context,
     error::{AnyError, AnyResult},
-    stream::{
-        concrete::{
-            addr::ConcreteStreamType,
-            context::StreamContext,
-            pool::{ConcreteConnPool, PoolBuilder},
-        },
-        session_table::StreamSessionTable,
-    },
+    stream::session_table::StreamSessionTable,
     udp::{context::UdpContext, session_table::UdpSessionTable},
 };
 use config::ConfigReader;
+use protocol::{
+    context::ConcreteContext,
+    stream::{
+        addr::ConcreteStreamType,
+        connector_table::ConcreteStreamConnectorTable,
+        context::ConcreteStreamContext,
+        pool::{ConcreteConnPool, ConcretePoolBuilder},
+    },
+};
 use proxy_server::{ProxyServerConfig, ProxyServerLoader};
 use serde::Deserialize;
 use swap::Swap;
@@ -55,9 +57,10 @@ where
     let stream_pool = Swap::new(ConcreteConnPool::empty());
 
     let context = Context {
-        stream: StreamContext {
+        stream: ConcreteStreamContext {
             session_table: serve_context.stream_session_table,
             pool: stream_pool,
+            connector_table: ConcreteStreamConnectorTable::new(),
         },
         udp: UdpContext {
             session_table: serve_context.udp_session_table,
@@ -117,7 +120,7 @@ async fn read_and_load_config<CR>(
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
     cancellation: CancellationToken,
-    context: Context,
+    context: ConcreteContext,
 ) -> Result<(), ServeError>
 where
     CR: ConfigReader<Config = ServerConfig>,
@@ -147,12 +150,14 @@ pub async fn load_and_clean(
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
     cancellation: CancellationToken,
-    context: Context,
+    context: ConcreteContext,
 ) -> AnyResult {
-    context
-        .stream
-        .pool
-        .replaced_by(config.global.stream_pool.build()?);
+    context.stream.pool.replaced_by(
+        config
+            .global
+            .stream_pool
+            .build(context.stream.connector_table.clone())?,
+    );
 
     config
         .access_server
@@ -188,5 +193,6 @@ pub struct ServerConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Global {
-    pub stream_pool: PoolBuilder,
+    #[serde(default)]
+    pub stream_pool: ConcretePoolBuilder,
 }

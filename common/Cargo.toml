@@ -6,7 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-arc-swap = "1"
 async-speed-limit = { workspace = true }
 async-trait = { workspace = true }
 base64 = "0.21"
@@ -19,14 +18,12 @@ lockfree-object-pool = "0.1"
 lru = "0.12"
 metrics = { workspace = true }
 monitor_table = { workspace = true }
-mptcp = { workspace = true }
-once_cell = "1"
+once_cell = { workspace = true }
 pin-project-lite = "0.2"
-# quinn = "0.10.1"
 rand = "0.8"
 regex = "1"
 scopeguard = "1"
-serde = { workspace = true, features = ["derive",  "rc"] }
+serde = { workspace = true, features = ["derive", "rc"] }
 slotmap = "1"
 strict-num = { workspace = true }
 swap = { workspace = true }
@@ -37,7 +34,6 @@ tokio-io-timeout = "1"
 tokio-util = { workspace = true }
 tokio_chacha20 = { workspace = true }
 tokio_conn_pool = { workspace = true }
-tokio_kcp = { workspace = true }
 tokio_throughput = { workspace = true }
 tracing = { workspace = true }
 

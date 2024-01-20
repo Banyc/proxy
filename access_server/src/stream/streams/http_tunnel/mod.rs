@@ -9,7 +9,6 @@ use common::{
     loading,
     stream::{
         addr::StreamAddr,
-        concrete::{addr::ConcreteStreamType, context::StreamContext, streams::tcp::TcpServer},
         io_copy::{CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
         metrics::{SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics, StreamRecord},
         proxy_table::StreamProxyTable,
@@ -23,6 +22,9 @@ use hyper::{
 };
 use hyper_util::rt::TokioIo;
 use monitor_table::table::RowOwnedGuard;
+use protocol::stream::{
+    addr::ConcreteStreamType, context::ConcreteStreamContext, streams::tcp::TcpServer,
+};
 use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -50,14 +52,14 @@ impl HttpAccessServerConfig {
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         filters: &HashMap<Arc<str>, Filter>,
         cancellation: CancellationToken,
-        stream_context: StreamContext,
+        stream_context: ConcreteStreamContext,
     ) -> Result<HttpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(&stream_context.pool, cancellation)?,
+            SharableConfig::Private(x) => x.build(&stream_context, cancellation)?,
         };
         let filter = match self.filter {
             SharableConfig::SharingKey(key) => filters
@@ -95,7 +97,7 @@ pub struct HttpAccessServerBuilder {
     proxy_table: StreamProxyTable<ConcreteStreamType>,
     filter: Filter,
     speed_limit: f64,
-    stream_context: StreamContext,
+    stream_context: ConcreteStreamContext,
 }
 
 impl loading::Builder for HttpAccessServerBuilder {
@@ -130,7 +132,7 @@ pub struct HttpAccess {
     proxy_table: Arc<StreamProxyTable<ConcreteStreamType>>,
     filter: Filter,
     speed_limiter: Limiter,
-    stream_context: StreamContext,
+    stream_context: ConcreteStreamContext,
 }
 
 impl HttpAccess {
@@ -138,7 +140,7 @@ impl HttpAccess {
         proxy_table: StreamProxyTable<ConcreteStreamType>,
         filter: Filter,
         speed_limit: f64,
-        stream_context: StreamContext,
+        stream_context: ConcreteStreamContext,
     ) -> Self {
         Self {
             proxy_table: Arc::new(proxy_table),
@@ -229,8 +231,7 @@ impl HttpAccess {
 
         // Establish proxy chain
         let proxy_chain = self.proxy_table.choose_chain();
-        let upstream =
-            establish(&proxy_chain.chain, addr.clone(), &self.stream_context.pool).await?;
+        let upstream = establish(&proxy_chain.chain, addr.clone(), &self.stream_context).await?;
 
         let session_guard = self.stream_context.session_table.as_ref().map(|s| {
             s.set_scope_owned(Session {
@@ -475,14 +476,14 @@ impl StreamServerHook for HttpAccess {
 struct HttpConnect {
     proxy_table: Arc<StreamProxyTable<ConcreteStreamType>>,
     speed_limiter: Limiter,
-    stream_context: StreamContext,
+    stream_context: ConcreteStreamContext,
 }
 
 impl HttpConnect {
     pub fn new(
         proxy_table: Arc<StreamProxyTable<ConcreteStreamType>>,
         speed_limiter: Limiter,
-        stream_context: StreamContext,
+        stream_context: ConcreteStreamContext,
     ) -> Self {
         Self {
             proxy_table,
@@ -507,8 +508,7 @@ impl HttpConnect {
             stream_type: ConcreteStreamType::Tcp,
         };
         let proxy_chain = self.proxy_table.choose_chain();
-        let upstream =
-            establish(&proxy_chain.chain, destination, &self.stream_context.pool).await?;
+        let upstream = establish(&proxy_chain.chain, destination, &self.stream_context).await?;
 
         let speed_limiter = self.speed_limiter.clone();
         let session_table = self.stream_context.session_table.clone();

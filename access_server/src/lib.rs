@@ -1,11 +1,11 @@
 use std::{collections::HashMap, sync::Arc};
 
 use common::{
-    context::Context,
     error::AnyResult,
     filter::{self, FilterBuilder, MatcherBuilder},
     loading,
 };
+use protocol::context::ConcreteContext;
 use serde::{Deserialize, Serialize};
 use socks5::server::{
     tcp::{Socks5ServerTcpAccess, Socks5ServerTcpAccessServerConfig},
@@ -68,14 +68,14 @@ impl AccessServerConfig {
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut AccessServerLoader,
         cancellation: CancellationToken,
-        context: Context,
+        context: ConcreteContext,
     ) -> AnyResult {
         // Shared
         let stream_proxy_tables = self
             .stream_proxy_tables
             .into_iter()
             .map(
-                |(k, v)| match v.build(&context.stream.pool, cancellation.clone()) {
+                |(k, v)| match v.build(&context.stream, cancellation.clone()) {
                     Ok(v) => Ok((k, v)),
                     Err(e) => Err(e),
                 },

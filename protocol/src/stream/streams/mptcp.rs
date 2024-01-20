@@ -3,16 +3,19 @@ use std::{io, net::SocketAddr, num::NonZeroUsize, sync::Arc};
 use metrics::counter;
 use mptcp::{listen::MptcpListener, stream::MptcpStream};
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::mpsc,
+};
 use tracing::{info, instrument, trace, warn};
 
-use crate::{
+use common::{
     error::AnyResult,
     loading,
-    stream::{IoAddr, IoStream, StreamServerHook},
+    stream::{connect::StreamConnect, IoAddr, IoStream, StreamServerHook},
 };
 
-use super::super::{connect::StreamConnect, created_stream::CreatedStream};
+use crate::stream::connection::Connection;
 
 const STREAMS: usize = 4;
 
@@ -86,7 +89,7 @@ where
                     // Arc hook
                     let hook = Arc::clone(&hook);
                     tokio::spawn(async move {
-                        hook.handle_stream(stream).await;
+                        hook.handle_stream(IoMptcpStream(stream)).await;
                     });
                 }
                 res = self.set_hook_rx.recv() => {
@@ -115,10 +118,56 @@ pub enum ServeError {
     },
 }
 
-impl IoStream for MptcpStream {}
-impl IoAddr for MptcpStream {
+#[derive(Debug, Clone, Copy)]
+pub struct MptcpConnector;
+
+impl StreamConnect for MptcpConnector {
+    type Connection = Connection;
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Connection> {
+        let stream = MptcpStream::connect(addr, NonZeroUsize::new(STREAMS).unwrap()).await?;
+        counter!("stream.mptcp.connects").increment(1);
+        Ok(Connection::Mptcp(IoMptcpStream(stream)))
+    }
+}
+
+#[derive(Debug)]
+pub struct IoMptcpStream(pub MptcpStream);
+impl AsyncWrite for IoMptcpStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, io::Error>> {
+        std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), io::Error>> {
+        std::pin::Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), io::Error>> {
+        std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
+    }
+}
+impl AsyncRead for IoMptcpStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+impl IoStream for IoMptcpStream {}
+impl IoAddr for IoMptcpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
-        Self::peer_addr(self).ok_or_else(|| {
+        self.0.peer_addr().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::Unsupported,
                 "MptcpStream may not have a unified peer address",
@@ -126,22 +175,11 @@ impl IoAddr for MptcpStream {
         })
     }
     fn local_addr(&self) -> io::Result<SocketAddr> {
-        Self::local_addr(self).ok_or_else(|| {
+        self.0.local_addr().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::Unsupported,
                 "MptcpStream may not have a unified local address",
             )
         })
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct MptcpConnector;
-
-impl StreamConnect for MptcpConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
-        let stream = MptcpStream::connect(addr, NonZeroUsize::new(STREAMS).unwrap()).await?;
-        counter!("stream.mptcp.connects").increment(1);
-        Ok(CreatedStream::Mptcp(stream))
     }
 }

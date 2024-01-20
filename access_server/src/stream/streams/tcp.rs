@@ -5,15 +5,14 @@ use common::{
     config::SharableConfig,
     loading,
     stream::{
-        concrete::{
-            addr::{ConcreteStreamAddr, ConcreteStreamAddrStr, ConcreteStreamType},
-            context::StreamContext,
-            streams::tcp::TcpServer,
-        },
-        io_copy::CopyBidirectional,
-        proxy_table::StreamProxyTable,
-        IoAddr, IoStream, StreamServerHook,
+        io_copy::CopyBidirectional, proxy_table::StreamProxyTable, IoAddr, IoStream,
+        StreamServerHook,
     },
+};
+use protocol::stream::{
+    addr::{ConcreteStreamAddr, ConcreteStreamAddrStr, ConcreteStreamType},
+    context::ConcreteStreamContext,
+    streams::tcp::TcpServer,
 };
 use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
@@ -38,14 +37,14 @@ impl TcpAccessServerConfig {
         self,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         cancellation: CancellationToken,
-        stream_context: StreamContext,
+        stream_context: ConcreteStreamContext,
     ) -> Result<TcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(&stream_context.pool, cancellation)?,
+            SharableConfig::Private(x) => x.build(&stream_context, cancellation)?,
         };
 
         Ok(TcpAccessServerBuilder {
@@ -72,7 +71,7 @@ pub struct TcpAccessServerBuilder {
     destination: ConcreteStreamAddrStr,
     proxy_table: StreamProxyTable<ConcreteStreamType>,
     speed_limit: f64,
-    stream_context: StreamContext,
+    stream_context: ConcreteStreamContext,
 }
 
 impl loading::Builder for TcpAccessServerBuilder {
@@ -106,7 +105,7 @@ pub struct TcpAccess {
     proxy_table: StreamProxyTable<ConcreteStreamType>,
     destination: ConcreteStreamAddr,
     speed_limiter: Limiter,
-    stream_context: StreamContext,
+    stream_context: ConcreteStreamContext,
 }
 
 impl TcpAccess {
@@ -114,7 +113,7 @@ impl TcpAccess {
         proxy_table: StreamProxyTable<ConcreteStreamType>,
         destination: ConcreteStreamAddr,
         speed_limit: f64,
-        stream_context: StreamContext,
+        stream_context: ConcreteStreamContext,
     ) -> Self {
         Self {
             proxy_table,
@@ -141,7 +140,7 @@ impl TcpAccess {
         let upstream = establish(
             &proxy_chain.chain,
             self.destination.clone(),
-            &self.stream_context.pool,
+            &self.stream_context,
         )
         .await?;
 

@@ -7,6 +7,7 @@ use crate::{
     stream::{IoAddr, IoStream},
 };
 
+#[derive(Debug)]
 pub struct XorStream<S> {
     write_crypto: XorCryptoCursor,
     read_crypto: XorCryptoCursor,

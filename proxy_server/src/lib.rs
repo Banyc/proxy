@@ -1,6 +1,7 @@
 use std::io;
 
-use common::{context::Context, error::AnyResult, loading};
+use common::{error::AnyResult, loading};
+use protocol::context::ConcreteContext;
 use serde::Deserialize;
 use stream::{
     kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, tcp::TcpProxyServerConfig,
@@ -39,7 +40,7 @@ impl ProxyServerConfig {
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut ProxyServerLoader,
-        context: Context,
+        context: ConcreteContext,
     ) -> AnyResult {
         loader
             .tcp_server

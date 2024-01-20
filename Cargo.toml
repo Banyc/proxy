@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "access_server",
     "common",
+    "protocol",
     "proxy_client",
     "proxy_server",
     "server",
@@ -19,6 +20,7 @@ metrics = "0.22"
 metrics-exporter-prometheus = { version = "0.13", default-features = false }
 monitor_table = { git = "https://github.com/Banyc/monitor_table.git", rev = "f9cbe7a0e792d793adbe5627402254b0c9eee46b" }
 mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "8c0b8ee35bc7d570de272f5da7af6742b460e23a" }
+once_cell = "1"
 openssl = "0.10"
 serde = "1"
 strict-num = "0.2"

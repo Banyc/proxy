@@ -9,14 +9,14 @@ use tokio::{
 use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::{
+use common::{
     addr::any_addr,
     error::AnyResult,
     loading,
-    stream::{IoAddr, IoStream, StreamServerHook},
+    stream::{connect::StreamConnect, IoAddr, IoStream, StreamServerHook},
 };
 
-use super::super::{connect::StreamConnect, created_stream::CreatedStream};
+use crate::stream::connection::Connection;
 
 #[derive(Debug)]
 pub struct KcpServer<H> {
@@ -123,13 +123,39 @@ pub enum ServeError {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct KcpConnector;
+
+impl StreamConnect for KcpConnector {
+    type Connection = Connection;
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Connection> {
+        let config = fast_kcp_config();
+        let stream = KcpStream::connect(&config, addr).await?;
+        let local_addr = any_addr(&addr.ip());
+        let stream = AddressedKcpStream {
+            stream,
+            local_addr,
+            peer_addr: addr,
+        };
+        counter!("stream.kcp.connects").increment(1);
+        Ok(Connection::Kcp(stream))
+    }
+}
+
+pub fn fast_kcp_config() -> KcpConfig {
+    KcpConfig {
+        /* cSpell:disable */
+        nodelay: KcpNoDelayConfig::fastest(),
+        ..Default::default()
+    }
+}
+
 #[derive(Debug)]
 pub struct AddressedKcpStream {
     stream: KcpStream,
     local_addr: SocketAddr,
     peer_addr: SocketAddr,
 }
-
 impl IoStream for AddressedKcpStream {}
 impl IoAddr for AddressedKcpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
@@ -139,7 +165,6 @@ impl IoAddr for AddressedKcpStream {
         Ok(self.local_addr)
     }
 }
-
 impl AsyncRead for AddressedKcpStream {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
@@ -149,7 +174,6 @@ impl AsyncRead for AddressedKcpStream {
         Pin::new(&mut self.stream).poll_read(cx, buf)
     }
 }
-
 impl AsyncWrite for AddressedKcpStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
@@ -171,31 +195,5 @@ impl AsyncWrite for AddressedKcpStream {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), io::Error>> {
         Pin::new(&mut self.stream).poll_shutdown(cx)
-    }
-}
-
-#[derive(Debug)]
-pub struct KcpConnector;
-
-impl StreamConnect for KcpConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<CreatedStream> {
-        let config = fast_kcp_config();
-        let stream = KcpStream::connect(&config, addr).await?;
-        let local_addr = any_addr(&addr.ip());
-        let stream = AddressedKcpStream {
-            stream,
-            local_addr,
-            peer_addr: addr,
-        };
-        counter!("stream.kcp.connects").increment(1);
-        Ok(CreatedStream::Kcp(stream))
-    }
-}
-
-pub fn fast_kcp_config() -> KcpConfig {
-    KcpConfig {
-        /* cSpell:disable */
-        nodelay: KcpNoDelayConfig::fastest(),
-        ..Default::default()
     }
 }

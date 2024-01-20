@@ -5,16 +5,14 @@ mod tests {
     use common::{
         loading::Server,
         proxy_table::ProxyConfig,
-        stream::{
-            addr::StreamAddr,
-            concrete::{
-                addr::{ConcreteStreamAddr, ConcreteStreamType},
-                context::StreamContext,
-                created_stream::CreatedStreamAndAddr,
-                pool::ConcreteConnPool,
-            },
-            proxy_table::StreamProxyConfig,
-        },
+        stream::{addr::StreamAddr, proxy_table::StreamProxyConfig},
+    };
+    use protocol::stream::{
+        addr::{ConcreteStreamAddr, ConcreteStreamType},
+        connection::ConnAndAddr,
+        connector_table::ConcreteStreamConnectorTable,
+        context::ConcreteStreamContext,
+        pool::ConcreteConnPool,
     };
     use proxy_client::stream::{establish, trace_rtt};
     use proxy_server::stream::{
@@ -35,20 +33,21 @@ mod tests {
         tokio_chacha20::config::Config::new(key.into())
     }
 
+    fn stream_context() -> ConcreteStreamContext {
+        ConcreteStreamContext {
+            session_table: None,
+            pool: Swap::new(ConcreteConnPool::empty()),
+            connector_table: ConcreteStreamConnectorTable::new(),
+        }
+    }
+
     async fn spawn_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
         ty: ConcreteStreamType,
     ) -> StreamProxyConfig<ConcreteStreamType> {
         let crypto = create_random_crypto();
-        let proxy = StreamProxy::new(
-            crypto.clone(),
-            None,
-            StreamContext {
-                session_table: None,
-                pool: Swap::new(ConcreteConnPool::empty()),
-            },
-        );
+        let proxy = StreamProxy::new(crypto.clone(), None, stream_context());
         let proxy_addr = match ty {
             ConcreteStreamType::Tcp => {
                 let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
@@ -149,6 +148,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_proxies() {
+        let stream_context = ConcreteStreamContext {
+            session_table: None,
+            pool: Swap::new(ConcreteConnPool::empty()),
+            connector_table: ConcreteStreamConnectorTable::new(),
+        };
+
         let mut join_set = tokio::task::JoinSet::new();
 
         // Start proxy servers
@@ -165,10 +170,9 @@ mod tests {
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let CreatedStreamAndAddr { mut stream, .. } =
-            establish(&proxies, greet_addr, &Swap::new(ConcreteConnPool::empty()))
-                .await
-                .unwrap();
+        let ConnAndAddr { mut stream, .. } = establish(&proxies, greet_addr, &stream_context)
+            .await
+            .unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();
@@ -177,15 +181,15 @@ mod tests {
         read_response(&mut stream, resp_msg).await.unwrap();
 
         // Trace
-        let rtt = trace_rtt(&proxies, &Swap::new(ConcreteConnPool::empty()))
-            .await
-            .unwrap();
+        let rtt = trace_rtt(&proxies, &stream_context).await.unwrap();
         assert!(rtt > Duration::from_secs(0));
         assert!(rtt < Duration::from_secs(1));
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_clients() {
+        let stream_context = stream_context();
+
         let mut join_set = tokio::task::JoinSet::new();
 
         // Start proxy servers
@@ -207,10 +211,11 @@ mod tests {
         for _ in 0..clients {
             let proxies = proxies.clone();
             let greet_addr = greet_addr.clone();
+            let stream_context = stream_context.clone();
             handles.spawn(async move {
                 // Connect to proxy server
-                let CreatedStreamAndAddr { mut stream, .. } =
-                    establish(&proxies, greet_addr, &Swap::new(ConcreteConnPool::empty()))
+                let ConnAndAddr { mut stream, .. } =
+                    establish(&proxies, greet_addr, &stream_context)
                         .await
                         .unwrap();
 
@@ -246,6 +251,8 @@ mod tests {
     }
 
     async fn stress_test(ty: ConcreteStreamType) {
+        let stream_context = stream_context();
+
         let mut join_set = tokio::task::JoinSet::new();
 
         // Start proxy servers
@@ -271,12 +278,13 @@ mod tests {
         for _ in 0..STRESS_PARALLEL {
             let proxies = proxies.clone();
             let greet_addr = greet_addr.clone();
+            let stream_context = stream_context.clone();
             handles.spawn(async move {
                 for _ in 0..STRESS_SERIAL {
                     let greet_addr = greet_addr.clone();
                     // Connect to proxy server
-                    let CreatedStreamAndAddr { mut stream, .. } =
-                        establish(&proxies, greet_addr, &Swap::new(ConcreteConnPool::empty()))
+                    let ConnAndAddr { mut stream, .. } =
+                        establish(&proxies, greet_addr, &stream_context)
                             .await
                             .unwrap();
 
@@ -341,10 +349,8 @@ mod tests {
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let CreatedStreamAndAddr { mut stream, .. } =
-            establish(&[], greet_addr, &Swap::new(ConcreteConnPool::empty()))
-                .await
-                .unwrap();
+        let ConnAndAddr { mut stream, .. } =
+            establish(&[], greet_addr, &stream_context()).await.unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();

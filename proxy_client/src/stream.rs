@@ -8,33 +8,32 @@ use common::{
         route::{RouteError, RouteResponse},
     },
     proxy_table::{convert_proxies_to_header_crypto_pairs, Tracer},
-    stream::{
-        concrete::{
-            addr::{ConcreteStreamAddr, ConcreteStreamType},
-            created_stream::CreatedStreamAndAddr,
-            pool::{connect_with_pool, ConnectError, SharedConcreteConnPool},
-        },
-        proxy_table::StreamProxyChain,
-    },
+    stream::{pool::connect_with_pool, proxy_table::StreamProxyChain},
 };
 use metrics::counter;
+use protocol::stream::{
+    addr::{ConcreteStreamAddr, ConcreteStreamType},
+    connect::ConcreteConnectError,
+    connection::ConnAndAddr,
+    context::ConcreteStreamContext,
+};
 use thiserror::Error;
 use tracing::{error, instrument, trace};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
-#[instrument(skip(proxies, stream_pool))]
+#[instrument(skip(proxies, stream_context))]
 pub async fn establish(
     proxies: &StreamProxyChain<ConcreteStreamType>,
     destination: ConcreteStreamAddr,
-    stream_pool: &SharedConcreteConnPool,
-) -> Result<CreatedStreamAndAddr, StreamEstablishError> {
+    stream_context: &ConcreteStreamContext,
+) -> Result<ConnAndAddr, StreamEstablishError> {
     // If there are no proxy configs, just connect to the destination
     if proxies.is_empty() {
-        let (stream, sock_addr) = connect_with_pool(&destination, stream_pool, true, IO_TIMEOUT)
+        let (stream, sock_addr) = connect_with_pool(&destination, stream_context, true, IO_TIMEOUT)
             .await
             .map_err(StreamEstablishError::ConnectDestination)?;
-        return Ok(CreatedStreamAndAddr {
+        return Ok(ConnAndAddr {
             stream,
             addr: destination,
             sock_addr,
@@ -44,7 +43,7 @@ pub async fn establish(
     // Connect to the first proxy
     let (mut stream, addr, sock_addr) = {
         let proxy_addr = &proxies[0].address;
-        let (stream, sock_addr) = connect_with_pool(proxy_addr, stream_pool, true, IO_TIMEOUT)
+        let (stream, sock_addr) = connect_with_pool(proxy_addr, stream_context, true, IO_TIMEOUT)
             .await
             .map_err(StreamEstablishError::ConnectFirstProxyServer)?;
         (stream, proxy_addr.clone(), sock_addr)
@@ -92,7 +91,7 @@ pub async fn establish(
     // }
 
     // Return stream
-    Ok(CreatedStreamAndAddr {
+    Ok(ConnAndAddr {
         stream,
         addr,
         sock_addr,
@@ -102,9 +101,9 @@ pub async fn establish(
 #[derive(Debug, Error)]
 pub enum StreamEstablishError {
     #[error("Failed to connect to destination: {0}")]
-    ConnectDestination(#[source] ConnectError),
+    ConnectDestination(#[source] ConcreteConnectError),
     #[error("Failed to connect to first proxy server: {0}")]
-    ConnectFirstProxyServer(#[source] ConnectError),
+    ConnectFirstProxyServer(#[source] ConcreteConnectError),
     #[error("Failed to write heartbeat upgrade to upstream: {source}, {upstream_addr}")]
     WriteHeartbeatUpgrade {
         #[source]
@@ -121,15 +120,13 @@ pub enum StreamEstablishError {
 
 #[derive(Debug, Clone)]
 pub struct StreamTracer {
-    stream_pool: SharedConcreteConnPool,
+    stream_context: ConcreteStreamContext,
 }
-
 impl StreamTracer {
-    pub fn new(stream_pool: SharedConcreteConnPool) -> Self {
-        Self { stream_pool }
+    pub fn new(stream_context: ConcreteStreamContext) -> Self {
+        Self { stream_context }
     }
 }
-
 impl Tracer for StreamTracer {
     type Address = ConcreteStreamAddr;
 
@@ -137,7 +134,7 @@ impl Tracer for StreamTracer {
         &self,
         chain: &StreamProxyChain<ConcreteStreamType>,
     ) -> Result<Duration, AnyError> {
-        trace_rtt(chain, &self.stream_pool)
+        trace_rtt(chain, &self.stream_context)
             .await
             .map_err(|e| e.into())
     }
@@ -145,7 +142,7 @@ impl Tracer for StreamTracer {
 
 pub async fn trace_rtt(
     proxies: &StreamProxyChain<ConcreteStreamType>,
-    stream_pool: &SharedConcreteConnPool,
+    stream_context: &ConcreteStreamContext,
 ) -> Result<Duration, TraceError> {
     if proxies.is_empty() {
         return Ok(Duration::from_secs(0));
@@ -155,7 +152,7 @@ pub async fn trace_rtt(
     let (mut stream, _addr, _sock_addr) = {
         let proxy_addr = &proxies[0].address;
         let (stream, sock_addr) =
-            connect_with_pool(proxy_addr, stream_pool, true, IO_TIMEOUT).await?;
+            connect_with_pool(proxy_addr, stream_context, true, IO_TIMEOUT).await?;
         (stream, proxy_addr.clone(), sock_addr)
     };
 
@@ -189,7 +186,7 @@ pub async fn trace_rtt(
 #[derive(Debug, Error)]
 pub enum TraceError {
     #[error("Connect error: {0}")]
-    ConnectError(#[from] ConnectError),
+    ConnectError(#[from] ConcreteConnectError),
     #[error("Heartbeat error: {0}")]
     HeartbeatError(#[from] HeartbeatError),
     #[error("Codec error: {0}")]

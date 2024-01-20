@@ -5,15 +5,14 @@ use common::{
     addr::ParseInternetAddrError,
     loading,
     stream::{
-        concrete::{
-            context::StreamContext,
-            created_stream::CreatedStreamAndAddr,
-            pool::{connect_with_pool, ConnectError, SharedConcreteConnPool},
-        },
         io_copy::CopyBidirectional,
+        pool::connect_with_pool,
         steer::{steer, SteerError},
         IoAddr, IoStream, StreamServerHook,
     },
+};
+use protocol::stream::{
+    connect::ConcreteConnectError, connection::ConnAndAddr, context::ConcreteStreamContext,
 };
 use serde::Deserialize;
 use thiserror::Error;
@@ -35,7 +34,7 @@ pub struct StreamProxyConfig {
 }
 
 impl StreamProxyConfig {
-    pub fn into_builder(self, stream_context: StreamContext) -> StreamProxyBuilder {
+    pub fn into_builder(self, stream_context: ConcreteStreamContext) -> StreamProxyBuilder {
         StreamProxyBuilder {
             header_key: self.header_key,
             payload_key: self.payload_key,
@@ -48,7 +47,7 @@ impl StreamProxyConfig {
 pub struct StreamProxyBuilder {
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
-    pub stream_context: StreamContext,
+    pub stream_context: ConcreteStreamContext,
 }
 
 impl StreamProxyBuilder {
@@ -91,17 +90,17 @@ pub enum StreamProxyServerBuildError {
 pub struct StreamProxy {
     acceptor: StreamProxyAcceptor,
     payload_crypto: Option<tokio_chacha20::config::Config>,
-    stream_context: StreamContext,
+    stream_context: ConcreteStreamContext,
 }
 
 impl StreamProxy {
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
         payload_crypto: Option<tokio_chacha20::config::Config>,
-        stream_context: StreamContext,
+        stream_context: ConcreteStreamContext,
     ) -> Self {
         Self {
-            acceptor: StreamProxyAcceptor::new(header_crypto, stream_context.pool.clone()),
+            acceptor: StreamProxyAcceptor::new(header_crypto, stream_context.clone()),
             payload_crypto,
             stream_context,
         }
@@ -193,17 +192,17 @@ pub enum ProxyResult {
 #[derive(Debug)]
 pub struct StreamProxyAcceptor {
     crypto: tokio_chacha20::config::Config,
-    stream_pool: SharedConcreteConnPool,
+    stream_context: ConcreteStreamContext,
 }
 
 impl StreamProxyAcceptor {
     pub fn new(
         crypto: tokio_chacha20::config::Config,
-        stream_pool: SharedConcreteConnPool,
+        stream_context: ConcreteStreamContext,
     ) -> Self {
         Self {
             crypto,
-            stream_pool,
+            stream_context,
         }
     }
 
@@ -211,7 +210,7 @@ impl StreamProxyAcceptor {
     async fn establish<S>(
         &self,
         downstream: &mut S,
-    ) -> Result<Option<CreatedStreamAndAddr>, StreamProxyAcceptorError>
+    ) -> Result<Option<ConnAndAddr>, StreamProxyAcceptorError>
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
@@ -221,15 +220,16 @@ impl StreamProxyAcceptor {
         };
 
         // Connect to upstream
-        let (upstream, sock_addr) = connect_with_pool(&addr, &self.stream_pool, false, IO_TIMEOUT)
-            .await
-            .map_err(|e| {
-                let downstream_addr = downstream.peer_addr().ok();
-                StreamProxyAcceptorError::ConnectUpstream {
-                    source: e,
-                    downstream_addr,
-                }
-            })?;
+        let (upstream, sock_addr) =
+            connect_with_pool(&addr, &self.stream_context, false, IO_TIMEOUT)
+                .await
+                .map_err(|e| {
+                    let downstream_addr = downstream.peer_addr().ok();
+                    StreamProxyAcceptorError::ConnectUpstream {
+                        source: e,
+                        downstream_addr,
+                    }
+                })?;
 
         // // Write Ok response
         // let resp = ResponseHeader { result: Ok(()) };
@@ -241,7 +241,7 @@ impl StreamProxyAcceptor {
         //     )?;
 
         // Return upstream
-        Ok(Some(CreatedStreamAndAddr {
+        Ok(Some(ConnAndAddr {
             stream: upstream,
             addr,
             sock_addr,
@@ -294,7 +294,7 @@ pub enum StreamProxyAcceptorError {
     #[error("Failed to connect to upstream: {source}, {downstream_addr:?}")]
     ConnectUpstream {
         #[source]
-        source: ConnectError,
+        source: ConcreteConnectError,
         downstream_addr: Option<SocketAddr>,
     },
 }

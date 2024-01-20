@@ -7,15 +7,13 @@ use common::{
     filter::{self, Filter, FilterBuilder},
     loading::{self, Hook},
     stream::{
-        addr::StreamAddr,
-        concrete::{
-            addr::ConcreteStreamType, context::StreamContext, created_stream::CreatedStreamAndAddr,
-            streams::tcp::TcpServer,
-        },
-        io_copy::CopyBidirectional,
-        proxy_table::StreamProxyTable,
-        IoAddr, IoStream, StreamServerHook,
+        addr::StreamAddr, io_copy::CopyBidirectional, proxy_table::StreamProxyTable, IoAddr,
+        IoStream, StreamServerHook,
     },
+};
+use protocol::stream::{
+    addr::ConcreteStreamType, connection::ConnAndAddr, context::ConcreteStreamContext,
+    streams::tcp::TcpServer,
 };
 use proxy_client::stream::StreamEstablishError;
 use serde::{Deserialize, Serialize};
@@ -53,14 +51,14 @@ impl Socks5ServerTcpAccessServerConfig {
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         filters: &HashMap<Arc<str>, Filter>,
         cancellation: CancellationToken,
-        stream_context: StreamContext,
+        stream_context: ConcreteStreamContext,
     ) -> Result<Socks5ServerTcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(&stream_context.pool, cancellation)?,
+            SharableConfig::Private(x) => x.build(&stream_context, cancellation)?,
         };
         let filter = match self.filter {
             SharableConfig::SharingKey(key) => filters
@@ -114,7 +112,7 @@ pub struct Socks5ServerTcpAccessServerBuilder {
     speed_limit: f64,
     udp_server_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-    stream_context: StreamContext,
+    stream_context: ConcreteStreamContext,
 }
 
 impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
@@ -153,7 +151,7 @@ pub struct Socks5ServerTcpAccess {
     speed_limiter: Limiter,
     udp_listen_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-    stream_context: StreamContext,
+    stream_context: ConcreteStreamContext,
 }
 
 impl Hook for Socks5ServerTcpAccess {}
@@ -180,7 +178,7 @@ impl Socks5ServerTcpAccess {
         speed_limit: f64,
         udp_listen_addr: Option<InternetAddr>,
         users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-        stream_context: StreamContext,
+        stream_context: ConcreteStreamContext,
     ) -> Self {
         Self {
             proxy_table,
@@ -543,8 +541,7 @@ impl Socks5ServerTcpAccess {
     async fn establish_proxy_chain(
         &self,
         destination: InternetAddr,
-    ) -> Result<(CreatedStreamAndAddr, Option<tokio_chacha20::config::Config>), StreamEstablishError>
-    {
+    ) -> Result<(ConnAndAddr, Option<tokio_chacha20::config::Config>), StreamEstablishError> {
         let proxy_chain = self.proxy_table.choose_chain();
         let res = proxy_client::stream::establish(
             &proxy_chain.chain,
@@ -552,7 +549,7 @@ impl Socks5ServerTcpAccess {
                 address: destination,
                 stream_type: ConcreteStreamType::Tcp,
             },
-            &self.stream_context.pool,
+            &self.stream_context,
         )
         .await?;
         Ok((res, proxy_chain.payload_crypto.clone()))
@@ -575,7 +572,7 @@ pub enum EstablishResult<S> {
     Proxy {
         destination: InternetAddr,
         downstream: S,
-        upstream: CreatedStreamAndAddr,
+        upstream: ConnAndAddr,
         payload_crypto: Option<tokio_chacha20::config::Config>,
     },
 }
@@ -592,7 +589,7 @@ enum RequestResult {
     Udp {},
     Proxy {
         destination: InternetAddr,
-        upstream: CreatedStreamAndAddr,
+        upstream: ConnAndAddr,
         payload_crypto: Option<tokio_chacha20::config::Config>,
     },
 }

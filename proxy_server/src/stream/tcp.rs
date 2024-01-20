@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
-use common::{
-    loading,
-    stream::concrete::{context::StreamContext, streams::tcp::TcpServer},
-};
+use common::loading;
+use protocol::stream::{context::ConcreteStreamContext, streams::tcp::TcpServer};
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::net::{TcpListener, ToSocketAddrs};
@@ -22,7 +20,7 @@ pub struct TcpProxyServerConfig {
 }
 
 impl TcpProxyServerConfig {
-    pub fn into_builder(self, stream_context: StreamContext) -> TcpProxyServerBuilder {
+    pub fn into_builder(self, stream_context: ConcreteStreamContext) -> TcpProxyServerBuilder {
         let inner = self.inner.into_builder(stream_context);
         TcpProxyServerBuilder {
             listen_addr: self.listen_addr,
@@ -86,11 +84,11 @@ mod tests {
     use common::{
         header::{codec::write_header_async, heartbeat},
         loading::Server,
-        stream::{
-            addr::StreamAddr,
-            concrete::{addr::ConcreteStreamType, pool::ConcreteConnPool},
-            header::StreamRequestHeader,
-        },
+        stream::{addr::StreamAddr, header::StreamRequestHeader},
+    };
+    use protocol::stream::{
+        addr::ConcreteStreamType, connector_table::ConcreteStreamConnectorTable,
+        pool::ConcreteConnPool,
     };
     use swap::Swap;
     use tokio::{
@@ -107,9 +105,10 @@ mod tests {
             let proxy = StreamProxy::new(
                 crypto.clone(),
                 None,
-                StreamContext {
+                ConcreteStreamContext {
                     session_table: None,
                     pool: Swap::new(ConcreteConnPool::empty()),
+                    connector_table: ConcreteStreamConnectorTable::new(),
                 },
             );
 
