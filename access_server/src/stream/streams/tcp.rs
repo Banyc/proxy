@@ -5,8 +5,9 @@ use common::{
     config::SharableConfig,
     loading,
     stream::{
-        io_copy::CopyBidirectional, proxy_table::StreamProxyTable, IoAddr, IoStream,
-        StreamServerHook,
+        io_copy::{CopyBidirectional, MetricContext},
+        proxy_table::StreamProxyTable,
+        IoAddr, IoStream, StreamServerHook,
     },
 };
 use protocol::stream::{
@@ -132,10 +133,6 @@ impl TcpAccess {
     where
         S: IoStream + IoAddr,
     {
-        let start = (std::time::Instant::now(), std::time::SystemTime::now());
-
-        let downstream_addr = downstream.peer_addr().ok();
-
         let proxy_chain = self.proxy_table.choose_chain();
         let upstream = establish(
             &proxy_chain.chain,
@@ -144,25 +141,25 @@ impl TcpAccess {
         )
         .await?;
 
-        let speed_limiter = self.speed_limiter.clone();
-        let destination = self.destination.clone();
-        let session_table = self.stream_context.session_table.clone();
-        let payload_crypto = proxy_chain.payload_crypto.clone();
+        let metrics_context = MetricContext {
+            start: (std::time::Instant::now(), std::time::SystemTime::now()),
+            upstream_addr: upstream.addr,
+            upstream_sock_addr: upstream.sock_addr,
+            downstream_addr: downstream.peer_addr().ok(),
+            upstream_local: upstream.stream.local_addr().ok(),
+            session_table: self.stream_context.session_table.clone(),
+            destination: Some(self.destination.clone()),
+        };
+        let io_copy = CopyBidirectional {
+            downstream,
+            upstream: upstream.stream,
+            payload_crypto: proxy_chain.payload_crypto.clone(),
+            speed_limiter: self.speed_limiter.clone(),
+            metrics_context,
+        }
+        .serve_as_access_server("TCP");
         tokio::spawn(async move {
-            let upstream_local = upstream.stream.local_addr().ok();
-            let io_copy = CopyBidirectional {
-                downstream,
-                upstream: upstream.stream,
-                payload_crypto,
-                speed_limiter,
-                start,
-                upstream_addr: upstream.addr,
-                upstream_sock_addr: upstream.sock_addr,
-                downstream_addr,
-            };
-            let _ = io_copy
-                .serve_as_access_server(destination, session_table, upstream_local, "TCP")
-                .await;
+            let _ = io_copy.await;
         });
         Ok(())
     }

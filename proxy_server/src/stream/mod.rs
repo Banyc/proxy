@@ -5,7 +5,7 @@ use common::{
     addr::ParseInternetAddrError,
     loading,
     stream::{
-        io_copy::CopyBidirectional,
+        io_copy::{CopyBidirectional, MetricContext},
         pool::connect_with_pool,
         steer::{steer, SteerError},
         IoAddr, IoStream, StreamServerHook,
@@ -111,10 +111,6 @@ impl StreamProxy {
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
-        let start = (std::time::Instant::now(), std::time::SystemTime::now());
-
-        let downstream_addr = downstream.peer_addr().ok();
-
         // Establish proxy chain
         let upstream = match self.acceptor.establish(&mut downstream).await {
             Ok(Some(upstream)) => upstream,
@@ -126,23 +122,25 @@ impl StreamProxy {
         };
 
         // Copy data
-        let payload_crypto = self.payload_crypto.clone();
-        let session_table = self.stream_context.session_table.clone();
-        let upstream_local = upstream.stream.local_addr().ok();
+        let metrics_context = MetricContext {
+            start: (std::time::Instant::now(), std::time::SystemTime::now()),
+            upstream_addr: upstream.addr,
+            upstream_sock_addr: upstream.sock_addr,
+            downstream_addr: downstream.peer_addr().ok(),
+            upstream_local: upstream.stream.local_addr().ok(),
+            session_table: self.stream_context.session_table.clone(),
+            destination: None,
+        };
+        let io_copy = CopyBidirectional {
+            downstream,
+            upstream: upstream.stream,
+            payload_crypto: self.payload_crypto.clone(),
+            speed_limiter: Limiter::new(f64::INFINITY),
+            metrics_context,
+        }
+        .serve_as_proxy_server("Stream");
         tokio::spawn(async move {
-            let io_copy = CopyBidirectional {
-                downstream,
-                upstream: upstream.stream,
-                payload_crypto,
-                speed_limiter: Limiter::new(f64::INFINITY),
-                start,
-                upstream_addr: upstream.addr,
-                upstream_sock_addr: upstream.sock_addr,
-                downstream_addr,
-            };
-            let _ = io_copy
-                .serve_as_proxy_server(session_table, upstream_local, "Stream")
-                .await;
+            let _ = io_copy.await;
         });
         Ok(ProxyResult::IoCopy)
     }

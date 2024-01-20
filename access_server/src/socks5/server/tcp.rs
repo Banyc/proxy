@@ -7,8 +7,10 @@ use common::{
     filter::{self, Filter, FilterBuilder},
     loading::{self, Hook},
     stream::{
-        addr::StreamAddr, io_copy::CopyBidirectional, proxy_table::StreamProxyTable, IoAddr,
-        IoStream, StreamServerHook,
+        addr::StreamAddr,
+        io_copy::{CopyBidirectional, MetricContext},
+        proxy_table::StreamProxyTable,
+        IoAddr, IoStream, StreamServerHook,
     },
 };
 use protocol::stream::{
@@ -194,10 +196,6 @@ impl Socks5ServerTcpAccess {
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
-        let start = (std::time::Instant::now(), std::time::SystemTime::now());
-
-        let downstream_addr = downstream.peer_addr().ok();
-
         let res = self.establish(downstream).await?;
         let (destination, downstream, upstream, payload_crypto) = match res {
             EstablishResult::Blocked { destination } => {
@@ -210,34 +208,29 @@ impl Socks5ServerTcpAccess {
                 upstream_addr,
                 upstream_sock_addr,
             } => {
-                let speed_limiter = self.speed_limiter.clone();
-                let session_table = self.stream_context.session_table.clone();
+                let upstream_addr = StreamAddr {
+                    stream_type: ConcreteStreamType::Tcp,
+                    address: upstream_addr.clone(),
+                };
+                let metrics_context = MetricContext {
+                    start: (std::time::Instant::now(), std::time::SystemTime::now()),
+                    upstream_addr: upstream_addr.clone(),
+                    upstream_sock_addr,
+                    downstream_addr: downstream.peer_addr().ok(),
+                    upstream_local: upstream.local_addr().ok(),
+                    session_table: self.stream_context.session_table.clone(),
+                    destination: Some(upstream_addr),
+                };
+                let io_copy = CopyBidirectional {
+                    downstream,
+                    upstream,
+                    payload_crypto: None,
+                    speed_limiter: self.speed_limiter.clone(),
+                    metrics_context,
+                }
+                .serve_as_access_server("SOCKS5 TCP direct");
                 tokio::spawn(async move {
-                    let upstream_local = upstream.local_addr().ok();
-                    let io_copy = CopyBidirectional {
-                        downstream,
-                        upstream,
-                        payload_crypto: None,
-                        speed_limiter,
-                        start,
-                        upstream_addr: StreamAddr {
-                            stream_type: ConcreteStreamType::Tcp,
-                            address: upstream_addr.clone(),
-                        },
-                        upstream_sock_addr,
-                        downstream_addr,
-                    };
-                    let _ = io_copy
-                        .serve_as_access_server(
-                            StreamAddr {
-                                stream_type: ConcreteStreamType::Tcp,
-                                address: upstream_addr,
-                            },
-                            session_table,
-                            upstream_local,
-                            "SOCKS5 TCP direct",
-                        )
-                        .await;
+                    let _ = io_copy.await;
                 });
                 return Ok(ProxyResult::IoCopy);
             }
@@ -257,31 +250,28 @@ impl Socks5ServerTcpAccess {
             } => (destination, downstream, upstream, payload_crypto),
         };
 
-        let speed_limiter = self.speed_limiter.clone();
-        let session_table = self.stream_context.session_table.clone();
+        let metrics_context = MetricContext {
+            start: (std::time::Instant::now(), std::time::SystemTime::now()),
+            upstream_addr: upstream.addr,
+            upstream_sock_addr: upstream.sock_addr,
+            downstream_addr: downstream.peer_addr().ok(),
+            upstream_local: upstream.stream.local_addr().ok(),
+            session_table: self.stream_context.session_table.clone(),
+            destination: Some(StreamAddr {
+                stream_type: ConcreteStreamType::Tcp,
+                address: destination.clone(),
+            }),
+        };
+        let io_copy = CopyBidirectional {
+            downstream,
+            upstream: upstream.stream,
+            payload_crypto,
+            speed_limiter: self.speed_limiter.clone(),
+            metrics_context,
+        }
+        .serve_as_access_server("SOCKS5 TCP");
         tokio::spawn(async move {
-            let upstream_local = upstream.stream.local_addr().ok();
-            let io_copy = CopyBidirectional {
-                downstream,
-                upstream: upstream.stream,
-                payload_crypto,
-                speed_limiter,
-                start,
-                upstream_addr: upstream.addr,
-                upstream_sock_addr: upstream.sock_addr,
-                downstream_addr,
-            };
-            let _ = io_copy
-                .serve_as_access_server(
-                    StreamAddr {
-                        stream_type: ConcreteStreamType::Tcp,
-                        address: destination.clone(),
-                    },
-                    session_table,
-                    upstream_local,
-                    "SOCKS5 TCP",
-                )
-                .await;
+            let _ = io_copy.await;
         });
         Ok(ProxyResult::IoCopy)
     }

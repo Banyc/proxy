@@ -9,7 +9,7 @@ use common::{
     loading,
     stream::{
         addr::StreamAddr,
-        io_copy::{CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
+        io_copy::{CopyBidirectional, MetricContext, DEAD_SESSION_RETENTION_DURATION},
         metrics::{SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics, StreamRecord},
         proxy_table::StreamProxyTable,
         session_table::{Session, StreamSessionTable},
@@ -385,8 +385,6 @@ async fn upgrade(
         }
     };
 
-    let start = (std::time::Instant::now(), std::time::SystemTime::now());
-
     // Proxy
     if let Some(http_connect) = http_connect {
         match http_connect.proxy(upgraded, addr).await {
@@ -416,32 +414,28 @@ async fn upgrade(
             return;
         }
     };
-
-    let upstream_local = upstream.local_addr().ok();
-    let io_copy = CopyBidirectional {
+    let upstream_addr = StreamAddr {
+        stream_type: ConcreteStreamType::Tcp,
+        address: addr.clone(),
+    };
+    let metrics_context = MetricContext {
+        start: (std::time::Instant::now(), std::time::SystemTime::now()),
+        upstream_addr: upstream_addr.clone(),
+        upstream_sock_addr: sock_addr,
+        downstream_addr: None,
+        upstream_local: upstream.local_addr().ok(),
+        session_table,
+        destination: Some(upstream_addr),
+    };
+    let _ = CopyBidirectional {
         downstream: TokioIo::new(upgraded),
         upstream,
         payload_crypto: None,
         speed_limiter,
-        start,
-        upstream_addr: StreamAddr {
-            stream_type: ConcreteStreamType::Tcp,
-            address: addr.clone(),
-        },
-        upstream_sock_addr: sock_addr,
-        downstream_addr: None,
-    };
-    let _ = io_copy
-        .serve_as_access_server(
-            StreamAddr {
-                stream_type: ConcreteStreamType::Tcp,
-                address: addr,
-            },
-            session_table,
-            upstream_local,
-            "HTTP CONNECT direct",
-        )
-        .await;
+        metrics_context,
+    }
+    .serve_as_access_server("HTTP CONNECT direct")
+    .await;
 }
 
 #[derive(Debug, Error)]
@@ -500,42 +494,38 @@ impl HttpConnect {
         upgraded: Upgraded,
         address: InternetAddr,
     ) -> Result<(), HttpConnectError> {
-        let start = (std::time::Instant::now(), std::time::SystemTime::now());
-
         // Establish proxy chain
         let destination = StreamAddr {
             address: address.clone(),
             stream_type: ConcreteStreamType::Tcp,
         };
         let proxy_chain = self.proxy_table.choose_chain();
-        let upstream = establish(&proxy_chain.chain, destination, &self.stream_context).await?;
+        let upstream = establish(
+            &proxy_chain.chain,
+            destination.clone(),
+            &self.stream_context,
+        )
+        .await?;
 
-        let speed_limiter = self.speed_limiter.clone();
-        let session_table = self.stream_context.session_table.clone();
-        let payload_crypto = proxy_chain.payload_crypto.clone();
+        let metrics_context = MetricContext {
+            start: (std::time::Instant::now(), std::time::SystemTime::now()),
+            upstream_addr: upstream.addr,
+            upstream_sock_addr: upstream.sock_addr,
+            downstream_addr: None,
+            upstream_local: upstream.stream.local_addr().ok(),
+            session_table: self.stream_context.session_table.clone(),
+            destination: Some(destination),
+        };
+        let io_copy = CopyBidirectional {
+            downstream: TokioIo::new(upgraded),
+            upstream: upstream.stream,
+            payload_crypto: proxy_chain.payload_crypto.clone(),
+            speed_limiter: self.speed_limiter.clone(),
+            metrics_context,
+        }
+        .serve_as_access_server("HTTP CONNECT");
         tokio::spawn(async move {
-            let upstream_local = upstream.stream.local_addr().ok();
-            let io_copy = CopyBidirectional {
-                downstream: TokioIo::new(upgraded),
-                upstream: upstream.stream,
-                payload_crypto,
-                speed_limiter,
-                start,
-                upstream_addr: upstream.addr,
-                upstream_sock_addr: upstream.sock_addr,
-                downstream_addr: None,
-            };
-            let _ = io_copy
-                .serve_as_access_server(
-                    StreamAddr {
-                        address: address.clone(),
-                        stream_type: ConcreteStreamType::Tcp,
-                    },
-                    session_table,
-                    upstream_local,
-                    "HTTP CONNECT",
-                )
-                .await;
+            let _ = io_copy.await;
         });
         Ok(())
     }

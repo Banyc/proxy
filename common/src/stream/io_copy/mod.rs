@@ -1,5 +1,4 @@
 use std::{
-    fmt,
     net::SocketAddr,
     sync::Mutex,
     time::{Duration, Instant, SystemTime},
@@ -7,13 +6,14 @@ use std::{
 
 use async_speed_limit::Limiter;
 use metrics::{counter, gauge};
+use monitor_table::table::RowOwnedGuard;
 use scopeguard::defer;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_throughput::{ReadGauge, WriteGauge};
 use tracing::info;
 
 use super::{
-    addr::StreamAddr,
+    addr::{StreamAddr, StreamType},
     metrics::{StreamMetrics, StreamProxyMetrics, StreamRecord},
     session_table::{Session, StreamSessionTable},
 };
@@ -27,64 +27,47 @@ pub struct CopyBidirectional<DS, US, ST> {
     pub upstream: US,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
     pub speed_limiter: Limiter,
-    pub start: (Instant, SystemTime),
-    pub upstream_addr: StreamAddr<ST>,
-    pub upstream_sock_addr: SocketAddr,
-    pub downstream_addr: Option<SocketAddr>,
+    pub metrics_context: MetricContext<ST>,
 }
 
 impl<DS, US, ST> CopyBidirectional<DS, US, ST>
 where
     US: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     DS: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    ST: Clone + fmt::Display + Sync + Send + 'static + serde::Serialize,
+    ST: StreamType,
 {
     pub async fn serve_as_proxy_server(
         self,
-        session_table: Option<StreamSessionTable<ST>>,
-        upstream_local: Option<SocketAddr>,
         log_prefix: &str,
-    ) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
-        let session = session_table.map(|s| {
-            let (up_handle, up) = tokio_throughput::gauge();
-            let (dn_handle, dn) = tokio_throughput::gauge();
-            let r = ReadGauge(up);
-            let w = WriteGauge(dn);
-
-            let session = Session {
-                start: SystemTime::now(),
-                end: None,
-                destination: None,
-                upstream_local,
-                upstream_remote: self.upstream_addr.clone(),
-                downstream_remote: self.downstream_addr,
-                up_gauge: Some(Mutex::new(up_handle)),
-                dn_gauge: Some(Mutex::new(dn_handle)),
-            };
-            let session = s.set_scope_owned(session);
-            (session, r, w)
-        });
+    ) -> Result<(), tokio_io::CopyBiErrorKind> {
+        let session = self.session();
+        let destination = self.metrics_context.destination.clone();
 
         let (metrics, res) = self
             .serve(session, EncryptionDirection::Decrypt, log_prefix)
             .await;
+        log(metrics, destination);
 
-        table_log::log!(&StreamRecord::Metrics(&metrics));
-
-        (metrics, res)
+        res
     }
 
     pub async fn serve_as_access_server(
         self,
-        destination: StreamAddr<ST>,
-        session_table: Option<StreamSessionTable<ST>>,
-        upstream_local: Option<SocketAddr>,
         log_prefix: &str,
-    ) -> (
-        StreamProxyMetrics<ST>,
-        Result<(), tokio_io::CopyBiErrorKind>,
-    ) {
-        let session = session_table.map(|s| {
+    ) -> Result<(), tokio_io::CopyBiErrorKind> {
+        let session = self.session();
+        let destination = self.metrics_context.destination.clone();
+
+        let (metrics, res) = self
+            .serve(session, EncryptionDirection::Encrypt, log_prefix)
+            .await;
+        log(metrics, destination);
+
+        res
+    }
+
+    fn session(&self) -> Option<(RowOwnedGuard<Session<ST>>, ReadGauge, WriteGauge)> {
+        self.metrics_context.session_table.as_ref().map(|s| {
             let (up_handle, up) = tokio_throughput::gauge();
             let (dn_handle, dn) = tokio_throughput::gauge();
             let r = ReadGauge(up);
@@ -93,29 +76,16 @@ where
             let session = Session {
                 start: SystemTime::now(),
                 end: None,
-                destination: Some(destination.clone()),
-                upstream_local,
-                upstream_remote: self.upstream_addr.clone(),
-                downstream_remote: self.downstream_addr,
+                destination: self.metrics_context.destination.clone(),
+                upstream_local: self.metrics_context.upstream_local,
+                upstream_remote: self.metrics_context.upstream_addr.clone(),
+                downstream_remote: self.metrics_context.downstream_addr,
                 up_gauge: Some(Mutex::new(up_handle)),
                 dn_gauge: Some(Mutex::new(dn_handle)),
             };
             let session = s.set_scope_owned(session);
             (session, r, w)
-        });
-
-        let (metrics, res) = self
-            .serve(session, EncryptionDirection::Encrypt, log_prefix)
-            .await;
-
-        let metrics = StreamProxyMetrics {
-            stream: metrics,
-            destination: destination.address,
-        };
-
-        table_log::log!(&StreamRecord::ProxyMetrics(&metrics));
-
-        (metrics, res)
+        })
     }
 
     async fn serve(
@@ -162,14 +132,7 @@ where
             }
         };
 
-        let (metrics, res) = get_metrics_from_copy_result(
-            self.start,
-            self.upstream_addr,
-            self.upstream_sock_addr,
-            self.downstream_addr,
-            res,
-        );
-
+        let (metrics, res) = get_metrics_from_copy_result(self.metrics_context, res);
         match &res {
             Ok(()) => {
                 info!(%metrics, "{log_prefix}: I/O copy finished");
@@ -178,8 +141,30 @@ where
                 info!(?e, %metrics, "{log_prefix}: I/O copy error");
             }
         }
-
         (metrics, res)
+    }
+}
+
+pub struct MetricContext<ST> {
+    pub start: (Instant, SystemTime),
+    pub upstream_addr: StreamAddr<ST>,
+    pub upstream_sock_addr: SocketAddr,
+    pub downstream_addr: Option<SocketAddr>,
+    pub upstream_local: Option<SocketAddr>,
+    pub session_table: Option<StreamSessionTable<ST>>,
+    pub destination: Option<StreamAddr<ST>>,
+}
+
+fn log<ST: StreamType>(metrics: StreamMetrics<ST>, destination: Option<StreamAddr<ST>>) {
+    match destination {
+        Some(d) => {
+            let metrics = StreamProxyMetrics {
+                stream: metrics,
+                destination: d.address,
+            };
+            table_log::log!(&StreamRecord::ProxyMetrics(&metrics));
+        }
+        None => table_log::log!(&StreamRecord::Metrics(&metrics)),
     }
 }
 
@@ -227,11 +212,8 @@ where
     }
 }
 
-pub fn get_metrics_from_copy_result<ST>(
-    start: (Instant, SystemTime),
-    upstream_addr: StreamAddr<ST>,
-    upstream_sock_addr: SocketAddr,
-    downstream_addr: Option<SocketAddr>,
+fn get_metrics_from_copy_result<ST>(
+    metrics_context: MetricContext<ST>,
     result: tokio_io::TimedCopyBidirectionalResult,
 ) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
     let (bytes_uplink, bytes_downlink) = result.amounts;
@@ -239,13 +221,13 @@ pub fn get_metrics_from_copy_result<ST>(
     counter!("stream.bytes_uplink").increment(bytes_uplink);
     counter!("stream.bytes_downlink").increment(bytes_downlink);
     let metrics = StreamMetrics {
-        start,
+        start: metrics_context.start,
         end: result.end,
         bytes_uplink,
         bytes_downlink,
-        upstream_addr,
-        upstream_sock_addr,
-        downstream_addr,
+        upstream_addr: metrics_context.upstream_addr,
+        upstream_sock_addr: metrics_context.upstream_sock_addr,
+        downstream_addr: metrics_context.downstream_addr,
     };
 
     (metrics, result.io_result)
