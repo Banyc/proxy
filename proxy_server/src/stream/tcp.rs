@@ -87,8 +87,7 @@ mod tests {
         stream::{addr::StreamAddr, header::StreamRequestHeader},
     };
     use protocol::stream::{
-        addr::ConcreteStreamType, connector_table::ConcreteStreamConnectorTable,
-        pool::ConcreteConnPool,
+        addr::ConcreteStreamType, connect::ConcreteStreamConnectorTable, pool::ConcreteConnPool,
     };
     use swap::Swap;
     use tokio::{

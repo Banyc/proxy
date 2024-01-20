@@ -12,7 +12,7 @@ use protocol::{
     context::ConcreteContext,
     stream::{
         addr::ConcreteStreamType,
-        connector_table::ConcreteStreamConnectorTable,
+        connect::ConcreteStreamConnectorTable,
         context::ConcreteStreamContext,
         pool::{ConcreteConnPool, ConcretePoolBuilder},
     },

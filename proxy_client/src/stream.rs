@@ -13,9 +13,9 @@ use common::{
 use metrics::counter;
 use protocol::stream::{
     addr::{ConcreteStreamAddr, ConcreteStreamType},
-    connect::ConcreteConnectError,
     connection::ConnAndAddr,
     context::ConcreteStreamContext,
+    pool::ConcreteConnectError,
 };
 use thiserror::Error;
 use tracing::{error, instrument, trace};

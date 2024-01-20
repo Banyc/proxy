@@ -9,8 +9,8 @@ mod tests {
     };
     use protocol::stream::{
         addr::{ConcreteStreamAddr, ConcreteStreamType},
+        connect::ConcreteStreamConnectorTable,
         connection::ConnAndAddr,
-        connector_table::ConcreteStreamConnectorTable,
         context::ConcreteStreamContext,
         pool::ConcreteConnPool,
     };
