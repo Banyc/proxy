@@ -79,5 +79,5 @@ async fn main() -> AnyResult {
     let config_reader = MultiFileConfigReader::new(args.config_file_paths.into());
     serve(notify_rx, config_reader, serve_context)
         .await
-        .map_err(|e| e.into())
+        .map_err(Into::into)
 }
