@@ -628,7 +628,7 @@ dependencies = [
 [[package]]
 name = "csv_logger"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/csv_logger.git?rev=d63ac71c4eeb55268102695b095fb6bf13b7ee8f#d63ac71c4eeb55268102695b095fb6bf13b7ee8f"
+source = "git+https://github.com/Banyc/csv_logger.git?rev=90234e9ca11eea2dd5916e024be5368530e42944#90234e9ca11eea2dd5916e024be5368530e42944"
 dependencies = [
  "csv",
  "erased-serde",
@@ -2591,10 +2591,11 @@ dependencies = [
 [[package]]
 name = "table_log"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/table_log.git?rev=eb936cc4521dd62854a1272da6908f7d70261c2c#eb936cc4521dd62854a1272da6908f7d70261c2c"
+source = "git+https://github.com/Banyc/table_log.git?rev=fc49af71a17257e03583d93114546065e8f2f470#fc49af71a17257e03583d93114546065e8f2f470"
 dependencies = [
  "erased-serde",
  "once_cell",
+ "serde",
 ]
 
 [[package]]
