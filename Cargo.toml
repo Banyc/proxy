@@ -30,7 +30,7 @@ thiserror = "1"
 tokio = "1"
 tokio-util = "0.7"
 tokio_chacha20 = { git = "https://github.com/Banyc/tokio_chacha20.git", rev = "40d2030f0ab6e7e32031e61618717d25f25e5509" }
-tokio_conn_pool = { git = "https://github.com/Banyc/tokio_conn_pool.git", rev = "95e71a1a998f3689d268521a50f69fd226c9427b" }
+tokio_conn_pool = { git = "https://github.com/Banyc/tokio_conn_pool.git", rev = "8454496666bc1960223ca2eb78535fe2fd30cfbe" }
 tokio_kcp = "0.9"
 tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", rev = "80cbf0572623762665caff07781cee3e0d97cfc7" }
 tracing = "0.1"
