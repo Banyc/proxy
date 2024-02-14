@@ -7,7 +7,7 @@ use common::{
     udp::{
         context::UdpContext,
         io_copy::{CopyBidirectional, DownstreamParts, UpstreamParts},
-        proxy_table::UdpProxyTable,
+        proxy_table::{UdpProxyConfig, UdpProxyTable},
         FlowOwnedGuard, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
@@ -34,6 +34,7 @@ pub struct Socks5ServerUdpAccessServerConfig {
 impl Socks5ServerUdpAccessServerConfig {
     pub fn into_builder(
         self,
+        udp_proxy: &HashMap<Arc<str>, UdpProxyConfig>,
         proxy_tables: &HashMap<Arc<str>, UdpProxyTable>,
         cancellation: CancellationToken,
         udp_context: UdpContext,
@@ -43,7 +44,7 @@ impl Socks5ServerUdpAccessServerConfig {
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(cancellation)?,
+            SharableConfig::Private(x) => x.build(udp_proxy, cancellation)?,
         };
 
         Ok(Socks5ServerUdpAccessServerBuilder {

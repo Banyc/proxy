@@ -1,17 +1,19 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use access_server::{AccessServerConfig, AccessServerLoader};
 use common::{
     context::Context,
     error::{AnyError, AnyResult},
-    stream::session_table::StreamSessionTable,
-    udp::{context::UdpContext, session_table::UdpSessionTable},
+    stream::{proxy_table::StreamProxyConfigBuilder, session_table::StreamSessionTable},
+    udp::{
+        context::UdpContext, proxy_table::UdpProxyConfigBuilder, session_table::UdpSessionTable,
+    },
 };
 use config::ConfigReader;
 use protocol::{
     context::ConcreteContext,
     stream::{
-        addr::ConcreteStreamType,
+        addr::{ConcreteStreamAddrStr, ConcreteStreamType},
         connect::ConcreteStreamConnectorTable,
         context::ConcreteStreamContext,
         pool::{ConcreteConnPool, ConcretePoolBuilder},
@@ -152,11 +154,23 @@ pub async fn load_and_clean(
     cancellation: CancellationToken,
     context: ConcreteContext,
 ) -> AnyResult {
+    let mut stream_proxy = HashMap::new();
+    for (k, v) in config.stream_proxy {
+        let v = v.build()?;
+        stream_proxy.insert(k, v);
+    }
+
+    let mut udp_proxy = HashMap::new();
+    for (k, v) in config.udp_proxy {
+        let v = v.build()?;
+        udp_proxy.insert(k, v);
+    }
+
     context.stream.pool.replaced_by(
         config
             .global
             .stream_pool
-            .build(context.stream.connector_table.clone())?,
+            .build(context.stream.connector_table.clone(), &stream_proxy)?,
     );
 
     config
@@ -166,6 +180,8 @@ pub async fn load_and_clean(
             &mut server_loader.access_server,
             cancellation,
             context.clone(),
+            &stream_proxy,
+            &udp_proxy,
         )
         .await?;
     config
@@ -188,6 +204,10 @@ pub struct ServerConfig {
     pub proxy_server: ProxyServerConfig,
     #[serde(default)]
     pub global: Global,
+    #[serde(default)]
+    pub stream_proxy: HashMap<Arc<str>, StreamProxyConfigBuilder<ConcreteStreamAddrStr>>,
+    #[serde(default)]
+    pub udp_proxy: HashMap<Arc<str>, UdpProxyConfigBuilder>,
 }
 
 #[derive(Debug, Default, Deserialize)]

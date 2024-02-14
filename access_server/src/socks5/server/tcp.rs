@@ -9,7 +9,7 @@ use common::{
     stream::{
         addr::StreamAddr,
         io_copy::{CopyBidirectional, MetricContext},
-        proxy_table::StreamProxyTable,
+        proxy_table::{StreamProxyConfig, StreamProxyTable},
         IoAddr, IoStream, StreamServerHook,
     },
 };
@@ -50,6 +50,7 @@ pub struct Socks5ServerTcpAccessServerConfig {
 impl Socks5ServerTcpAccessServerConfig {
     pub fn into_builder(
         self,
+        stream_proxy: &HashMap<Arc<str>, StreamProxyConfig<ConcreteStreamType>>,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         filters: &HashMap<Arc<str>, Filter>,
         cancellation: CancellationToken,
@@ -60,7 +61,7 @@ impl Socks5ServerTcpAccessServerConfig {
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(&stream_context, cancellation)?,
+            SharableConfig::Private(x) => x.build(stream_proxy, &stream_context, cancellation)?,
         };
         let filter = match self.filter {
             SharableConfig::SharingKey(key) => filters

@@ -1,7 +1,12 @@
+use std::{collections::HashMap, sync::Arc};
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::proxy_table::{ProxyConfig, ProxyTable, WeightedProxyChain};
+use crate::{
+    config::SharableConfig,
+    proxy_table::{ProxyConfig, ProxyTable, WeightedProxyChain},
+};
 
 use super::{addr::StreamAddrStr, StreamAddr};
 
@@ -27,18 +32,23 @@ impl<SAS> StreamProxyConfigBuilder<SAS> {
 pub enum StreamProxyConfigBuildError {
     #[error("{0}")]
     Crypto(#[from] tokio_chacha20::config::ConfigBuildError),
+    #[error("Key not found: {0}")]
+    KeyNotFound(Arc<str>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamWeightedProxyChainBuilder<SAS> {
     pub weight: usize,
-    pub chain: Vec<StreamProxyConfigBuilder<SAS>>,
+    pub chain: Vec<SharableConfig<StreamProxyConfigBuilder<SAS>>>,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
 }
 
 impl<SAS> StreamWeightedProxyChainBuilder<SAS> {
-    pub fn build<ST>(self) -> Result<StreamWeightedProxyChain<ST>, StreamProxyConfigBuildError>
+    pub fn build<ST: Clone>(
+        self,
+        stream_proxy: &HashMap<Arc<str>, StreamProxyConfig<ST>>,
+    ) -> Result<StreamWeightedProxyChain<ST>, StreamProxyConfigBuildError>
     where
         SAS: StreamAddrStr<StreamType = ST>,
     {
@@ -49,7 +59,13 @@ impl<SAS> StreamWeightedProxyChainBuilder<SAS> {
         let chain = self
             .chain
             .into_iter()
-            .map(|c| c.build())
+            .map(|c| match c {
+                SharableConfig::SharingKey(k) => stream_proxy
+                    .get(&k)
+                    .cloned()
+                    .ok_or_else(|| StreamProxyConfigBuildError::KeyNotFound(k)),
+                SharableConfig::Private(c) => c.build(),
+            })
             .collect::<Result<_, _>>()?;
         Ok(WeightedProxyChain {
             weight: self.weight,

@@ -1,8 +1,11 @@
+use std::{collections::HashMap, sync::Arc};
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
     addr::{InternetAddr, InternetAddrStr},
+    config::SharableConfig,
     proxy_table::{ProxyConfig, ProxyTable, WeightedProxyChain},
 };
 
@@ -25,18 +28,23 @@ impl UdpProxyConfigBuilder {
 pub enum UdpProxyConfigBuildError {
     #[error("{0}")]
     Crypto(#[from] tokio_chacha20::config::ConfigBuildError),
+    #[error("Key not found: {0}")]
+    KeyNotFound(Arc<str>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UdpWeightedProxyChainBuilder {
     pub weight: usize,
-    pub chain: Vec<UdpProxyConfigBuilder>,
+    pub chain: Vec<SharableConfig<UdpProxyConfigBuilder>>,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
 }
 
 impl UdpWeightedProxyChainBuilder {
-    pub fn build(self) -> Result<UdpWeightedProxyChain, UdpProxyConfigBuildError> {
+    pub fn build(
+        self,
+        udp_proxy: &HashMap<Arc<str>, UdpProxyConfig>,
+    ) -> Result<UdpWeightedProxyChain, UdpProxyConfigBuildError> {
         let payload_crypto = match self.payload_key {
             Some(c) => Some(c.build()?),
             None => None,
@@ -44,7 +52,13 @@ impl UdpWeightedProxyChainBuilder {
         let chain = self
             .chain
             .into_iter()
-            .map(|c| c.build())
+            .map(|c| match c {
+                SharableConfig::SharingKey(k) => udp_proxy
+                    .get(&k)
+                    .cloned()
+                    .ok_or_else(|| UdpProxyConfigBuildError::KeyNotFound(k)),
+                SharableConfig::Private(c) => c.build(),
+            })
             .collect::<Result<_, _>>()?;
         Ok(WeightedProxyChain {
             weight: self.weight,

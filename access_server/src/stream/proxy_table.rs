@@ -1,9 +1,10 @@
-use std::num::NonZeroUsize;
+use std::{collections::HashMap, num::NonZeroUsize, sync::Arc};
 
 use common::{
     proxy_table::{ProxyTable, ProxyTableError},
     stream::proxy_table::{
-        StreamProxyConfigBuildError, StreamProxyTable, StreamWeightedProxyChainBuilder,
+        StreamProxyConfig, StreamProxyConfigBuildError, StreamProxyTable,
+        StreamWeightedProxyChainBuilder,
     },
 };
 use protocol::stream::{
@@ -26,13 +27,14 @@ pub struct StreamProxyTableBuilder {
 impl StreamProxyTableBuilder {
     pub fn build(
         self,
+        stream_proxy: &HashMap<Arc<str>, StreamProxyConfig<ConcreteStreamType>>,
         stream_context: &ConcreteStreamContext,
         cancellation: CancellationToken,
     ) -> Result<StreamProxyTable<ConcreteStreamType>, StreamProxyTableBuildError> {
         let chains = self
             .chains
             .into_iter()
-            .map(|c| c.build())
+            .map(|c| c.build(stream_proxy))
             .collect::<Result<_, _>>()
             .map_err(StreamProxyTableBuildError::ChainConfig)?;
         let tracer = match self.trace_rtt {

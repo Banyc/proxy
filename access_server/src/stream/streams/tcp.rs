@@ -6,7 +6,7 @@ use common::{
     loading,
     stream::{
         io_copy::{CopyBidirectional, MetricContext},
-        proxy_table::StreamProxyTable,
+        proxy_table::{StreamProxyConfig, StreamProxyTable},
         IoAddr, IoStream, StreamServerHook,
     },
 };
@@ -36,6 +36,7 @@ pub struct TcpAccessServerConfig {
 impl TcpAccessServerConfig {
     pub fn into_builder(
         self,
+        stream_proxy: &HashMap<Arc<str>, StreamProxyConfig<ConcreteStreamType>>,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         cancellation: CancellationToken,
         stream_context: ConcreteStreamContext,
@@ -45,7 +46,7 @@ impl TcpAccessServerConfig {
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(&stream_context, cancellation)?,
+            SharableConfig::Private(x) => x.build(stream_proxy, &stream_context, cancellation)?,
         };
 
         Ok(TcpAccessServerBuilder {

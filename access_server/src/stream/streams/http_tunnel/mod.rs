@@ -11,7 +11,7 @@ use common::{
         addr::StreamAddr,
         io_copy::{CopyBidirectional, MetricContext, DEAD_SESSION_RETENTION_DURATION},
         metrics::{SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics, StreamRecord},
-        proxy_table::StreamProxyTable,
+        proxy_table::{StreamProxyConfig, StreamProxyTable},
         session_table::{Session, StreamSessionTable},
         IoAddr, IoStream, StreamServerHook,
     },
@@ -49,6 +49,7 @@ pub struct HttpAccessServerConfig {
 impl HttpAccessServerConfig {
     pub fn into_builder(
         self,
+        stream_proxy: &HashMap<Arc<str>, StreamProxyConfig<ConcreteStreamType>>,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
         filters: &HashMap<Arc<str>, Filter>,
         cancellation: CancellationToken,
@@ -59,7 +60,7 @@ impl HttpAccessServerConfig {
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(&stream_context, cancellation)?,
+            SharableConfig::Private(x) => x.build(stream_proxy, &stream_context, cancellation)?,
         };
         let filter = match self.filter {
             SharableConfig::SharingKey(key) => filters

@@ -2,14 +2,13 @@ use std::{collections::HashMap, io, sync::Arc};
 
 use async_speed_limit::Limiter;
 use common::{
-    addr::InternetAddr,
-    addr::InternetAddrStr,
+    addr::{InternetAddr, InternetAddrStr},
     config::SharableConfig,
     loading,
     udp::{
         context::UdpContext,
         io_copy::{CopyBiError, CopyBidirectional, DownstreamParts, UpstreamParts},
-        proxy_table::UdpProxyTable,
+        proxy_table::{UdpProxyConfig, UdpProxyTable},
         FlowOwnedGuard, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
@@ -36,6 +35,7 @@ pub struct UdpAccessServerConfig {
 impl UdpAccessServerConfig {
     pub fn into_builder(
         self,
+        udp_proxy: &HashMap<Arc<str>, UdpProxyConfig>,
         proxy_tables: &HashMap<Arc<str>, UdpProxyTable>,
         cancellation: CancellationToken,
         udp_context: UdpContext,
@@ -45,7 +45,7 @@ impl UdpAccessServerConfig {
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(cancellation.clone())?,
+            SharableConfig::Private(x) => x.build(udp_proxy, cancellation.clone())?,
         };
 
         Ok(UdpAccessServerBuilder {

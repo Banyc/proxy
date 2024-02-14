@@ -1,8 +1,10 @@
-use std::num::NonZeroUsize;
+use std::{collections::HashMap, num::NonZeroUsize, sync::Arc};
 
 use common::{
     proxy_table::{ProxyTable, ProxyTableError},
-    udp::proxy_table::{UdpProxyConfigBuildError, UdpProxyTable, UdpWeightedProxyChainBuilder},
+    udp::proxy_table::{
+        UdpProxyConfig, UdpProxyConfigBuildError, UdpProxyTable, UdpWeightedProxyChainBuilder,
+    },
 };
 use proxy_client::udp::UdpTracer;
 use serde::{Deserialize, Serialize};
@@ -20,12 +22,13 @@ pub struct UdpProxyTableBuilder {
 impl UdpProxyTableBuilder {
     pub fn build(
         self,
+        udp_proxy: &HashMap<Arc<str>, UdpProxyConfig>,
         cancellation: CancellationToken,
     ) -> Result<UdpProxyTable, UdpProxyTableBuildError> {
         let chains = self
             .chains
             .into_iter()
-            .map(|c| c.build())
+            .map(|c| c.build(udp_proxy))
             .collect::<Result<_, _>>()
             .map_err(UdpProxyTableBuildError::ChainConfig)?;
         let tracer = match self.trace_rtt {
