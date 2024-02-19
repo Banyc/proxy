@@ -4,7 +4,7 @@ use axum::Router;
 use clap::Parser;
 use common::error::AnyResult;
 use server::{
-    config::multi_file_config::{spawn_watch_tasks, MultiConfigReader},
+    config::{multi_file_config::MultiConfigReader, spawn_watch_tasks},
     monitor::monitor_router,
     serve, ServeContext,
 };
