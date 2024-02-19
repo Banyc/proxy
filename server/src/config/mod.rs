@@ -4,6 +4,7 @@ use common::error::AnyError;
 use file_watcher_tokio::EventActor;
 
 pub mod multi_file_config;
+pub mod toml;
 
 pub trait ConfigReader {
     type Config;

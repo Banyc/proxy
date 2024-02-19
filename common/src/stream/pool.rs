@@ -1,5 +1,6 @@
 use std::{
-    collections::HashMap, io, marker::PhantomData, net::SocketAddr, sync::Arc, time::Duration,
+    collections::HashMap, convert::Infallible, io, marker::PhantomData, net::SocketAddr, sync::Arc,
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -8,7 +9,7 @@ use thiserror::Error;
 use tokio_conn_pool::{ConnPool, ConnPoolEntry};
 
 use crate::{
-    config::SharableConfig,
+    config::{Merge, SharableConfig},
     header::heartbeat::send_noop,
     proxy_table::ProxyConfig,
     stream::{
@@ -70,17 +71,28 @@ where
         Ok(pool)
     }
 }
-impl<SAS> Default for PoolBuilder<SAS> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 #[derive(Debug, Error)]
 pub enum PoolBuildError {
     #[error("{0}")]
     StreamProxyConfigBuild(#[from] StreamProxyConfigBuildError),
     #[error("Key not found: {0}")]
     KeyNotFound(Arc<str>),
+}
+impl<SAS> Default for PoolBuilder<SAS> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl<SAS> Merge for PoolBuilder<SAS> {
+    type Error = Infallible;
+
+    fn merge(mut self, other: Self) -> Result<Self, Self::Error>
+    where
+        Self: Sized,
+    {
+        self.0.extend(other.0);
+        Ok(Self(self.0))
+    }
 }
 
 fn pool_entries_from_proxy_configs<C, CT: Clone, ST>(

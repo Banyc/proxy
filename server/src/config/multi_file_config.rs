@@ -1,11 +1,11 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use common::error::AnyError;
+use common::{config::Merge, error::AnyError};
 use serde::Deserialize;
 
 use crate::ConfigReader;
 
-use super::ConfigWatcher;
+use super::{toml::human_toml_error, ConfigWatcher};
 
 pub fn spawn_watch_tasks(config_file_paths: &[Arc<str>]) -> Arc<tokio::sync::Notify> {
     let watcher = ConfigWatcher::new();
@@ -18,12 +18,12 @@ pub fn spawn_watch_tasks(config_file_paths: &[Arc<str>]) -> Arc<tokio::sync::Not
     notify_rx
 }
 
-pub struct MultiFileConfigReader<C> {
+pub struct MultiConfigReader<C> {
     config_file_paths: Arc<[Arc<str>]>,
     phantom_config: PhantomData<C>,
 }
 
-impl<C> MultiFileConfigReader<C> {
+impl<C> MultiConfigReader<C> {
     pub fn new(config_file_paths: Arc<[Arc<str>]>) -> Self {
         Self {
             config_file_paths,
@@ -32,60 +32,19 @@ impl<C> MultiFileConfigReader<C> {
     }
 }
 
-impl<C> ConfigReader for MultiFileConfigReader<C>
+impl<C> ConfigReader for MultiConfigReader<C>
 where
     for<'de> C: Deserialize<'de> + Send + Sync + 'static,
+    C: Merge<Error = AnyError>,
 {
     type Config = C;
     async fn read_config(&self) -> Result<Self::Config, AnyError> {
-        read_multi_file_config(&self.config_file_paths).await
-    }
-}
-
-pub async fn read_multi_file_config<C>(config_file_paths: &[Arc<str>]) -> Result<C, AnyError>
-where
-    for<'de> C: Deserialize<'de>,
-{
-    let mut config_str = String::new();
-    for path in config_file_paths {
-        let src = tokio::fs::read_to_string(path.as_ref()).await?;
-        config_str.push_str(&src);
-    }
-    let config: C = toml::from_str(&config_str).map_err(|e| human_toml_error(&config_str, e))?;
-    Ok(config)
-}
-
-fn human_toml_error(src: &str, e: toml::de::Error) -> String {
-    let Some(span) = e.span() else {
-        return format!("{e}");
-    };
-    let affected = src
-        .chars()
-        .skip(span.start)
-        .take(span.end - span.start)
-        .collect::<String>();
-    let (line, col) = {
-        let mut line = 1;
-        let mut col = 1;
-
-        for (i, char) in src.chars().enumerate() {
-            if i == span.start {
-                break;
-            }
-            if char == '\n' {
-                line += 1;
-                col = 1;
-            }
-            col += 1;
+        let mut config = C::default();
+        for path in self.config_file_paths.iter() {
+            let src = tokio::fs::read_to_string(path.as_ref()).await?;
+            let c: C = toml::from_str(&src).map_err(|e| human_toml_error(path, &src, e))?;
+            config = config.merge(c)?;
         }
-
-        (line, col)
-    };
-    let msg = e.message();
-    let e = format!(
-        "{msg}
-Line {line}, Column {col}
-Affected: #'{affected}'#"
-    );
-    e
+        Ok(config)
+    }
 }

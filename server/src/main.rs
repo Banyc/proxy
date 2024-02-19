@@ -4,7 +4,7 @@ use axum::Router;
 use clap::Parser;
 use common::error::AnyResult;
 use server::{
-    config::multi_file_config::{spawn_watch_tasks, MultiFileConfigReader},
+    config::multi_file_config::{spawn_watch_tasks, MultiConfigReader},
     monitor::monitor_router,
     serve, ServeContext,
 };
@@ -32,6 +32,10 @@ struct Args {
 async fn main() -> AnyResult {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
+    if args.config_file_paths.is_empty() {
+        tracing::error!("No config files provided. Check --help for usage.");
+        std::process::abort();
+    }
     if let Some(path) = args.csv_log_path {
         csv_logger::init(
             path,
@@ -76,7 +80,7 @@ async fn main() -> AnyResult {
     }
 
     let notify_rx = spawn_watch_tasks(&args.config_file_paths);
-    let config_reader = MultiFileConfigReader::new(args.config_file_paths.into());
+    let config_reader = MultiConfigReader::new(args.config_file_paths.into());
     serve(notify_rx, config_reader, serve_context)
         .await
         .map_err(Into::into)

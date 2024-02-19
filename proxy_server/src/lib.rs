@@ -1,6 +1,6 @@
-use std::io;
+use std::{convert::Infallible, io};
 
-use common::{error::AnyResult, loading};
+use common::{config::Merge, error::AnyResult, loading};
 use protocol::context::ConcreteContext;
 use serde::Deserialize;
 use stream::{
@@ -13,7 +13,7 @@ use udp::{UdpProxy, UdpProxyServerBuilder, UdpProxyServerConfig};
 pub mod stream;
 pub mod udp;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyServerConfig {
     #[serde(default)]
@@ -25,7 +25,6 @@ pub struct ProxyServerConfig {
     #[serde(default)]
     pub mptcp_server: Vec<MptcpProxyServerConfig>,
 }
-
 impl ProxyServerConfig {
     pub fn new() -> Self {
         Self {
@@ -92,10 +91,23 @@ impl ProxyServerConfig {
         Ok(())
     }
 }
+impl Merge for ProxyServerConfig {
+    type Error = Infallible;
 
-impl Default for ProxyServerConfig {
-    fn default() -> Self {
-        Self::new()
+    fn merge(mut self, other: Self) -> Result<Self, Self::Error>
+    where
+        Self: Sized,
+    {
+        self.tcp_server.extend(other.tcp_server);
+        self.udp_server.extend(other.udp_server);
+        self.kcp_server.extend(other.kcp_server);
+        self.mptcp_server.extend(other.mptcp_server);
+        Ok(Self {
+            tcp_server: self.tcp_server,
+            udp_server: self.udp_server,
+            kcp_server: self.kcp_server,
+            mptcp_server: self.mptcp_server,
+        })
     }
 }
 

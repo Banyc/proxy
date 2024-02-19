@@ -1,7 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use common::{
-    error::AnyResult,
+    config::{merge_map, Merge},
+    error::{AnyError, AnyResult},
     filter::{self, FilterBuilder, MatcherBuilder},
     loading,
     stream::proxy_table::StreamProxyConfig,
@@ -27,7 +28,7 @@ pub mod socks5;
 pub mod stream;
 pub mod udp;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct AccessServerConfig {
     #[serde(default)]
@@ -49,7 +50,6 @@ pub struct AccessServerConfig {
     #[serde(default)]
     pub filters: HashMap<Arc<str>, FilterBuilder>,
 }
-
 impl AccessServerConfig {
     pub fn new() -> AccessServerConfig {
         AccessServerConfig {
@@ -190,13 +190,37 @@ impl AccessServerConfig {
         Ok(())
     }
 }
+impl Merge for AccessServerConfig {
+    type Error = AnyError;
 
-impl Default for AccessServerConfig {
-    fn default() -> Self {
-        Self::new()
+    fn merge(mut self, other: Self) -> Result<Self, Self::Error>
+    where
+        Self: Sized,
+    {
+        self.tcp_server.extend(other.tcp_server);
+        self.udp_server.extend(other.udp_server);
+        self.http_server.extend(other.http_server);
+        self.socks5_tcp_server.extend(other.socks5_tcp_server);
+        self.socks5_udp_server.extend(other.socks5_udp_server);
+        let stream_proxy_tables = merge_map(self.stream_proxy_tables, other.stream_proxy_tables)?;
+        let udp_proxy_tables = merge_map(self.udp_proxy_tables, other.udp_proxy_tables)?;
+        let matchers = merge_map(self.matchers, other.matchers)?;
+        let filters = merge_map(self.filters, other.filters)?;
+        Ok(Self {
+            tcp_server: self.tcp_server,
+            udp_server: self.udp_server,
+            http_server: self.http_server,
+            socks5_tcp_server: self.socks5_tcp_server,
+            socks5_udp_server: self.socks5_udp_server,
+            stream_proxy_tables,
+            udp_proxy_tables,
+            matchers,
+            filters,
+        })
     }
 }
 
+#[derive(Default)]
 pub struct AccessServerLoader {
     tcp_server: loading::Loader<TcpAccess>,
     udp_server: loading::Loader<UdpAccess>,
@@ -204,7 +228,6 @@ pub struct AccessServerLoader {
     socks5_tcp_server: loading::Loader<Socks5ServerTcpAccess>,
     socks5_udp_server: loading::Loader<Socks5ServerUdpAccess>,
 }
-
 impl AccessServerLoader {
     pub fn new() -> Self {
         Self {
@@ -214,11 +237,5 @@ impl AccessServerLoader {
             socks5_tcp_server: loading::Loader::new(),
             socks5_udp_server: loading::Loader::new(),
         }
-    }
-}
-
-impl Default for AccessServerLoader {
-    fn default() -> Self {
-        Self::new()
     }
 }

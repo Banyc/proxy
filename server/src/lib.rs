@@ -1,7 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, sync::Arc};
 
 use access_server::{AccessServerConfig, AccessServerLoader};
 use common::{
+    config::{merge_map, Merge},
     context::Context,
     error::{AnyError, AnyResult},
     stream::{proxy_table::StreamProxyConfigBuilder, session_table::StreamSessionTable},
@@ -195,7 +196,7 @@ pub async fn load_and_clean(
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     #[serde(default)]
@@ -209,10 +210,42 @@ pub struct ServerConfig {
     #[serde(default)]
     pub udp_proxy: HashMap<Arc<str>, UdpProxyConfigBuilder>,
 }
+impl Merge for ServerConfig {
+    type Error = AnyError;
+
+    fn merge(self, other: Self) -> Result<Self, Self::Error>
+    where
+        Self: Sized,
+    {
+        let access_server = self.access_server.merge(other.access_server)?;
+        let proxy_server = self.proxy_server.merge(other.proxy_server)?;
+        let global = self.global.merge(other.global)?;
+        let stream_proxy = merge_map(self.stream_proxy, other.stream_proxy)?;
+        let udp_proxy = merge_map(self.udp_proxy, other.udp_proxy)?;
+        Ok(Self {
+            access_server,
+            proxy_server,
+            global,
+            stream_proxy,
+            udp_proxy,
+        })
+    }
+}
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Global {
     #[serde(default)]
     pub stream_pool: ConcretePoolBuilder,
+}
+impl Merge for Global {
+    type Error = Infallible;
+
+    fn merge(self, other: Self) -> Result<Self, Self::Error>
+    where
+        Self: Sized,
+    {
+        let stream_pool = self.stream_pool.merge(other.stream_pool)?;
+        Ok(Self { stream_pool })
+    }
 }

@@ -92,7 +92,7 @@ mod tests {
     use swap::Swap;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
-        net::{TcpListener, TcpStream},
+        net::TcpStream,
     };
 
     #[tokio::test(flavor = "multi_thread")]
