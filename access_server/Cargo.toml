@@ -15,6 +15,7 @@ monitor_table = { workspace = true }
 pin-project-lite = "0.2"
 protocol = { path = "../protocol" }
 proxy_client = { path = "../proxy_client" }
+regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 table_log = { workspace = true }
 thiserror = { workspace = true }

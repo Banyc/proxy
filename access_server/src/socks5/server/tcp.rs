@@ -532,8 +532,12 @@ impl Socks5ServerTcpAccess {
     async fn establish_proxy_chain(
         &self,
         destination: InternetAddr,
-    ) -> Result<(ConnAndAddr, Option<tokio_chacha20::config::Config>), StreamEstablishError> {
-        let proxy_chain = self.proxy_table.choose_chain();
+    ) -> Result<(ConnAndAddr, Option<tokio_chacha20::config::Config>), EstablishProxyChainError>
+    {
+        let Some(proxy_table_group) = self.proxy_table.group(&destination) else {
+            return Err(EstablishProxyChainError::NoProxy);
+        };
+        let proxy_chain = proxy_table_group.choose_chain();
         let res = proxy_client::stream::establish(
             &proxy_chain.chain,
             StreamAddr {
@@ -545,6 +549,14 @@ impl Socks5ServerTcpAccess {
         .await?;
         Ok((res, proxy_chain.payload_crypto.clone()))
     }
+}
+
+#[derive(Debug, Error)]
+pub enum EstablishProxyChainError {
+    #[error("No proxy")]
+    NoProxy,
+    #[error("{0}")]
+    StreamEstablish(#[from] StreamEstablishError),
 }
 
 pub enum EstablishResult<S> {
@@ -604,7 +616,7 @@ pub enum EstablishError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
     #[error("Failed to establish proxy chain: {0}")]
-    EstablishProxyChain(#[from] StreamEstablishError),
+    EstablishProxyChain(#[from] EstablishProxyChainError),
     #[error("Command BIND not supported")]
     CmdBindNotSupported,
     #[error("No UDP server available")]

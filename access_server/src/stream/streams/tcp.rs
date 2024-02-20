@@ -134,7 +134,10 @@ impl TcpAccess {
     where
         S: IoStream + IoAddr,
     {
-        let proxy_chain = self.proxy_table.choose_chain();
+        let Some(proxy_table_group) = self.proxy_table.group(&self.destination.address) else {
+            return Err(ProxyError::NoProxy);
+        };
+        let proxy_chain = proxy_table_group.choose_chain();
         let upstream = establish(
             &proxy_chain.chain,
             self.destination.clone(),
@@ -168,6 +171,8 @@ impl TcpAccess {
 
 #[derive(Debug, Error)]
 pub enum ProxyError {
+    #[error("No proxy")]
+    NoProxy,
     #[error("Failed to get downstream address: {0}")]
     DownstreamAddr(#[source] io::Error),
     #[error("Failed to establish proxy chain: {0}")]

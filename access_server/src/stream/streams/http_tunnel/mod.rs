@@ -231,7 +231,11 @@ impl HttpAccess {
         }
 
         // Establish proxy chain
-        let proxy_chain = self.proxy_table.choose_chain();
+        let Some(proxy_table_group) = self.proxy_table.group(&addr.address) else {
+            trace!(?addr, "No proxy {}", method);
+            return Ok(respond_with_rejection());
+        };
+        let proxy_chain = proxy_table_group.choose_chain();
         let upstream = establish(&proxy_chain.chain, addr.clone(), &self.stream_context).await?;
 
         let session_guard = self.stream_context.session_table.as_ref().map(|s| {
@@ -500,7 +504,10 @@ impl HttpConnect {
             address: address.clone(),
             stream_type: ConcreteStreamType::Tcp,
         };
-        let proxy_chain = self.proxy_table.choose_chain();
+        let Some(proxy_table_group) = self.proxy_table.group(&address) else {
+            return Err(HttpConnectError::NoProxy);
+        };
+        let proxy_chain = proxy_table_group.choose_chain();
         let upstream = establish(
             &proxy_chain.chain,
             destination.clone(),
@@ -534,6 +541,8 @@ impl HttpConnect {
 
 #[derive(Debug, Error)]
 pub enum HttpConnectError {
+    #[error("No proxy")]
+    NoProxy,
     #[error("Failed to establish proxy chain")]
     EstablishProxyChain(#[from] StreamEstablishError),
 }

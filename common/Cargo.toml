@@ -21,7 +21,7 @@ monitor_table = { workspace = true }
 once_cell = { workspace = true }
 pin-project-lite = "0.2"
 rand = "0.8"
-regex = "1"
+regex = { workspace = true }
 scopeguard = "1"
 serde = { workspace = true, features = ["derive", "rc"] }
 slotmap = "1"

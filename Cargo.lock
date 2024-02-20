@@ -16,6 +16,7 @@ dependencies = [
  "pin-project-lite",
  "protocol",
  "proxy_client",
+ "regex",
  "serde",
  "table_log",
  "thiserror",

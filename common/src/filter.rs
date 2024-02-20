@@ -206,6 +206,14 @@ impl MatcherBuilderKind {
 
 #[derive(Debug, Clone)]
 pub struct Matcher(MatcherKind);
+impl Matcher {
+    pub fn matches(&self, addr: &InternetAddr) -> bool {
+        match addr.deref() {
+            InternetAddrKind::SocketAddr(addr) => self.0.is_match_ip(*addr),
+            InternetAddrKind::DomainName { addr, port } => self.0.is_match_domain_name(addr, *port),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 enum MatcherKind {

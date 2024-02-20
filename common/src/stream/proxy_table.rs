@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{
     config::SharableConfig,
-    proxy_table::{ProxyConfig, ProxyTable, WeightedProxyChain},
+    proxy_table::{ProxyConfig, ProxyTable, ProxyTableGroup, WeightedProxyChain},
 };
 
 use super::{addr::StreamAddrStr, StreamAddr};
@@ -79,3 +79,4 @@ pub type StreamProxyConfig<ST> = ProxyConfig<StreamAddr<ST>>;
 pub type StreamProxyChain<ST> = [StreamProxyConfig<ST>];
 pub type StreamWeightedProxyChain<ST> = WeightedProxyChain<StreamAddr<ST>>;
 pub type StreamProxyTable<ST> = ProxyTable<StreamAddr<ST>>;
+pub type StreamProxyTableGroup<ST> = ProxyTableGroup<StreamAddr<ST>>;

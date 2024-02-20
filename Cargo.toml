@@ -22,6 +22,7 @@ monitor_table = { git = "https://github.com/Banyc/monitor_table.git", rev = "f9c
 mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "8c0b8ee35bc7d570de272f5da7af6742b460e23a" }
 once_cell = "1"
 openssl = "0.10"
+regex = "1"
 serde = "1"
 strict-num = "0.2"
 swap = { git = "https://github.com/Banyc/swap.git", rev = "d10a8b5b10503fa6ebac523cfcaa4d62135a665f" }

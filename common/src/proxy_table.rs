@@ -11,7 +11,10 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, trace};
 
-use crate::{cache_cell::CacheCell, error::AnyError, header::route::RouteRequest};
+use crate::{
+    addr::InternetAddr, cache_cell::CacheCell, error::AnyError, filter::Matcher,
+    header::route::RouteRequest,
+};
 
 const TRACE_INTERVAL: Duration = Duration::from_secs(30);
 const TRACE_DEAD_INTERVAL: Duration = Duration::from_secs(60 * 2);
@@ -57,17 +60,37 @@ where
 
 #[derive(Debug, Clone)]
 pub struct ProxyTable<A> {
+    groups: Vec<ProxyTableGroup<A>>,
+}
+impl<A> ProxyTable<A>
+where
+    A: std::fmt::Debug + Display + Clone + Send + Sync + 'static,
+{
+    pub fn new(groups: Vec<ProxyTableGroup<A>>) -> Self {
+        Self { groups }
+    }
+
+    pub fn group(&self, addr: &InternetAddr) -> Option<&ProxyTableGroup<A>> {
+        self.groups
+            .iter()
+            .find(|&group| group.matcher().matches(addr))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyTableGroup<A> {
+    matcher: Matcher,
     chains: Arc<[GaugedProxyChain<A>]>,
     cum_weight: NonZeroUsize,
     score_store: Arc<RwLock<ScoreStore>>,
     active_chains: NonZeroUsize,
 }
-
-impl<A> ProxyTable<A>
+impl<A> ProxyTableGroup<A>
 where
     A: std::fmt::Debug + Display + Clone + Send + Sync + 'static,
 {
     pub fn new<T>(
+        matcher: Matcher,
         chains: Vec<WeightedProxyChain<A>>,
         tracer: Option<T>,
         active_chains: Option<NonZeroUsize>,
@@ -99,11 +122,16 @@ where
             .collect::<Arc<[_]>>();
         let score_store = Arc::new(RwLock::new(ScoreStore::new(None, TRACE_INTERVAL)));
         Ok(Self {
+            matcher,
             chains,
             cum_weight,
             score_store,
             active_chains,
         })
+    }
+
+    pub fn matcher(&self) -> &Matcher {
+        &self.matcher
     }
 
     pub fn choose_chain(&self) -> &WeightedProxyChain<A> {
@@ -165,7 +193,6 @@ where
         scores[..self.active_chains.get()].to_vec()
     }
 }
-
 #[derive(Debug, Error)]
 pub enum ProxyTableError {
     #[error("Zero accumulated weight with chains")]

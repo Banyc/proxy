@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::{
     addr::{InternetAddr, InternetAddrStr},
     config::SharableConfig,
-    proxy_table::{ProxyConfig, ProxyTable, WeightedProxyChain},
+    proxy_table::{ProxyConfig, ProxyTable, ProxyTableGroup, WeightedProxyChain},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,3 +72,4 @@ pub type UdpProxyConfig = ProxyConfig<InternetAddr>;
 pub type UdpProxyChain = [UdpProxyConfig];
 pub type UdpWeightedProxyChain = WeightedProxyChain<InternetAddr>;
 pub type UdpProxyTable = ProxyTable<InternetAddr>;
+pub type UdpProxyTableGroup = ProxyTableGroup<InternetAddr>;

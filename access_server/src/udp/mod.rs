@@ -138,7 +138,10 @@ impl UdpAccess {
         downstream_writer: UdpDownstreamWriter,
     ) -> Result<(), AccessProxyError> {
         // Connect to upstream
-        let proxy_chain = self.proxy_table.choose_chain();
+        let Some(proxy_table_group) = self.proxy_table.group(&flow.flow().upstream.0) else {
+            return Err(AccessProxyError::NoProxy);
+        };
+        let proxy_chain = proxy_table_group.choose_chain();
         let upstream =
             UdpProxyClient::establish(proxy_chain.chain.clone(), self.destination.clone()).await?;
         let upstream_remote = upstream.remote_addr().clone();
@@ -174,6 +177,8 @@ impl UdpAccess {
 
 #[derive(Debug, Error)]
 pub enum AccessProxyError {
+    #[error("No proxy")]
+    NoProxy,
     #[error("Failed to establish proxy chain: {0}")]
     Establish(#[from] EstablishError),
     #[error("Failed to copy: {0}")]

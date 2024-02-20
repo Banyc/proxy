@@ -5,23 +5,27 @@ stream_pool = [
 ]
 
 [access_server.stream_proxy_tables]
-"default" = { chains = [
-    { weight = 1, chain = [
-        { address = "tcp://proxy.example.org:80", header_key = "base64" },
-    ],                                            payload_key = "base64" },
-    { weight = 1, chain = [
-        { address = "kcp://proxy.example.org:80", header_key = "base64" },
-    ],                                            payload_key = "base64" },
-    { weight = 1, chain = [
-        { address = "mptcp://proxy.example.org:81", header_key = "base64" },
-    ],                                              payload_key = "base64" },
-], trace_rtt = false, active_chains = 3 }
+"default" = { groups = [
+    { matcher = { }, chains = [
+        { weight = 1, chain = [
+            { address = "tcp://proxy.example.org:80", header_key = "base64" },
+        ],                                            payload_key = "base64" },
+        { weight = 1, chain = [
+            { address = "kcp://proxy.example.org:80", header_key = "base64" },
+        ],                                            payload_key = "base64" },
+        { weight = 1, chain = [
+            { address = "mptcp://proxy.example.org:81", header_key = "base64" },
+        ],                                              payload_key = "base64" },
+    ], trace_rtt = false, active_chains = 3 },
+] }
 [access_server.udp_proxy_tables]
-"default" = { chains = [
-    { weight = 1, chain = [
-        { address = "proxy.example.org:80", header_key = "base64" },
-    ],                                      payload_key = "base64" },
-], trace_rtt = false, active_chains = 1 }
+"default" = { groups = [
+    { matcher = { }, chains = [
+        { weight = 1, chain = [
+            { address = "proxy.example.org:80", header_key = "base64" },
+        ],                                      payload_key = "base64" },
+    ], trace_rtt = false, active_chains = 1 },
+] }
 [access_server.filters]
 "default" = [
     "localhost",
