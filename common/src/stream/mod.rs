@@ -13,7 +13,6 @@ pub mod header;
 pub mod io_copy;
 pub mod metrics;
 pub mod pool;
-pub mod proxy_table;
 pub mod session_table;
 pub mod steer;
 pub mod xor;
