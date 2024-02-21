@@ -6,19 +6,23 @@ use protocol::stream::{
     streams::kcp::{fast_kcp_config, KcpServer},
 };
 use serde::Deserialize;
+use thiserror::Error;
 use tokio::net::ToSocketAddrs;
 use tokio_kcp::KcpListener;
 
 use crate::ListenerBindError;
 
-use super::{StreamProxy, StreamProxyBuilder, StreamProxyConfig, StreamProxyServerBuildError};
+use super::{
+    StreamProxyServer, StreamProxyServerBuildError, StreamProxyServerBuilder,
+    StreamProxyServerConfig,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KcpProxyServerConfig {
     pub listen_addr: Arc<str>,
     #[serde(flatten)]
-    pub inner: StreamProxyConfig,
+    pub inner: StreamProxyServerConfig,
 }
 
 impl KcpProxyServerConfig {
@@ -34,13 +38,12 @@ impl KcpProxyServerConfig {
 #[derive(Debug, Clone)]
 pub struct KcpProxyServerBuilder {
     pub listen_addr: Arc<str>,
-    pub inner: StreamProxyBuilder,
+    pub inner: StreamProxyServerBuilder,
 }
-
 impl loading::Builder for KcpProxyServerBuilder {
-    type Hook = StreamProxy;
+    type Hook = StreamProxyServer;
     type Server = KcpServer<Self::Hook>;
-    type Err = StreamProxyServerBuildError;
+    type Err = KcpProxyServerBuildError;
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
@@ -59,10 +62,18 @@ impl loading::Builder for KcpProxyServerBuilder {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum KcpProxyServerBuildError {
+    #[error("{0}")]
+    Hook(#[from] StreamProxyServerBuildError),
+    #[error("{0}")]
+    Server(#[from] ListenerBindError),
+}
+
 pub async fn build_kcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
-    stream_proxy: StreamProxy,
-) -> Result<KcpServer<StreamProxy>, ListenerBindError> {
+    stream_proxy: StreamProxyServer,
+) -> Result<KcpServer<StreamProxyServer>, ListenerBindError> {
     let config = fast_kcp_config();
     let listener = KcpListener::bind(config, listen_addr)
         .await

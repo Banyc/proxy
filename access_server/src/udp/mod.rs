@@ -5,10 +5,11 @@ use common::{
     addr::{InternetAddr, InternetAddrStr},
     config::SharableConfig,
     loading,
+    proxy_table::ProxyGroupBuildError,
     udp::{
         context::UdpContext,
         io_copy::{CopyBiError, CopyBidirectional, DownstreamParts, UpstreamParts},
-        proxy_table::{UdpProxyConfig, UdpProxyTable},
+        proxy_table::{UdpProxyGroup, UdpProxyGroupBuilder},
         FlowOwnedGuard, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
@@ -16,10 +17,9 @@ use proxy_client::udp::{EstablishError, UdpProxyClient};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
-use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
-use self::proxy_table::{UdpProxyTableBuildError, UdpProxyTableBuilder};
+use self::proxy_table::UdpProxyGroupBuildContext;
 
 pub mod proxy_table;
 
@@ -28,30 +28,29 @@ pub mod proxy_table;
 pub struct UdpAccessServerConfig {
     pub listen_addr: Arc<str>,
     pub destination: InternetAddrStr,
-    pub proxy_table: SharableConfig<UdpProxyTableBuilder>,
+    pub proxy_group: SharableConfig<UdpProxyGroupBuilder>,
     pub speed_limit: Option<f64>,
 }
 
 impl UdpAccessServerConfig {
     pub fn into_builder(
         self,
-        udp_proxy: &HashMap<Arc<str>, UdpProxyConfig>,
-        proxy_tables: &HashMap<Arc<str>, UdpProxyTable>,
-        cancellation: CancellationToken,
+        proxy_group: &HashMap<Arc<str>, UdpProxyGroup>,
+        cx: UdpProxyGroupBuildContext<'_>,
         udp_context: UdpContext,
     ) -> Result<UdpAccessServerBuilder, BuildError> {
-        let proxy_table = match self.proxy_table {
-            SharableConfig::SharingKey(key) => proxy_tables
+        let proxy_group = match self.proxy_group {
+            SharableConfig::SharingKey(key) => proxy_group
                 .get(&key)
-                .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
+                .ok_or_else(|| BuildError::ProxyGroupKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(udp_proxy, cancellation.clone())?,
+            SharableConfig::Private(x) => x.build(cx)?,
         };
 
         Ok(UdpAccessServerBuilder {
             listen_addr: self.listen_addr,
             destination: self.destination,
-            proxy_table,
+            proxy_group,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
             udp_context,
         })
@@ -60,17 +59,17 @@ impl UdpAccessServerConfig {
 
 #[derive(Debug, Error)]
 pub enum BuildError {
-    #[error("Proxy table key not found: {0}")]
-    ProxyTableKeyNotFound(Arc<str>),
+    #[error("Proxy group key not found: {0}")]
+    ProxyGroupKeyNotFound(Arc<str>),
     #[error("{0}")]
-    ProxyTable(#[from] UdpProxyTableBuildError),
+    ProxyGroup(#[from] ProxyGroupBuildError),
 }
 
 #[derive(Debug, Clone)]
 pub struct UdpAccessServerBuilder {
     listen_addr: Arc<str>,
     destination: InternetAddrStr,
-    proxy_table: UdpProxyTable,
+    proxy_group: UdpProxyGroup,
     speed_limit: f64,
     udp_context: UdpContext,
 }
@@ -93,7 +92,7 @@ impl loading::Builder for UdpAccessServerBuilder {
 
     fn build_hook(self) -> Result<Self::Hook, Self::Err> {
         Ok(UdpAccess::new(
-            self.proxy_table,
+            self.proxy_group,
             self.destination.0,
             self.speed_limit,
             self.udp_context,
@@ -103,7 +102,7 @@ impl loading::Builder for UdpAccessServerBuilder {
 
 #[derive(Debug)]
 pub struct UdpAccess {
-    proxy_table: UdpProxyTable,
+    proxy_group: UdpProxyGroup,
     destination: InternetAddr,
     speed_limiter: Limiter,
     udp_context: UdpContext,
@@ -113,13 +112,13 @@ impl loading::Hook for UdpAccess {}
 
 impl UdpAccess {
     pub fn new(
-        proxy_table: UdpProxyTable,
+        proxy_table: UdpProxyGroup,
         destination: InternetAddr,
         speed_limit: f64,
         udp_context: UdpContext,
     ) -> Self {
         Self {
-            proxy_table,
+            proxy_group: proxy_table,
             destination,
             speed_limiter: Limiter::new(speed_limit),
             udp_context,
@@ -138,10 +137,7 @@ impl UdpAccess {
         downstream_writer: UdpDownstreamWriter,
     ) -> Result<(), AccessProxyError> {
         // Connect to upstream
-        let Some(proxy_table_group) = self.proxy_table.group(&flow.flow().upstream.0) else {
-            return Err(AccessProxyError::NoProxy);
-        };
-        let proxy_chain = proxy_table_group.choose_chain();
+        let proxy_chain = self.proxy_group.choose_chain();
         let upstream =
             UdpProxyClient::establish(proxy_chain.chain.clone(), self.destination.clone()).await?;
         let upstream_remote = upstream.remote_addr().clone();
@@ -177,8 +173,6 @@ impl UdpAccess {
 
 #[derive(Debug, Error)]
 pub enum AccessProxyError {
-    #[error("No proxy")]
-    NoProxy,
     #[error("Failed to establish proxy chain: {0}")]
     Establish(#[from] EstablishError),
     #[error("Failed to copy: {0}")]

@@ -4,10 +4,11 @@ use async_speed_limit::Limiter;
 use common::{
     config::SharableConfig,
     loading,
+    proxy_table::ProxyGroupBuildError,
     udp::{
         context::UdpContext,
         io_copy::{CopyBidirectional, DownstreamParts, UpstreamParts},
-        proxy_table::{UdpProxyConfig, UdpProxyTable},
+        proxy_table::{UdpProxyGroup, UdpProxyGroupBuilder},
         FlowOwnedGuard, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
@@ -15,41 +16,36 @@ use proxy_client::udp::{EstablishError, UdpProxyClient};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
-use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
-use crate::{
-    socks5::messages::UdpRequestHeader,
-    udp::proxy_table::{UdpProxyTableBuildError, UdpProxyTableBuilder},
-};
+use crate::{socks5::messages::UdpRequestHeader, udp::proxy_table::UdpProxyGroupBuildContext};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Socks5ServerUdpAccessServerConfig {
     pub listen_addr: Arc<str>,
-    pub proxy_table: SharableConfig<UdpProxyTableBuilder>,
+    pub proxy_group: SharableConfig<UdpProxyGroupBuilder>,
     pub speed_limit: Option<f64>,
 }
 
 impl Socks5ServerUdpAccessServerConfig {
     pub fn into_builder(
         self,
-        udp_proxy: &HashMap<Arc<str>, UdpProxyConfig>,
-        proxy_tables: &HashMap<Arc<str>, UdpProxyTable>,
-        cancellation: CancellationToken,
+        proxy_group: &HashMap<Arc<str>, UdpProxyGroup>,
+        cx: UdpProxyGroupBuildContext<'_>,
         udp_context: UdpContext,
     ) -> Result<Socks5ServerUdpAccessServerBuilder, BuildError> {
-        let proxy_table = match self.proxy_table {
-            SharableConfig::SharingKey(key) => proxy_tables
+        let proxy_group = match self.proxy_group {
+            SharableConfig::SharingKey(key) => proxy_group
                 .get(&key)
-                .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
+                .ok_or_else(|| BuildError::ProxyGroupKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(udp_proxy, cancellation)?,
+            SharableConfig::Private(x) => x.build(cx)?,
         };
 
         Ok(Socks5ServerUdpAccessServerBuilder {
             listen_addr: self.listen_addr,
-            proxy_table,
+            proxy_group,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
             udp_context,
         })
@@ -58,16 +54,16 @@ impl Socks5ServerUdpAccessServerConfig {
 
 #[derive(Debug, Error)]
 pub enum BuildError {
-    #[error("Proxy table key not found: {0}")]
-    ProxyTableKeyNotFound(Arc<str>),
+    #[error("Proxy group key not found: {0}")]
+    ProxyGroupKeyNotFound(Arc<str>),
     #[error("{0}")]
-    ProxyTable(#[from] UdpProxyTableBuildError),
+    ProxyGroup(#[from] ProxyGroupBuildError),
 }
 
 #[derive(Debug, Clone)]
 pub struct Socks5ServerUdpAccessServerBuilder {
     listen_addr: Arc<str>,
-    proxy_table: UdpProxyTable,
+    proxy_group: UdpProxyGroup,
     speed_limit: f64,
     udp_context: UdpContext,
 }
@@ -90,7 +86,7 @@ impl loading::Builder for Socks5ServerUdpAccessServerBuilder {
 
     fn build_hook(self) -> Result<Self::Hook, Self::Err> {
         Ok(Socks5ServerUdpAccess::new(
-            self.proxy_table,
+            self.proxy_group,
             self.speed_limit,
             self.udp_context,
         ))
@@ -99,7 +95,7 @@ impl loading::Builder for Socks5ServerUdpAccessServerBuilder {
 
 #[derive(Debug)]
 pub struct Socks5ServerUdpAccess {
-    proxy_table: UdpProxyTable,
+    proxy_group: UdpProxyGroup,
     speed_limiter: Limiter,
     udp_context: UdpContext,
 }
@@ -107,9 +103,9 @@ pub struct Socks5ServerUdpAccess {
 impl loading::Hook for Socks5ServerUdpAccess {}
 
 impl Socks5ServerUdpAccess {
-    pub fn new(proxy_table: UdpProxyTable, speed_limit: f64, udp_context: UdpContext) -> Self {
+    pub fn new(proxy_group: UdpProxyGroup, speed_limit: f64, udp_context: UdpContext) -> Self {
         Self {
-            proxy_table,
+            proxy_group,
             speed_limiter: Limiter::new(speed_limit),
             udp_context,
         }
@@ -127,10 +123,7 @@ impl Socks5ServerUdpAccess {
         downstream_writer: UdpDownstreamWriter,
     ) -> Result<(), AccessProxyError> {
         // Connect to upstream
-        let Some(proxy_table_group) = self.proxy_table.group(&flow.flow().upstream.0) else {
-            return Err(AccessProxyError::NoProxy);
-        };
-        let proxy_chain = proxy_table_group.choose_chain();
+        let proxy_chain = self.proxy_group.choose_chain();
         let upstream =
             UdpProxyClient::establish(proxy_chain.chain.clone(), flow.flow().upstream.0.clone())
                 .await?;
@@ -177,8 +170,6 @@ impl Socks5ServerUdpAccess {
 
 #[derive(Debug, Error)]
 pub enum AccessProxyError {
-    #[error("No proxy")]
-    NoProxy,
     #[error("Failed to establish proxy chain: {0}")]
     Establish(#[from] EstablishError),
 }

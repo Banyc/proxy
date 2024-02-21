@@ -14,6 +14,8 @@ use serde::{de::Visitor, Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::lookup_host;
 
+use crate::proxy_table::AddressString;
+
 static RESOLVED_SOCKET_ADDR: Lazy<Mutex<LruCache<Arc<str>, IpAddr>>> =
     Lazy::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())));
 
@@ -146,7 +148,13 @@ impl InternetAddr {
 
 #[derive(Debug, Clone)]
 pub struct InternetAddrStr(pub InternetAddr);
+impl AddressString for InternetAddrStr {
+    type Address = InternetAddr;
 
+    fn into_address(self) -> Self::Address {
+        self.0
+    }
+}
 impl Serialize for InternetAddrStr {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -155,7 +163,6 @@ impl Serialize for InternetAddrStr {
         serializer.serialize_str(&self.0.to_string())
     }
 }
-
 impl<'de> Deserialize<'de> for InternetAddrStr {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -164,9 +171,7 @@ impl<'de> Deserialize<'de> for InternetAddrStr {
         deserializer.deserialize_str(InternetAddrStrVisitor)
     }
 }
-
 struct InternetAddrStrVisitor;
-
 impl<'de> Visitor<'de> for InternetAddrStrVisitor {
     type Value = InternetAddrStr;
 

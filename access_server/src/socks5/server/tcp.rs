@@ -4,24 +4,25 @@ use async_speed_limit::Limiter;
 use common::{
     addr::{InternetAddr, InternetAddrStr},
     config::SharableConfig,
-    filter::{self, Filter, FilterBuilder},
     loading::{self, Hook},
+    proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{
         addr::StreamAddr,
         io_copy::{CopyBidirectional, MetricContext},
-        proxy_table::{StreamProxyConfig, StreamProxyTable},
         IoAddr, IoStream, StreamServerHook,
     },
 };
 use protocol::stream::{
-    addr::ConcreteStreamType, connection::ConnAndAddr, context::ConcreteStreamContext,
+    addr::ConcreteStreamType,
+    connection::ConnAndAddr,
+    context::ConcreteStreamContext,
+    proxy_table::{StreamProxyGroup, StreamProxyTable, StreamProxyTableBuilder},
     streams::tcp::TcpServer,
 };
 use proxy_client::stream::StreamEstablishError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
-use tokio_util::sync::CancellationToken;
 use tracing::{error, trace, warn};
 
 use crate::{
@@ -32,7 +33,7 @@ use crate::{
         Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,
         RelayResponse, Reply,
     },
-    stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder},
+    stream::proxy_table::StreamProxyTableBuildContext,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,7 +41,6 @@ use crate::{
 pub struct Socks5ServerTcpAccessServerConfig {
     pub listen_addr: Arc<str>,
     pub proxy_table: SharableConfig<StreamProxyTableBuilder>,
-    pub filter: SharableConfig<FilterBuilder>,
     pub speed_limit: Option<f64>,
     pub udp_server_addr: Option<InternetAddrStr>,
     #[serde(default)]
@@ -50,25 +50,16 @@ pub struct Socks5ServerTcpAccessServerConfig {
 impl Socks5ServerTcpAccessServerConfig {
     pub fn into_builder(
         self,
-        stream_proxy: &HashMap<Arc<str>, StreamProxyConfig<ConcreteStreamType>>,
-        proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
-        filters: &HashMap<Arc<str>, Filter>,
-        cancellation: CancellationToken,
+        proxy_table: &HashMap<Arc<str>, StreamProxyTable>,
+        proxy_table_cx: StreamProxyTableBuildContext<'_>,
         stream_context: ConcreteStreamContext,
     ) -> Result<Socks5ServerTcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
-            SharableConfig::SharingKey(key) => proxy_tables
+            SharableConfig::SharingKey(key) => proxy_table
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(stream_proxy, &stream_context, cancellation)?,
-        };
-        let filter = match self.filter {
-            SharableConfig::SharingKey(key) => filters
-                .get(&key)
-                .ok_or_else(|| BuildError::FilterKeyNotFound(key.clone()))?
-                .clone(),
-            SharableConfig::Private(x) => x.build(filters, &Default::default())?,
+            SharableConfig::Private(x) => x.build(proxy_table_cx)?,
         };
         let users = self
             .users
@@ -79,7 +70,6 @@ impl Socks5ServerTcpAccessServerConfig {
         Ok(Socks5ServerTcpAccessServerBuilder {
             listen_addr: self.listen_addr,
             proxy_table,
-            filter,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
             udp_server_addr: self.udp_server_addr.map(|a| a.0),
             users,
@@ -101,17 +91,14 @@ pub enum BuildError {
     ProxyTableKeyNotFound(Arc<str>),
     #[error("Filter key not found: {0}")]
     FilterKeyNotFound(Arc<str>),
-    #[error("Filter error: {0}")]
-    Filter(#[from] filter::FilterBuildError),
     #[error("{0}")]
-    ProxyTable(#[from] StreamProxyTableBuildError),
+    ProxyTable(#[from] ProxyTableBuildError),
 }
 
 #[derive(Debug, Clone)]
 pub struct Socks5ServerTcpAccessServerBuilder {
     listen_addr: Arc<str>,
-    proxy_table: StreamProxyTable<ConcreteStreamType>,
-    filter: Filter,
+    proxy_table: StreamProxyTable,
     speed_limit: f64,
     udp_server_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
@@ -137,7 +124,6 @@ impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
     fn build_hook(self) -> Result<Self::Hook, Self::Err> {
         let access = Socks5ServerTcpAccess::new(
             self.proxy_table,
-            self.filter,
             self.speed_limit,
             self.udp_server_addr,
             self.users,
@@ -149,16 +135,13 @@ impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
 
 #[derive(Debug)]
 pub struct Socks5ServerTcpAccess {
-    proxy_table: StreamProxyTable<ConcreteStreamType>,
-    filter: Filter,
+    proxy_table: StreamProxyTable,
     speed_limiter: Limiter,
     udp_listen_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
     stream_context: ConcreteStreamContext,
 }
-
 impl Hook for Socks5ServerTcpAccess {}
-
 impl StreamServerHook for Socks5ServerTcpAccess {
     async fn handle_stream<S>(&self, stream: S)
     where
@@ -173,11 +156,9 @@ impl StreamServerHook for Socks5ServerTcpAccess {
         }
     }
 }
-
 impl Socks5ServerTcpAccess {
     pub fn new(
-        proxy_table: StreamProxyTable<ConcreteStreamType>,
-        filter: Filter,
+        proxy_table: StreamProxyTable,
         speed_limit: f64,
         udp_listen_addr: Option<InternetAddr>,
         users: HashMap<Arc<[u8]>, Arc<[u8]>>,
@@ -185,7 +166,6 @@ impl Socks5ServerTcpAccess {
     ) -> Self {
         Self {
             proxy_table,
-            filter,
             speed_limiter: Limiter::new(speed_limit),
             udp_listen_addr,
             users,
@@ -322,21 +302,6 @@ impl Socks5ServerTcpAccess {
         relay_request: RelayRequest,
         local_addr: SocketAddr,
     ) -> (RelayResponse, Result<RequestResult, EstablishError>) {
-        // Filter
-        let action = self.filter.filter(&relay_request.destination);
-        if matches!(action, filter::Action::Block) {
-            let relay_response = RelayResponse {
-                reply: Reply::ConnectionNotAllowedByRuleset,
-                bind: InternetAddr::zero_ipv4_addr(),
-            };
-            return (
-                relay_response,
-                Ok(RequestResult::Blocked {
-                    destination: relay_request.destination,
-                }),
-            );
-        }
-
         match relay_request.command {
             Command::Connect => (),
             Command::Bind => {
@@ -364,54 +329,64 @@ impl Socks5ServerTcpAccess {
             },
         }
 
-        fn general_socks_server_failure() -> RelayResponse {
-            RelayResponse {
-                reply: Reply::GeneralSocksServerFailure,
-                bind: InternetAddr::zero_ipv4_addr(),
+        // Filter
+        let action = self.proxy_table.action(&relay_request.destination);
+        let proxy_group = match action {
+            ProxyAction::Block => {
+                let relay_response = RelayResponse {
+                    reply: Reply::ConnectionNotAllowedByRuleset,
+                    bind: InternetAddr::zero_ipv4_addr(),
+                };
+                return (
+                    relay_response,
+                    Ok(RequestResult::Blocked {
+                        destination: relay_request.destination,
+                    }),
+                );
             }
-        }
-
-        if matches!(action, filter::Action::Direct) {
-            let sock_addr = match relay_request.destination.to_socket_addr().await {
-                Ok(sock_addr) => sock_addr,
-                Err(e) => {
-                    return (
-                        general_socks_server_failure(),
-                        Err(EstablishError::DirectConnect {
-                            source: e,
-                            destination: relay_request.destination.clone(),
-                        }),
-                    );
-                }
-            };
-            let upstream = match tokio::net::TcpStream::connect(sock_addr).await {
-                Ok(upstream) => upstream,
-                Err(e) => {
-                    return (
-                        general_socks_server_failure(),
-                        Err(EstablishError::DirectConnect {
-                            source: e,
-                            destination: relay_request.destination.clone(),
-                        }),
-                    );
-                }
-            };
-            let relay_response = RelayResponse {
-                reply: Reply::Succeeded,
-                bind: local_addr.into(),
-            };
-            return (
-                relay_response,
-                Ok(RequestResult::Direct {
-                    upstream,
-                    upstream_addr: relay_request.destination,
-                    upstream_sock_addr: sock_addr,
-                }),
-            );
-        }
+            ProxyAction::Direct => {
+                let sock_addr = match relay_request.destination.to_socket_addr().await {
+                    Ok(sock_addr) => sock_addr,
+                    Err(e) => {
+                        return (
+                            general_socks_server_failure(),
+                            Err(EstablishError::DirectConnect {
+                                source: e,
+                                destination: relay_request.destination.clone(),
+                            }),
+                        );
+                    }
+                };
+                let upstream = match tokio::net::TcpStream::connect(sock_addr).await {
+                    Ok(upstream) => upstream,
+                    Err(e) => {
+                        return (
+                            general_socks_server_failure(),
+                            Err(EstablishError::DirectConnect {
+                                source: e,
+                                destination: relay_request.destination.clone(),
+                            }),
+                        );
+                    }
+                };
+                let relay_response = RelayResponse {
+                    reply: Reply::Succeeded,
+                    bind: local_addr.into(),
+                };
+                return (
+                    relay_response,
+                    Ok(RequestResult::Direct {
+                        upstream,
+                        upstream_addr: relay_request.destination,
+                        upstream_sock_addr: sock_addr,
+                    }),
+                );
+            }
+            ProxyAction::ProxyGroup(proxy_group) => proxy_group,
+        };
 
         let (upstream, payload_crypto) = match self
-            .establish_proxy_chain(relay_request.destination.clone())
+            .establish_proxy_chain(proxy_group, relay_request.destination.clone())
             .await
         {
             Ok(res) => res,
@@ -423,14 +398,21 @@ impl Socks5ServerTcpAccess {
             reply: Reply::Succeeded,
             bind: local_addr.into(),
         };
-        (
+        return (
             relay_response,
             Ok(RequestResult::Proxy {
                 destination: relay_request.destination,
                 upstream,
                 payload_crypto,
             }),
-        )
+        );
+
+        fn general_socks_server_failure() -> RelayResponse {
+            RelayResponse {
+                reply: Reply::GeneralSocksServerFailure,
+                bind: InternetAddr::zero_ipv4_addr(),
+            }
+        }
     }
 
     async fn steer<S>(&self, stream: S) -> io::Result<(S, RelayRequest)>
@@ -531,13 +513,11 @@ impl Socks5ServerTcpAccess {
 
     async fn establish_proxy_chain(
         &self,
+        proxy_group: &StreamProxyGroup,
         destination: InternetAddr,
     ) -> Result<(ConnAndAddr, Option<tokio_chacha20::config::Config>), EstablishProxyChainError>
     {
-        let Some(proxy_table_group) = self.proxy_table.group(&destination) else {
-            return Err(EstablishProxyChainError::NoProxy);
-        };
-        let proxy_chain = proxy_table_group.choose_chain();
+        let proxy_chain = proxy_group.choose_chain();
         let res = proxy_client::stream::establish(
             &proxy_chain.chain,
             StreamAddr {
@@ -553,8 +533,6 @@ impl Socks5ServerTcpAccess {
 
 #[derive(Debug, Error)]
 pub enum EstablishProxyChainError {
-    #[error("No proxy")]
-    NoProxy,
     #[error("{0}")]
     StreamEstablish(#[from] StreamEstablishError),
 }

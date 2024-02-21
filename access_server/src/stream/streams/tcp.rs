@@ -4,55 +4,54 @@ use async_speed_limit::Limiter;
 use common::{
     config::SharableConfig,
     loading,
+    proxy_table::ProxyGroupBuildError,
     stream::{
         io_copy::{CopyBidirectional, MetricContext},
-        proxy_table::{StreamProxyConfig, StreamProxyTable},
         IoAddr, IoStream, StreamServerHook,
     },
 };
 use protocol::stream::{
-    addr::{ConcreteStreamAddr, ConcreteStreamAddrStr, ConcreteStreamType},
+    addr::{ConcreteStreamAddr, ConcreteStreamAddrStr},
     context::ConcreteStreamContext,
+    proxy_table::{StreamProxyGroup, StreamProxyGroupBuilder},
     streams::tcp::TcpServer,
 };
 use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::ToSocketAddrs;
-use tokio_util::sync::CancellationToken;
 use tracing::{error, instrument, warn};
 
-use crate::stream::proxy_table::{StreamProxyTableBuildError, StreamProxyTableBuilder};
+use crate::stream::proxy_table::StreamProxyGroupBuildContext;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TcpAccessServerConfig {
     pub listen_addr: Arc<str>,
     pub destination: ConcreteStreamAddrStr,
-    pub proxy_table: SharableConfig<StreamProxyTableBuilder>,
+    pub proxy_group: SharableConfig<StreamProxyGroupBuilder>,
     pub speed_limit: Option<f64>,
 }
 
 impl TcpAccessServerConfig {
     pub fn into_builder(
         self,
-        stream_proxy: &HashMap<Arc<str>, StreamProxyConfig<ConcreteStreamType>>,
-        proxy_tables: &HashMap<Arc<str>, StreamProxyTable<ConcreteStreamType>>,
-        cancellation: CancellationToken,
+        proxy_group: &HashMap<Arc<str>, StreamProxyGroup>,
+        proxy_group_cx: StreamProxyGroupBuildContext<'_>,
         stream_context: ConcreteStreamContext,
     ) -> Result<TcpAccessServerBuilder, BuildError> {
-        let proxy_table = match self.proxy_table {
-            SharableConfig::SharingKey(key) => proxy_tables
+        let proxy_group = match self.proxy_group {
+            SharableConfig::SharingKey(key) => proxy_group
                 .get(&key)
-                .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
+                .ok_or_else(|| BuildError::ProxyGroupKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(stream_proxy, &stream_context, cancellation)?,
+            SharableConfig::Private(x) => x.build(proxy_group_cx.clone())?,
         };
 
         Ok(TcpAccessServerBuilder {
             listen_addr: self.listen_addr,
             destination: self.destination,
-            proxy_table,
+            proxy_group,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
             stream_context,
         })
@@ -61,17 +60,17 @@ impl TcpAccessServerConfig {
 
 #[derive(Debug, Error)]
 pub enum BuildError {
-    #[error("Proxy table key not found: {0}")]
-    ProxyTableKeyNotFound(Arc<str>),
+    #[error("Proxy group key not found: {0}")]
+    ProxyGroupKeyNotFound(Arc<str>),
     #[error("{0}")]
-    ProxyTable(#[from] StreamProxyTableBuildError),
+    ProxyGroup(#[from] ProxyGroupBuildError),
 }
 
 #[derive(Debug, Clone)]
 pub struct TcpAccessServerBuilder {
     listen_addr: Arc<str>,
     destination: ConcreteStreamAddrStr,
-    proxy_table: StreamProxyTable<ConcreteStreamType>,
+    proxy_group: StreamProxyGroup,
     speed_limit: f64,
     stream_context: ConcreteStreamContext,
 }
@@ -94,7 +93,7 @@ impl loading::Builder for TcpAccessServerBuilder {
 
     fn build_hook(self) -> Result<Self::Hook, Self::Err> {
         Ok(TcpAccess::new(
-            self.proxy_table,
+            self.proxy_group,
             self.destination.0,
             self.speed_limit,
             self.stream_context,
@@ -104,7 +103,7 @@ impl loading::Builder for TcpAccessServerBuilder {
 
 #[derive(Debug)]
 pub struct TcpAccess {
-    proxy_table: StreamProxyTable<ConcreteStreamType>,
+    proxy_group: StreamProxyGroup,
     destination: ConcreteStreamAddr,
     speed_limiter: Limiter,
     stream_context: ConcreteStreamContext,
@@ -112,13 +111,13 @@ pub struct TcpAccess {
 
 impl TcpAccess {
     pub fn new(
-        proxy_table: StreamProxyTable<ConcreteStreamType>,
+        proxy_group: StreamProxyGroup,
         destination: ConcreteStreamAddr,
         speed_limit: f64,
         stream_context: ConcreteStreamContext,
     ) -> Self {
         Self {
-            proxy_table,
+            proxy_group,
             destination,
             speed_limiter: Limiter::new(speed_limit),
             stream_context,
@@ -134,10 +133,7 @@ impl TcpAccess {
     where
         S: IoStream + IoAddr,
     {
-        let Some(proxy_table_group) = self.proxy_table.group(&self.destination.address) else {
-            return Err(ProxyError::NoProxy);
-        };
-        let proxy_chain = proxy_table_group.choose_chain();
+        let proxy_chain = self.proxy_group.choose_chain();
         let upstream = establish(
             &proxy_chain.chain,
             self.destination.clone(),
@@ -171,8 +167,6 @@ impl TcpAccess {
 
 #[derive(Debug, Error)]
 pub enum ProxyError {
-    #[error("No proxy")]
-    NoProxy,
     #[error("Failed to get downstream address: {0}")]
     DownstreamAddr(#[source] io::Error),
     #[error("Failed to establish proxy chain: {0}")]

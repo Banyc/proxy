@@ -24,7 +24,6 @@ pub trait StreamType:
 pub struct StreamAddrBuilder {
     pub address: Arc<str>,
 }
-
 impl StreamAddrBuilder {
     pub fn build<ST: StreamType>(self) -> Result<StreamAddr<ST>, ParseInternetAddrError> {
         self.address.as_ref().parse()
@@ -37,13 +36,11 @@ pub struct StreamAddr<ST> {
     pub address: InternetAddr,
     pub stream_type: ST,
 }
-
 impl<ST: Display> Display for StreamAddr<ST> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}://{}", self.stream_type, self.address)
     }
 }
-
 impl<ST: FromStr<Err = ParseInternetAddrError>> FromStr for StreamAddr<ST> {
     type Err = ParseInternetAddrError;
 

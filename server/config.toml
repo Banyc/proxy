@@ -1,68 +1,62 @@
-[global]
-stream_pool = [
-    { address = "tcp://proxy.example.org:80", header_key = "base64" },
-    { address = "mptcp://proxy.example.org:81", header_key = "base64" },
+[stream.proxy_server]
+"tcp1" = { address = "tcp://proxy.example.org:80", header_key = "base64", payload_key = "base64" }
+"kcp1" = { address = "kcp://proxy.example.org:80", header_key = "base64", payload_key = "base64" }
+"mptcp1" = { address = "mptcp://proxy.example.org:81", header_key = "base64", payload_key = "base64" }
+
+[stream]
+pool = ["tcp1", "mptcp1"]
+
+[udp.proxy_server]
+"udp1" = { address = "proxy.example.org:80", header_key = "base64", payload_key = "base64" }
+
+[access_server.matcher]
+"localhost" = [
+    { addr = "127.0.0.1" }, # IPv4
+    { addr = "::1" },       # IPv6
+    { addr = "localhost" }, # domain name regex
 ]
 
-[access_server.stream_proxy_tables]
-"default" = { groups = [
-    { matcher = { }, chains = [
-        { weight = 1, chain = [
-            { address = "tcp://proxy.example.org:80", header_key = "base64" },
-        ],                                            payload_key = "base64" },
-        { weight = 1, chain = [
-            { address = "kcp://proxy.example.org:80", header_key = "base64" },
-        ],                                            payload_key = "base64" },
-        { weight = 1, chain = [
-            { address = "mptcp://proxy.example.org:81", header_key = "base64" },
-        ],                                              payload_key = "base64" },
-    ], trace_rtt = false, active_chains = 3 },
-] }
-[access_server.udp_proxy_tables]
-"default" = { groups = [
-    { matcher = { }, chains = [
-        { weight = 1, chain = [
-            { address = "proxy.example.org:80", header_key = "base64" },
-        ],                                      payload_key = "base64" },
-    ], trace_rtt = false, active_chains = 1 },
-] }
-[access_server.filters]
+[access_server.stream.proxy_group]
+"default" = { chains = [
+    { weight = 1, chain = ["tcp1"] },
+    { weight = 1, chain = ["kcp1"] },
+    { weight = 1, chain = ["mptcp1"] },
+], trace_rtt = false, active_chains = 3 }
+
+[access_server.stream.proxy_table]
 "default" = [
-    "localhost",
-    # { matcher = { port = 443 }, action = "proxy" },
+    { matcher = "localhost", action = "default" }, # Forward local traffic directly
+                                                   # <- At this point, no more local traffic
     # { matcher = { }, action = "block" }, # Block all
+    { matcher = { }, action = "default" }, # Forward remaining traffic to the "default" proxy group above
 ]
-"localhost" = [
-    { matcher = [
-        { addr = "127.0.0.1" }, # IPv4
-        { addr = "::1" },       # IPv6
-        { addr = "localhost" }, # domain name regex
-    ], action = "direct" },
-]
+
+[access_server.udp.proxy_group]
+"default" = { chains = [
+    { weight = 1, chain = ["udp1"] },
+], trace_rtt = false, active_chains = 1 }
 
 [[access_server.tcp_server]]
 listen_addr = "0.0.0.0:80"
 destination = "tcp://www.example.org:80"
-proxy_table = "default"                  # Or, `proxy_table = { chains = ..., trace_rtt = ..., ... }`
+proxy_group = "default"                  # Or, `proxy_group = { chains = ..., trace_rtt = ..., ... }`
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[access_server.udp_server]]
 listen_addr = "0.0.0.0:80"
 destination = "www.example.org:80"
-proxy_table = "default"            # Or, `proxy_table = { chains = ..., trace_rtt = ..., ... }`
+proxy_group = "default"            # Or, `proxy_group = { chains = ..., trace_rtt = ..., ... }`
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[access_server.http_server]]
 listen_addr = "0.0.0.0:80"
-proxy_table = "default"    # Or, `proxy_table = { chains = ..., trace_rtt = ..., ... }`
-filter = "default"
+proxy_table = "default"    # Or, `proxy_table = [...]`
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[access_server.socks5_tcp_server]]
 listen_addr = "0.0.0.0:80"
 udp_server_addr = "0.0.0.0:80"
-proxy_table = "default"        # Or, `proxy_table = { chains = ..., trace_rtt = ..., ... }`
-filter = "default"
+proxy_table = "default"        # Or, `proxy_table = [...]`
 # speed_limit = 1024.0 # 1.0 KiB/s
 # users = [
 #     { username = "", password = "" },
@@ -70,7 +64,7 @@ filter = "default"
 
 [[access_server.socks5_udp_server]]
 listen_addr = "0.0.0.0:80"
-proxy_table = "default"    # Or, `proxy_table = { chains = ..., trace_rtt = ..., ... }`
+proxy_group = "default"    # Or, `proxy_group = { chains = ..., trace_rtt = ..., ... }`
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[proxy_server.tcp_server]]

@@ -4,7 +4,8 @@ use serde::{de::Visitor, Deserialize, Serialize};
 
 use common::{
     addr::ParseInternetAddrError,
-    stream::addr::{StreamAddr, StreamAddrStr, StreamType},
+    proxy_table::AddressString,
+    stream::addr::{StreamAddr, StreamType},
 };
 
 pub type ConcreteStreamAddr = StreamAddr<ConcreteStreamType>;
@@ -41,12 +42,10 @@ impl FromStr for ConcreteStreamType {
 
 #[derive(Debug, Clone)]
 pub struct ConcreteStreamAddrStr(pub ConcreteStreamAddr);
-impl StreamAddrStr for ConcreteStreamAddrStr {
-    type StreamType = ConcreteStreamType;
-    fn inner(&self) -> &StreamAddr<Self::StreamType> {
-        &self.0
-    }
-    fn into_inner(self) -> StreamAddr<Self::StreamType> {
+impl AddressString for ConcreteStreamAddrStr {
+    type Address = ConcreteStreamAddr;
+
+    fn into_address(self) -> Self::Address {
         self.0
     }
 }

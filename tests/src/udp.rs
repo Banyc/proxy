@@ -38,7 +38,8 @@ mod tests {
         });
         ProxyConfig {
             address: proxy_addr.into(),
-            crypto,
+            header_crypto: crypto,
+            payload_crypto: None,
         }
     }
 

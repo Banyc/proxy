@@ -2,22 +2,19 @@
 mod tests {
     use std::{io, time::Duration};
 
-    use common::{
-        loading::Server,
-        proxy_table::ProxyConfig,
-        stream::{addr::StreamAddr, proxy_table::StreamProxyConfig},
-    };
+    use common::{loading::Server, proxy_table::ProxyConfig, stream::addr::StreamAddr};
     use protocol::stream::{
         addr::{ConcreteStreamAddr, ConcreteStreamType},
         connect::ConcreteStreamConnectorTable,
         connection::ConnAndAddr,
         context::ConcreteStreamContext,
         pool::ConcreteConnPool,
+        proxy_table::StreamProxyConfig,
     };
     use proxy_client::stream::{establish, trace_rtt};
     use proxy_server::stream::{
         kcp::build_kcp_proxy_server, mptcp::build_mptcp_proxy_server, tcp::build_tcp_proxy_server,
-        StreamProxy,
+        StreamProxyServer,
     };
     use serial_test::serial;
     use swap::Swap;
@@ -45,9 +42,9 @@ mod tests {
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
         ty: ConcreteStreamType,
-    ) -> StreamProxyConfig<ConcreteStreamType> {
+    ) -> StreamProxyConfig {
         let crypto = create_random_crypto();
-        let proxy = StreamProxy::new(crypto.clone(), None, stream_context());
+        let proxy = StreamProxyServer::new(crypto.clone(), None, stream_context());
         let proxy_addr = match ty {
             ConcreteStreamType::Tcp => {
                 let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
@@ -82,21 +79,22 @@ mod tests {
                 address: proxy_addr.into(),
                 stream_type: ty,
             },
-            crypto,
+            header_crypto: crypto,
+            payload_crypto: None,
         }
     }
 
     async fn spawn_tcp_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
-    ) -> StreamProxyConfig<ConcreteStreamType> {
+    ) -> StreamProxyConfig {
         spawn_proxy(join_set, addr, ConcreteStreamType::Tcp).await
     }
 
     async fn spawn_kcp_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
-    ) -> StreamProxyConfig<ConcreteStreamType> {
+    ) -> StreamProxyConfig {
         spawn_proxy(join_set, addr, ConcreteStreamType::Kcp).await
     }
 

@@ -9,14 +9,17 @@ use tracing::error;
 
 use crate::ListenerBindError;
 
-use super::{StreamProxy, StreamProxyBuildError, StreamProxyBuilder, StreamProxyConfig};
+use super::{
+    StreamProxyServer, StreamProxyServerBuildError, StreamProxyServerBuilder,
+    StreamProxyServerConfig,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TcpProxyServerConfig {
     pub listen_addr: Arc<str>,
     #[serde(flatten)]
-    pub inner: StreamProxyConfig,
+    pub inner: StreamProxyServerConfig,
 }
 
 impl TcpProxyServerConfig {
@@ -32,11 +35,11 @@ impl TcpProxyServerConfig {
 #[derive(Debug, Clone)]
 pub struct TcpProxyServerBuilder {
     pub listen_addr: Arc<str>,
-    pub inner: StreamProxyBuilder,
+    pub inner: StreamProxyServerBuilder,
 }
 
 impl loading::Builder for TcpProxyServerBuilder {
-    type Hook = StreamProxy;
+    type Hook = StreamProxyServer;
     type Server = TcpServer<Self::Hook>;
     type Err = TcpProxyServerBuildError;
 
@@ -60,15 +63,15 @@ impl loading::Builder for TcpProxyServerBuilder {
 #[derive(Debug, Error)]
 pub enum TcpProxyServerBuildError {
     #[error("{0}")]
-    Hook(#[from] StreamProxyBuildError),
+    Hook(#[from] StreamProxyServerBuildError),
     #[error("{0}")]
     Server(#[from] ListenerBindError),
 }
 
 pub async fn build_tcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
-    stream_proxy: StreamProxy,
-) -> Result<TcpServer<StreamProxy>, ListenerBindError> {
+    stream_proxy: StreamProxyServer,
+) -> Result<TcpServer<StreamProxyServer>, ListenerBindError> {
     let listener = TcpListener::bind(listen_addr)
         .await
         .map_err(ListenerBindError)?;
@@ -101,7 +104,7 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy = StreamProxy::new(
+            let proxy = StreamProxyServer::new(
                 crypto.clone(),
                 None,
                 ConcreteStreamContext {

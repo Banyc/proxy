@@ -5,7 +5,7 @@ use protocol::context::ConcreteContext;
 use serde::Deserialize;
 use stream::{
     kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, tcp::TcpProxyServerConfig,
-    StreamProxy,
+    StreamProxyServer,
 };
 use thiserror::Error;
 use udp::{UdpProxy, UdpProxyServerBuilder, UdpProxyServerConfig};
@@ -112,10 +112,10 @@ impl Merge for ProxyServerConfig {
 }
 
 pub struct ProxyServerLoader {
-    tcp_server: loading::Loader<StreamProxy>,
+    tcp_server: loading::Loader<StreamProxyServer>,
     udp_server: loading::Loader<UdpProxy>,
-    kcp_server: loading::Loader<StreamProxy>,
-    mptcp_server: loading::Loader<StreamProxy>,
+    kcp_server: loading::Loader<StreamProxyServer>,
+    mptcp_server: loading::Loader<StreamProxyServer>,
 }
 
 impl ProxyServerLoader {

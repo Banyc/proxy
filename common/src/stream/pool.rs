@@ -11,18 +11,14 @@ use tokio_conn_pool::{ConnPool, ConnPoolEntry};
 use crate::{
     config::{Merge, SharableConfig},
     header::heartbeat::send_noop,
-    proxy_table::ProxyConfig,
-    stream::{
-        proxy_table::{StreamProxyConfigBuildError, StreamProxyConfigBuilder},
-        IoAddr,
-    },
+    proxy_table::{AddressString, ProxyConfig, ProxyConfigBuildError, ProxyConfigBuilder},
+    stream::IoAddr,
 };
 
 use super::{
-    addr::{StreamAddr, StreamAddrStr, StreamType},
+    addr::{StreamAddr, StreamType},
     connect::StreamConnectorTable,
     context::StreamContext,
-    proxy_table::StreamProxyConfig,
     IoStream,
 };
 
@@ -30,26 +26,24 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[serde(bound(deserialize = "SAS: Deserialize<'de>"))]
-pub struct PoolBuilder<SAS>(
-    #[serde(default)] pub Vec<SharableConfig<StreamProxyConfigBuilder<SAS>>>,
-);
-impl<SAS> PoolBuilder<SAS> {
+#[serde(bound(deserialize = "AS: Deserialize<'de>"))]
+pub struct PoolBuilder<AS>(#[serde(default)] pub Vec<SharableConfig<ProxyConfigBuilder<AS>>>);
+impl<AS> PoolBuilder<AS> {
     pub fn new() -> Self {
         Self(vec![])
     }
 }
-impl<SAS, ST> PoolBuilder<SAS>
+impl<AS, ST> PoolBuilder<AS>
 where
-    SAS: StreamAddrStr<StreamType = ST>,
-    ST: StreamType,
+    AS: AddressString<Address = StreamAddr<ST>>,
 {
     pub fn build<C, CT>(
         self,
         connector_table: CT,
-        stream_proxy: &HashMap<Arc<str>, StreamProxyConfig<ST>>,
+        proxy_server: &HashMap<Arc<str>, ProxyConfig<StreamAddr<ST>>>,
     ) -> Result<ConnPool<StreamAddr<ST>, C>, PoolBuildError>
     where
+        ST: StreamType + Clone,
         C: std::fmt::Debug + IoStream,
         CT: StreamConnectorTable<Connection = C, StreamType = ST>,
     {
@@ -57,13 +51,11 @@ where
             .0
             .into_iter()
             .map(|c| match c {
-                SharableConfig::SharingKey(k) => stream_proxy
+                SharableConfig::SharingKey(k) => proxy_server
                     .get(&k)
                     .cloned()
-                    .ok_or_else(|| PoolBuildError::KeyNotFound(k)),
-                SharableConfig::Private(c) => c
-                    .build::<ST>()
-                    .map_err(PoolBuildError::StreamProxyConfigBuild),
+                    .ok_or_else(|| PoolBuildError::ProxyServerKeyNotFound(k)),
+                SharableConfig::Private(c) => c.build().map_err(PoolBuildError::ProxyConfigBuild),
             })
             .collect::<Result<Vec<_>, _>>()?;
         let entries = pool_entries_from_proxy_configs(c.into_iter(), connector_table.clone());
@@ -74,9 +66,9 @@ where
 #[derive(Debug, Error)]
 pub enum PoolBuildError {
     #[error("{0}")]
-    StreamProxyConfigBuild(#[from] StreamProxyConfigBuildError),
-    #[error("Key not found: {0}")]
-    KeyNotFound(Arc<str>),
+    ProxyConfigBuild(#[from] ProxyConfigBuildError),
+    #[error("Proxy server key not found: {0}")]
+    ProxyServerKeyNotFound(Arc<str>),
 }
 impl<SAS> Default for PoolBuilder<SAS> {
     fn default() -> Self {
@@ -160,7 +152,7 @@ where
         send_noop(
             &mut conn,
             HEARTBEAT_INTERVAL,
-            &self.proxy_config.crypto.clone(),
+            &self.proxy_config.header_crypto.clone(),
         )
         .await
         .ok()?;

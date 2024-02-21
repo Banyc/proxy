@@ -18,8 +18,6 @@ use serde::Deserialize;
 use thiserror::Error;
 use tracing::{error, info, instrument, warn};
 
-use crate::ListenerBindError;
-
 pub mod kcp;
 pub mod mptcp;
 pub mod tcp;
@@ -28,14 +26,14 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StreamProxyConfig {
+pub struct StreamProxyServerConfig {
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
 }
 
-impl StreamProxyConfig {
-    pub fn into_builder(self, stream_context: ConcreteStreamContext) -> StreamProxyBuilder {
-        StreamProxyBuilder {
+impl StreamProxyServerConfig {
+    pub fn into_builder(self, stream_context: ConcreteStreamContext) -> StreamProxyServerBuilder {
+        StreamProxyServerBuilder {
             header_key: self.header_key,
             payload_key: self.payload_key,
             stream_context,
@@ -44,23 +42,26 @@ impl StreamProxyConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct StreamProxyBuilder {
+pub struct StreamProxyServerBuilder {
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
     pub stream_context: ConcreteStreamContext,
 }
 
-impl StreamProxyBuilder {
-    pub fn build(self) -> Result<StreamProxy, StreamProxyBuildError> {
+impl StreamProxyServerBuilder {
+    pub fn build(self) -> Result<StreamProxyServer, StreamProxyServerBuildError> {
         let header_crypto = self
             .header_key
             .build()
-            .map_err(StreamProxyBuildError::HeaderCrypto)?;
+            .map_err(StreamProxyServerBuildError::HeaderCrypto)?;
         let payload_crypto = match self.payload_key {
-            Some(key) => Some(key.build().map_err(StreamProxyBuildError::PayloadCrypto)?),
+            Some(key) => Some(
+                key.build()
+                    .map_err(StreamProxyServerBuildError::PayloadCrypto)?,
+            ),
             None => None,
         };
-        Ok(StreamProxy::new(
+        Ok(StreamProxyServer::new(
             header_crypto,
             payload_crypto,
             self.stream_context,
@@ -69,7 +70,7 @@ impl StreamProxyBuilder {
 }
 
 #[derive(Debug, Error)]
-pub enum StreamProxyBuildError {
+pub enum StreamProxyServerBuildError {
     #[error("HeaderCrypto: {0}")]
     HeaderCrypto(#[source] tokio_chacha20::config::ConfigBuildError),
     #[error("PayloadCrypto: {0}")]
@@ -78,22 +79,14 @@ pub enum StreamProxyBuildError {
     StreamPool(#[from] ParseInternetAddrError),
 }
 
-#[derive(Debug, Error)]
-pub enum StreamProxyServerBuildError {
-    #[error("{0}")]
-    Hook(#[from] StreamProxyBuildError),
-    #[error("{0}")]
-    Server(#[from] ListenerBindError),
-}
-
 #[derive(Debug)]
-pub struct StreamProxy {
+pub struct StreamProxyServer {
     acceptor: StreamProxyAcceptor,
     payload_crypto: Option<tokio_chacha20::config::Config>,
     stream_context: ConcreteStreamContext,
 }
 
-impl StreamProxy {
+impl StreamProxyServer {
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
         payload_crypto: Option<tokio_chacha20::config::Config>,
@@ -165,10 +158,8 @@ impl StreamProxy {
     //         });
     // }
 }
-
-impl loading::Hook for StreamProxy {}
-
-impl StreamServerHook for StreamProxy {
+impl loading::Hook for StreamProxyServer {}
+impl StreamServerHook for StreamProxyServer {
     #[instrument(skip(self))]
     async fn handle_stream<S>(&self, stream: S)
     where
@@ -192,7 +183,6 @@ pub struct StreamProxyAcceptor {
     crypto: tokio_chacha20::config::Config,
     stream_context: ConcreteStreamContext,
 }
-
 impl StreamProxyAcceptor {
     pub fn new(
         crypto: tokio_chacha20::config::Config,

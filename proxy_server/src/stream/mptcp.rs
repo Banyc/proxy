@@ -10,7 +10,10 @@ use tracing::error;
 
 use crate::ListenerBindError;
 
-use super::{StreamProxy, StreamProxyBuildError, StreamProxyBuilder, StreamProxyConfig};
+use super::{
+    StreamProxyServer, StreamProxyServerBuildError, StreamProxyServerBuilder,
+    StreamProxyServerConfig,
+};
 
 const MAX_SESSION_STREAMS: usize = 4;
 
@@ -19,7 +22,7 @@ const MAX_SESSION_STREAMS: usize = 4;
 pub struct MptcpProxyServerConfig {
     pub listen_addr: Arc<str>,
     #[serde(flatten)]
-    pub inner: StreamProxyConfig,
+    pub inner: StreamProxyServerConfig,
 }
 
 impl MptcpProxyServerConfig {
@@ -35,11 +38,11 @@ impl MptcpProxyServerConfig {
 #[derive(Debug, Clone)]
 pub struct MptcpProxyServerBuilder {
     pub listen_addr: Arc<str>,
-    pub inner: StreamProxyBuilder,
+    pub inner: StreamProxyServerBuilder,
 }
 
 impl loading::Builder for MptcpProxyServerBuilder {
-    type Hook = StreamProxy;
+    type Hook = StreamProxyServer;
     type Server = MptcpServer<Self::Hook>;
     type Err = MptcpProxyServerBuildError;
 
@@ -63,15 +66,15 @@ impl loading::Builder for MptcpProxyServerBuilder {
 #[derive(Debug, Error)]
 pub enum MptcpProxyServerBuildError {
     #[error("{0}")]
-    Hook(#[from] StreamProxyBuildError),
+    Hook(#[from] StreamProxyServerBuildError),
     #[error("{0}")]
     Server(#[from] ListenerBindError),
 }
 
 pub async fn build_mptcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
-    stream_proxy: StreamProxy,
-) -> Result<MptcpServer<StreamProxy>, ListenerBindError> {
+    stream_proxy: StreamProxyServer,
+) -> Result<MptcpServer<StreamProxyServer>, ListenerBindError> {
     let listener =
         MptcpListener::bind(listen_addr, NonZeroUsize::new(MAX_SESSION_STREAMS).unwrap())
             .await

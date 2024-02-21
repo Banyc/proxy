@@ -12,7 +12,7 @@ use common::{
         codec::{read_header, write_header, CodecError},
         route::{RouteError, RouteResponse},
     },
-    proxy_table::{convert_proxies_to_header_crypto_pairs, Tracer},
+    proxy_table::{convert_proxies_to_header_crypto_pairs, Tracer, TracerBuilder},
     udp::{
         io_copy::{UdpRecv, UdpSend},
         proxy_table::UdpProxyChain,
@@ -259,7 +259,8 @@ impl UdpProxyClientReadHalf {
         // Decode and check headers
         for node in self.proxies.iter() {
             trace!(?node.address, "Reading response");
-            let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new(*node.crypto.key());
+            let mut crypto_cursor =
+                tokio_chacha20::cursor::DecryptCursor::new(*node.header_crypto.key());
             let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor)?;
             if let Err(err) = resp.result {
                 warn!(?err, %node.address, "Upstream responded with an error");
@@ -296,21 +297,37 @@ pub enum RecvError {
     Response { err: RouteError, addr: InternetAddr },
 }
 
+pub struct UdpTracerBuilder {}
+impl UdpTracerBuilder {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+impl Default for UdpTracerBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl TracerBuilder for UdpTracerBuilder {
+    type Tracer = UdpTracer;
+
+    fn build(&self) -> Self::Tracer {
+        UdpTracer::new()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UdpTracer {}
-
 impl UdpTracer {
     pub fn new() -> Self {
         Self {}
     }
 }
-
 impl Default for UdpTracer {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl Tracer for UdpTracer {
     type Address = InternetAddr;
 
@@ -357,7 +374,8 @@ pub async fn trace_rtt(proxies: &UdpProxyChain) -> Result<Duration, TraceError> 
     let mut reader = io::Cursor::new(&buf[..n]);
     for node in proxies.iter() {
         trace!(?node.address, "Reading response");
-        let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new(*node.crypto.key());
+        let mut crypto_cursor =
+            tokio_chacha20::cursor::DecryptCursor::new(*node.header_crypto.key());
         let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor)?;
         if let Err(err) = resp.result {
             warn!(?err, %node.address, "Upstream responded with an error");
