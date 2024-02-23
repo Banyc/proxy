@@ -99,11 +99,11 @@ where
     proxy_configs.map(move |c| ConnPoolEntry {
         key: c.address.clone(),
         connect: Arc::new(PoolConnector {
-            proxy_config: c.clone(),
+            proxy_server: c.clone(),
             connector_table: connector_table.clone(),
         }),
         heartbeat: Arc::new(PoolHeartbeat {
-            proxy_config: c.clone(),
+            proxy_server: c.clone(),
             connection: Default::default(),
         }),
     })
@@ -111,7 +111,7 @@ where
 
 #[derive(Debug)]
 struct PoolConnector<ST, CT> {
-    proxy_config: ProxyConfig<StreamAddr<ST>>,
+    proxy_server: ProxyConfig<StreamAddr<ST>>,
     connector_table: CT,
 }
 #[async_trait]
@@ -123,11 +123,11 @@ where
 {
     type Connection = C;
     async fn connect(&self) -> Option<Self::Connection> {
-        let addr = self.proxy_config.address.clone();
+        let addr = self.proxy_server.address.clone();
         let sock_addr = addr.address.to_socket_addr().await.ok()?;
         self.connector_table
             .timed_connect(
-                &self.proxy_config.address.stream_type,
+                &self.proxy_server.address.stream_type,
                 sock_addr,
                 HEARTBEAT_INTERVAL,
             )
@@ -138,7 +138,7 @@ where
 
 #[derive(Debug)]
 struct PoolHeartbeat<C, ST> {
-    proxy_config: ProxyConfig<StreamAddr<ST>>,
+    proxy_server: ProxyConfig<StreamAddr<ST>>,
     connection: PhantomData<C>,
 }
 #[async_trait]
@@ -152,7 +152,7 @@ where
         send_noop(
             &mut conn,
             HEARTBEAT_INTERVAL,
-            &self.proxy_config.header_crypto.clone(),
+            &self.proxy_server.header_crypto.clone(),
         )
         .await
         .ok()?;

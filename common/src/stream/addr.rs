@@ -57,10 +57,3 @@ impl<ST: FromStr<Err = ParseInternetAddrError>> FromStr for StreamAddr<ST> {
         })
     }
 }
-
-pub trait StreamAddrStr {
-    type StreamType: StreamType;
-
-    fn inner(&self) -> &StreamAddr<Self::StreamType>;
-    fn into_inner(self) -> StreamAddr<Self::StreamType>;
-}

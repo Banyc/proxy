@@ -25,8 +25,8 @@ pool = ["tcp1", "mptcp1"]
 
 [access_server.stream.proxy_table]
 "default" = [
-    { matcher = "localhost", action = "default" }, # Forward local traffic directly
-                                                   # <- At this point, no more local traffic
+    { matcher = "localhost", action = "direct" }, # Forward local traffic directly
+                                                  # <- At this point, no more local traffic
     # { matcher = { }, action = "block" }, # Block all
     { matcher = { }, action = "default" }, # Forward remaining traffic to the "default" proxy group above
 ]
