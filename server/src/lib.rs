@@ -51,13 +51,6 @@ where
     };
     let mut server_tasks = tokio::task::JoinSet::new();
 
-    // Make sure there is always `Some(res)` from `join_next`
-    server_tasks.spawn(async move {
-        let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
-        rx.await.unwrap();
-        unreachable!()
-    });
-
     let stream_pool = Swap::new(ConcreteConnPool::empty());
 
     let context = Context {
@@ -72,7 +65,7 @@ where
     };
 
     let cancellation = CancellationToken::new();
-    read_and_load_config(
+    read_and_exec_config(
         &config_reader,
         &mut server_tasks,
         &mut server_loader,
@@ -85,8 +78,7 @@ where
 
     loop {
         tokio::select! {
-            res = server_tasks.join_next() => {
-                let res = res.expect("Always `Some(res)` from `join_next`");
+            Some(res) = server_tasks.join_next() => {
                 let res = res.unwrap();
                 res.map_err(ServeError::ServerTask)?;
             }
@@ -97,14 +89,14 @@ where
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
                 let cancellation = CancellationToken::new();
-                if let Err(e) = read_and_load_config(
+                if let Err(e) = read_and_exec_config(
                     &config_reader,
                     &mut server_tasks,
                     &mut server_loader,
                     cancellation.clone(),
                     context.clone(),
                 ).await {
-                    warn!(?e, "Failed to read and load config");
+                    warn!(?e, "Failed to read and execute config");
                     continue;
                 }
 
@@ -119,7 +111,7 @@ pub struct ServerLoader {
     pub proxy_server: ProxyServerLoader,
 }
 
-async fn read_and_load_config<CR>(
+async fn read_and_exec_config<CR>(
     config_reader: &CR,
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
@@ -133,7 +125,7 @@ where
         .read_config()
         .await
         .map_err(ServeError::Config)?;
-    load_and_clean(config, server_tasks, server_loader, cancellation, context)
+    spawn_and_clean(config, server_tasks, server_loader, cancellation, context)
         .await
         .map_err(ServeError::Load)?;
     Ok(())
@@ -149,7 +141,7 @@ pub enum ServeError {
     ServerTask(#[source] AnyError),
 }
 
-pub async fn load_and_clean(
+pub async fn spawn_and_clean(
     config: ServerConfig,
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
@@ -188,7 +180,7 @@ pub async fn load_and_clean(
         .await?;
     config
         .proxy_server
-        .load_and_clean(
+        .spawn_and_clean(
             server_tasks,
             &mut server_loader.proxy_server,
             context.clone(),
