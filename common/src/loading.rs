@@ -8,11 +8,12 @@ use tokio::sync::mpsc;
 
 use crate::error::AnyResult;
 
+/// A listener loader that spawns and kills listeners
 #[derive(Debug)]
 pub struct Loader<H> {
+    /// Handles of the listeners using the actor model pattern
     handles: HashMap<Arc<str>, mpsc::Sender<H>>,
 }
-
 impl<H> Loader<H>
 where
     H: Hook + std::fmt::Debug,
@@ -59,7 +60,6 @@ where
         Ok(())
     }
 }
-
 impl<H> Default for Loader<H>
 where
     H: Hook + std::fmt::Debug,
@@ -69,8 +69,10 @@ where
     }
 }
 
+/// The business logic for the accepted connections
 pub trait Hook {}
 
+/// A builder of a server and its hook
 pub trait Builder {
     type Hook: Hook;
     type Server: Server<Hook = Self::Hook>;
@@ -82,8 +84,12 @@ pub trait Builder {
     fn key(&self) -> &Arc<str>;
 }
 
+/// A listener including the business logic for the accepted connections
 pub trait Server {
     type Hook: Hook;
+    /// The handle of this server using the actor model
+    ///
+    /// If all the handle has been dropped, the listener must despawn eventually but still keep all its connections alive.
     fn handle(&self) -> mpsc::Sender<Self::Hook>;
     /// Server ends if the caller does not hold a handle to the server.
     fn serve(self) -> impl std::future::Future<Output = AnyResult> + Send;

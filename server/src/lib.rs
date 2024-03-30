@@ -106,6 +106,7 @@ where
     }
 }
 
+/// Spawn and kill servers given a new config
 pub struct ServerLoader {
     pub access_server: AccessServerLoader,
     pub proxy_server: ProxyServerLoader,
