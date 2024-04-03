@@ -5,11 +5,11 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 pub const USERNAME_PASSWORD_VERSION: u8 = 0x1;
 
 /// ```text
-/// +----+------+----------+------+----------+
-/// |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
-/// +----+------+----------+------+----------+
-/// | 1  |  1   | 1 to 255 |  1   | 1 to 255 |
-/// +----+------+----------+------+----------+
+/// +-----+------+----------+------+----------+
+/// | VER | ULEN |  UNAME   | PLEN |  PASSWD  |
+/// +-----+------+----------+------+----------+
+/// |  1  |  1   | 1 to 255 |  1   | 1 to 255 |
+/// +-----+------+----------+------+----------+
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UsernamePasswordRequest {
@@ -91,11 +91,11 @@ impl UsernamePasswordRequest {
 }
 
 /// ```text
-/// +----+--------+
-/// |VER | STATUS |
-/// +----+--------+
-/// | 1  |   1    |
-/// +----+--------+
+/// +-----+--------+
+/// | VER | STATUS |
+/// +-----+--------+
+/// |  1  |   1    |
+/// +-----+--------+
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UsernamePasswordResponse {
