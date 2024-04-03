@@ -98,6 +98,13 @@ mod tests {
         spawn_proxy(join_set, addr, ConcreteStreamType::Kcp).await
     }
 
+    async fn spawn_mptcp_proxy(
+        join_set: &mut tokio::task::JoinSet<()>,
+        addr: &str,
+    ) -> StreamProxyConfig {
+        spawn_proxy(join_set, addr, ConcreteStreamType::Mptcp).await
+    }
+
     async fn spawn_greet(
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
@@ -259,7 +266,7 @@ mod tests {
             let proxy_config = match ty {
                 ConcreteStreamType::Tcp => spawn_tcp_proxy(&mut join_set, "0.0.0.0:0").await,
                 ConcreteStreamType::Kcp => spawn_kcp_proxy(&mut join_set, "0.0.0.0:0").await,
-                ConcreteStreamType::Mptcp => spawn_kcp_proxy(&mut join_set, "0.0.0.0:0").await,
+                ConcreteStreamType::Mptcp => spawn_mptcp_proxy(&mut join_set, "0.0.0.0:0").await,
             };
             proxies.push(proxy_config);
         }
