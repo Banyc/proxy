@@ -18,7 +18,7 @@ bytes = "1"
 csv_logger = { git = "https://github.com/Banyc/csv_logger.git", rev = "90234e9ca11eea2dd5916e024be5368530e42944" }
 metrics = "0.22"
 metrics-exporter-prometheus = { version = "0.14", default-features = false }
-monitor_table = { git = "https://github.com/Banyc/monitor_table.git", rev = "f9cbe7a0e792d793adbe5627402254b0c9eee46b" }
+monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.0.1" }
 mptcp = { git = "https://github.com/Banyc/mptcp.git", rev = "8c0b8ee35bc7d570de272f5da7af6742b460e23a" }
 once_cell = "1"
 regex = "1"
@@ -29,7 +29,7 @@ table_log = { git = "https://github.com/Banyc/table_log.git", rev = "fc49af71a17
 thiserror = "1"
 tokio = "1"
 tokio-util = "0.7"
-tokio_chacha20 = { git = "https://github.com/Banyc/tokio_chacha20.git", rev = "40d2030f0ab6e7e32031e61618717d25f25e5509" }
+tokio_chacha20 = { git = "https://github.com/Banyc/tokio_chacha20.git", tag = "v0.0.1" }
 tokio_conn_pool = { git = "https://github.com/Banyc/tokio_conn_pool.git", rev = "8454496666bc1960223ca2eb78535fe2fd30cfbe" }
 tokio_kcp = "0.9"
 tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", rev = "80cbf0572623762665caff07781cee3e0d97cfc7" }
