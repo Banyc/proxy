@@ -7,13 +7,13 @@ edition = "2021"
 
 [dependencies]
 common = { path = "../common" }
-rand = "0.8"
+rand = { workspace = true }
 
 [dev-dependencies]
 protocol = { path = "../protocol" }
 proxy_client = { path = "../proxy_client" }
 proxy_server = { path = "../proxy_server" }
-serial_test = "3"
+serial_test = { workspace = true }
 swap = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio_chacha20 = { workspace = true }

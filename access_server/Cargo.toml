@@ -8,11 +8,11 @@ edition = "2021"
 async-speed-limit = { workspace = true }
 bytes = { workspace = true }
 common = { path = "../common" }
-http-body-util = "0.1"
-hyper = { version = "1", features = ["full"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["full"] }
+hyper-util = { workspace = true, features = ["tokio"] }
 monitor_table = { workspace = true }
-pin-project-lite = "0.2"
+pin-project-lite = { workspace = true }
 protocol = { path = "../protocol" }
 proxy_client = { path = "../proxy_client" }
 regex = { workspace = true }

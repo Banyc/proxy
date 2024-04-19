@@ -11,7 +11,7 @@ common = { path = "../common" }
 metrics = { workspace = true }
 mptcp = { workspace = true }
 once_cell = { workspace = true }
-rand = "0.8"
+rand = { workspace = true }
 serde = { workspace = true }
 swap = { workspace = true }
 thiserror = { workspace = true }
@@ -22,4 +22,4 @@ tokio_kcp = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-serde_json = "1"
+serde_json = { workspace = true }

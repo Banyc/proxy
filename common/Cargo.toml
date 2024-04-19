@@ -8,29 +8,29 @@ edition = "2021"
 [dependencies]
 async-speed-limit = { workspace = true }
 async-trait = { workspace = true }
-base64 = "0.22"
+base64 = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
-bytesize = "1"
-duplicate = "1"
-futures-core = "0.3"
-lockfree-object-pool = "0.1"
-lru = "0.12"
+bytesize = { workspace = true }
+duplicate = { workspace = true }
+futures-core = { workspace = true }
+lockfree-object-pool = { workspace = true }
+lru = { workspace = true }
 metrics = { workspace = true }
 monitor_table = { workspace = true }
 once_cell = { workspace = true }
-pin-project-lite = "0.2"
-rand = "0.8"
+pin-project-lite = { workspace = true }
+rand = { workspace = true }
 regex = { workspace = true }
-scopeguard = "1"
+scopeguard = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }
-slotmap = "1"
+slotmap = { workspace = true }
 strict-num = { workspace = true }
 swap = { workspace = true }
 table_log = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-tokio-io-timeout = "1"
+tokio-io-timeout = { workspace = true }
 tokio-util = { workspace = true }
 tokio_chacha20 = { workspace = true }
 tokio_conn_pool = { workspace = true }
@@ -38,4 +38,4 @@ tokio_throughput = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-serde_json = "1"
+serde_json = { workspace = true }
