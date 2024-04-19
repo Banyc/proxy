@@ -671,9 +671,9 @@ dependencies = [
 
 [[package]]
 name = "dfsql"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4f69f0db525787eec7f102b932239125734a508249e44cbeb67a35f4b88af64"
+checksum = "55c42e4b0dc1bc44ba64cac3fb51bc7a8fbd8d3870f30ecb06b203f9334b057b"
 dependencies = [
  "chumsky",
  "polars",
@@ -1422,7 +1422,7 @@ dependencies = [
 [[package]]
 name = "monitor_table"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/monitor_table.git?tag=v0.0.2#7cd5314abbe93f2a18d85899024d7cfbd84c05db"
+source = "git+https://github.com/Banyc/monitor_table.git?tag=v0.0.3#1ddac9c3d84158f6f66feedeb6537518256c5a0c"
 dependencies = [
  "anyhow",
  "dfsql",
