@@ -32,7 +32,7 @@ impl fmt::Display for FlowMetrics {
             self.packets_downlink,
             ByteSize::b(self.bytes_downlink),
             ByteSize::b(downlink_speed as u64),
-            self.flow.upstream.0,
+            self.flow.upstream.as_ref().unwrap().0,
             self.flow.downstream.0,
         )?;
         Ok(())
@@ -58,7 +58,7 @@ impl<'caller> serde::Serialize for FlowRecord<'caller> {
         }
         let duration = self.0.end - self.0.start.0;
         Record {
-            upstream_addr: self.0.flow.upstream.0.to_string(),
+            upstream_addr: self.0.flow.upstream.as_ref().unwrap().0.to_string(),
             downstream_addr: self.0.flow.downstream.0.to_string(),
             start_ms: self
                 .0

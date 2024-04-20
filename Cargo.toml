@@ -24,6 +24,7 @@ csv_logger = { git = "https://github.com/Banyc/csv_logger.git", rev = "90234e9ca
 dhat = "0.3"
 duplicate = "1"
 file_watcher_tokio = "0.3"
+futures = "0.3"
 futures-core = "0.3"
 http-body-util = "0.1"
 hyper = "1"
@@ -58,6 +59,7 @@ tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", rev 
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.5" }
 
 [profile.profiling]
 inherits = "release"

@@ -12,9 +12,10 @@ use async_speed_limit::Limiter;
 use metrics::{counter, gauge};
 use scopeguard::defer;
 use thiserror::Error;
-use tokio::{net::UdpSocket, sync::mpsc};
+use tokio::net::UdpSocket;
 use tokio_throughput::{ReadGauge, WriteGauge};
 use tracing::{info, trace, warn};
+use udp_listener::{AcceptedUdpRead, AcceptedUdpWrite};
 
 use crate::{
     addr::InternetAddr,
@@ -25,7 +26,7 @@ use crate::{
 use super::{
     metrics::FlowMetrics,
     session_table::{Session, UdpSessionTable},
-    Flow, FlowOwnedGuard, Packet, UdpDownstreamWriter, ACTIVITY_CHECK_INTERVAL, BUFFER_LENGTH,
+    Flow, Packet, ACTIVITY_CHECK_INTERVAL, BUFFER_LENGTH,
 };
 
 const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
@@ -50,12 +51,12 @@ pub struct UpstreamParts<R, W> {
 }
 
 pub struct DownstreamParts {
-    pub rx: mpsc::Receiver<Packet>,
-    pub write: UdpDownstreamWriter,
+    pub read: AcceptedUdpRead<Packet>,
+    pub write: AcceptedUdpWrite,
 }
 
 pub struct CopyBidirectional<R, W> {
-    pub flow: FlowOwnedGuard,
+    pub flow: Flow,
     pub upstream: UpstreamParts<R, W>,
     pub downstream: DownstreamParts,
     pub speed_limiter: Limiter,
@@ -85,8 +86,8 @@ where
                 end: None,
                 destination: None,
                 upstream_local,
-                upstream_remote: self.flow.flow().upstream.0.clone(),
-                downstream_remote: self.flow.flow().downstream.0,
+                upstream_remote: self.flow.upstream.as_ref().unwrap().0.clone(),
+                downstream_remote: self.flow.downstream.0,
                 up_gauge: Mutex::new(up_handle),
                 dn_gauge: Mutex::new(dn_handle),
             };
@@ -114,10 +115,10 @@ where
             let session = Session {
                 start: SystemTime::now(),
                 end: None,
-                destination: Some(self.flow.flow().upstream.0.clone()),
+                destination: Some(self.flow.upstream.as_ref().unwrap().0.clone()),
                 upstream_local,
                 upstream_remote,
-                downstream_remote: self.flow.flow().downstream.0,
+                downstream_remote: self.flow.downstream.0,
                 up_gauge: Mutex::new(up_handle),
                 dn_gauge: Mutex::new(dn_handle),
             };
@@ -142,7 +143,7 @@ where
         let res = match session {
             Some((session, r, w)) => {
                 let res = copy_bidirectional(
-                    self.flow.flow().clone(),
+                    self.flow.clone(),
                     (self.upstream, self.downstream),
                     self.speed_limiter,
                     self.payload_crypto,
@@ -164,7 +165,7 @@ where
             }
             None => {
                 copy_bidirectional(
-                    self.flow.flow().clone(),
+                    self.flow.clone(),
                     (self.upstream, self.downstream),
                     self.speed_limiter,
                     self.payload_crypto,
@@ -238,7 +239,7 @@ where
         let payload_crypto = payload_crypto.clone();
         async move {
             loop {
-                let res = downstream.rx.recv().await;
+                let res = downstream.read.recv().recv().await;
                 trace!("Received packet from downstream");
                 let mut packet = match res {
                     Some(packet) => packet,
@@ -415,7 +416,7 @@ pub enum CopyBiError {
     SendDownstream {
         #[source]
         source: io::Error,
-        downstream: UdpDownstreamWriter,
+        downstream: AcceptedUdpWrite,
     },
 }
 

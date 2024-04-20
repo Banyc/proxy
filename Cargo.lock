@@ -9,6 +9,7 @@ dependencies = [
  "async-speed-limit",
  "bytes",
  "common",
+ "futures",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -25,6 +26,7 @@ dependencies = [
  "tokio_chacha20",
  "tracing",
  "tracing-subscriber",
+ "udp_listener",
 ]
 
 [[package]]
@@ -390,12 +392,13 @@ checksum = "a3e368af43e418a04d52505cf3dbc23dda4e3407ae2fa99fd0e4f308ce546acc"
 
 [[package]]
 name = "cc"
-version = "1.0.94"
+version = "1.0.95"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17f6e324229dc011159fcc089755d1e2e216a90d43a7dea6853ca740b84f35e7"
+checksum = "d32a725bc159af97c3e629873bb9f88fb8cf8a4867175f76dc987815ea07c83b"
 dependencies = [
  "jobserver",
  "libc",
+ "once_cell",
 ]
 
 [[package]]
@@ -544,6 +547,7 @@ dependencies = [
  "tokio_conn_pool",
  "tokio_throughput",
  "tracing",
+ "udp_listener",
 ]
 
 [[package]]
@@ -2156,6 +2160,7 @@ dependencies = [
  "tokio_kcp",
  "tracing",
  "tracing-subscriber",
+ "udp_listener",
 ]
 
 [[package]]
@@ -2982,9 +2987,9 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.22.11"
+version = "0.22.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb686a972ccef8537b39eead3968b0e8616cb5040dbb9bba93007c8e07c9215f"
+checksum = "d3328d4f68a705b2a4498da1d580585d39a6510f98318a2cec3018a7ec61ddef"
 dependencies = [
  "indexmap",
  "serde",
@@ -3088,6 +3093,16 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "udp_listener"
+version = "0.1.0"
+source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.5#1c027421caae1fbbfa98f38214024a2e523a03ce"
+dependencies = [
+ "bytes",
+ "lockfree-object-pool",
+ "tokio",
+]
 
 [[package]]
 name = "unicode-ident"

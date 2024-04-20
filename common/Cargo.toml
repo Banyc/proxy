@@ -36,6 +36,7 @@ tokio_chacha20 = { workspace = true }
 tokio_conn_pool = { workspace = true }
 tokio_throughput = { workspace = true }
 tracing = { workspace = true }
+udp_listener = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

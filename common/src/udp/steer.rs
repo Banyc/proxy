@@ -1,60 +1,36 @@
 use std::io::{self, Write};
 
 use metrics::counter;
-use tracing::{trace, warn};
+use tracing::warn;
+use udp_listener::AcceptedUdpWrite;
 
-use crate::{
-    header::{
-        codec::{read_header, write_header, CodecError},
-        route::{RouteErrorKind, RouteResponse},
-    },
-    udp::respond::respond_with_error,
+use crate::header::{
+    codec::{read_header, write_header, CodecError},
+    route::RouteResponse,
 };
 
-use super::{header::UdpRequestHeader, UdpDownstreamWriter, UpstreamAddr};
+use super::{header::UdpRequestHeader, UpstreamAddr};
 
-pub async fn steer(
-    buf: &mut io::Cursor<&[u8]>,
-    downstream_writer: &UdpDownstreamWriter,
+pub async fn echo(
+    buf: &[u8],
+    dn_writer: &AcceptedUdpWrite,
     header_crypto: &tokio_chacha20::config::Config,
-) -> Result<Option<UpstreamAddr>, CodecError> {
-    let res = decode_header(buf, header_crypto).await;
-    match res {
-        Ok(upstream_addr) => {
-            // Proxy
-            if let Some(addr) = upstream_addr {
-                return Ok(Some(addr));
-            }
-
-            // Echo
-            let resp = RouteResponse { result: Ok(()) };
-            let mut wtr = Vec::new();
-            let mut crypto_cursor =
-                tokio_chacha20::cursor::EncryptCursor::new(*header_crypto.key());
-            write_header(&mut wtr, &resp, &mut crypto_cursor).unwrap();
-            wtr.write_all(&buf.get_ref()[buf.position() as usize..])
-                .unwrap();
-            let downstream_writer = downstream_writer.clone();
-            tokio::spawn(async move {
-                if let Err(e) = downstream_writer.send(&wtr).await {
-                    warn!(
-                        ?e,
-                        ?downstream_writer,
-                        "Failed to send response to downstream"
-                    );
-                };
-            });
-            counter!("udp.echoes").increment(1);
-            Ok(None)
-        }
-        Err(err) => {
-            handle_steer_error(downstream_writer, &err, header_crypto).await;
-            Err(err)
-        }
-    }
+) {
+    let resp = RouteResponse { result: Ok(()) };
+    let mut wtr = Vec::new();
+    let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*header_crypto.key());
+    write_header(&mut wtr, &resp, &mut crypto_cursor).unwrap();
+    wtr.write_all(buf).unwrap();
+    let dn_writer = dn_writer.clone();
+    tokio::spawn(async move {
+        if let Err(e) = dn_writer.send(&wtr).await {
+            warn!(?e, ?dn_writer, "Failed to send response to downstream");
+        };
+    });
+    counter!("udp.echoes").increment(1);
 }
 
-async fn decode_header(
+pub fn decode_route_header(
     buf: &mut io::Cursor<&[u8]>,
     header_crypto: &tokio_chacha20::config::Config,
 ) -> Result<Option<UpstreamAddr>, CodecError> {
@@ -63,24 +39,4 @@ async fn decode_header(
     let header: UdpRequestHeader = read_header(buf, &mut crypto_cursor)?;
 
     Ok(header.upstream.map(UpstreamAddr))
-}
-
-async fn handle_steer_error(
-    downstream_writer: &UdpDownstreamWriter,
-    error: &CodecError,
-    header_crypto: &tokio_chacha20::config::Config,
-) {
-    let peer_addr = downstream_writer.peer_addr();
-    warn!(?error, ?peer_addr, "Failed to steer");
-    let kind = error_kind_from_header_error(error);
-    if let Err(e) = respond_with_error(downstream_writer, kind, header_crypto).await {
-        trace!(?e, ?peer_addr, "Failed to respond with error to downstream");
-    }
-}
-
-fn error_kind_from_header_error(e: &CodecError) -> RouteErrorKind {
-    match e {
-        CodecError::Io(_) => RouteErrorKind::Io,
-        CodecError::Serialization(_) | CodecError::Integrity => RouteErrorKind::Codec,
-    }
 }

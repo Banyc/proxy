@@ -10,14 +10,15 @@ use common::{
         context::UdpContext,
         io_copy::{CopyBiError, CopyBidirectional, DownstreamParts, UpstreamParts},
         proxy_table::{UdpProxyGroup, UdpProxyGroupBuilder},
-        FlowOwnedGuard, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
+        Flow, Packet, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
 use proxy_client::udp::{EstablishError, UdpProxyClient};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{net::ToSocketAddrs, sync::mpsc};
+use tokio::net::ToSocketAddrs;
 use tracing::{error, warn};
+use udp_listener::AcceptedUdp;
 
 use self::proxy_table::UdpProxyGroupBuildContext;
 
@@ -130,12 +131,7 @@ impl UdpAccess {
         Ok(UdpServer::new(listener, self))
     }
 
-    async fn proxy(
-        &self,
-        rx: mpsc::Receiver<Packet>,
-        flow: FlowOwnedGuard,
-        downstream_writer: UdpDownstreamWriter,
-    ) -> Result<(), AccessProxyError> {
+    async fn proxy(&self, accepted_udp: AcceptedUdp<Flow, Packet>) -> Result<(), AccessProxyError> {
         // Connect to upstream
         let proxy_chain = self.proxy_group.choose_chain();
         let upstream =
@@ -148,6 +144,8 @@ impl UdpAccess {
         let payload_crypto = proxy_chain.payload_crypto.clone();
         let session_table = self.udp_context.session_table.clone();
         let upstream_local = upstream_read.inner().local_addr().ok();
+        let flow = accepted_udp.dispatch_key().clone();
+        let (dn_read, dn_write) = accepted_udp.split();
         tokio::spawn(async move {
             let io_copy = CopyBidirectional {
                 flow,
@@ -156,8 +154,8 @@ impl UdpAccess {
                     write: upstream_write,
                 },
                 downstream: DownstreamParts {
-                    rx,
-                    write: downstream_writer,
+                    read: dn_read,
+                    write: dn_write,
                 },
                 speed_limiter,
                 payload_crypto,
@@ -180,21 +178,12 @@ pub enum AccessProxyError {
 }
 
 impl UdpServerHook for UdpAccess {
-    async fn parse_upstream_addr(
-        &self,
-        _buf: &mut io::Cursor<&[u8]>,
-        _downstream_writer: &UdpDownstreamWriter,
-    ) -> Option<UpstreamAddr> {
-        Some(UpstreamAddr(self.destination.clone()))
+    fn parse_upstream_addr(&self, _buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
+        Some(Some(UpstreamAddr(self.destination.clone())))
     }
 
-    async fn handle_flow(
-        &self,
-        rx: mpsc::Receiver<Packet>,
-        flow: FlowOwnedGuard,
-        downstream_writer: UdpDownstreamWriter,
-    ) {
-        let res = self.proxy(rx, flow, downstream_writer).await;
+    async fn handle_flow(&self, accepted: AcceptedUdp<common::udp::Flow, Packet>) {
+        let res = self.proxy(accepted).await;
         match res {
             Ok(()) => (),
             Err(e) => {

@@ -12,17 +12,15 @@ use common::{
         context::UdpContext,
         io_copy::{CopyBidirectional, DownstreamParts, UpstreamParts},
         respond::respond_with_error,
-        steer::steer,
-        FlowOwnedGuard, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
+        steer::{decode_route_header, echo},
+        Flow, Packet, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
 use serde::Deserialize;
 use thiserror::Error;
-use tokio::{
-    net::{ToSocketAddrs, UdpSocket},
-    sync::mpsc,
-};
+use tokio::net::{ToSocketAddrs, UdpSocket};
 use tracing::{error, instrument, trace, warn};
+use udp_listener::{AcceptedUdp, AcceptedUdpWrite};
 
 use crate::ListenerBindError;
 
@@ -124,27 +122,32 @@ impl UdpProxy {
         Ok(UdpServer::new(listener, self))
     }
 
-    #[instrument(skip(self, rx, flow, downstream_writer))]
-    async fn proxy(
-        &self,
-        rx: mpsc::Receiver<Packet>,
-        flow: FlowOwnedGuard,
-        downstream_writer: UdpDownstreamWriter,
-    ) -> Result<(), ProxyError> {
+    #[instrument(skip(self, accepted_udp))]
+    async fn proxy(&self, mut accepted_udp: AcceptedUdp<Flow, Packet>) -> Result<(), ProxyError> {
+        let flow = accepted_udp.dispatch_key().clone();
+
+        // Echo
+        if flow.upstream.is_none() {
+            let pkt = accepted_udp.read().recv().try_recv().unwrap();
+            echo(pkt.slice(), accepted_udp.write(), &self.header_crypto).await;
+            return Ok(());
+        }
+
         // Prevent connections to localhost
-        let resolved_upstream =
-            flow.flow()
-                .upstream
-                .0
-                .to_socket_addr()
-                .await
-                .map_err(|e| ProxyError::Resolve {
-                    source: e,
-                    addr: flow.flow().upstream.0.clone(),
-                })?;
+        let resolved_upstream = flow
+            .upstream
+            .as_ref()
+            .unwrap()
+            .0
+            .to_socket_addr()
+            .await
+            .map_err(|e| ProxyError::Resolve {
+                source: e,
+                addr: flow.upstream.as_ref().unwrap().0.clone(),
+            })?;
         if resolved_upstream.ip().is_loopback() {
             return Err(ProxyError::Loopback {
-                addr: flow.flow().upstream.0.clone(),
+                addr: flow.upstream.as_ref().unwrap().0.clone(),
                 sock_addr: resolved_upstream,
             });
         }
@@ -159,7 +162,7 @@ impl UdpProxy {
             .await
             .map_err(|e| ProxyError::ConnectUpstream {
                 source: e,
-                addr: flow.flow().upstream.0.clone(),
+                addr: flow.upstream.as_ref().unwrap().0.clone(),
                 sock_addr: resolved_upstream,
             })?;
         let upstream = Arc::new(upstream);
@@ -178,6 +181,7 @@ impl UdpProxy {
         let payload_crypto = self.payload_crypto.clone();
         let session_table = self.udp_context.session_table.clone();
         let upstream_local = upstream.local_addr().ok();
+        let (dn_read, dn_write) = accepted_udp.split();
         tokio::spawn(async move {
             let io_copy = CopyBidirectional {
                 flow,
@@ -186,8 +190,8 @@ impl UdpProxy {
                     write: upstream,
                 },
                 downstream: DownstreamParts {
-                    rx,
-                    write: downstream_writer.clone(),
+                    read: dn_read,
+                    write: dn_write.clone(),
                 },
                 speed_limiter: Limiter::new(f64::INFINITY),
                 payload_crypto,
@@ -197,27 +201,20 @@ impl UdpProxy {
                 .serve_as_proxy_server(session_table, upstream_local, "UDP")
                 .await;
             if res.is_err() {
-                let _ = respond_with_error(&downstream_writer, RouteErrorKind::Io, &header_crypto)
-                    .await;
+                let _ = respond_with_error(&dn_write, RouteErrorKind::Io, &header_crypto).await;
             }
         });
         Ok(())
     }
 
-    async fn handle_proxy_result(
-        &self,
-        downstream_writer: &UdpDownstreamWriter,
-        res: Result<(), ProxyError>,
-    ) {
+    async fn handle_proxy_result(&self, dn_write: &AcceptedUdpWrite, res: Result<(), ProxyError>) {
         match res {
             Ok(()) => (),
             Err(e) => {
-                let peer_addr = downstream_writer.peer_addr();
+                let peer_addr = dn_write.peer_addr();
                 warn!(?e, ?peer_addr, "Proxy failed");
                 let kind = error_kind_from_proxy_error(e);
-                if let Err(e) =
-                    respond_with_error(downstream_writer, kind, &self.header_crypto).await
-                {
+                if let Err(e) = respond_with_error(dn_write, kind, &self.header_crypto).await {
                     trace!(?e, ?peer_addr, "Failed to respond with error");
                 }
             }
@@ -261,24 +258,14 @@ fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
 impl loading::Hook for UdpProxy {}
 
 impl UdpServerHook for UdpProxy {
-    async fn parse_upstream_addr(
-        &self,
-        buf: &mut io::Cursor<&[u8]>,
-        downstream_writer: &UdpDownstreamWriter,
-    ) -> Option<UpstreamAddr> {
-        match steer(buf, downstream_writer, &self.header_crypto).await {
-            Ok(res) => res,
-            Err(_) => None,
-        }
+    fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
+        let res = decode_route_header(buf, &self.header_crypto);
+        res.ok()
     }
 
-    async fn handle_flow(
-        &self,
-        rx: mpsc::Receiver<Packet>,
-        flow: FlowOwnedGuard,
-        downstream_writer: UdpDownstreamWriter,
-    ) {
-        let res = self.proxy(rx, flow, downstream_writer.clone()).await;
-        self.handle_proxy_result(&downstream_writer, res).await;
+    async fn handle_flow(&self, accepted: AcceptedUdp<common::udp::Flow, Packet>) {
+        let dn_write = accepted.write().clone();
+        let res = self.proxy(accepted).await;
+        self.handle_proxy_result(&dn_write, res).await;
     }
 }

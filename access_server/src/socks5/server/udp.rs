@@ -9,14 +9,15 @@ use common::{
         context::UdpContext,
         io_copy::{CopyBidirectional, DownstreamParts, UpstreamParts},
         proxy_table::{UdpProxyGroup, UdpProxyGroupBuilder},
-        FlowOwnedGuard, Packet, UdpDownstreamWriter, UdpServer, UdpServerHook, UpstreamAddr,
+        Flow, Packet, UdpServer, UdpServerHook, UpstreamAddr,
     },
 };
 use proxy_client::udp::{EstablishError, UdpProxyClient};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{net::ToSocketAddrs, sync::mpsc};
+use tokio::net::ToSocketAddrs;
 use tracing::{error, warn};
+use udp_listener::AcceptedUdp;
 
 use crate::{socks5::messages::UdpRequestHeader, udp::proxy_table::UdpProxyGroupBuildContext};
 
@@ -116,17 +117,15 @@ impl Socks5ServerUdpAccess {
         Ok(UdpServer::new(listener, self))
     }
 
-    async fn proxy(
-        &self,
-        rx: mpsc::Receiver<Packet>,
-        flow: FlowOwnedGuard,
-        downstream_writer: UdpDownstreamWriter,
-    ) -> Result<(), AccessProxyError> {
+    async fn proxy(&self, accepted_udp: AcceptedUdp<Flow, Packet>) -> Result<(), AccessProxyError> {
         // Connect to upstream
         let proxy_chain = self.proxy_group.choose_chain();
-        let upstream =
-            UdpProxyClient::establish(proxy_chain.chain.clone(), flow.flow().upstream.0.clone())
-                .await?;
+        let flow = accepted_udp.dispatch_key().clone();
+        let upstream = UdpProxyClient::establish(
+            proxy_chain.chain.clone(),
+            flow.upstream.as_ref().unwrap().0.clone(),
+        )
+        .await?;
         let upstream_remote = upstream.remote_addr().clone();
 
         let (upstream_read, upstream_write) = upstream.into_split();
@@ -135,7 +134,7 @@ impl Socks5ServerUdpAccess {
             let mut wtr = Vec::new();
             let udp_request_header = UdpRequestHeader {
                 fragment: 0,
-                destination: flow.flow().upstream.0.clone(),
+                destination: flow.upstream.as_ref().unwrap().0.clone(),
             };
             udp_request_header.encode(&mut wtr).await.unwrap();
             wtr.into()
@@ -145,6 +144,7 @@ impl Socks5ServerUdpAccess {
         let payload_crypto = proxy_chain.payload_crypto.clone();
         let session_table = self.udp_context.session_table.clone();
         let upstream_local = upstream_read.inner().local_addr().ok();
+        let (dn_read, dn_write) = accepted_udp.split();
         tokio::spawn(async move {
             let io_copy = CopyBidirectional {
                 flow,
@@ -153,8 +153,8 @@ impl Socks5ServerUdpAccess {
                     write: upstream_write,
                 },
                 downstream: DownstreamParts {
-                    rx,
-                    write: downstream_writer,
+                    read: dn_read,
+                    write: dn_write,
                 },
                 speed_limiter,
                 payload_crypto,
@@ -175,12 +175,9 @@ pub enum AccessProxyError {
 }
 
 impl UdpServerHook for Socks5ServerUdpAccess {
-    async fn parse_upstream_addr(
-        &self,
-        buf: &mut io::Cursor<&[u8]>,
-        _downstream_writer: &UdpDownstreamWriter,
-    ) -> Option<UpstreamAddr> {
-        let request_header = match UdpRequestHeader::decode(buf).await {
+    fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
+        let res = futures::executor::block_on(async move { UdpRequestHeader::decode(buf).await });
+        let request_header = match res {
             Ok(header) => header,
             Err(e) => {
                 warn!(?e, "Failed to decode UDP request header");
@@ -191,16 +188,11 @@ impl UdpServerHook for Socks5ServerUdpAccess {
             return None;
         }
 
-        Some(UpstreamAddr(request_header.destination))
+        Some(Some(UpstreamAddr(request_header.destination)))
     }
 
-    async fn handle_flow(
-        &self,
-        rx: mpsc::Receiver<Packet>,
-        flow: FlowOwnedGuard,
-        downstream_writer: UdpDownstreamWriter,
-    ) {
-        let res = self.proxy(rx, flow, downstream_writer).await;
+    async fn handle_flow(&self, accepted: AcceptedUdp<Flow, Packet>) {
+        let res = self.proxy(accepted).await;
         match res {
             Ok(()) => (),
             Err(e) => {

@@ -8,6 +8,7 @@ edition = "2021"
 async-speed-limit = { workspace = true }
 bytes = { workspace = true }
 common = { path = "../common" }
+futures = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["full"] }
 hyper-util = { workspace = true, features = ["tokio"] }
@@ -24,3 +25,4 @@ tokio_chacha20 = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+udp_listener = { workspace = true }
