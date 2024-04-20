@@ -87,13 +87,13 @@ impl<SAS> Merge for PoolBuilder<SAS> {
     }
 }
 
-fn pool_entries_from_proxy_configs<C, CT: Clone, ST>(
+fn pool_entries_from_proxy_configs<C, CT, ST>(
     proxy_configs: impl Iterator<Item = ProxyConfig<StreamAddr<ST>>>,
     connector_table: CT,
 ) -> impl Iterator<Item = ConnPoolEntry<StreamAddr<ST>, C>>
 where
     C: std::fmt::Debug + IoStream,
-    CT: StreamConnectorTable<Connection = C, StreamType = ST> + Sync + Send + 'static,
+    CT: Clone + StreamConnectorTable<Connection = C, StreamType = ST> + Sync + Send + 'static,
     ST: StreamType,
 {
     proxy_configs.map(move |c| ConnPoolEntry {
