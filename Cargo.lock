@@ -3097,7 +3097,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "udp_listener"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.5#1c027421caae1fbbfa98f38214024a2e523a03ce"
+source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.6#971ef2b5c0c18842576447171c962ef84454b33a"
 dependencies = [
  "bytes",
  "lockfree-object-pool",

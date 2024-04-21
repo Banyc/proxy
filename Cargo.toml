@@ -59,7 +59,7 @@ tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", rev 
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.5" }
+udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.6" }
 
 [profile.profiling]
 inherits = "release"

@@ -1,11 +1,4 @@
-use std::{
-    collections::HashMap,
-    io,
-    net::SocketAddr,
-    num::NonZeroUsize,
-    sync::{Arc, RwLock},
-    time::Duration,
-};
+use std::{io, net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use bytes::BytesMut;
 use lockfree_object_pool::{LinearObjectPool, LinearOwnedReusable};
@@ -165,24 +158,6 @@ pub enum ServeError {
     },
 }
 
-pub struct FlowOwnedGuard {
-    flow: Flow,
-    map: Arc<RwLock<FlowMap>>,
-}
-
-impl FlowOwnedGuard {
-    pub fn flow(&self) -> &Flow {
-        &self.flow
-    }
-}
-
-impl Drop for FlowOwnedGuard {
-    fn drop(&mut self) {
-        // Remove flow
-        self.map.write().unwrap().remove(&self.flow);
-    }
-}
-
 pub trait UdpServerHook: loading::Hook {
     fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>>;
 
@@ -197,8 +172,6 @@ pub struct DownstreamAddr(pub SocketAddr);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UpstreamAddr(pub InternetAddr);
-
-type FlowMap = HashMap<Flow, mpsc::Sender<Packet>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Flow {
