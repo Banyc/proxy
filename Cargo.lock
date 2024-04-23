@@ -2364,7 +2364,7 @@ checksum = "1e0e61cd21fbddd85fbd9367b775660a01d388c08a61c6d2824af480b0309bb9"
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.4#2342c4ee80f365a92b1dfaa41aa79e25d9cb4622"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.5#c63a6e338e04e1945465910fced33a984cc20a05"
 dependencies = [
  "async-trait",
  "async_async_io",
@@ -3135,7 +3135,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "udp_listener"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.7#6daaa2cac1b033e532c5a9286f2222e2638da238"
+source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.8#5ee5b1163f12f4592896bba24456b5499ca17820"
 dependencies = [
  "bytes",
  "lockfree-object-pool",
@@ -3303,11 +3303,11 @@ checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
 
 [[package]]
 name = "winapi-util"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f29e6f9198ba0d26b4c9f07dbe6f9ed633e1f3d5b8b414090084349e46a52596"
+checksum = "134306a13c5647ad6453e8deaec55d3a44d6021970129e6188735e74bf546697"
 dependencies = [
- "winapi",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
