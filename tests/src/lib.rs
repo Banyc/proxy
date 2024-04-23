@@ -1,7 +1,7 @@
 use common::{crypto::XorCrypto, header::codec::MAX_HEADER_LEN};
 use rand::Rng;
 
-pub mod tcp;
+pub mod stream;
 pub mod udp;
 
 pub const STRESS_PARALLEL: usize = 2;
