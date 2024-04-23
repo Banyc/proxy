@@ -11,6 +11,7 @@ bincode = { workspace = true }
 common = { path = "../common" }
 mptcp = { workspace = true }
 protocol = { path = "../protocol" }
+rtp = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 swap = { workspace = true }
 thiserror = { workspace = true }

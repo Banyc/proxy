@@ -6,7 +6,9 @@ use common::stream::{IoAddr, IoStream};
 
 use super::{
     addr::ConcreteStreamAddr,
-    streams::{kcp::AddressedKcpStream, mptcp::IoMptcpStream, tcp::IoTcpStream},
+    streams::{
+        kcp::AddressedKcpStream, mptcp::IoMptcpStream, rtp::AddressedRtpStream, tcp::IoTcpStream,
+    },
 };
 
 #[derive(Debug)]
@@ -15,6 +17,7 @@ pub enum Connection {
     Tcp(IoTcpStream),
     Kcp(AddressedKcpStream),
     Mptcp(IoMptcpStream),
+    Rtp(AddressedRtpStream),
 }
 
 impl IoStream for Connection {}
@@ -25,6 +28,7 @@ impl IoAddr for Connection {
             Connection::Tcp(x) => x.peer_addr(),
             Connection::Kcp(x) => x.peer_addr(),
             Connection::Mptcp(x) => IoAddr::peer_addr(x),
+            Connection::Rtp(x) => IoAddr::peer_addr(x),
         }
     }
 
@@ -34,6 +38,7 @@ impl IoAddr for Connection {
             Connection::Tcp(x) => x.local_addr(),
             Connection::Kcp(x) => x.local_addr(),
             Connection::Mptcp(x) => IoAddr::local_addr(x),
+            Connection::Rtp(x) => IoAddr::local_addr(x),
         }
     }
 }
@@ -49,6 +54,7 @@ impl AsyncWrite for Connection {
             Connection::Tcp(x) => Pin::new(x).poll_write(cx, buf),
             Connection::Kcp(x) => Pin::new(x).poll_write(cx, buf),
             Connection::Mptcp(x) => Pin::new(x).poll_write(cx, buf),
+            Connection::Rtp(x) => Pin::new(x).poll_write(cx, buf),
         }
     }
 
@@ -61,6 +67,7 @@ impl AsyncWrite for Connection {
             Connection::Tcp(x) => Pin::new(x).poll_flush(cx),
             Connection::Kcp(x) => Pin::new(x).poll_flush(cx),
             Connection::Mptcp(x) => Pin::new(x).poll_flush(cx),
+            Connection::Rtp(x) => Pin::new(x).poll_flush(cx),
         }
     }
 
@@ -73,6 +80,7 @@ impl AsyncWrite for Connection {
             Connection::Tcp(x) => Pin::new(x).poll_shutdown(cx),
             Connection::Kcp(x) => Pin::new(x).poll_shutdown(cx),
             Connection::Mptcp(x) => Pin::new(x).poll_shutdown(cx),
+            Connection::Rtp(x) => Pin::new(x).poll_shutdown(cx),
         }
     }
 }
@@ -88,6 +96,7 @@ impl AsyncRead for Connection {
             Connection::Tcp(x) => Pin::new(x).poll_read(cx, buf),
             Connection::Kcp(x) => Pin::new(x).poll_read(cx, buf),
             Connection::Mptcp(x) => Pin::new(x).poll_read(cx, buf),
+            Connection::Rtp(x) => Pin::new(x).poll_read(cx, buf),
         }
     }
 }

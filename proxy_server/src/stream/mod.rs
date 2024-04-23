@@ -20,6 +20,7 @@ use tracing::{error, info, instrument, warn};
 
 pub mod kcp;
 pub mod mptcp;
+pub mod rtp;
 pub mod tcp;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(60);

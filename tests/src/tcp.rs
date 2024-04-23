@@ -13,8 +13,8 @@ mod tests {
     };
     use proxy_client::stream::{establish, trace_rtt};
     use proxy_server::stream::{
-        kcp::build_kcp_proxy_server, mptcp::build_mptcp_proxy_server, tcp::build_tcp_proxy_server,
-        StreamProxyServer,
+        kcp::build_kcp_proxy_server, mptcp::build_mptcp_proxy_server, rtp::build_rtp_proxy_server,
+        tcp::build_tcp_proxy_server, StreamProxyServer,
     };
     use serial_test::serial;
     use swap::Swap;
@@ -73,6 +73,15 @@ mod tests {
                 });
                 proxy_addr
             }
+            ConcreteStreamType::Rtp => {
+                let server = build_rtp_proxy_server(addr, proxy).await.unwrap();
+                let proxy_addr = server.listener().local_addr();
+                join_set.spawn(async move {
+                    let _handle = server.handle();
+                    server.serve().await.unwrap();
+                });
+                proxy_addr
+            }
         };
         ProxyConfig {
             address: StreamAddr {
@@ -103,6 +112,13 @@ mod tests {
         addr: &str,
     ) -> StreamProxyConfig {
         spawn_proxy(join_set, addr, ConcreteStreamType::Mptcp).await
+    }
+
+    async fn spawn_rtp_proxy(
+        join_set: &mut tokio::task::JoinSet<()>,
+        addr: &str,
+    ) -> StreamProxyConfig {
+        spawn_proxy(join_set, addr, ConcreteStreamType::Rtp).await
     }
 
     async fn spawn_greet(
@@ -255,6 +271,12 @@ mod tests {
         stress_test(ConcreteStreamType::Mptcp).await
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn stress_test_rtp() {
+        stress_test(ConcreteStreamType::Rtp).await
+    }
+
     async fn stress_test(ty: ConcreteStreamType) {
         let stream_context = stream_context();
 
@@ -267,6 +289,7 @@ mod tests {
                 ConcreteStreamType::Tcp => spawn_tcp_proxy(&mut join_set, "0.0.0.0:0").await,
                 ConcreteStreamType::Kcp => spawn_kcp_proxy(&mut join_set, "0.0.0.0:0").await,
                 ConcreteStreamType::Mptcp => spawn_mptcp_proxy(&mut join_set, "0.0.0.0:0").await,
+                ConcreteStreamType::Rtp => spawn_rtp_proxy(&mut join_set, "0.0.0.0:0").await,
             };
             proxies.push(proxy_config);
         }

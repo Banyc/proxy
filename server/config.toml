@@ -2,9 +2,10 @@
 "tcp1" = { address = "tcp://proxy.example.org:80", header_key = "base64", payload_key = "base64" }
 "kcp1" = { address = "kcp://proxy.example.org:80", header_key = "base64", payload_key = "base64" }
 "mptcp1" = { address = "mptcp://proxy.example.org:81", header_key = "base64", payload_key = "base64" }
+"rtp1" = { address = "rtp://proxy.example.org:81", header_key = "base64", payload_key = "base64" }
 
 [stream]
-pool = ["tcp1", "mptcp1"]
+pool = ["tcp1", "mptcp1", "rtp1"]
 
 [udp.proxy_server]
 "udp1" = { address = "proxy.example.org:80", header_key = "base64", payload_key = "base64" }
@@ -21,7 +22,8 @@ pool = ["tcp1", "mptcp1"]
     { weight = 1, chain = ["tcp1"] },
     { weight = 1, chain = ["kcp1"] },
     { weight = 1, chain = ["mptcp1"] },
-], trace_rtt = false, active_chains = 3 }
+    { weight = 1, chain = ["rtp1"] },
+], trace_rtt = false, active_chains = 4 }
 
 [access_server.stream.proxy_table]
 "default" = [
@@ -78,7 +80,12 @@ header_key = "base64"
 # payload_key = "base64"
 
 [[proxy_server.mptcp_server]]
-listen_addr = "0.0.0.0:81"
+listen_addr = "0.0.0.0:80"
+header_key = "base64"
+# payload_key = "base64"
+
+[[proxy_server.rtp_server]]
+listen_addr = "0.0.0.0:80"
 header_key = "base64"
 # payload_key = "base64"
 

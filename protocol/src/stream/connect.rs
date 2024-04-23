@@ -5,7 +5,7 @@ use common::stream::connect::{StreamConnect, StreamConnectExt, StreamConnectorTa
 use super::{
     addr::ConcreteStreamType,
     connection::Connection,
-    streams::{kcp::KcpConnector, mptcp::MptcpConnector, tcp::TcpConnector},
+    streams::{kcp::KcpConnector, mptcp::MptcpConnector, rtp::RtpConnector, tcp::TcpConnector},
 };
 
 #[derive(Debug, Clone)]
@@ -13,6 +13,7 @@ pub struct ConcreteStreamConnectorTable {
     tcp: TcpConnector,
     kcp: KcpConnector,
     mptcp: MptcpConnector,
+    rtp: RtpConnector,
 }
 
 impl ConcreteStreamConnectorTable {
@@ -21,6 +22,7 @@ impl ConcreteStreamConnectorTable {
             tcp: TcpConnector,
             kcp: KcpConnector,
             mptcp: MptcpConnector,
+            rtp: RtpConnector,
         }
     }
 }
@@ -38,6 +40,7 @@ impl StreamConnectorTable for ConcreteStreamConnectorTable {
             ConcreteStreamType::Tcp => self.tcp.connect(addr).await,
             ConcreteStreamType::Kcp => self.kcp.connect(addr).await,
             ConcreteStreamType::Mptcp => self.mptcp.connect(addr).await,
+            ConcreteStreamType::Rtp => self.rtp.connect(addr).await,
         }
     }
 
@@ -51,6 +54,7 @@ impl StreamConnectorTable for ConcreteStreamConnectorTable {
             ConcreteStreamType::Tcp => self.tcp.timed_connect(addr, timeout).await,
             ConcreteStreamType::Kcp => self.kcp.timed_connect(addr, timeout).await,
             ConcreteStreamType::Mptcp => self.mptcp.timed_connect(addr, timeout).await,
+            ConcreteStreamType::Rtp => self.rtp.timed_connect(addr, timeout).await,
         }
     }
 }

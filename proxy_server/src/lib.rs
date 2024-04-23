@@ -4,8 +4,8 @@ use common::{config::Merge, error::AnyResult, loading};
 use protocol::context::ConcreteContext;
 use serde::Deserialize;
 use stream::{
-    kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, tcp::TcpProxyServerConfig,
-    StreamProxyServer,
+    kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, rtp::RtpProxyServerConfig,
+    tcp::TcpProxyServerConfig, StreamProxyServer,
 };
 use thiserror::Error;
 use udp::{UdpProxy, UdpProxyServerBuilder, UdpProxyServerConfig};
@@ -24,6 +24,8 @@ pub struct ProxyServerConfig {
     pub kcp_server: Vec<KcpProxyServerConfig>,
     #[serde(default)]
     pub mptcp_server: Vec<MptcpProxyServerConfig>,
+    #[serde(default)]
+    pub rtp_server: Vec<RtpProxyServerConfig>,
 }
 impl ProxyServerConfig {
     pub fn new() -> Self {
@@ -32,6 +34,7 @@ impl ProxyServerConfig {
             udp_server: Default::default(),
             kcp_server: Default::default(),
             mptcp_server: Default::default(),
+            rtp_server: Default::default(),
         }
     }
 
@@ -88,6 +91,17 @@ impl ProxyServerConfig {
             )
             .await?;
 
+        loader
+            .rtp_server
+            .spawn_and_clean(
+                join_set,
+                self.rtp_server
+                    .into_iter()
+                    .map(|s| s.into_builder(context.stream.clone()))
+                    .collect(),
+            )
+            .await?;
+
         Ok(())
     }
 }
@@ -102,11 +116,13 @@ impl Merge for ProxyServerConfig {
         self.udp_server.extend(other.udp_server);
         self.kcp_server.extend(other.kcp_server);
         self.mptcp_server.extend(other.mptcp_server);
+        self.rtp_server.extend(other.rtp_server);
         Ok(Self {
             tcp_server: self.tcp_server,
             udp_server: self.udp_server,
             kcp_server: self.kcp_server,
             mptcp_server: self.mptcp_server,
+            rtp_server: self.rtp_server,
         })
     }
 }
@@ -116,6 +132,7 @@ pub struct ProxyServerLoader {
     udp_server: loading::Loader<UdpProxy>,
     kcp_server: loading::Loader<StreamProxyServer>,
     mptcp_server: loading::Loader<StreamProxyServer>,
+    rtp_server: loading::Loader<StreamProxyServer>,
 }
 
 impl ProxyServerLoader {
@@ -125,6 +142,7 @@ impl ProxyServerLoader {
             udp_server: loading::Loader::new(),
             kcp_server: loading::Loader::new(),
             mptcp_server: loading::Loader::new(),
+            rtp_server: loading::Loader::new(),
         }
     }
 }

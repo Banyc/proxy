@@ -16,6 +16,7 @@ pub enum ConcreteStreamType {
     Tcp,
     Kcp,
     Mptcp,
+    Rtp,
 }
 impl StreamType for ConcreteStreamType {}
 impl fmt::Display for ConcreteStreamType {
@@ -24,6 +25,7 @@ impl fmt::Display for ConcreteStreamType {
             ConcreteStreamType::Tcp => write!(f, "tcp"),
             ConcreteStreamType::Kcp => write!(f, "kcp"),
             ConcreteStreamType::Mptcp => write!(f, "mptcp"),
+            ConcreteStreamType::Rtp => write!(f, "rtp"),
         }
     }
 }
@@ -35,6 +37,7 @@ impl FromStr for ConcreteStreamType {
             "tcp" => Ok(Self::Tcp),
             "kcp" => Ok(Self::Kcp),
             "mptcp" => Ok(Self::Mptcp),
+            "rtp" => Ok(Self::Rtp),
             _ => Err(ParseInternetAddrError),
         }
     }
