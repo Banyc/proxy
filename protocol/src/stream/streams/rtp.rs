@@ -74,7 +74,7 @@ where
         loop {
             trace!("Waiting for connection");
             tokio::select! {
-                res = self.listener.accept() => {
+                res = self.listener.accept_without_handshake() => {
                     let accepted = match res {
                         Ok(res) => res,
                         Err(e) => {
@@ -125,7 +125,7 @@ pub struct RtpConnector;
 impl StreamConnect for RtpConnector {
     type Connection = Connection;
     async fn connect(&self, addr: SocketAddr) -> io::Result<Connection> {
-        let connected = rtp::udp::connect(addr, None).await?;
+        let connected = rtp::udp::connect_without_handshake(addr, None).await?;
         let stream = AddressedRtpStream {
             read: connected.read.into_async_read(),
             write: connected.write.into_async_write(true),
