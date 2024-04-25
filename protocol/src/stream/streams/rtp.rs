@@ -125,7 +125,7 @@ pub struct RtpConnector;
 impl StreamConnect for RtpConnector {
     type Connection = Connection;
     async fn connect(&self, addr: SocketAddr) -> io::Result<Connection> {
-        let connected = rtp::udp::connect(addr).await?;
+        let connected = rtp::udp::connect(addr, None).await?;
         let stream = AddressedRtpStream {
             read: connected.read.into_async_read(),
             write: connected.write.into_async_write(true),
