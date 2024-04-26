@@ -5,7 +5,7 @@
 "rtp1" = { address = "rtp://proxy.example.org:81", header_key = "base64", payload_key = "base64" }
 
 [stream]
-pool = ["tcp1", "mptcp1", "rtp1"]
+pool = ["tcp1", "mptcp1"]
 
 [udp.proxy_server]
 "udp1" = { address = "proxy.example.org:80", header_key = "base64", payload_key = "base64" }
