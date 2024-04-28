@@ -2373,7 +2373,7 @@ checksum = "1e0e61cd21fbddd85fbd9367b775660a01d388c08a61c6d2824af480b0309bb9"
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.16#83033337d490dd20d59387b9572bb7e1f6f55931"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.17#f8342e79560ec1d105e079553d5bf0b686e0fd11"
 dependencies = [
  "async-trait",
  "async_async_io",
