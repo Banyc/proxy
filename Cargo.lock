@@ -308,9 +308,9 @@ checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
 
 [[package]]
 name = "base64"
-version = "0.22.0"
+version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9475866fec1451be56a3c2400fd081ff546538961565ccb5b7142cbd22bc7a51"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bincode"
@@ -398,9 +398,9 @@ checksum = "a3e368af43e418a04d52505cf3dbc23dda4e3407ae2fa99fd0e4f308ce546acc"
 
 [[package]]
 name = "cc"
-version = "1.0.95"
+version = "1.0.96"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d32a725bc159af97c3e629873bb9f88fb8cf8a4867175f76dc987815ea07c83b"
+checksum = "065a29261d53ba54260972629f9ca6bffa69bac13cd1fed61420f7fa68b9f8bd"
 dependencies = [
  "jobserver",
  "libc",
@@ -524,7 +524,7 @@ version = "0.1.0"
 dependencies = [
  "async-speed-limit",
  "async-trait",
- "base64 0.22.0",
+ "base64 0.22.1",
  "bincode",
  "bytes",
  "bytesize",
@@ -1365,7 +1365,7 @@ version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d58e362dc7206e9456ddbcdbd53c71ba441020e62104703075a69151e38d85f"
 dependencies = [
- "base64 0.22.0",
+ "base64 0.22.1",
  "indexmap",
  "metrics",
  "metrics-util",
@@ -2373,7 +2373,7 @@ checksum = "1e0e61cd21fbddd85fbd9367b775660a01d388c08a61c6d2824af480b0309bb9"
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.25#8355ee79a4d5d519f73709fd4685449284178aee"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.26#66152fc816ed7c709c51f5fff3bc7c6629bacc74"
 dependencies = [
  "async-trait",
  "async_async_io",
@@ -2968,7 +2968,7 @@ version = "0.1.0"
 source = "git+https://github.com/Banyc/tokio_chacha20.git?tag=v0.0.1#dbda6eb25febd4eab84357f8d3a4c18b3d1c0be5"
 dependencies = [
  "arrayvec",
- "base64 0.22.0",
+ "base64 0.22.1",
  "blake3",
  "num-bigint",
  "rand",
