@@ -40,7 +40,7 @@ once_cell = "1"
 pin-project-lite = "0.2"
 rand = "0.8"
 regex = "1"
-rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.36" }
+rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.38" }
 scopeguard = "1"
 serde = "1"
 serde_json = "1"
@@ -60,7 +60,7 @@ tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", rev 
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.8" }
+udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.9" }
 
 [profile.profiling]
 inherits = "release"

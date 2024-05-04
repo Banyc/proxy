@@ -9,6 +9,7 @@ use tokio::{
 use tracing::{error, info, instrument, trace, warn};
 
 use common::{
+    addr::any_addr,
     error::AnyResult,
     loading,
     stream::{connect::StreamConnect, IoAddr, IoStream, StreamServerHook},
@@ -84,7 +85,7 @@ where
                     };
                     let stream = AddressedRtpStream {
                         read: accepted.read.into_async_read(),
-                        write: accepted.write.into_async_write(true),
+                        write: accepted.write.into_async_write(),
                         local_addr: self.listener.local_addr(),
                         peer_addr: accepted.peer_addr,
                     };
@@ -125,10 +126,11 @@ pub struct RtpConnector;
 impl StreamConnect for RtpConnector {
     type Connection = Connection;
     async fn connect(&self, addr: SocketAddr) -> io::Result<Connection> {
-        let connected = rtp::udp::connect_without_handshake(addr, None).await?;
+        let connected =
+            rtp::udp::connect_without_handshake(any_addr(&addr.ip()), addr, None).await?;
         let stream = AddressedRtpStream {
             read: connected.read.into_async_read(),
-            write: connected.write.into_async_write(true),
+            write: connected.write.into_async_write(),
             local_addr: connected.local_addr,
             peer_addr: connected.peer_addr,
         };
