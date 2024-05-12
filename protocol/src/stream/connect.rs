@@ -1,6 +1,6 @@
 use std::{io, net::SocketAddr, time::Duration};
 
-use common::stream::connect::{StreamConnect, StreamConnectExt, StreamConnectorTable};
+use common::stream::connect::{StreamConnectExt, StreamConnectorTable};
 
 use super::{
     addr::ConcreteStreamType,
@@ -30,19 +30,6 @@ impl ConcreteStreamConnectorTable {
 impl StreamConnectorTable for ConcreteStreamConnectorTable {
     type Connection = Connection;
     type StreamType = ConcreteStreamType;
-
-    async fn connect(
-        &self,
-        stream_type: &ConcreteStreamType,
-        addr: SocketAddr,
-    ) -> io::Result<Connection> {
-        match stream_type {
-            ConcreteStreamType::Tcp => self.tcp.connect(addr).await,
-            ConcreteStreamType::Kcp => self.kcp.connect(addr).await,
-            ConcreteStreamType::Mptcp => self.mptcp.connect(addr).await,
-            ConcreteStreamType::Rtp => self.rtp.connect(addr).await,
-        }
-    }
 
     async fn timed_connect(
         &self,

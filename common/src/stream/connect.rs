@@ -33,11 +33,6 @@ pub trait StreamConnectorTable: std::fmt::Debug + Clone + Sync + Send + 'static 
     type Connection;
     type StreamType;
 
-    fn connect(
-        &self,
-        stream_type: &Self::StreamType,
-        addr: SocketAddr,
-    ) -> impl std::future::Future<Output = io::Result<Self::Connection>> + Send;
     fn timed_connect(
         &self,
         stream_type: &Self::StreamType,
