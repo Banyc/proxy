@@ -7,7 +7,7 @@ use std::{
 
 use bytesize::ByteSize;
 use monitor_table::{
-    row::{LiteralType, LiteralValue, TableRow},
+    row::{LiteralType, LiteralValue, TableRow, ValueDisplay},
     table::Table,
 };
 use tokio_throughput::GaugeHandle;
@@ -99,7 +99,8 @@ impl<ST: fmt::Display> TableRow for Session<ST> {
             dn_total_bytes,
         ]
     }
-
+}
+impl<ST> ValueDisplay for Session<ST> {
     fn display_value(header: &str, value: Option<LiteralValue>) -> String {
         let Some(v) = value else {
             return String::new();

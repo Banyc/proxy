@@ -6,7 +6,7 @@ use std::{
 
 use bytesize::ByteSize;
 use monitor_table::{
-    row::{LiteralType, LiteralValue, TableRow},
+    row::{LiteralType, LiteralValue, TableRow, ValueDisplay},
     table::Table,
 };
 use tokio_throughput::GaugeHandle;
@@ -26,7 +26,6 @@ pub struct Session {
     pub up_gauge: Mutex<GaugeHandle>,
     pub dn_gauge: Mutex<GaugeHandle>,
 }
-
 impl TableRow for Session {
     fn schema() -> Vec<(String, LiteralType)> {
         vec![
@@ -90,7 +89,8 @@ impl TableRow for Session {
             dn_total_bytes,
         ]
     }
-
+}
+impl ValueDisplay for Session {
     fn display_value(header: &str, value: Option<LiteralValue>) -> String {
         let Some(v) = value else {
             return String::new();
