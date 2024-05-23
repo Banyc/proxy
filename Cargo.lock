@@ -309,6 +309,12 @@ dependencies = [
 
 [[package]]
 name = "base64"
+version = "0.21.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
+
+[[package]]
+name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
@@ -333,6 +339,9 @@ name = "bitflags"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf4b9d6a944f767f8e5e0db018570623c85f3d925ac718db4e06d0187adb21c1"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "blake3"
@@ -525,12 +534,14 @@ version = "0.1.0"
 dependencies = [
  "async-speed-limit",
  "async-trait",
- "base64",
+ "base64 0.22.1",
  "bincode",
  "bytes",
  "bytesize",
  "duplicate",
  "futures-core",
+ "hdv",
+ "hdv_derive",
  "lockfree-object-pool",
  "lru",
  "metrics",
@@ -669,9 +680,9 @@ dependencies = [
 
 [[package]]
 name = "dfsql"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35a4313a7b822b2f84087d53c0c89ba47a01b0132d014192dc75fca63147916c"
+checksum = "fccf0fb31bd05436bc8ca4e0386bfd3f00a0ab8d94cc3870bd1d71849fb9d53b"
 dependencies = [
  "chumsky",
  "polars",
@@ -1007,6 +1018,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "hdv"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f68f7f674adf5a3eca4be9049b3b86288b99df7d56a229f749149ed9baf4b6b0"
+dependencies = [
+ "bincode",
+ "integer-encoding",
+ "ron",
+ "serde",
+ "strum",
+]
+
+[[package]]
+name = "hdv_derive"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aff31b8b2fffa313a9e68ccc25e4b3a1818d09cf310322d2a1b21f504f3f1a37"
+dependencies = [
+ "hdv",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.65",
+]
+
+[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1174,6 +1210,12 @@ checksum = "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "integer-encoding"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "924df4f0e24e2e7f9cdd90babb0b96f93b20f3ecfa949ea9e6613756b8c8e1bf"
 
 [[package]]
 name = "is_terminal_polyfill"
@@ -1375,7 +1417,7 @@ version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d58e362dc7206e9456ddbcdbd53c71ba441020e62104703075a69151e38d85f"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "indexmap",
  "metrics",
  "metrics-util",
@@ -1438,6 +1480,7 @@ source = "git+https://github.com/Banyc/monitor_table.git?tag=v0.0.6#761df0da3437
 dependencies = [
  "anyhow",
  "dfsql",
+ "hdv",
  "math",
  "polars",
  "slotmap",
@@ -1927,7 +1970,7 @@ checksum = "7b0aed7e169c81b98457641cf82b251f52239a668916c2e683abd1f38df00d58"
 dependencies = [
  "ahash",
  "argminmax",
- "base64",
+ "base64 0.22.1",
  "bytemuck",
  "chrono",
  "chrono-tz",
@@ -1956,7 +1999,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c70670a9e51cac66d0e77fd20b5cc957dbcf9f2660d410633862bb72f846d5b8"
 dependencies = [
  "ahash",
- "base64",
+ "base64 0.22.1",
  "ethnum",
  "num-traits",
  "parquet-format-safe",
@@ -2411,6 +2454,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e61cd21fbddd85fbd9367b775660a01d388c08a61c6d2824af480b0309bb9"
 
 [[package]]
+name = "ron"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b91f7eff05f748767f183df4320a63d6936e9c6107d97c9e6bdd9784f4289c94"
+dependencies = [
+ "base64 0.21.7",
+ "bitflags 2.5.0",
+ "serde",
+ "serde_derive",
+]
+
+[[package]]
 name = "rtp"
 version = "0.1.0"
 source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.52#20b3e0eafc02fe36d73cbc95871a56b3eee62716"
@@ -2788,6 +2843,9 @@ name = "strum"
 version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d8cec3501a5194c432b2b7976db6b7d10ec95c253208b45f83f7136aa985e29"
+dependencies = [
+ "strum_macros",
+]
 
 [[package]]
 name = "strum_macros"
@@ -3004,7 +3062,7 @@ version = "0.1.0"
 source = "git+https://github.com/Banyc/tokio_chacha20.git?tag=v0.0.1#dbda6eb25febd4eab84357f8d3a4c18b3d1c0be5"
 dependencies = [
  "arrayvec",
- "base64",
+ "base64 0.22.1",
  "blake3",
  "num-bigint",
  "rand",
