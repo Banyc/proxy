@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use hdv_derive::HdvSerde;
 use lru::LruCache;
 use once_cell::sync::Lazy;
 use serde::{de::Visitor, Deserialize, Serialize};
@@ -143,6 +144,27 @@ impl InternetAddr {
                 res
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, HdvSerde)]
+pub struct InternetAddrHdv {
+    pub host: Arc<str>,
+    pub port: u16,
+}
+impl From<&InternetAddr> for InternetAddrHdv {
+    fn from(value: &InternetAddr) -> Self {
+        let (host, port) = match &value.0 {
+            InternetAddrKind::SocketAddr(x) => return (*x).into(),
+            InternetAddrKind::DomainName { addr, port } => (addr.clone(), *port),
+        };
+        Self { host, port }
+    }
+}
+impl From<SocketAddr> for InternetAddrHdv {
+    fn from(value: SocketAddr) -> Self {
+        let (host, port) = (value.ip().to_string().into(), value.port());
+        Self { host, port }
     }
 }
 

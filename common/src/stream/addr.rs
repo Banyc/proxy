@@ -1,8 +1,9 @@
 use std::{fmt::Display, str::FromStr, sync::Arc};
 
+use hdv_derive::HdvSerde;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::addr::{InternetAddr, ParseInternetAddrError};
+use crate::addr::{InternetAddr, InternetAddrHdv, ParseInternetAddrError};
 
 pub trait StreamType:
     Clone
@@ -55,5 +56,18 @@ impl<ST: FromStr<Err = ParseInternetAddrError>> FromStr for StreamAddr<ST> {
             address,
             stream_type,
         })
+    }
+}
+
+#[derive(Debug, Clone, HdvSerde)]
+pub struct StreamAddrHdv {
+    pub addr: InternetAddrHdv,
+    pub ty: Arc<str>,
+}
+impl<ST: Display> From<&StreamAddr<ST>> for StreamAddrHdv {
+    fn from(value: &StreamAddr<ST>) -> Self {
+        let addr = (&value.address).into();
+        let ty = value.stream_type.to_string().into();
+        Self { addr, ty }
     }
 }

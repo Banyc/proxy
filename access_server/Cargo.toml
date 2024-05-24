@@ -18,7 +18,6 @@ protocol = { path = "../protocol" }
 proxy_client = { path = "../proxy_client" }
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-table_log = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio_chacha20 = { workspace = true }

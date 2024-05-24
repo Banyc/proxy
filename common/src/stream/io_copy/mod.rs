@@ -12,9 +12,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_throughput::{ReadGauge, WriteGauge};
 use tracing::info;
 
+use crate::log::Timing;
+
 use super::{
     addr::{StreamAddr, StreamType},
-    log::{StreamLog, StreamProxyLog, StreamRecord},
+    log::{StreamLog, StreamProxyLog, LOGGER},
     metrics::{Session, StreamSessionTable},
 };
 
@@ -155,16 +157,24 @@ pub struct LogContext<ST> {
     pub destination: Option<StreamAddr<ST>>,
 }
 
-fn log<ST: StreamType>(metrics: StreamLog<ST>, destination: Option<StreamAddr<ST>>) {
+fn log<ST: StreamType>(log: StreamLog<ST>, destination: Option<StreamAddr<ST>>) {
     match destination {
         Some(d) => {
-            let metrics = StreamProxyLog {
-                stream: metrics,
+            let log = StreamProxyLog {
+                stream: log,
                 destination: d.address,
             };
-            table_log::log!(&StreamRecord::ProxyLog(&metrics));
+            let record = (&log).into();
+            if let Some(x) = LOGGER.lock().unwrap().as_ref() {
+                x.write(&record);
+            }
         }
-        None => table_log::log!(&StreamRecord::Log(&metrics)),
+        None => {
+            let record = (&log).into();
+            if let Some(x) = LOGGER.lock().unwrap().as_ref() {
+                x.write(&record);
+            }
+        }
     }
 }
 
@@ -218,11 +228,14 @@ fn get_log_from_copy_result<ST>(
 ) -> (StreamLog<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
     let (bytes_uplink, bytes_downlink) = result.amounts;
 
-    counter!("stream.bytes_uplink").increment(bytes_uplink);
-    counter!("stream.bytes_downlink").increment(bytes_downlink);
-    let metrics = StreamLog {
+    counter!("stream.up.bytes").increment(bytes_uplink);
+    counter!("stream.dn.bytes").increment(bytes_downlink);
+    let timing = Timing {
         start: log_context.start,
         end: result.end,
+    };
+    let log = StreamLog {
+        timing,
         bytes_uplink,
         bytes_downlink,
         upstream_addr: log_context.upstream_addr,
@@ -230,5 +243,5 @@ fn get_log_from_copy_result<ST>(
         downstream_addr: log_context.downstream_addr,
     };
 
-    (metrics, result.io_result)
+    (log, result.io_result)
 }

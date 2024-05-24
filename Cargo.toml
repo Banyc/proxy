@@ -20,9 +20,9 @@ bincode = "1"
 bytes = "1"
 bytesize = "1"
 clap = "4"
-csv_logger = { git = "https://github.com/Banyc/csv_logger.git", tag = "v0.0.1" }
 dhat = "0.3"
 duplicate = "1"
+file_rotating_log = { git = "https://github.com/Banyc/file_rotating_log.git", tag = "v0.0.1" }
 file_watcher_tokio = "0.3"
 futures = "0.3"
 futures-core = "0.3"
@@ -50,7 +50,6 @@ serial_test = "3"
 slotmap = "1"
 strict-num = "0.2"
 swap = { git = "https://github.com/Banyc/swap.git", rev = "d10a8b5b10503fa6ebac523cfcaa4d62135a665f" }
-table_log = { git = "https://github.com/Banyc/table_log.git", tag = "v0.0.1" }
 thiserror = "1"
 tokio = "1"
 tokio-io-timeout = "1"

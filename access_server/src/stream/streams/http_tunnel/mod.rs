@@ -6,11 +6,12 @@ use common::{
     addr::{InternetAddr, ParseInternetAddrError},
     config::SharableConfig,
     loading,
+    log::Timing,
     proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{
         addr::StreamAddr,
         io_copy::{CopyBidirectional, LogContext, DEAD_SESSION_RETENTION_DURATION},
-        log::{SimplifiedStreamLog, SimplifiedStreamProxyLog, StreamRecord},
+        log::{SimplifiedStreamLog, SimplifiedStreamProxyLog, LOGGER},
         metrics::{Session, StreamSessionTable},
         IoAddr, IoStream, StreamServerHook,
     },
@@ -236,19 +237,22 @@ impl HttpAccess {
         };
 
         let end = std::time::Instant::now();
-        let metrics = SimplifiedStreamProxyLog {
+        let timing = Timing { start, end };
+        let log = SimplifiedStreamProxyLog {
             stream: SimplifiedStreamLog {
-                start,
-                end,
+                timing,
                 upstream_addr: upstream.addr,
                 upstream_sock_addr: upstream.sock_addr,
                 downstream_addr: None,
             },
             destination: addr.address,
         };
-        info!(%metrics, "{} finished", method);
+        info!(%log, "{} finished", method);
 
-        table_log::log!(&StreamRecord::SimplifiedProxyLog(&metrics));
+        let record = (&log).into();
+        if let Some(x) = LOGGER.lock().unwrap().as_ref() {
+            x.write(&record);
+        }
 
         res
     }

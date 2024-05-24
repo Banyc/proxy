@@ -2,7 +2,7 @@ use std::{
     io::{self, Write},
     net::SocketAddr,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicU64, Ordering},
         Arc, Mutex, RwLock,
     },
     time::{Duration, SystemTime},
@@ -20,7 +20,11 @@ use udp_listener::{AcceptedUdpRead, AcceptedUdpWrite};
 use crate::{
     addr::InternetAddr,
     error::AnyError,
-    udp::{log::FlowRecord, TIMEOUT},
+    log::Timing,
+    udp::{
+        log::{TrafficLog, LOGGER},
+        TIMEOUT,
+    },
 };
 
 use super::{
@@ -179,8 +183,10 @@ where
 
         match &res {
             Ok(log) => {
-                let record = FlowRecord(log);
-                table_log::log!(&record);
+                let record = log.into();
+                if let Some(x) = LOGGER.lock().unwrap().as_mut() {
+                    x.write(&record)
+                }
 
                 info!(%log, "{log_prefix}: I/O copy finished");
             }
@@ -221,8 +227,8 @@ where
 
     let bytes_uplink = Arc::new(AtomicU64::new(0));
     let bytes_downlink = Arc::new(AtomicU64::new(0));
-    let packets_uplink = Arc::new(AtomicUsize::new(0));
-    let packets_downlink = Arc::new(AtomicUsize::new(0));
+    let packets_uplink = Arc::new(AtomicU64::new(0));
+    let packets_downlink = Arc::new(AtomicU64::new(0));
 
     let mut en_dec_buf = [0; BUFFER_LENGTH];
 
@@ -390,19 +396,27 @@ where
         *last_downlink_packet.read().unwrap(),
         *last_uplink_packet.read().unwrap(),
     );
-    counter!("udp.io_copy.bytes_uplink").increment(bytes_uplink.load(Ordering::Relaxed));
-    counter!("udp.io_copy.bytes_downlink").increment(bytes_downlink.load(Ordering::Relaxed));
-    counter!("udp.io_copy.packets_uplink").increment(packets_uplink.load(Ordering::Relaxed) as _);
-    counter!("udp.io_copy.packets_downlink")
-        .increment(packets_downlink.load(Ordering::Relaxed) as _);
-    Ok(FlowLog {
-        flow,
+    let up = TrafficLog {
+        bytes: bytes_uplink.load(Ordering::Relaxed),
+        packets: packets_uplink.load(Ordering::Relaxed),
+    };
+    let dn = TrafficLog {
+        bytes: bytes_downlink.load(Ordering::Relaxed),
+        packets: packets_downlink.load(Ordering::Relaxed),
+    };
+    let timing = Timing {
         start,
         end: last_packet,
-        bytes_uplink: bytes_uplink.load(Ordering::Relaxed),
-        bytes_downlink: bytes_downlink.load(Ordering::Relaxed),
-        packets_uplink: packets_uplink.load(Ordering::Relaxed),
-        packets_downlink: packets_downlink.load(Ordering::Relaxed),
+    };
+    counter!("udp.io_copy.up.bytes").increment(up.bytes);
+    counter!("udp.io_copy.up.packets").increment(up.packets);
+    counter!("udp.io_copy.dn.bytes").increment(dn.bytes);
+    counter!("udp.io_copy.dn.packets").increment(dn.packets);
+    Ok(FlowLog {
+        flow,
+        timing,
+        up,
+        dn,
     })
 }
 

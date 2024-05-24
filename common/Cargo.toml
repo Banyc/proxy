@@ -13,6 +13,7 @@ bincode = { workspace = true }
 bytes = { workspace = true }
 bytesize = { workspace = true }
 duplicate = { workspace = true }
+file_rotating_log = { workspace = true }
 futures-core = { workspace = true }
 hdv = { workspace = true }
 hdv_derive = { workspace = true }
@@ -29,7 +30,6 @@ serde = { workspace = true, features = ["derive", "rc"] }
 slotmap = { workspace = true }
 strict-num = { workspace = true }
 swap = { workspace = true }
-table_log = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-io-timeout = { workspace = true }

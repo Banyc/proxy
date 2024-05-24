@@ -15,7 +15,6 @@ anyhow = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 common = { path = "../common" }
-csv_logger = { workspace = true }
 dhat = { workspace = true, optional = true }
 file_watcher_tokio = { workspace = true }
 metrics = { workspace = true }

@@ -2,19 +2,32 @@ use std::{
     fmt::{self, Display},
     net::SocketAddr,
     ops::Deref,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    path::PathBuf,
+    sync::{Arc, Mutex},
 };
 
 use bytesize::ByteSize;
+use hdv_derive::HdvSerde;
+use once_cell::sync::Lazy;
 
-use crate::addr::{InternetAddr, InternetAddrKind};
+use crate::{
+    addr::{InternetAddr, InternetAddrHdv, InternetAddrKind},
+    log::{HdvLogger, Timing, TimingHdv},
+};
 
-use super::addr::StreamAddr;
+use super::addr::{StreamAddr, StreamAddrHdv};
+
+pub static LOGGER: Lazy<Arc<Mutex<Option<HdvLogger<StreamLogHdv>>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(None)));
+pub fn init_logger(output_dir: PathBuf) {
+    let output_dir = output_dir.join("stream_record");
+    let logger = HdvLogger::new(output_dir);
+    *LOGGER.lock().unwrap() = Some(logger);
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StreamLog<ST> {
-    pub start: (Instant, SystemTime),
-    pub end: Instant,
+    pub timing: Timing,
     pub bytes_uplink: u64,
     pub bytes_downlink: u64,
     pub upstream_addr: StreamAddr<ST>,
@@ -24,8 +37,7 @@ pub struct StreamLog<ST> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SimplifiedStreamLog<ST> {
-    pub start: (Instant, SystemTime),
-    pub end: Instant,
+    pub timing: Timing,
     pub upstream_addr: StreamAddr<ST>,
     pub upstream_sock_addr: SocketAddr,
     pub downstream_addr: Option<SocketAddr>,
@@ -43,86 +55,74 @@ pub struct SimplifiedStreamProxyLog<ST> {
     pub destination: InternetAddr,
 }
 
-pub enum StreamRecord<'caller, ST> {
-    Log(&'caller StreamLog<ST>),
-    ProxyLog(&'caller StreamProxyLog<ST>),
-    SimplifiedLog(&'caller SimplifiedStreamLog<ST>),
-    SimplifiedProxyLog(&'caller SimplifiedStreamProxyLog<ST>),
+#[derive(Debug, Clone, HdvSerde)]
+pub struct StreamLogHdv {
+    pub timing: TimingHdv,
+    pub up_bytes: Option<u64>,
+    pub dn_bytes: Option<u64>,
+    pub upstream_addr: StreamAddrHdv,
+    pub upstream_sock_addr: InternetAddrHdv,
+    pub downstream_addr: Option<InternetAddrHdv>,
+    pub destination: Option<InternetAddrHdv>,
 }
-impl<ST: fmt::Display> serde::Serialize for StreamRecord<'_, ST> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        #[derive(serde::Serialize)]
-        struct Record {
-            pub start_ms: u128,
-            pub duration_ms: u128,
-            pub bytes_uplink: Option<u64>,
-            pub bytes_downlink: Option<u64>,
-            pub upstream_addr_type: String,
-            pub upstream_addr: String,
-            pub upstream_sock_addr: SocketAddr,
-            pub downstream_addr: Option<SocketAddr>,
-            pub destination: Option<String>,
+impl<ST: fmt::Display> From<&StreamLog<ST>> for StreamLogHdv {
+    fn from(value: &StreamLog<ST>) -> Self {
+        let timing = (&value.timing).into();
+        let up_bytes = Some(value.bytes_uplink);
+        let dn_bytes = Some(value.bytes_downlink);
+        let upstream_addr = (&value.upstream_addr).into();
+        let upstream_sock_addr = value.upstream_sock_addr.into();
+        let downstream_addr = value.downstream_addr.map(|x| x.into());
+        let destination = None;
+        Self {
+            timing,
+            up_bytes,
+            dn_bytes,
+            upstream_addr,
+            upstream_sock_addr,
+            downstream_addr,
+            destination,
         }
-        fn from_log<ST: fmt::Display>(s: &StreamLog<ST>) -> Record {
-            let duration = s.end - s.start.0;
-            Record {
-                start_ms: s.start.1.duration_since(UNIX_EPOCH).unwrap().as_millis(),
-                duration_ms: duration.as_millis(),
-                bytes_uplink: Some(s.bytes_uplink),
-                bytes_downlink: Some(s.bytes_downlink),
-                upstream_addr_type: s.upstream_addr.stream_type.to_string(),
-                upstream_addr: s.upstream_addr.address.to_string(),
-                upstream_sock_addr: s.upstream_sock_addr,
-                downstream_addr: s.downstream_addr,
-                destination: None,
-            }
-        }
-        fn from_simplified_log<ST: fmt::Display>(s: &SimplifiedStreamLog<ST>) -> Record {
-            let duration = s.end - s.start.0;
-            Record {
-                start_ms: s.start.1.duration_since(UNIX_EPOCH).unwrap().as_millis(),
-                duration_ms: duration.as_millis(),
-                bytes_uplink: None,
-                bytes_downlink: None,
-                upstream_addr_type: s.upstream_addr.stream_type.to_string(),
-                upstream_addr: s.upstream_addr.address.to_string(),
-                upstream_sock_addr: s.upstream_sock_addr,
-                downstream_addr: s.downstream_addr,
-                destination: None,
-            }
-        }
-        let record = match &self {
-            Self::Log(s) => from_log(s),
-            Self::ProxyLog(s) => {
-                let mut r = from_log(&s.stream);
-                r.destination = Some(s.destination.to_string());
-                r
-            }
-            Self::SimplifiedLog(s) => from_simplified_log(s),
-            Self::SimplifiedProxyLog(s) => {
-                let mut r = from_simplified_log(&s.stream);
-                r.destination = Some(s.destination.to_string());
-                r
-            }
-        };
-        record.serialize(serializer)
     }
 }
-impl<'erased, ST: fmt::Display + 'erased> table_log::LogRecord<'erased>
-    for StreamRecord<'erased, ST>
-{
-    fn table_name(&self) -> &'static str {
-        "stream_record"
+impl<ST: fmt::Display> From<&SimplifiedStreamLog<ST>> for StreamLogHdv {
+    fn from(value: &SimplifiedStreamLog<ST>) -> Self {
+        let timing = (&value.timing).into();
+        let up_bytes = None;
+        let dn_bytes = None;
+        let upstream_addr = (&value.upstream_addr).into();
+        let upstream_sock_addr = value.upstream_sock_addr.into();
+        let downstream_addr = value.downstream_addr.map(|x| x.into());
+        let destination = None;
+        Self {
+            timing,
+            up_bytes,
+            dn_bytes,
+            upstream_addr,
+            upstream_sock_addr,
+            downstream_addr,
+            destination,
+        }
+    }
+}
+impl<ST: fmt::Display> From<&StreamProxyLog<ST>> for StreamLogHdv {
+    fn from(value: &StreamProxyLog<ST>) -> Self {
+        let mut this: StreamLogHdv = (&value.stream).into();
+        this.destination = Some((&value.destination).into());
+        this
+    }
+}
+impl<ST: fmt::Display> From<&SimplifiedStreamProxyLog<ST>> for StreamLogHdv {
+    fn from(value: &SimplifiedStreamProxyLog<ST>) -> Self {
+        let mut this: StreamLogHdv = (&value.stream).into();
+        this.destination = Some((&value.destination).into());
+        this
     }
 }
 
 impl<ST: Display> Display for StreamLog<ST> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let duration = self.end - self.start.0;
-        let duration = duration.as_secs_f64();
+        let duration = self.timing.duration().as_secs_f64();
         let uplink_speed = self.bytes_uplink as f64 / duration;
         let downlink_speed = self.bytes_downlink as f64 / duration;
         let upstream_addrs = match self.upstream_addr.address.deref() {
@@ -150,8 +150,7 @@ impl<ST: Display> Display for StreamLog<ST> {
 
 impl<ST: Display> Display for SimplifiedStreamLog<ST> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let duration = self.end - self.start.0;
-        let duration = duration.as_secs_f64();
+        let duration = self.timing.duration().as_secs_f64();
         let upstream_addrs = match self.upstream_addr.address.deref() {
             InternetAddrKind::SocketAddr(_) => self.upstream_addr.to_string(),
             InternetAddrKind::DomainName { .. } => {

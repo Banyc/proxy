@@ -1,6 +1,7 @@
 use std::{io, net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use bytes::BytesMut;
+use hdv_derive::HdvSerde;
 use lockfree_object_pool::{LinearObjectPool, LinearOwnedReusable};
 use once_cell::sync::Lazy;
 use thiserror::Error;
@@ -8,7 +9,11 @@ use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{error, info, instrument, trace, warn};
 use udp_listener::{AcceptedUdp, UdpListener};
 
-use crate::{addr::InternetAddr, error::AnyResult, loading};
+use crate::{
+    addr::{InternetAddr, InternetAddrHdv},
+    error::AnyResult,
+    loading,
+};
 
 pub mod context;
 pub mod header;
@@ -177,6 +182,21 @@ pub struct UpstreamAddr(pub InternetAddr);
 pub struct Flow {
     pub upstream: Option<UpstreamAddr>,
     pub downstream: DownstreamAddr,
+}
+#[derive(Debug, Clone, HdvSerde)]
+pub struct FlowHdv {
+    pub upstream: Option<InternetAddrHdv>,
+    pub downstream: InternetAddrHdv,
+}
+impl From<&Flow> for FlowHdv {
+    fn from(value: &Flow) -> Self {
+        let upstream = value.upstream.as_ref().map(|x| (&x.0).into());
+        let downstream = value.downstream.0.into();
+        Self {
+            upstream,
+            downstream,
+        }
+    }
 }
 
 pub struct Packet {

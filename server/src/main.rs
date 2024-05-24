@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, num::NonZeroUsize, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use axum::Router;
 use clap::Parser;
@@ -37,13 +37,8 @@ async fn main() -> AnyResult {
         std::process::abort();
     }
     if let Some(path) = args.csv_log_path {
-        csv_logger::init(
-            path,
-            csv_logger::RotationPolicy {
-                max_records: NonZeroUsize::new(1024 * 64).unwrap(),
-                max_epochs: 4,
-            },
-        );
+        common::stream::log::init_logger(path.clone());
+        common::udp::log::init_logger(path.clone());
     };
 
     #[cfg(feature = "dhat-heap")]
