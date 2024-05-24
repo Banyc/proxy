@@ -1,7 +1,7 @@
 use std::{
     fmt,
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::Mutex,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -13,7 +13,9 @@ use monitor_table::{
 };
 use tokio_throughput::GaugeHandle;
 
-use super::addr::StreamAddr;
+use crate::addr::InternetAddrHdv;
+
+use super::addr::{StreamAddr, StreamAddrHdv};
 
 pub type StreamSessionTable<ST> = Table<Session<ST>>;
 
@@ -96,13 +98,13 @@ impl<ST> ValueDisplay for Session<ST> {
 
 #[derive(Debug, HdvSerde)]
 struct SessionView {
-    pub destination: Option<Arc<str>>,
+    pub destination: Option<StreamAddrHdv>,
     pub duration: u64,
     pub start_ms: u64,
     pub end_ms: Option<u64>,
-    pub upstream_local: Option<Arc<str>>,
-    pub upstream_remote: Arc<str>,
-    pub downstream_remote: Option<Arc<str>>,
+    pub upstream_local: Option<InternetAddrHdv>,
+    pub upstream_remote: StreamAddrHdv,
+    pub downstream_remote: Option<InternetAddrHdv>,
     pub up: Option<GaugeView>,
     pub dn: Option<GaugeView>,
 }
@@ -119,15 +121,15 @@ impl SessionView {
             None => now_unix.saturating_sub(start_unix),
         };
 
-        let destination = s.destination.as_ref().map(|d| d.to_string().into());
+        let destination = s.destination.as_ref().map(|d| d.into());
         let duration = duration.as_millis() as u64;
         let start_ms = start_unix.as_millis() as u64;
         let end_ms = s
             .end
             .map(|e| e.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64);
-        let upstream_local = s.upstream_local.map(|x| x.to_string().into());
-        let upstream_remote = s.upstream_remote.to_string().into();
-        let downstream_remote = s.downstream_remote.map(|x| x.to_string().into());
+        let upstream_local = s.upstream_local.map(|x| x.into());
+        let upstream_remote = (&s.upstream_remote).into();
+        let downstream_remote = s.downstream_remote.map(|x| x.into());
         let now = Instant::now();
         let up = s
             .up_gauge

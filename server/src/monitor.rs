@@ -58,14 +58,24 @@ pub fn monitor_router() -> (SessionTables, Router) {
     (session_tables, router)
 }
 
-fn default_sql() -> String {
-    const SQL: &str = "sort start_ms select destination duration upstream_remote";
+fn stream_default_sql() -> String {
+    const SQL: &str = r#"
+sort start_ms
+select (col "destination.addr.host") (col "destination.addr.port") duration (col "upstream_remote.addr.host") (col "upstream_remote.addr.port")
+"#;
+    SQL.to_string()
+}
+fn udp_default_sql() -> String {
+    const SQL: &str = r#"
+sort start_ms
+select (col "destination.host") (col "destination.port") duration (col "upstream_remote.host") (col "upstream_remote.port")
+"#;
     SQL.to_string()
 }
 #[derive(Debug, Deserialize)]
 struct SessionsParams {
-    #[serde(default = "default_sql")]
+    #[serde(default = "stream_default_sql")]
     stream_sql: String,
-    #[serde(default = "default_sql")]
+    #[serde(default = "udp_default_sql")]
     udp_sql: String,
 }

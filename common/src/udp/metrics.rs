@@ -1,6 +1,6 @@
 use std::{
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::Mutex,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -12,7 +12,7 @@ use monitor_table::{
 };
 use tokio_throughput::GaugeHandle;
 
-use crate::addr::InternetAddr;
+use crate::addr::{InternetAddr, InternetAddrHdv};
 
 pub type UdpSessionTable = Table<Session>;
 
@@ -29,11 +29,11 @@ pub struct Session {
 }
 impl TableRow for Session {
     fn schema() -> Vec<(String, LiteralType)> {
-        <SessionView as TableRow>::schema()
+        <SessionHdv as TableRow>::schema()
     }
 
     fn fields(&self) -> Vec<Option<LiteralValue>> {
-        let view = SessionView::from_session(self);
+        let view = SessionHdv::from_session(self);
         TableRow::fields(&view)
     }
 }
@@ -93,18 +93,18 @@ impl ValueDisplay for Session {
 }
 
 #[derive(Debug, HdvSerde)]
-struct SessionView {
-    pub destination: Option<Arc<str>>,
+struct SessionHdv {
+    pub destination: Option<InternetAddrHdv>,
     pub duration: u64,
     pub start_ms: u64,
     pub end_ms: Option<u64>,
-    pub upstream_local: Option<Arc<str>>,
-    pub upstream_remote: Arc<str>,
-    pub downstream_remote: Arc<str>,
-    pub up: GaugeView,
-    pub dn: GaugeView,
+    pub upstream_local: Option<InternetAddrHdv>,
+    pub upstream_remote: InternetAddrHdv,
+    pub downstream_remote: InternetAddrHdv,
+    pub up: GaugeHdv,
+    pub dn: GaugeHdv,
 }
-impl SessionView {
+impl SessionHdv {
     pub fn from_session(s: &Session) -> Self {
         let start_unix = s.start.duration_since(UNIX_EPOCH).unwrap();
         let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
@@ -117,18 +117,18 @@ impl SessionView {
             None => now_unix.saturating_sub(start_unix),
         };
 
-        let destination = s.destination.as_ref().map(|d| d.to_string().into());
+        let destination = s.destination.as_ref().map(|d| d.into());
         let duration = duration.as_millis() as u64;
         let start_ms = start_unix.as_millis() as u64;
         let end_ms = s
             .end
             .map(|e| e.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64);
-        let upstream_local = s.upstream_local.map(|x| x.to_string().into());
-        let upstream_remote = s.upstream_remote.to_string().into();
-        let downstream_remote = s.downstream_remote.to_string().into();
+        let upstream_local = s.upstream_local.map(|x| x.into());
+        let upstream_remote = (&s.upstream_remote).into();
+        let downstream_remote = s.downstream_remote.into();
         let now = Instant::now();
-        let up = GaugeView::from_gauge_handle(&s.up_gauge, now);
-        let dn = GaugeView::from_gauge_handle(&s.dn_gauge, now);
+        let up = GaugeHdv::from_gauge_handle(&s.up_gauge, now);
+        let dn = GaugeHdv::from_gauge_handle(&s.dn_gauge, now);
 
         Self {
             destination,
@@ -145,11 +145,11 @@ impl SessionView {
 }
 
 #[derive(Debug, HdvSerde)]
-struct GaugeView {
+struct GaugeHdv {
     pub thruput: f64,
     pub bytes: u64,
 }
-impl GaugeView {
+impl GaugeHdv {
     pub fn from_gauge_handle(g: &Mutex<tokio_throughput::GaugeHandle>, now: Instant) -> Self {
         let mut g = g.lock().unwrap();
         g.update(now);
