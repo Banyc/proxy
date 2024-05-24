@@ -8,7 +8,7 @@ use common::{
     proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{
         addr::StreamAddr,
-        io_copy::{CopyBidirectional, MetricContext},
+        io_copy::{CopyBidirectional, LogContext},
         IoAddr, IoStream, StreamServerHook,
     },
 };
@@ -193,7 +193,7 @@ impl Socks5ServerTcpAccess {
                     stream_type: ConcreteStreamType::Tcp,
                     address: upstream_addr.clone(),
                 };
-                let metrics_context = MetricContext {
+                let metrics_context = LogContext {
                     start: (std::time::Instant::now(), std::time::SystemTime::now()),
                     upstream_addr: upstream_addr.clone(),
                     upstream_sock_addr,
@@ -231,7 +231,7 @@ impl Socks5ServerTcpAccess {
             } => (destination, downstream, upstream, payload_crypto),
         };
 
-        let metrics_context = MetricContext {
+        let metrics_context = LogContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
             upstream_addr: upstream.addr,
             upstream_sock_addr: upstream.sock_addr,

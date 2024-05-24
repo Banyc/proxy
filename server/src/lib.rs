@@ -5,10 +5,8 @@ use common::{
     config::{merge_map, Merge},
     context::Context,
     error::{AnyError, AnyResult},
-    stream::session_table::StreamSessionTable,
-    udp::{
-        context::UdpContext, proxy_table::UdpProxyConfigBuilder, session_table::UdpSessionTable,
-    },
+    stream::metrics::StreamSessionTable,
+    udp::{context::UdpContext, metrics::UdpSessionTable, proxy_table::UdpProxyConfigBuilder},
 };
 use config::ConfigReader;
 use protocol::{

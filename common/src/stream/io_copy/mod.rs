@@ -14,8 +14,8 @@ use tracing::info;
 
 use super::{
     addr::{StreamAddr, StreamType},
-    metrics::{StreamMetrics, StreamProxyMetrics, StreamRecord},
-    session_table::{Session, StreamSessionTable},
+    log::{StreamLog, StreamProxyLog, StreamRecord},
+    metrics::{Session, StreamSessionTable},
 };
 
 pub mod tokio_io;
@@ -27,7 +27,7 @@ pub struct CopyBidirectional<DS, US, ST> {
     pub upstream: US,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
     pub speed_limiter: Limiter,
-    pub metrics_context: MetricContext<ST>,
+    pub metrics_context: LogContext<ST>,
 }
 
 impl<DS, US, ST> CopyBidirectional<DS, US, ST>
@@ -97,7 +97,7 @@ where
         )>,
         en_dir: EncryptionDirection,
         log_prefix: &str,
-    ) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
+    ) -> (StreamLog<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
         let res = match session {
             Some((session, r, w)) => {
                 let downstream = tokio_throughput::WholeStream::new(self.downstream, r, w);
@@ -132,20 +132,20 @@ where
             }
         };
 
-        let (metrics, res) = get_metrics_from_copy_result(self.metrics_context, res);
+        let (log, res) = get_log_from_copy_result(self.metrics_context, res);
         match &res {
             Ok(()) => {
-                info!(%metrics, "{log_prefix}: I/O copy finished");
+                info!(%log, "{log_prefix}: I/O copy finished");
             }
             Err(e) => {
-                info!(?e, %metrics, "{log_prefix}: I/O copy error");
+                info!(?e, %log, "{log_prefix}: I/O copy error");
             }
         }
-        (metrics, res)
+        (log, res)
     }
 }
 
-pub struct MetricContext<ST> {
+pub struct LogContext<ST> {
     pub start: (Instant, SystemTime),
     pub upstream_addr: StreamAddr<ST>,
     pub upstream_sock_addr: SocketAddr,
@@ -155,16 +155,16 @@ pub struct MetricContext<ST> {
     pub destination: Option<StreamAddr<ST>>,
 }
 
-fn log<ST: StreamType>(metrics: StreamMetrics<ST>, destination: Option<StreamAddr<ST>>) {
+fn log<ST: StreamType>(metrics: StreamLog<ST>, destination: Option<StreamAddr<ST>>) {
     match destination {
         Some(d) => {
-            let metrics = StreamProxyMetrics {
+            let metrics = StreamProxyLog {
                 stream: metrics,
                 destination: d.address,
             };
-            table_log::log!(&StreamRecord::ProxyMetrics(&metrics));
+            table_log::log!(&StreamRecord::ProxyLog(&metrics));
         }
-        None => table_log::log!(&StreamRecord::Metrics(&metrics)),
+        None => table_log::log!(&StreamRecord::Log(&metrics)),
     }
 }
 
@@ -212,22 +212,22 @@ where
     }
 }
 
-fn get_metrics_from_copy_result<ST>(
-    metrics_context: MetricContext<ST>,
+fn get_log_from_copy_result<ST>(
+    log_context: LogContext<ST>,
     result: tokio_io::TimedCopyBidirectionalResult,
-) -> (StreamMetrics<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
+) -> (StreamLog<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
     let (bytes_uplink, bytes_downlink) = result.amounts;
 
     counter!("stream.bytes_uplink").increment(bytes_uplink);
     counter!("stream.bytes_downlink").increment(bytes_downlink);
-    let metrics = StreamMetrics {
-        start: metrics_context.start,
+    let metrics = StreamLog {
+        start: log_context.start,
         end: result.end,
         bytes_uplink,
         bytes_downlink,
-        upstream_addr: metrics_context.upstream_addr,
-        upstream_sock_addr: metrics_context.upstream_sock_addr,
-        downstream_addr: metrics_context.downstream_addr,
+        upstream_addr: log_context.upstream_addr,
+        upstream_sock_addr: log_context.upstream_sock_addr,
+        downstream_addr: log_context.downstream_addr,
     };
 
     (metrics, result.io_result)

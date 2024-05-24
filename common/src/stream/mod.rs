@@ -11,9 +11,9 @@ pub mod connect;
 pub mod context;
 pub mod header;
 pub mod io_copy;
+pub mod log;
 pub mod metrics;
 pub mod pool;
-pub mod session_table;
 pub mod steer;
 pub mod xor;
 

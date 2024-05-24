@@ -1,7 +1,7 @@
 use swap::Swap;
 use tokio_conn_pool::ConnPool;
 
-use crate::stream::session_table::StreamSessionTable;
+use crate::stream::metrics::StreamSessionTable;
 
 use super::{addr::StreamAddr, connect::StreamConnectorTable};
 

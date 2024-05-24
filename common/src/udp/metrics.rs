@@ -1,83 +1,161 @@
-use core::fmt;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 
 use bytesize::ByteSize;
+use hdv_derive::HdvSerde;
+use monitor_table::{
+    row::{LiteralType, LiteralValue, TableRow, ValueDisplay},
+    table::Table,
+};
+use tokio_throughput::GaugeHandle;
 
-use super::Flow;
+use crate::addr::InternetAddr;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FlowMetrics {
-    pub flow: Flow,
-    pub start: (Instant, SystemTime),
-    pub end: Instant,
-    pub bytes_uplink: u64,
-    pub bytes_downlink: u64,
-    pub packets_uplink: usize,
-    pub packets_downlink: usize,
+pub type UdpSessionTable = Table<Session>;
+
+#[derive(Debug)]
+pub struct Session {
+    pub start: SystemTime,
+    pub end: Option<SystemTime>,
+    pub destination: Option<InternetAddr>,
+    pub upstream_local: Option<SocketAddr>,
+    pub upstream_remote: InternetAddr,
+    pub downstream_remote: SocketAddr,
+    pub up_gauge: Mutex<GaugeHandle>,
+    pub dn_gauge: Mutex<GaugeHandle>,
 }
+impl TableRow for Session {
+    fn schema() -> Vec<(String, LiteralType)> {
+        <SessionView as TableRow>::schema()
+    }
 
-impl fmt::Display for FlowMetrics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let duration = self.end - self.start.0;
-        let duration = duration.as_secs_f64();
-        let uplink_speed = self.bytes_uplink as f64 / duration;
-        let downlink_speed = self.bytes_downlink as f64 / duration;
-        write!(
-            f,
-            "{:.1}s,up{{{},{},{}/s}},dn{{{},{},{}/s}},up:{},dn:{}",
-            duration,
-            self.packets_uplink,
-            ByteSize::b(self.bytes_uplink),
-            ByteSize::b(uplink_speed as u64),
-            self.packets_downlink,
-            ByteSize::b(self.bytes_downlink),
-            ByteSize::b(downlink_speed as u64),
-            self.flow.upstream.as_ref().unwrap().0,
-            self.flow.downstream.0,
-        )?;
-        Ok(())
+    fn fields(&self) -> Vec<Option<LiteralValue>> {
+        let view = SessionView::from_session(self);
+        TableRow::fields(&view)
+    }
+}
+impl ValueDisplay for Session {
+    fn display_value(header: &str, value: Option<LiteralValue>) -> String {
+        let Some(v) = value else {
+            return String::new();
+        };
+        match header {
+            "dur" | "duration" => {
+                let duration = match v {
+                    LiteralValue::Int(duration) => duration as u64,
+                    LiteralValue::UInt(duration) => duration,
+                    LiteralValue::Float(duration) => duration as u64,
+                    _ => return v.to_string(),
+                };
+                let duration = Duration::from_millis(duration);
+                if duration.as_secs() == 0 {
+                    format!("{} ms", duration.as_millis())
+                } else if duration.as_secs() / 60 == 0 {
+                    format!("{} s", duration.as_secs())
+                } else if duration.as_secs() / 60 / 60 == 0 {
+                    format!("{} min", duration.as_secs() / 60)
+                } else {
+                    format!("{} h", duration.as_secs() / 60 / 60)
+                }
+            }
+            "bytes" | "up.bytes" | "dn.bytes" => {
+                let bytes = match v {
+                    LiteralValue::Int(bytes) => bytes as u64,
+                    LiteralValue::UInt(bytes) => bytes,
+                    LiteralValue::Float(bytes) => bytes as u64,
+                    _ => return v.to_string(),
+                };
+                ByteSize(bytes).to_string()
+            }
+            "thruput" | "up.thruput" | "dn.thruput" => {
+                let thruput = match v {
+                    LiteralValue::Int(thruput) => thruput as f64,
+                    LiteralValue::UInt(thruput) => thruput as f64,
+                    LiteralValue::Float(thruput) => thruput,
+                    _ => return v.to_string(),
+                };
+                if thruput / 1024.0 < 1.0 {
+                    format!("{:.1} B/s", thruput)
+                } else if thruput / 1024.0 / 1024.0 < 1.0 {
+                    format!("{:.1} KB/s", thruput / 1024.0)
+                } else if thruput / 1024.0 / 1024.0 / 1024.0 < 1.0 {
+                    format!("{:.1} MB/s", thruput / 1024.0 / 1024.0)
+                } else {
+                    format!("{:.1} GB/s", thruput / 1024.0 / 1024.0 / 1024.0)
+                }
+            }
+            _ => v.to_string(),
+        }
     }
 }
 
-pub struct FlowRecord<'caller>(pub &'caller FlowMetrics);
-impl<'caller> serde::Serialize for FlowRecord<'caller> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        #[derive(serde::Serialize)]
-        struct Record {
-            pub upstream_addr: String,
-            pub downstream_addr: String,
-            pub start_ms: u128,
-            pub duration_ms: u128,
-            pub bytes_uplink: u64,
-            pub bytes_downlink: u64,
-            pub packets_uplink: usize,
-            pub packets_downlink: usize,
-        }
-        let duration = self.0.end - self.0.start.0;
-        Record {
-            upstream_addr: self.0.flow.upstream.as_ref().unwrap().0.to_string(),
-            downstream_addr: self.0.flow.downstream.0.to_string(),
-            start_ms: self
-                .0
-                .start
-                .1
+#[derive(Debug, HdvSerde)]
+struct SessionView {
+    pub destination: Option<Arc<str>>,
+    pub duration: u64,
+    pub start_ms: u64,
+    pub end_ms: Option<u64>,
+    pub upstream_local: Option<Arc<str>>,
+    pub upstream_remote: Arc<str>,
+    pub downstream_remote: Arc<str>,
+    pub up: GaugeView,
+    pub dn: GaugeView,
+}
+impl SessionView {
+    pub fn from_session(s: &Session) -> Self {
+        let start_unix = s.start.duration_since(UNIX_EPOCH).unwrap();
+        let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+
+        let duration = match s.end {
+            Some(end) => end
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_millis(),
-            duration_ms: duration.as_millis(),
-            bytes_uplink: self.0.bytes_uplink,
-            bytes_downlink: self.0.bytes_downlink,
-            packets_uplink: self.0.packets_uplink,
-            packets_downlink: self.0.packets_downlink,
+                .saturating_sub(start_unix),
+            None => now_unix.saturating_sub(start_unix),
+        };
+
+        let destination = s.destination.as_ref().map(|d| d.to_string().into());
+        let duration = duration.as_millis() as u64;
+        let start_ms = start_unix.as_millis() as u64;
+        let end_ms = s
+            .end
+            .map(|e| e.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64);
+        let upstream_local = s.upstream_local.map(|x| x.to_string().into());
+        let upstream_remote = s.upstream_remote.to_string().into();
+        let downstream_remote = s.downstream_remote.to_string().into();
+        let now = Instant::now();
+        let up = GaugeView::from_gauge_handle(&s.up_gauge, now);
+        let dn = GaugeView::from_gauge_handle(&s.dn_gauge, now);
+
+        Self {
+            destination,
+            duration,
+            start_ms,
+            end_ms,
+            upstream_local,
+            upstream_remote,
+            downstream_remote,
+            up,
+            dn,
         }
-        .serialize(serializer)
     }
 }
-impl<'caller> table_log::LogRecord<'caller> for FlowRecord<'caller> {
-    fn table_name(&self) -> &'static str {
-        "udp_record"
+
+#[derive(Debug, HdvSerde)]
+struct GaugeView {
+    pub thruput: f64,
+    pub bytes: u64,
+}
+impl GaugeView {
+    pub fn from_gauge_handle(g: &Mutex<tokio_throughput::GaugeHandle>, now: Instant) -> Self {
+        let mut g = g.lock().unwrap();
+        g.update(now);
+        Self {
+            thruput: g.thruput(),
+            bytes: g.total_bytes(),
+        }
     }
 }

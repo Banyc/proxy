@@ -9,9 +9,9 @@ use common::{
     proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{
         addr::StreamAddr,
-        io_copy::{CopyBidirectional, MetricContext, DEAD_SESSION_RETENTION_DURATION},
-        metrics::{SimplifiedStreamMetrics, SimplifiedStreamProxyMetrics, StreamRecord},
-        session_table::{Session, StreamSessionTable},
+        io_copy::{CopyBidirectional, LogContext, DEAD_SESSION_RETENTION_DURATION},
+        log::{SimplifiedStreamLog, SimplifiedStreamProxyLog, StreamRecord},
+        metrics::{Session, StreamSessionTable},
         IoAddr, IoStream, StreamServerHook,
     },
 };
@@ -236,8 +236,8 @@ impl HttpAccess {
         };
 
         let end = std::time::Instant::now();
-        let metrics = SimplifiedStreamProxyMetrics {
-            stream: SimplifiedStreamMetrics {
+        let metrics = SimplifiedStreamProxyLog {
+            stream: SimplifiedStreamLog {
                 start,
                 end,
                 upstream_addr: upstream.addr,
@@ -248,7 +248,7 @@ impl HttpAccess {
         };
         info!(%metrics, "{} finished", method);
 
-        table_log::log!(&StreamRecord::SimplifiedProxyMetrics(&metrics));
+        table_log::log!(&StreamRecord::SimplifiedProxyLog(&metrics));
 
         res
     }
@@ -396,7 +396,7 @@ async fn upgrade(
         stream_type: ConcreteStreamType::Tcp,
         address: addr.clone(),
     };
-    let metrics_context = MetricContext {
+    let metrics_context = LogContext {
         start: (std::time::Instant::now(), std::time::SystemTime::now()),
         upstream_addr: upstream_addr.clone(),
         upstream_sock_addr: sock_addr,
@@ -485,7 +485,7 @@ impl HttpConnect {
         )
         .await?;
 
-        let metrics_context = MetricContext {
+        let metrics_context = LogContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
             upstream_addr: upstream.addr,
             upstream_sock_addr: upstream.sock_addr,

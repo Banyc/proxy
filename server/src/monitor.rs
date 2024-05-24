@@ -3,7 +3,7 @@ use axum::{
     routing::get,
     Router,
 };
-use common::{stream::session_table::StreamSessionTable, udp::session_table::UdpSessionTable};
+use common::{stream::metrics::StreamSessionTable, udp::metrics::UdpSessionTable};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use protocol::stream::addr::ConcreteStreamType;
 use serde::Deserialize;

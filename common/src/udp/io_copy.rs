@@ -20,12 +20,12 @@ use udp_listener::{AcceptedUdpRead, AcceptedUdpWrite};
 use crate::{
     addr::InternetAddr,
     error::AnyError,
-    udp::{metrics::FlowRecord, TIMEOUT},
+    udp::{log::FlowRecord, TIMEOUT},
 };
 
 use super::{
-    metrics::FlowMetrics,
-    session_table::{Session, UdpSessionTable},
+    log::FlowLog,
+    metrics::{Session, UdpSessionTable},
     Flow, Packet, ACTIVITY_CHECK_INTERVAL, BUFFER_LENGTH,
 };
 
@@ -74,7 +74,7 @@ where
         session_table: Option<UdpSessionTable>,
         upstream_local: Option<SocketAddr>,
         log_prefix: &str,
-    ) -> Result<FlowMetrics, CopyBiError> {
+    ) -> Result<FlowLog, CopyBiError> {
         let session = session_table.as_ref().map(|s| {
             let (up_handle, up) = tokio_throughput::gauge();
             let (dn_handle, dn) = tokio_throughput::gauge();
@@ -105,7 +105,7 @@ where
         upstream_local: Option<SocketAddr>,
         upstream_remote: InternetAddr,
         log_prefix: &str,
-    ) -> Result<FlowMetrics, CopyBiError> {
+    ) -> Result<FlowLog, CopyBiError> {
         let session = session_table.as_ref().map(|s| {
             let (up_handle, up) = tokio_throughput::gauge();
             let (dn_handle, dn) = tokio_throughput::gauge();
@@ -139,7 +139,7 @@ where
         )>,
         log_prefix: &str,
         en_dir: EncryptionDirection,
-    ) -> Result<FlowMetrics, CopyBiError> {
+    ) -> Result<FlowLog, CopyBiError> {
         let res = match session {
             Some((session, r, w)) => {
                 let res = copy_bidirectional(
@@ -178,11 +178,11 @@ where
         };
 
         match &res {
-            Ok(metrics) => {
-                let record = FlowRecord(metrics);
+            Ok(log) => {
+                let record = FlowRecord(log);
                 table_log::log!(&record);
 
-                info!(%metrics, "{log_prefix}: I/O copy finished");
+                info!(%log, "{log_prefix}: I/O copy finished");
             }
             Err(e) => {
                 info!(?e, "{log_prefix}: I/O copy error");
@@ -201,7 +201,7 @@ pub async fn copy_bidirectional<R, W>(
     response_header: Option<Arc<[u8]>>,
     en_dir: EncryptionDirection,
     gauges: Option<(ReadGauge, WriteGauge)>,
-) -> Result<FlowMetrics, CopyBiError>
+) -> Result<FlowLog, CopyBiError>
 where
     R: UdpRecv + Send + 'static,
     W: UdpSend + Send + 'static,
@@ -395,7 +395,7 @@ where
     counter!("udp.io_copy.packets_uplink").increment(packets_uplink.load(Ordering::Relaxed) as _);
     counter!("udp.io_copy.packets_downlink")
         .increment(packets_downlink.load(Ordering::Relaxed) as _);
-    Ok(FlowMetrics {
+    Ok(FlowLog {
         flow,
         start,
         end: last_packet,

@@ -6,7 +6,7 @@ use common::{
     loading,
     proxy_table::ProxyGroupBuildError,
     stream::{
-        io_copy::{CopyBidirectional, MetricContext},
+        io_copy::{CopyBidirectional, LogContext},
         IoAddr, IoStream, StreamServerHook,
     },
 };
@@ -141,7 +141,7 @@ impl TcpAccess {
         )
         .await?;
 
-        let metrics_context = MetricContext {
+        let metrics_context = LogContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
             upstream_addr: upstream.addr,
             upstream_sock_addr: upstream.sock_addr,

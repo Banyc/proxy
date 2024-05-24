@@ -5,7 +5,7 @@ use common::{
     addr::ParseInternetAddrError,
     loading,
     stream::{
-        io_copy::{CopyBidirectional, MetricContext},
+        io_copy::{CopyBidirectional, LogContext},
         pool::connect_with_pool,
         steer::{steer, SteerError},
         IoAddr, IoStream, StreamServerHook,
@@ -116,7 +116,7 @@ impl StreamProxyServer {
         };
 
         // Copy data
-        let metrics_context = MetricContext {
+        let metrics_context = LogContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
             upstream_addr: upstream.addr,
             upstream_sock_addr: upstream.sock_addr,

@@ -13,10 +13,10 @@ use crate::{addr::InternetAddr, error::AnyResult, loading};
 pub mod context;
 pub mod header;
 pub mod io_copy;
+pub mod log;
 pub mod metrics;
 pub mod proxy_table;
 pub mod respond;
-pub mod session_table;
 pub mod steer;
 
 pub const BUFFER_LENGTH: usize = 2_usize.pow(16);

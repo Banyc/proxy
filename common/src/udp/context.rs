@@ -1,4 +1,4 @@
-use super::session_table::UdpSessionTable;
+use super::metrics::UdpSessionTable;
 
 #[derive(Debug, Clone)]
 pub struct UdpContext {
