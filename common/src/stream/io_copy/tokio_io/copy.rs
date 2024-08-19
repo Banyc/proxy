@@ -7,7 +7,6 @@ use futures_core::ready;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tracing::debug;
 
-use std::future::Future;
 use std::io::{self, ErrorKind};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -117,77 +116,5 @@ impl CopyBuffer {
 
     pub(super) fn amt(&self) -> u64 {
         self.amt
-    }
-}
-
-/// A future that asynchronously copies the entire contents of a reader into a
-/// writer.
-#[derive(Debug)]
-#[must_use = "futures do nothing unless you `.await` or poll them"]
-struct Copy<'a, R: ?Sized, W: ?Sized> {
-    reader: &'a mut R,
-    writer: &'a mut W,
-    buf: CopyBuffer,
-}
-
-// cfg_io_util! {
-//     /// Asynchronously copies the entire contents of a reader into a writer.
-//     ///
-//     /// This function returns a future that will continuously read data from
-//     /// `reader` and then write it into `writer` in a streaming fashion until
-//     /// `reader` returns EOF.
-//     ///
-//     /// On success, the total number of bytes that were copied from `reader` to
-//     /// `writer` is returned.
-//     ///
-//     /// This is an asynchronous version of [`std::io::copy`][std].
-//     ///
-//     /// [std]: std::io::copy
-//     ///
-//     /// # Errors
-//     ///
-//     /// The returned future will return an error immediately if any call to
-//     /// `poll_read` or `poll_write` returns an error.
-//     ///
-//     /// # Examples
-//     ///
-//     /// ```
-//     /// use tokio::io;
-//     ///
-//     /// # async fn dox() -> std::io::Result<()> {
-//     /// let mut reader: &[u8] = b"hello";
-//     /// let mut writer: Vec<u8> = vec![];
-//     ///
-//     /// io::copy(&mut reader, &mut writer).await?;
-//     ///
-//     /// assert_eq!(&b"hello"[..], &writer[..]);
-//     /// # Ok(())
-//     /// # }
-//     /// ```
-//     pub async fn copy<'a, R, W>(reader: &'a mut R, writer: &'a mut W) -> io::Result<u64>
-//     where
-//         R: AsyncRead + Unpin + ?Sized,
-//         W: AsyncWrite + Unpin + ?Sized,
-//     {
-//         Copy {
-//             reader,
-//             writer,
-//             buf: CopyBuffer::new()
-//         }.await
-//     }
-// }
-
-impl<R, W> Future for Copy<'_, R, W>
-where
-    R: AsyncRead + Unpin + ?Sized,
-    W: AsyncWrite + Unpin + ?Sized,
-{
-    type Output = io::Result<u64>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
-        let me = &mut *self;
-
-        me.buf
-            .poll_copy(cx, Pin::new(&mut *me.reader), Pin::new(&mut *me.writer))
     }
 }
