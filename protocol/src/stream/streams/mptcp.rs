@@ -1,4 +1,4 @@
-use std::{io, net::SocketAddr, num::NonZeroUsize, sync::Arc};
+use std::{io, net::SocketAddr, sync::Arc};
 
 use metrics::counter;
 use mptcp::{listen::MptcpListener, stream::MptcpStream};
@@ -70,7 +70,12 @@ where
     async fn serve_(mut self) -> Result<(), ServeError> {
         drop(self.handle);
 
-        let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
+        let addr = self
+            .listener
+            .local_addrs()
+            .next()
+            .unwrap()
+            .map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
         // Arc hook
         let mut hook = Arc::new(self.hook);
@@ -124,7 +129,8 @@ pub struct MptcpConnector;
 impl StreamConnect for MptcpConnector {
     type Connection = Connection;
     async fn connect(&self, addr: SocketAddr) -> io::Result<Connection> {
-        let stream = MptcpStream::connect(addr, NonZeroUsize::new(STREAMS).unwrap()).await?;
+        let addrs = core::iter::repeat(()).take(STREAMS).map(|()| addr);
+        let stream = MptcpStream::connect(addrs).await?;
         counter!("stream.mptcp.connects").increment(1);
         Ok(Connection::Mptcp(IoMptcpStream(stream)))
     }

@@ -66,7 +66,7 @@ mod tests {
             }
             ConcreteStreamType::Mptcp => {
                 let server = build_mptcp_proxy_server(addr, proxy).await.unwrap();
-                let proxy_addr = server.listener().local_addr().unwrap();
+                let proxy_addr = server.listener().local_addrs().next().unwrap().unwrap();
                 join_set.spawn(async move {
                     let _handle = server.handle();
                     server.serve().await.unwrap();

@@ -75,10 +75,12 @@ pub async fn build_mptcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyServer,
 ) -> Result<MptcpServer<StreamProxyServer>, ListenerBindError> {
-    let listener =
-        MptcpListener::bind(listen_addr, NonZeroUsize::new(MAX_SESSION_STREAMS).unwrap())
-            .await
-            .map_err(ListenerBindError)?;
+    let listener = MptcpListener::bind(
+        [listen_addr].iter(),
+        NonZeroUsize::new(MAX_SESSION_STREAMS).unwrap(),
+    )
+    .await
+    .map_err(ListenerBindError)?;
     let server = MptcpServer::new(listener, stream_proxy);
     Ok(server)
 }

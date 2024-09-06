@@ -6,7 +6,8 @@ use std::{
 };
 
 use file_rotating_log::{
-    rotator::{spawn_flusher, LogRotator, RotationPolicy},
+    rotator::{spawn_flushers, LogRotator, RotationPolicy},
+    time_past::{DailyContains, TimePast},
     LogWriter,
 };
 use hdv::{
@@ -26,13 +27,15 @@ where
     T: HdvScheme + HdvSerialize + Sync + Send + 'static,
 {
     pub fn new(output_dir: PathBuf) -> Self {
+        let time_past = TimePast::new(Arc::new(DailyContains));
         let rotation = RotationPolicy {
-            max_records: NonZeroUsize::new(1024 * 64).unwrap(),
+            max_records: Some(NonZeroUsize::new(1024 * 64).unwrap()),
+            time: Some(time_past),
             max_epochs: 4,
         };
         let rotator = LogRotator::new(output_dir, rotation);
         let rotator = Arc::new(Mutex::new(rotator));
-        spawn_flusher(Arc::clone(&rotator), FLUSH_INTERVAL);
+        spawn_flushers(vec![Arc::clone(&rotator)], FLUSH_INTERVAL);
         Self { rotator }
     }
 
