@@ -35,7 +35,7 @@ lockfree-object-pool = "0.1"
 lru = "0.12"
 metrics = "0.23"
 metrics-exporter-prometheus = { version = "0.15", default-features = false }
-monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.0.9" }
+monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.0.10" }
 mptcp = { git = "https://github.com/Banyc/mptcp.git", tag = "v0.0.2" }
 notify = "6"
 once_cell = "1"
