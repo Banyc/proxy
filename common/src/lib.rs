@@ -11,6 +11,7 @@ pub mod filter;
 pub mod header;
 pub mod loading;
 pub mod log;
+pub mod metrics;
 pub mod proxy_table;
 pub mod sampling;
 pub mod stream;

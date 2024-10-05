@@ -71,7 +71,7 @@ impl<AS> WeightedProxyChainBuilder<AS> {
                 SharableConfig::SharingKey(k) => proxy_server
                     .get(&k)
                     .cloned()
-                    .ok_or_else(|| WeightedProxyChainBuildError::ProxyServerKeyNotFound(k)),
+                    .ok_or(WeightedProxyChainBuildError::ProxyServerKeyNotFound(k)),
                 SharableConfig::Private(c) => c.build().map_err(Into::into),
             })
             .collect::<Result<Arc<_>, _>>()?;
@@ -244,7 +244,7 @@ impl<A> Drop for GaugedProxyChain<A> {
 
 pub struct DisplayChain<'chain, A>(&'chain ProxyChain<A>);
 
-impl<'chain, A> fmt::Display for DisplayChain<'chain, A>
+impl<A> fmt::Display for DisplayChain<'_, A>
 where
     A: fmt::Display,
 {

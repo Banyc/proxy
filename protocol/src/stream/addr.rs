@@ -70,7 +70,7 @@ impl<'de> Deserialize<'de> for ConcreteStreamAddrStr {
 }
 
 struct ConcreteStreamAddrStrVisitor;
-impl<'de> Visitor<'de> for ConcreteStreamAddrStrVisitor {
+impl Visitor<'_> for ConcreteStreamAddrStrVisitor {
     type Value = ConcreteStreamAddrStr;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {

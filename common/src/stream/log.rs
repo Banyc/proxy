@@ -6,9 +6,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use bytesize::ByteSize;
 use hdv_derive::HdvSerde;
 use once_cell::sync::Lazy;
+use primitive::ops::unit::HumanBytes;
 
 use crate::{
     addr::{InternetAddr, InternetAddrHdv, InternetAddrKind},
@@ -133,12 +133,12 @@ impl<ST: Display> Display for StreamLog<ST> {
         };
         write!(
             f,
-            "{:.1}s,up{{{},{}/s}},dn{{{},{}/s}},up{{{}}}",
+            "{:.1}s,up{{{:.1},{:.1}/s}},dn{{{:.1},{:.1}/s}},up{{{}}}",
             duration,
-            ByteSize::b(self.bytes_uplink),
-            ByteSize::b(uplink_speed as u64),
-            ByteSize::b(self.bytes_downlink),
-            ByteSize::b(downlink_speed as u64),
+            HumanBytes(self.bytes_uplink),
+            HumanBytes(uplink_speed as u64),
+            HumanBytes(self.bytes_downlink),
+            HumanBytes(downlink_speed as u64),
             upstream_addrs,
         )?;
         if let Some(downstream_addr) = self.downstream_addr {

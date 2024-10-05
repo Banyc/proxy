@@ -1,10 +1,9 @@
 use std::{
     net::SocketAddr,
     sync::Mutex,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use bytesize::ByteSize;
 use hdv_derive::HdvSerde;
 use monitor_table::{
     row::{LiteralType, LiteralValue, TableRow, ValueDisplay},
@@ -12,7 +11,10 @@ use monitor_table::{
 };
 use tokio_throughput::GaugeHandle;
 
-use crate::addr::{InternetAddr, InternetAddrHdv};
+use crate::{
+    addr::{InternetAddr, InternetAddrHdv},
+    metrics::display_value,
+};
 
 pub type UdpSessionTable = Table<Session>;
 
@@ -39,56 +41,7 @@ impl TableRow for Session {
 }
 impl ValueDisplay for Session {
     fn display_value(header: &str, value: Option<LiteralValue>) -> String {
-        let Some(v) = value else {
-            return String::new();
-        };
-        match header {
-            "dur" | "duration" => {
-                let duration = match v {
-                    LiteralValue::Int(duration) => duration as u64,
-                    LiteralValue::UInt(duration) => duration,
-                    LiteralValue::Float(duration) => duration as u64,
-                    _ => return v.to_string(),
-                };
-                let duration = Duration::from_millis(duration);
-                if duration.as_secs() == 0 {
-                    format!("{} ms", duration.as_millis())
-                } else if duration.as_secs() / 60 == 0 {
-                    format!("{} s", duration.as_secs())
-                } else if duration.as_secs() / 60 / 60 == 0 {
-                    format!("{} min", duration.as_secs() / 60)
-                } else {
-                    format!("{} h", duration.as_secs() / 60 / 60)
-                }
-            }
-            "bytes" | "up.bytes" | "dn.bytes" => {
-                let bytes = match v {
-                    LiteralValue::Int(bytes) => bytes as u64,
-                    LiteralValue::UInt(bytes) => bytes,
-                    LiteralValue::Float(bytes) => bytes as u64,
-                    _ => return v.to_string(),
-                };
-                ByteSize(bytes).to_string()
-            }
-            "thruput" | "up.thruput" | "dn.thruput" => {
-                let thruput = match v {
-                    LiteralValue::Int(thruput) => thruput as f64,
-                    LiteralValue::UInt(thruput) => thruput as f64,
-                    LiteralValue::Float(thruput) => thruput,
-                    _ => return v.to_string(),
-                };
-                if thruput / 1024.0 < 1.0 {
-                    format!("{:.1} B/s", thruput)
-                } else if thruput / 1024.0 / 1024.0 < 1.0 {
-                    format!("{:.1} KB/s", thruput / 1024.0)
-                } else if thruput / 1024.0 / 1024.0 / 1024.0 < 1.0 {
-                    format!("{:.1} MB/s", thruput / 1024.0 / 1024.0)
-                } else {
-                    format!("{:.1} GB/s", thruput / 1024.0 / 1024.0 / 1024.0)
-                }
-            }
-            _ => v.to_string(),
-        }
+        display_value(header, value)
     }
 }
 

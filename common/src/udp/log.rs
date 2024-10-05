@@ -4,9 +4,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use bytesize::ByteSize;
 use hdv_derive::HdvSerde;
 use once_cell::sync::Lazy;
+use primitive::ops::unit::HumanBytes;
 
 use crate::log::{HdvLogger, Timing, TimingHdv};
 
@@ -41,14 +41,14 @@ impl fmt::Display for FlowLog {
         let downlink_speed = self.dn.bytes as f64 / duration;
         write!(
             f,
-            "{:.1}s,up{{{},{},{}/s}},dn{{{},{},{}/s}},up:{},dn:{}",
+            "{:.1}s,up{{{},{:.1},{:.1}/s}},dn{{{},{:.1},{:.1}/s}},up:{},dn:{}",
             duration,
             self.up.packets,
-            ByteSize::b(self.up.bytes),
-            ByteSize::b(uplink_speed as u64),
+            HumanBytes(self.up.bytes),
+            HumanBytes(uplink_speed as u64),
             self.dn.packets,
-            ByteSize::b(self.dn.bytes),
-            ByteSize::b(downlink_speed as u64),
+            HumanBytes(self.dn.bytes),
+            HumanBytes(downlink_speed as u64),
             self.flow.upstream.as_ref().unwrap().0,
             self.flow.downstream.0,
         )?;

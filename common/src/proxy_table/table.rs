@@ -20,7 +20,7 @@ pub struct ProxyTableBuildContext<'caller, A, TB> {
     pub proxy_group: &'caller HashMap<Arc<str>, ProxyGroup<A>>,
     pub proxy_group_cx: ProxyGroupBuildContext<'caller, A, TB>,
 }
-impl<'caller, A, TB> Clone for ProxyTableBuildContext<'caller, A, TB> {
+impl<A, TB> Clone for ProxyTableBuildContext<'_, A, TB> {
     fn clone(&self) -> Self {
         Self {
             matcher: self.matcher,
@@ -102,7 +102,7 @@ impl<AS> ProxyTableEntryBuilder<AS> {
                 .matcher
                 .get(&k)
                 .cloned()
-                .ok_or_else(|| ProxyTableBuildError::ProxyGroupKeyNotFound(k))?,
+                .ok_or(ProxyTableBuildError::ProxyGroupKeyNotFound(k))?,
             SharableConfig::Private(v) => v.build().map_err(ProxyTableBuildError::Matcher)?,
         };
         let action = self.action.build(cx.proxy_group, cx.proxy_group_cx)?;
@@ -166,7 +166,7 @@ impl<AS> ProxyActionBuilder<AS> {
                 SharableConfig::SharingKey(k) => proxy_group
                     .get(&k)
                     .cloned()
-                    .ok_or_else(|| ProxyTableBuildError::ProxyGroupKeyNotFound(k))?,
+                    .ok_or(ProxyTableBuildError::ProxyGroupKeyNotFound(k))?,
                 SharableConfig::Private(p) => p.build(proxy_group_cx)?,
             })),
         })

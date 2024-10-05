@@ -194,7 +194,7 @@ impl<'de> Deserialize<'de> for InternetAddrStr {
     }
 }
 struct InternetAddrStrVisitor;
-impl<'de> Visitor<'de> for InternetAddrStrVisitor {
+impl Visitor<'_> for InternetAddrStrVisitor {
     type Value = InternetAddrStr;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {

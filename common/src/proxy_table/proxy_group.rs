@@ -67,7 +67,7 @@ pub struct ProxyGroupBuildContext<'caller, A, TB> {
     pub tracer_builder: &'caller TB,
     pub cancellation: CancellationToken,
 }
-impl<'caller, A, TB> Clone for ProxyGroupBuildContext<'caller, A, TB> {
+impl<A, TB> Clone for ProxyGroupBuildContext<'_, A, TB> {
     fn clone(&self) -> Self {
         Self {
             proxy_server: self.proxy_server,
