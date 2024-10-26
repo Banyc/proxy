@@ -20,7 +20,7 @@ use serde::Deserialize;
 use thiserror::Error;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tracing::{error, instrument, trace, warn};
-use udp_listener::{AcceptedUdp, AcceptedUdpWrite};
+use udp_listener::{Conn, ConnWrite};
 
 use crate::ListenerBindError;
 
@@ -122,14 +122,14 @@ impl UdpProxy {
         Ok(UdpServer::new(listener, self))
     }
 
-    #[instrument(skip(self, accepted_udp))]
-    async fn proxy(&self, mut accepted_udp: AcceptedUdp<Flow, Packet>) -> Result<(), ProxyError> {
-        let flow = accepted_udp.dispatch_key().clone();
+    #[instrument(skip(self, conn))]
+    async fn proxy(&self, mut conn: Conn<Flow, Packet>) -> Result<(), ProxyError> {
+        let flow = conn.conn_key().clone();
 
         // Echo
         if flow.upstream.is_none() {
-            let pkt = accepted_udp.read().recv().try_recv().unwrap();
-            echo(pkt.slice(), accepted_udp.write(), &self.header_crypto).await;
+            let pkt = conn.read().recv().try_recv().unwrap();
+            echo(pkt.slice(), conn.write(), &self.header_crypto).await;
             return Ok(());
         }
 
@@ -181,7 +181,7 @@ impl UdpProxy {
         let payload_crypto = self.payload_crypto.clone();
         let session_table = self.udp_context.session_table.clone();
         let upstream_local = upstream.local_addr().ok();
-        let (dn_read, dn_write) = accepted_udp.split();
+        let (dn_read, dn_write) = conn.split();
         tokio::spawn(async move {
             let io_copy = CopyBidirectional {
                 flow,
@@ -207,7 +207,7 @@ impl UdpProxy {
         Ok(())
     }
 
-    async fn handle_proxy_result(&self, dn_write: &AcceptedUdpWrite, res: Result<(), ProxyError>) {
+    async fn handle_proxy_result(&self, dn_write: &ConnWrite, res: Result<(), ProxyError>) {
         match res {
             Ok(()) => (),
             Err(e) => {
@@ -263,7 +263,7 @@ impl UdpServerHook for UdpProxy {
         res.ok()
     }
 
-    async fn handle_flow(&self, accepted: AcceptedUdp<common::udp::Flow, Packet>) {
+    async fn handle_flow(&self, accepted: Conn<common::udp::Flow, Packet>) {
         let dn_write = accepted.write().clone();
         let res = self.proxy(accepted).await;
         self.handle_proxy_result(&dn_write, res).await;

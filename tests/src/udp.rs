@@ -2,12 +2,13 @@
 mod tests {
     use std::{sync::Arc, time::Duration};
 
+    use bytes::BytesMut;
     use common::{
         addr::InternetAddr,
         header::route::RouteErrorKind,
         loading::Server,
         proxy_table::ProxyConfig,
-        udp::{context::UdpContext, proxy_table::UdpProxyConfig},
+        udp::{context::UdpContext, proxy_table::UdpProxyConfig, PACKET_BUFFER_LENGTH},
     };
     use proxy_client::udp::{trace_rtt, RecvError, UdpProxyClient, UdpProxyClientReadHalf};
     use proxy_server::udp::UdpProxy;
@@ -79,6 +80,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_proxies() {
+        let mut pkt_buf = BytesMut::with_capacity(PACKET_BUFFER_LENGTH);
         let mut join_set = tokio::task::JoinSet::new();
 
         // Start proxy servers
@@ -107,7 +109,7 @@ mod tests {
         read_response(&mut client_read, resp_msg).await.unwrap();
 
         // Trace
-        let rtt = trace_rtt(&proxies).await.unwrap();
+        let rtt = trace_rtt(&mut pkt_buf, &proxies).await.unwrap();
         assert!(rtt > Duration::from_secs(0));
         assert!(rtt < Duration::from_secs(1));
     }

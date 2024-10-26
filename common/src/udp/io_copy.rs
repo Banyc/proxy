@@ -15,7 +15,7 @@ use thiserror::Error;
 use tokio::net::UdpSocket;
 use tokio_throughput::{ReadGauge, WriteGauge};
 use tracing::{info, trace, warn};
-use udp_listener::{AcceptedUdpRead, AcceptedUdpWrite};
+use udp_listener::{ConnRead, ConnWrite};
 
 use crate::{
     addr::InternetAddr,
@@ -23,14 +23,14 @@ use crate::{
     log::Timing,
     udp::{
         log::{TrafficLog, LOGGER},
-        TIMEOUT,
+        PACKET_BUFFER_LENGTH, TIMEOUT,
     },
 };
 
 use super::{
     log::FlowLog,
     metrics::{Session, UdpSessionTable},
-    Flow, Packet, ACTIVITY_CHECK_INTERVAL, BUFFER_LENGTH,
+    Flow, Packet, ACTIVITY_CHECK_INTERVAL,
 };
 
 const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
@@ -55,8 +55,8 @@ pub struct UpstreamParts<R, W> {
 }
 
 pub struct DownstreamParts {
-    pub read: AcceptedUdpRead<Packet>,
-    pub write: AcceptedUdpWrite,
+    pub read: ConnRead<Packet>,
+    pub write: ConnWrite,
 }
 
 pub struct CopyBidirectional<R, W> {
@@ -230,7 +230,7 @@ where
     let packets_uplink = Arc::new(AtomicU64::new(0));
     let packets_downlink = Arc::new(AtomicU64::new(0));
 
-    let mut en_dec_buf = [0; BUFFER_LENGTH];
+    let mut en_dec_buf = [0; PACKET_BUFFER_LENGTH];
 
     let (up_gauge, dn_gauge) = gauges
         .map(|(r, w)| (Some(r.0), Some(w.0)))
@@ -295,7 +295,7 @@ where
         let bytes_downlink = Arc::clone(&bytes_downlink);
         let packets_downlink = Arc::clone(&packets_downlink);
         let payload_crypto = payload_crypto.clone();
-        let mut downlink_buf = [0; BUFFER_LENGTH];
+        let mut downlink_buf = [0; PACKET_BUFFER_LENGTH];
         let mut downlink_protocol_buf = Vec::new();
         async move {
             loop {
@@ -307,7 +307,7 @@ where
                 // Limit speed
                 speed_limiter.consume(pkt.len()).await;
 
-                if n == BUFFER_LENGTH {
+                if n == PACKET_BUFFER_LENGTH {
                     warn!(
                         ?flow,
                         ?n,
@@ -430,7 +430,7 @@ pub enum CopyBiError {
     SendDownstream {
         #[source]
         source: io::Error,
-        downstream: AcceptedUdpWrite,
+        downstream: ConnWrite,
     },
 }
 

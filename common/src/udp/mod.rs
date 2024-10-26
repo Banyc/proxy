@@ -1,18 +1,12 @@
-use std::{
-    io,
-    net::SocketAddr,
-    num::NonZeroUsize,
-    sync::{Arc, LazyLock},
-    time::Duration,
-};
+use std::{io, net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use bytes::BytesMut;
 use hdv_derive::HdvSerde;
-use lockfree_object_pool::{LinearObjectPool, LinearOwnedReusable};
+use primitive::obj_pool::ObjectScoped;
 use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{error, info, instrument, trace, warn};
-use udp_listener::{AcceptedUdp, UdpListener};
+use udp_listener::{Conn, UdpListener};
 
 use crate::{
     addr::{InternetAddr, InternetAddrHdv},
@@ -29,14 +23,7 @@ pub mod proxy_table;
 pub mod respond;
 pub mod steer;
 
-pub const BUFFER_LENGTH: usize = 2_usize.pow(16);
-pub static BUFFER_POOL: LazyLock<Arc<LinearObjectPool<BytesMut>>> = LazyLock::new(|| {
-    Arc::new(LinearObjectPool::new(
-        || BytesMut::with_capacity(BUFFER_LENGTH),
-        |buf| buf.clear(),
-    ))
-});
-
+pub const PACKET_BUFFER_LENGTH: usize = 2_usize.pow(16);
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 pub const ACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -171,10 +158,8 @@ pub enum ServeError {
 pub trait UdpServerHook: loading::Hook {
     fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>>;
 
-    fn handle_flow(
-        &self,
-        accepted: AcceptedUdp<Flow, Packet>,
-    ) -> impl std::future::Future<Output = ()> + Send;
+    fn handle_flow(&self, conn: Conn<Flow, Packet>)
+        -> impl std::future::Future<Output = ()> + Send;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -205,12 +190,12 @@ impl From<&Flow> for FlowHdv {
 }
 
 pub struct Packet {
-    buf: LinearOwnedReusable<BytesMut>,
+    buf: ObjectScoped<BytesMut>,
     pos: usize,
 }
 
 impl Packet {
-    pub fn new(buf: LinearOwnedReusable<BytesMut>) -> Self {
+    pub fn new(buf: ObjectScoped<BytesMut>) -> Self {
         Self { buf, pos: 0 }
     }
 

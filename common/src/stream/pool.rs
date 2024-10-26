@@ -54,7 +54,7 @@ where
                 SharableConfig::SharingKey(k) => proxy_server
                     .get(&k)
                     .cloned()
-                    .ok_or_else(|| PoolBuildError::ProxyServerKeyNotFound(k)),
+                    .ok_or(PoolBuildError::ProxyServerKeyNotFound(k)),
                 SharableConfig::Private(c) => c.build().map_err(PoolBuildError::ProxyConfigBuild),
             })
             .collect::<Result<Vec<_>, _>>()?;

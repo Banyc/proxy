@@ -1,7 +1,7 @@
 use std::io;
 
 use tracing::trace;
-use udp_listener::AcceptedUdpWrite;
+use udp_listener::ConnWrite;
 
 use crate::header::{
     codec::write_header,
@@ -9,7 +9,7 @@ use crate::header::{
 };
 
 pub async fn respond_with_error(
-    dn_writer: &AcceptedUdpWrite,
+    dn_writer: &ConnWrite,
     kind: RouteErrorKind,
     header_crypto: &tokio_chacha20::config::Config,
 ) -> Result<(), io::Error> {

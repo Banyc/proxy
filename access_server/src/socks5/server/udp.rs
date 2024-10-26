@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::ToSocketAddrs;
 use tracing::{error, warn};
-use udp_listener::AcceptedUdp;
+use udp_listener::Conn;
 
 use crate::{socks5::messages::UdpRequestHeader, udp::proxy_table::UdpProxyGroupBuildContext};
 
@@ -117,10 +117,10 @@ impl Socks5ServerUdpAccess {
         Ok(UdpServer::new(listener, self))
     }
 
-    async fn proxy(&self, accepted_udp: AcceptedUdp<Flow, Packet>) -> Result<(), AccessProxyError> {
+    async fn proxy(&self, conn: Conn<Flow, Packet>) -> Result<(), AccessProxyError> {
         // Connect to upstream
         let proxy_chain = self.proxy_group.choose_chain();
-        let flow = accepted_udp.dispatch_key().clone();
+        let flow = conn.conn_key().clone();
         let upstream = UdpProxyClient::establish(
             proxy_chain.chain.clone(),
             flow.upstream.as_ref().unwrap().0.clone(),
@@ -144,7 +144,7 @@ impl Socks5ServerUdpAccess {
         let payload_crypto = proxy_chain.payload_crypto.clone();
         let session_table = self.udp_context.session_table.clone();
         let upstream_local = upstream_read.inner().local_addr().ok();
-        let (dn_read, dn_write) = accepted_udp.split();
+        let (dn_read, dn_write) = conn.split();
         tokio::spawn(async move {
             let io_copy = CopyBidirectional {
                 flow,
@@ -191,7 +191,7 @@ impl UdpServerHook for Socks5ServerUdpAccess {
         Some(Some(UpstreamAddr(request_header.destination)))
     }
 
-    async fn handle_flow(&self, accepted: AcceptedUdp<Flow, Packet>) {
+    async fn handle_flow(&self, accepted: Conn<Flow, Packet>) {
         let res = self.proxy(accepted).await;
         match res {
             Ok(()) => (),

@@ -1,10 +1,12 @@
 use std::{
     io::{self, Write},
     net::SocketAddr,
+    num::NonZeroUsize,
     sync::Arc,
     time::{Duration, Instant},
 };
 
+use bytes::BytesMut;
 use common::{
     addr::{any_addr, InternetAddr},
     error::AnyError,
@@ -16,10 +18,11 @@ use common::{
     udp::{
         io_copy::{UdpRecv, UdpSend},
         proxy_table::UdpProxyChain,
-        BUFFER_POOL,
+        PACKET_BUFFER_LENGTH,
     },
 };
 use metrics::counter;
+use primitive::obj_pool::ArcObjectPool;
 use thiserror::Error;
 use tokio::net::UdpSocket;
 use tracing::{error, instrument, trace, warn};
@@ -316,11 +319,19 @@ impl TracerBuilder for UdpTracerBuilder {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct UdpTracer {}
+#[derive(Debug)]
+pub struct UdpTracer {
+    pool: ArcObjectPool<BytesMut>,
+}
 impl UdpTracer {
     pub fn new() -> Self {
-        Self {}
+        let pool = ArcObjectPool::new(
+            usize::try_from(u32::MAX).unwrap(),
+            NonZeroUsize::new(1).unwrap(),
+            || BytesMut::with_capacity(PACKET_BUFFER_LENGTH),
+            |buf| buf.clear(),
+        );
+        Self { pool }
     }
 }
 impl Default for UdpTracer {
@@ -332,11 +343,17 @@ impl Tracer for UdpTracer {
     type Address = InternetAddr;
 
     async fn trace_rtt(&self, chain: &UdpProxyChain) -> Result<Duration, AnyError> {
-        trace_rtt(chain).await.map_err(|e| e.into())
+        let mut pkt_buf = self.pool.take();
+        let res = trace_rtt(&mut pkt_buf, chain).await.map_err(|e| e.into());
+        self.pool.put(pkt_buf);
+        res
     }
 }
 
-pub async fn trace_rtt(proxies: &UdpProxyChain) -> Result<Duration, TraceError> {
+pub async fn trace_rtt(
+    pkt_buf: &mut BytesMut,
+    proxies: &UdpProxyChain,
+) -> Result<Duration, TraceError> {
     if proxies.is_empty() {
         return Ok(Duration::from_secs(0));
     }
@@ -365,13 +382,12 @@ pub async fn trace_rtt(proxies: &UdpProxyChain) -> Result<Duration, TraceError> 
     upstream.send(&buf).await?;
 
     // Recv response
-    let mut buf = BUFFER_POOL.pull();
-    let n = upstream.recv_buf(&mut *buf).await?;
+    let n = upstream.recv_buf(pkt_buf).await?;
 
     let end = Instant::now();
 
     // Decode and check headers
-    let mut reader = io::Cursor::new(&buf[..n]);
+    let mut reader = io::Cursor::new(&pkt_buf[..n]);
     for node in proxies.iter() {
         trace!(?node.address, "Reading response");
         let mut crypto_cursor =

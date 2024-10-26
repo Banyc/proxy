@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use metrics::counter;
 use tracing::warn;
-use udp_listener::AcceptedUdpWrite;
+use udp_listener::ConnWrite;
 
 use crate::header::{
     codec::{read_header, write_header, CodecError},
@@ -13,7 +13,7 @@ use super::{header::UdpRequestHeader, UpstreamAddr};
 
 pub async fn echo(
     buf: &[u8],
-    dn_writer: &AcceptedUdpWrite,
+    dn_writer: &ConnWrite,
     header_crypto: &tokio_chacha20::config::Config,
 ) {
     let resp = RouteResponse { result: Ok(()) };

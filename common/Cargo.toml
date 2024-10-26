@@ -16,7 +16,6 @@ file_rotating_log = { workspace = true }
 futures-core = { workspace = true }
 hdv = { workspace = true }
 hdv_derive = { workspace = true }
-lockfree-object-pool = { workspace = true }
 lru = { workspace = true }
 metrics = { workspace = true }
 monitor_table = { workspace = true, features = ["hdv"] }
