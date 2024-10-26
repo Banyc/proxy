@@ -326,7 +326,7 @@ pub struct UdpTracer {
 impl UdpTracer {
     pub fn new() -> Self {
         let pool = ArcObjectPool::new(
-            usize::try_from(u32::MAX).unwrap(),
+            None,
             NonZeroUsize::new(1).unwrap(),
             || BytesMut::with_capacity(PACKET_BUFFER_LENGTH),
             |buf| buf.clear(),

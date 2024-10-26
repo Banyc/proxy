@@ -548,7 +548,7 @@ dependencies = [
  "metrics",
  "monitor_table",
  "pin-project-lite",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.34)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.35)",
  "rand",
  "regex",
  "scopeguard",
@@ -2187,7 +2187,7 @@ dependencies = [
 [[package]]
 name = "primitive"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.34#6979518f4d8e8ae30c03af2abe8b83494b362913"
+source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.35#9d93e5916723519dc18e0723c841d1f171a54196"
 dependencies = [
  "anyhow",
  "num-traits",
@@ -2244,7 +2244,7 @@ dependencies = [
  "bytes",
  "common",
  "metrics",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.34)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.35)",
  "protocol",
  "thiserror",
  "tokio",
@@ -2487,7 +2487,7 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.53#3160c324deb54f71bf8f52096637b9d5dc396692"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.54#50a431303cd021e58c87b418d6d532bf6dd1f56d"
 dependencies = [
  "async-trait",
  "async_async_io",
@@ -2540,9 +2540,9 @@ dependencies = [
 
 [[package]]
 name = "scc"
-version = "2.2.3"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb4a8e7cf6f3e2ba33751990b9744cb21d247da624468020d0479faeefc098a5"
+checksum = "d8d25269dd3a12467afe2e510f69fb0b46b698e5afb296b59f2145259deaf8e8"
 dependencies = [
  "sdd",
 ]
@@ -3213,10 +3213,10 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "udp_listener"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.10#915e530077291b4e11ee2fd277d36c0297484800"
+source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.11#35026640ab90a863f0846fb8870dbab98fecf07e"
 dependencies = [
  "bytes",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.34)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.35)",
  "tokio",
 ]
 

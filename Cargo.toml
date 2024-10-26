@@ -37,10 +37,10 @@ monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.
 mptcp = { git = "https://github.com/Banyc/mptcp.git", tag = "v0.0.2" }
 notify = "7"
 pin-project-lite = "0.2"
-primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.34" }
+primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.35" }
 rand = "0.8"
 regex = "1"
-rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.53" }
+rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.54" }
 scopeguard = "1"
 serde = "1"
 serde_json = "1"
@@ -59,7 +59,7 @@ tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", tag 
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.10" }
+udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.11" }
 
 [profile.profiling]
 inherits = "release"

@@ -1,8 +1,6 @@
 use std::{io, net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Duration};
 
-use bytes::BytesMut;
 use hdv_derive::HdvSerde;
-use primitive::obj_pool::ObjectScoped;
 use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{error, info, instrument, trace, warn};
@@ -190,12 +188,12 @@ impl From<&Flow> for FlowHdv {
 }
 
 pub struct Packet {
-    buf: ObjectScoped<BytesMut>,
+    buf: udp_listener::Packet,
     pos: usize,
 }
 
 impl Packet {
-    pub fn new(buf: ObjectScoped<BytesMut>) -> Self {
+    pub fn new(buf: udp_listener::Packet) -> Self {
         Self { buf, pos: 0 }
     }
 
