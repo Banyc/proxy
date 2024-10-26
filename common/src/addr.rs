@@ -5,20 +5,19 @@ use std::{
     num::NonZeroUsize,
     ops::Deref,
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use hdv_derive::HdvSerde;
 use lru::LruCache;
-use once_cell::sync::Lazy;
 use serde::{de::Visitor, Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::lookup_host;
 
 use crate::proxy_table::AddressString;
 
-static RESOLVED_SOCKET_ADDR: Lazy<Mutex<LruCache<Arc<str>, IpAddr>>> =
-    Lazy::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())));
+static RESOLVED_SOCKET_ADDR: LazyLock<Mutex<LruCache<Arc<str>, IpAddr>>> =
+    LazyLock::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())));
 
 pub fn any_addr(ip_version: &IpAddr) -> SocketAddr {
     let any_ip = match ip_version {

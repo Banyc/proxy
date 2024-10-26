@@ -1,9 +1,14 @@
-use std::{io, net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{
+    io,
+    net::SocketAddr,
+    num::NonZeroUsize,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 use bytes::BytesMut;
 use hdv_derive::HdvSerde;
 use lockfree_object_pool::{LinearObjectPool, LinearOwnedReusable};
-use once_cell::sync::Lazy;
 use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{error, info, instrument, trace, warn};
@@ -25,7 +30,7 @@ pub mod respond;
 pub mod steer;
 
 pub const BUFFER_LENGTH: usize = 2_usize.pow(16);
-pub static BUFFER_POOL: Lazy<Arc<LinearObjectPool<BytesMut>>> = Lazy::new(|| {
+pub static BUFFER_POOL: LazyLock<Arc<LinearObjectPool<BytesMut>>> = LazyLock::new(|| {
     Arc::new(LinearObjectPool::new(
         || BytesMut::with_capacity(BUFFER_LENGTH),
         |buf| buf.clear(),

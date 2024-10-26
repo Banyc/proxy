@@ -10,7 +10,6 @@ async-trait = { workspace = true }
 common = { path = "../common" }
 metrics = { workspace = true }
 mptcp = { workspace = true }
-once_cell = { workspace = true }
 rand = { workspace = true }
 rtp = { workspace = true }
 serde = { workspace = true }

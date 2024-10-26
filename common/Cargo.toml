@@ -20,7 +20,6 @@ lockfree-object-pool = { workspace = true }
 lru = { workspace = true }
 metrics = { workspace = true }
 monitor_table = { workspace = true, features = ["hdv"] }
-once_cell = { workspace = true }
 pin-project-lite = { workspace = true }
 primitive = { workspace = true }
 rand = { workspace = true }

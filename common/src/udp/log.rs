@@ -1,19 +1,18 @@
 use core::fmt;
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use hdv_derive::HdvSerde;
-use once_cell::sync::Lazy;
 use primitive::ops::unit::HumanBytes;
 
 use crate::log::{HdvLogger, Timing, TimingHdv};
 
 use super::{Flow, FlowHdv};
 
-pub static LOGGER: Lazy<Arc<Mutex<Option<HdvLogger<FlowLogHdv>>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(None)));
+pub static LOGGER: LazyLock<Arc<Mutex<Option<HdvLogger<FlowLogHdv>>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(None)));
 pub fn init_logger(output_dir: PathBuf) {
     let output_dir = output_dir.join("udp_record");
     let logger = HdvLogger::new(output_dir);

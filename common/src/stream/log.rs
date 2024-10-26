@@ -3,11 +3,10 @@ use std::{
     net::SocketAddr,
     ops::Deref,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use hdv_derive::HdvSerde;
-use once_cell::sync::Lazy;
 use primitive::ops::unit::HumanBytes;
 
 use crate::{
@@ -17,8 +16,8 @@ use crate::{
 
 use super::addr::{StreamAddr, StreamAddrHdv};
 
-pub static LOGGER: Lazy<Arc<Mutex<Option<HdvLogger<StreamLogHdv>>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(None)));
+pub static LOGGER: LazyLock<Arc<Mutex<Option<HdvLogger<StreamLogHdv>>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(None)));
 pub fn init_logger(output_dir: PathBuf) {
     let output_dir = output_dir.join("stream_record");
     let logger = HdvLogger::new(output_dir);
