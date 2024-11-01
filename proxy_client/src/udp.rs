@@ -22,7 +22,7 @@ use common::{
     },
 };
 use metrics::counter;
-use primitive::obj_pool::ArcObjectPool;
+use primitive::arena::obj_pool::ArcObjectPool;
 use thiserror::Error;
 use tokio::net::UdpSocket;
 use tracing::{error, instrument, trace, warn};
