@@ -27,13 +27,13 @@ file_watcher_tokio = "0.4"
 futures = "0.3"
 futures-core = "0.3"
 http-body-util = "0.1"
-hdv = "0.4"
-hdv_derive = "0.4"
+hdv = "0.5"
+hdv_derive = "0.5"
 hyper = "1"
 hyper-util = "0.1"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.16", default-features = false }
-monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.0.10" }
+monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.0.11" }
 mptcp = { git = "https://github.com/Banyc/mptcp.git", tag = "v0.0.2" }
 notify = "7"
 pin-project-lite = "0.2"
