@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+ahash = { workspace = true }
 async-speed-limit = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
@@ -16,7 +17,6 @@ file_rotating_log = { workspace = true }
 futures-core = { workspace = true }
 hdv = { workspace = true }
 hdv_derive = { workspace = true }
-lru = { workspace = true }
 metrics = { workspace = true }
 monitor_table = { workspace = true, features = ["hdv"] }
 pin-project-lite = { workspace = true }

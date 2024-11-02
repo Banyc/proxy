@@ -2,22 +2,22 @@ use std::{
     fmt::Display,
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4},
-    num::NonZeroUsize,
     ops::Deref,
     str::FromStr,
     sync::{Arc, LazyLock, Mutex},
 };
 
 use hdv_derive::HdvSerde;
-use lru::LruCache;
+use primitive::map::weak_lru::WeakLru;
 use serde::{de::Visitor, Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::lookup_host;
 
 use crate::proxy_table::AddressString;
 
-static RESOLVED_SOCKET_ADDR: LazyLock<Mutex<LruCache<Arc<str>, IpAddr>>> =
-    LazyLock::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())));
+const RESOLVED_SOCKET_ADDR_SIZE: usize = 128;
+static RESOLVED_SOCKET_ADDR: LazyLock<Mutex<WeakLru<Arc<str>, IpAddr, RESOLVED_SOCKET_ADDR_SIZE>>> =
+    LazyLock::new(|| Mutex::new(WeakLru::new()));
 
 pub fn any_addr(ip_version: &IpAddr) -> SocketAddr {
     let any_ip = match ip_version {
@@ -130,12 +130,12 @@ impl InternetAddr {
                 match &res {
                     Ok(resolved_addr) => {
                         if let Ok(mut store) = RESOLVED_SOCKET_ADDR.try_lock() {
-                            store.put(addr.clone(), resolved_addr.ip());
+                            store.insert(addr.clone(), resolved_addr.ip());
                         }
                     }
                     Err(_) => {
                         let mut store = RESOLVED_SOCKET_ADDR.lock().unwrap();
-                        if let Some(ip) = store.get(addr.as_ref()) {
+                        if let Some(ip) = store.get_mut(addr.as_ref()) {
                             return Ok(SocketAddr::new(*ip, *port));
                         }
                     }
