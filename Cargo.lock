@@ -655,7 +655,6 @@ dependencies = [
  "serde",
  "serde_json",
  "slotmap",
- "strict-num",
  "swap",
  "thiserror",
  "tokio",

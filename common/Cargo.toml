@@ -26,7 +26,6 @@ regex = { workspace = true }
 scopeguard = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }
 slotmap = { workspace = true }
-strict-num = { workspace = true }
 swap = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
