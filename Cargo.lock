@@ -648,7 +648,7 @@ dependencies = [
  "metrics",
  "monitor_table",
  "pin-project-lite",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.39)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.41)",
  "rand",
  "regex",
  "scopeguard",
@@ -2643,6 +2643,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "primitive"
+version = "0.1.0"
+source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.41#cb93a7fd4b4b2fcf3a7c199f4e5222d77589878c"
+dependencies = [
+ "anyhow",
+ "num-traits",
+ "thiserror",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2692,7 +2702,7 @@ dependencies = [
  "bytes",
  "common",
  "metrics",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.39)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.41)",
  "protocol",
  "thiserror",
  "tokio",
@@ -3137,17 +3147,17 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.54#50a431303cd021e58c87b418d6d532bf6dd1f56d"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.55#9a2cb829591130d08cf7caa4a46ea934ef13d28a"
 dependencies = [
  "async-trait",
  "async_async_io",
  "byteorder",
  "csv",
  "dre",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.41)",
  "rand",
  "self_assign",
  "serde",
- "strict-num",
  "tap",
  "thiserror",
  "tokio",
