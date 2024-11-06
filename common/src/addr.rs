@@ -8,7 +8,7 @@ use std::{
 };
 
 use hdv_derive::HdvSerde;
-use primitive::map::weak_lru::WeakLru;
+use primitive::map::{hash_map::HashGetMut, weak_lru::WeakLru, MapInsert};
 use serde::{de::Visitor, Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::lookup_host;
