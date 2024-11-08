@@ -476,9 +476,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.1.36"
+version = "1.1.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baee610e9452a8f6f0a1b6194ec09ff9e2d85dea54432acdae41aa0761c95d70"
+checksum = "40545c26d092346d8a8dab71ee48e7685a7a9cba76e634790c215b41a4a7b4cf"
 dependencies = [
  "jobserver",
  "libc",
@@ -1734,9 +1734,9 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "libc"
-version = "0.2.161"
+version = "0.2.162"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e9489c2807c139ffd9c1794f4af0ebe86a828db53ecdc7fea2111d0fed085d1"
+checksum = "18d287de67fe55fd7e1581fe933d965a5a9477b38e949cfa9f8574ef01506398"
 
 [[package]]
 name = "libm"
@@ -2791,17 +2791,17 @@ dependencies = [
 [[package]]
 name = "primitive"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.41#cb93a7fd4b4b2fcf3a7c199f4e5222d77589878c"
+source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.42#a7277644e37cf689a8cb0ceabf8896a3bbbc1ab8"
 dependencies = [
  "anyhow",
  "num-traits",
- "thiserror 1.0.68",
+ "thiserror 2.0.0",
 ]
 
 [[package]]
 name = "primitive"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.42#a7277644e37cf689a8cb0ceabf8896a3bbbc1ab8"
+source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.43#025de54d671c0d49d4380e2bbc1e960dffe37546"
 dependencies = [
  "anyhow",
  "num-traits",
@@ -3303,19 +3303,19 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.55#9a2cb829591130d08cf7caa4a46ea934ef13d28a"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.56#79e2daf0108766d51e6902d0e7800e5e41b54700"
 dependencies = [
  "async-trait",
  "async_async_io",
  "byteorder",
  "csv",
  "dre",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.41)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.43)",
  "rand",
  "self_assign",
  "serde",
  "tap",
- "thiserror 1.0.68",
+ "thiserror 2.0.0",
  "tokio",
  "tokio-util",
  "udp_listener",
@@ -3471,9 +3471,9 @@ dependencies = [
 
 [[package]]
 name = "security-framework-sys"
-version = "2.12.0"
+version = "2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea4a292869320c0272d7bc55a5a6aafaff59b4f63404a003887b679a2e05b4b6"
+checksum = "fa39c7303dc58b5543c94d22c1766b0d31f2ee58306363ea622b10bbc075eaa2"
 dependencies = [
  "core-foundation-sys",
  "libc",
@@ -4019,9 +4019,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.41.0"
+version = "1.41.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "145f3413504347a2be84393cc8a7d2fb4d863b375909ea59f2158261aa258bbb"
+checksum = "22cfb5bee7a6a52939ca9224d6ac897bb669134078daa8735560897f69de4d33"
 dependencies = [
  "backtrace",
  "bytes",
