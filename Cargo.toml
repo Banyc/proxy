@@ -37,10 +37,10 @@ monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.
 mptcp = { git = "https://github.com/Banyc/mptcp.git", tag = "v0.0.2" }
 notify = "7"
 pin-project-lite = "0.2"
-primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.46" }
+primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.47" }
 rand = "0.8"
 regex = "1"
-rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.58" }
+rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.59" }
 scopeguard = "1"
 serde = "1"
 serde_json = "1"
