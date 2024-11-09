@@ -648,7 +648,7 @@ dependencies = [
  "metrics",
  "monitor_table",
  "pin-project-lite",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.47)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.48)",
  "rand",
  "regex",
  "scopeguard",
@@ -2791,7 +2791,7 @@ dependencies = [
 [[package]]
 name = "primitive"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.47#96b4b8c6d9da639b8748a8d6ebaa043dc9d69016"
+source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.48#7cc94a27bafd046ae319a9fd25d9d10a2e0da256"
 dependencies = [
  "anyhow",
  "num-traits",
@@ -2848,7 +2848,7 @@ dependencies = [
  "bytes",
  "common",
  "metrics",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.47)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.48)",
  "protocol",
  "thiserror 2.0.1",
  "tokio",
@@ -3293,14 +3293,14 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.59#5d81a1b64812ab50431e08e472a9a5ed2b40fe86"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.60#7abb59882529a9b5dcfb7d396fa9396d7a64f1b1"
 dependencies = [
  "async-trait",
  "async_async_io",
  "byteorder",
  "csv",
  "dre",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.47)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.48)",
  "rand",
  "self_assign",
  "serde",
