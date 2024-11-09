@@ -19,7 +19,7 @@ dependencies = [
  "proxy_client",
  "regex",
  "serde",
- "thiserror 2.0.0",
+ "thiserror 2.0.1",
  "tokio",
  "tokio-util",
  "tokio_chacha20",
@@ -82,9 +82,9 @@ dependencies = [
 
 [[package]]
 name = "allocator-api2"
-version = "0.2.18"
+version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c6cb57a04249c6480766f7f7cef5467412af1490f8d1e243141daddada3264f"
+checksum = "611cc2ae7d2e242c457e4be7f97036b8ad9ca152b499f53faf99b1ed8fc2553f"
 
 [[package]]
 name = "android-tzdata"
@@ -648,7 +648,7 @@ dependencies = [
  "metrics",
  "monitor_table",
  "pin-project-lite",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.42)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.46)",
  "rand",
  "regex",
  "scopeguard",
@@ -656,7 +656,7 @@ dependencies = [
  "serde_json",
  "slotmap",
  "swap",
- "thiserror 2.0.0",
+ "thiserror 2.0.1",
  "tokio",
  "tokio-io-timeout",
  "tokio-util",
@@ -796,9 +796,9 @@ dependencies = [
 
 [[package]]
 name = "csv"
-version = "1.3.0"
+version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac574ff4d437a7b5ad237ef331c17ccca63c46479e5b5453eb8e10bb99a759fe"
+checksum = "acdc4883a9c96732e4733212c01447ebd805833b7275a73ca3ee080fd77afdaf"
 dependencies = [
  "csv-core",
  "itoa",
@@ -2791,21 +2791,11 @@ dependencies = [
 [[package]]
 name = "primitive"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.42#a7277644e37cf689a8cb0ceabf8896a3bbbc1ab8"
+source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.46#ceb3b028cc781c7a9dcb78da6de5be5cef9b36ff"
 dependencies = [
  "anyhow",
  "num-traits",
- "thiserror 2.0.0",
-]
-
-[[package]]
-name = "primitive"
-version = "0.1.0"
-source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.43#025de54d671c0d49d4380e2bbc1e960dffe37546"
-dependencies = [
- "anyhow",
- "num-traits",
- "thiserror 2.0.0",
+ "thiserror 2.0.1",
 ]
 
 [[package]]
@@ -2843,7 +2833,7 @@ dependencies = [
  "serde",
  "serde_json",
  "swap",
- "thiserror 2.0.0",
+ "thiserror 2.0.1",
  "tokio",
  "tokio_chacha20",
  "tokio_conn_pool",
@@ -2858,9 +2848,9 @@ dependencies = [
  "bytes",
  "common",
  "metrics",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.42)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.46)",
  "protocol",
- "thiserror 2.0.0",
+ "thiserror 2.0.1",
  "tokio",
  "tokio_chacha20",
  "tracing",
@@ -2879,7 +2869,7 @@ dependencies = [
  "rtp",
  "serde",
  "swap",
- "thiserror 2.0.0",
+ "thiserror 2.0.1",
  "tokio",
  "tokio_chacha20",
  "tokio_kcp",
@@ -3303,19 +3293,19 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.57#dc15b1cbe513311cba5a0d4583e4866e619b13cc"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.58#e815ed137b3c468117c945ade5d52e9707bf9cfe"
 dependencies = [
  "async-trait",
  "async_async_io",
  "byteorder",
  "csv",
  "dre",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.43)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.46)",
  "rand",
  "self_assign",
  "serde",
  "tap",
- "thiserror 2.0.0",
+ "thiserror 2.0.1",
  "tokio",
  "tokio-util",
  "udp_listener",
@@ -3554,9 +3544,9 @@ dependencies = [
 
 [[package]]
 name = "serial_test"
-version = "3.1.1"
+version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b4b487fe2acf240a021cf57c6b2b4903b1e78ca0ecd862a71b71d2a51fed77d"
+checksum = "1b258109f244e1d6891bf1053a55d63a5cd4f8f4c30cf9a1280989f80e7a1fa9"
 dependencies = [
  "futures",
  "log",
@@ -3568,9 +3558,9 @@ dependencies = [
 
 [[package]]
 name = "serial_test_derive"
-version = "3.1.1"
+version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82fe9db325bcef1fbcde82e078a5cc4efdf787e96b3b9cf45b50b529f2083d67"
+checksum = "5d69265a08751de7844521fd15003ae0a888e035773ba05695c5c759a6f89eef"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3595,7 +3585,7 @@ dependencies = [
  "proxy_server",
  "serde",
  "swap",
- "thiserror 2.0.0",
+ "thiserror 2.0.1",
  "tokio",
  "tokio-util",
  "toml",
@@ -3947,11 +3937,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15291287e9bff1bc6f9ff3409ed9af665bec7a5fc8ac079ea96be07bca0e2668"
+checksum = "07c1e40dd48a282ae8edc36c732cbc219144b87fb6a4c7316d611c6b1f06ec0c"
 dependencies = [
- "thiserror-impl 2.0.0",
+ "thiserror-impl 2.0.1",
 ]
 
 [[package]]
@@ -3967,9 +3957,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22efd00f33f93fa62848a7cab956c3d38c8d43095efda1decfc2b3a5dc0b8972"
+checksum = "874aa7e446f1da8d9c3a5c95b1c5eb41d800045252121dc7f8e0ba370cee55f5"
 dependencies = [
  "proc-macro2",
  "quote",
