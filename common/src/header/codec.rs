@@ -143,7 +143,7 @@ where
     }
 }
 
-pub async fn timed_write_header_async<'cursor, W, H>(
+pub async fn timed_write_header_async<W, H>(
     writer: &mut W,
     header: &H,
     cursor: &mut tokio_chacha20::cursor::EncryptCursor,
