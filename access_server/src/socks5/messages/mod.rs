@@ -270,7 +270,7 @@ where
         },
         InternetAddrKind::DomainName { addr, port } => {
             writer.write_u8(AddressType::DomainName.into()).await?;
-            let len = u8::try_from(addr.as_bytes().len())
+            let len = u8::try_from(addr.len())
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             writer.write_u8(len).await?;
             writer.write_all(addr.as_bytes()).await?;
