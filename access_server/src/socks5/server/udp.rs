@@ -9,7 +9,7 @@ use common::{
         context::UdpContext,
         io_copy::{CopyBidirectional, DownstreamParts, UpstreamParts},
         proxy_table::{UdpProxyGroup, UdpProxyGroupBuilder},
-        Flow, Packet, UdpServer, UdpServerHook, UpstreamAddr,
+        Flow, Packet, UdpServer, UdpServerHandleConn, UpstreamAddr,
     },
 };
 use proxy_client::udp::{EstablishError, UdpProxyClient};
@@ -69,14 +69,14 @@ pub struct Socks5ServerUdpAccessServerBuilder {
     udp_context: UdpContext,
 }
 
-impl loading::Builder for Socks5ServerUdpAccessServerBuilder {
-    type Hook = Socks5ServerUdpAccess;
-    type Server = UdpServer<Self::Hook>;
+impl loading::Build for Socks5ServerUdpAccessServerBuilder {
+    type ConnHandler = Socks5ServerUdpAccess;
+    type Server = UdpServer<Self::ConnHandler>;
     type Err = io::Error;
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
-        let access = self.build_hook()?;
+        let access = self.build_conn_handler()?;
         let server = access.build(listen_addr.as_ref()).await?;
         Ok(server)
     }
@@ -85,7 +85,7 @@ impl loading::Builder for Socks5ServerUdpAccessServerBuilder {
         &self.listen_addr
     }
 
-    fn build_hook(self) -> Result<Self::Hook, Self::Err> {
+    fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
         Ok(Socks5ServerUdpAccess::new(
             self.proxy_group,
             self.speed_limit,
@@ -101,7 +101,7 @@ pub struct Socks5ServerUdpAccess {
     udp_context: UdpContext,
 }
 
-impl loading::Hook for Socks5ServerUdpAccess {}
+impl loading::HandleConn for Socks5ServerUdpAccess {}
 
 impl Socks5ServerUdpAccess {
     pub fn new(proxy_group: UdpProxyGroup, speed_limit: f64, udp_context: UdpContext) -> Self {
@@ -174,7 +174,7 @@ pub enum AccessProxyError {
     Establish(#[from] EstablishError),
 }
 
-impl UdpServerHook for Socks5ServerUdpAccess {
+impl UdpServerHandleConn for Socks5ServerUdpAccess {
     fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
         let res = futures::executor::block_on(async move { UdpRequestHeader::decode(buf).await });
         let request_header = match res {

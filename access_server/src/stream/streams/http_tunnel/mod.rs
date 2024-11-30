@@ -13,7 +13,7 @@ use common::{
         io_copy::{CopyBidirectional, LogContext, DEAD_SESSION_RETENTION_DURATION},
         log::{SimplifiedStreamLog, SimplifiedStreamProxyLog, LOGGER},
         metrics::{Session, StreamSessionTable},
-        IoAddr, IoStream, StreamServerHook,
+        IoAddr, IoStream, StreamServerHandleConn,
     },
 };
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
@@ -87,14 +87,14 @@ pub struct HttpAccessServerBuilder {
     stream_context: ConcreteStreamContext,
 }
 
-impl loading::Builder for HttpAccessServerBuilder {
-    type Hook = HttpAccess;
-    type Server = TcpServer<Self::Hook>;
+impl loading::Build for HttpAccessServerBuilder {
+    type ConnHandler = HttpAccess;
+    type Server = TcpServer<Self::ConnHandler>;
     type Err = io::Error;
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
-        let access = self.build_hook()?;
+        let access = self.build_conn_handler()?;
         let server = access.build(listen_addr.as_ref()).await?;
         Ok(server)
     }
@@ -103,7 +103,7 @@ impl loading::Builder for HttpAccessServerBuilder {
         &self.listen_addr
     }
 
-    fn build_hook(self) -> Result<Self::Hook, Self::Err> {
+    fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
         let access = HttpAccess::new(self.proxy_table, self.speed_limit, self.stream_context);
         Ok(access)
     }
@@ -434,9 +434,9 @@ pub enum TunnelError {
     Address(#[from] ParseInternetAddrError),
 }
 
-impl loading::Hook for HttpAccess {}
+impl loading::HandleConn for HttpAccess {}
 
-impl StreamServerHook for HttpAccess {
+impl StreamServerHandleConn for HttpAccess {
     #[instrument(skip(self, stream))]
     async fn handle_stream<S>(&self, stream: S)
     where

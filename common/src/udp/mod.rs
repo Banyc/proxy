@@ -26,21 +26,21 @@ pub const TIMEOUT: Duration = Duration::from_secs(10);
 pub const ACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
-pub struct UdpServer<H> {
+pub struct UdpServer<ConnHandler> {
     listener: UdpSocket,
-    hook: H,
-    handle: mpsc::Sender<H>,
-    set_hook_rx: mpsc::Receiver<H>,
+    conn_handler: ConnHandler,
+    handle: mpsc::Sender<ConnHandler>,
+    set_conn_handler_rx: mpsc::Receiver<ConnHandler>,
 }
 
-impl<H> UdpServer<H> {
-    pub fn new(listener: UdpSocket, hook: H) -> Self {
-        let (set_hook_tx, set_hook_rx) = mpsc::channel(64);
+impl<ConnHandler> UdpServer<ConnHandler> {
+    pub fn new(listener: UdpSocket, conn_handler: ConnHandler) -> Self {
+        let (set_conn_handler_tx, set_conn_handler_rx) = mpsc::channel(64);
         Self {
             listener,
-            hook,
-            handle: set_hook_tx,
-            set_hook_rx,
+            conn_handler,
+            handle: set_conn_handler_tx,
+            set_conn_handler_rx,
         }
     }
 
@@ -53,13 +53,13 @@ impl<H> UdpServer<H> {
     }
 }
 
-impl<H> loading::Server for UdpServer<H>
+impl<ConnHandler> loading::Serve for UdpServer<ConnHandler>
 where
-    H: UdpServerHook + Send + Sync + 'static,
+    ConnHandler: UdpServerHandleConn + Send + Sync + 'static,
 {
-    type Hook = H;
+    type ConnHandler = ConnHandler;
 
-    fn handle(&self) -> mpsc::Sender<Self::Hook> {
+    fn handle(&self) -> mpsc::Sender<Self::ConnHandler> {
         self.handle.clone()
     }
 
@@ -68,22 +68,22 @@ where
     }
 }
 
-impl<H> UdpServer<H>
+impl<ConnHandler> UdpServer<ConnHandler>
 where
-    H: UdpServerHook + Send + Sync + 'static,
+    ConnHandler: UdpServerHandleConn + Send + Sync + 'static,
 {
     #[instrument(skip(self))]
     async fn serve_(mut self) -> Result<(), ServeError> {
         drop(self.handle);
 
-        let mut hook = Arc::new(self.hook);
+        let mut conn_handler = Arc::new(self.conn_handler);
 
         let dispatch = {
-            let hook = hook.clone();
+            let conn_handler = conn_handler.clone();
             move |addr: SocketAddr, packet: udp_listener::Packet| -> Option<(Flow, Packet)> {
-                let hook = hook.clone();
+                let conn_handler = conn_handler.clone();
                 let mut buf_reader = io::Cursor::new(&packet[..]);
-                let upstream_addr = hook.parse_upstream_addr(&mut buf_reader)?;
+                let upstream_addr = conn_handler.parse_upstream_addr(&mut buf_reader)?;
                 let flow = Flow {
                     upstream: upstream_addr,
                     downstream: DownstreamAddr(addr),
@@ -109,7 +109,7 @@ where
             trace!("Waiting for packet");
             tokio::select! {
                 res = downstream_listener.accept() => {
-                    let accepted = match res {
+                    let flow = match res {
                         Ok(x) => x,
                         Err(e) => {
                             // Ref: https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-recvfrom
@@ -122,18 +122,18 @@ where
                     };
                     warned = false;
 
-                    let hook = Arc::clone(&hook);
+                    let conn_handler = Arc::clone(&conn_handler);
                     tokio::spawn(async move {
-                        hook.handle_flow(accepted).await;
+                        conn_handler.handle_flow(flow).await;
                     });
                 }
-                res = self.set_hook_rx.recv() => {
+                res = self.set_conn_handler_rx.recv() => {
                     let new_hook = match res {
                         Some(new_hook) => new_hook,
                         None => break,
                     };
-                    info!(?addr, "Hook set");
-                    hook = Arc::new(new_hook);
+                    info!(?addr, "Connection handler set");
+                    conn_handler = Arc::new(new_hook);
                 }
             }
         }
@@ -153,7 +153,7 @@ pub enum ServeError {
     },
 }
 
-pub trait UdpServerHook: loading::Hook {
+pub trait UdpServerHandleConn: loading::HandleConn {
     fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>>;
 
     fn handle_flow(&self, conn: Conn<Flow, Packet>)

@@ -7,7 +7,7 @@ use common::{
     proxy_table::ProxyGroupBuildError,
     stream::{
         io_copy::{CopyBidirectional, LogContext},
-        IoAddr, IoStream, StreamServerHook,
+        IoAddr, IoStream, StreamServerHandleConn,
     },
 };
 use protocol::stream::{
@@ -75,14 +75,14 @@ pub struct TcpAccessServerBuilder {
     stream_context: ConcreteStreamContext,
 }
 
-impl loading::Builder for TcpAccessServerBuilder {
-    type Hook = TcpAccess;
-    type Server = TcpServer<Self::Hook>;
+impl loading::Build for TcpAccessServerBuilder {
+    type ConnHandler = TcpAccess;
+    type Server = TcpServer<Self::ConnHandler>;
     type Err = io::Error;
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
-        let access = self.build_hook()?;
+        let access = self.build_conn_handler()?;
         let server = access.build(listen_addr.as_ref()).await?;
         Ok(server)
     }
@@ -91,7 +91,7 @@ impl loading::Builder for TcpAccessServerBuilder {
         &self.listen_addr
     }
 
-    fn build_hook(self) -> Result<Self::Hook, Self::Err> {
+    fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
         Ok(TcpAccess::new(
             self.proxy_group,
             self.destination.0,
@@ -173,9 +173,9 @@ pub enum ProxyError {
     EstablishProxyChain(#[from] StreamEstablishError),
 }
 
-impl loading::Hook for TcpAccess {}
+impl loading::HandleConn for TcpAccess {}
 
-impl StreamServerHook for TcpAccess {
+impl StreamServerHandleConn for TcpAccess {
     #[instrument(skip(self, stream))]
     async fn handle_stream<S>(&self, stream: S)
     where

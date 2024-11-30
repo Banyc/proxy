@@ -10,13 +10,13 @@ use crate::error::AnyResult;
 
 /// A listener loader that spawns and kills listeners
 #[derive(Debug)]
-pub struct Loader<H> {
+pub struct Loader<ConnHandler> {
     /// Handles of the listeners using the actor model pattern
-    handles: HashMap<Arc<str>, mpsc::Sender<H>>,
+    handles: HashMap<Arc<str>, mpsc::Sender<ConnHandler>>,
 }
-impl<H> Loader<H>
+impl<ConnHandler> Loader<ConnHandler>
 where
-    H: Hook + std::fmt::Debug,
+    ConnHandler: HandleConn + std::fmt::Debug,
 {
     pub fn new() -> Self {
         Self {
@@ -30,8 +30,8 @@ where
         builders: Vec<B>,
     ) -> AnyResult
     where
-        S: Server<Hook = H> + Send + 'static,
-        B: Builder<Hook = H, Server = S>,
+        S: Serve<ConnHandler = ConnHandler> + Send + 'static,
+        B: Build<ConnHandler = ConnHandler, Server = S>,
     {
         // Spawn servers
         let mut keys = HashSet::new();
@@ -40,8 +40,8 @@ where
 
             // Hot reloading
             if let Some(handle) = self.handles.get(server.key()) {
-                let hook = server.build_hook()?;
-                handle.send(hook).await.unwrap();
+                let conn_handler = server.build_conn_handler()?;
+                handle.send(conn_handler).await.unwrap();
                 continue;
             }
 
@@ -60,9 +60,9 @@ where
         Ok(())
     }
 }
-impl<H> Default for Loader<H>
+impl<ConnHandler> Default for Loader<ConnHandler>
 where
-    H: Hook + std::fmt::Debug,
+    ConnHandler: HandleConn + std::fmt::Debug,
 {
     fn default() -> Self {
         Self::new()
@@ -70,27 +70,27 @@ where
 }
 
 /// The business logic for the accepted connections
-pub trait Hook {}
+pub trait HandleConn {}
 
 /// A builder of a server and its hook
-pub trait Builder {
-    type Hook: Hook;
-    type Server: Server<Hook = Self::Hook>;
+pub trait Build {
+    type ConnHandler: HandleConn;
+    type Server: Serve<ConnHandler = Self::ConnHandler>;
     type Err: std::error::Error + Send + Sync + 'static;
     fn build_server(
         self,
     ) -> impl std::future::Future<Output = Result<Self::Server, Self::Err>> + Send;
-    fn build_hook(self) -> Result<Self::Hook, Self::Err>;
+    fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err>;
     fn key(&self) -> &Arc<str>;
 }
 
 /// A listener including the business logic for the accepted connections
-pub trait Server {
-    type Hook: Hook;
+pub trait Serve {
+    type ConnHandler: HandleConn;
     /// The handle of this server using the actor model
     ///
     /// If all the handle has been dropped, the listener must despawn eventually but still keep all its connections alive.
-    fn handle(&self) -> mpsc::Sender<Self::Hook>;
+    fn handle(&self) -> mpsc::Sender<Self::ConnHandler>;
     /// Server ends if the caller does not hold a handle to the server.
     fn serve(self) -> impl std::future::Future<Output = AnyResult> + Send;
 }

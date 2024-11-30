@@ -4,12 +4,12 @@ use async_speed_limit::Limiter;
 use common::{
     addr::{InternetAddr, InternetAddrStr},
     config::SharableConfig,
-    loading::{self, Hook},
+    loading::{self, HandleConn},
     proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{
         addr::StreamAddr,
         io_copy::{CopyBidirectional, LogContext},
-        IoAddr, IoStream, StreamServerHook,
+        IoAddr, IoStream, StreamServerHandleConn,
     },
 };
 use protocol::stream::{
@@ -105,14 +105,14 @@ pub struct Socks5ServerTcpAccessServerBuilder {
     stream_context: ConcreteStreamContext,
 }
 
-impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
-    type Hook = Socks5ServerTcpAccess;
-    type Server = TcpServer<Self::Hook>;
+impl loading::Build for Socks5ServerTcpAccessServerBuilder {
+    type ConnHandler = Socks5ServerTcpAccess;
+    type Server = TcpServer<Self::ConnHandler>;
     type Err = io::Error;
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
-        let access = self.build_hook()?;
+        let access = self.build_conn_handler()?;
         let tcp_listener = tokio::net::TcpListener::bind(listen_addr.as_ref()).await?;
         Ok(TcpServer::new(tcp_listener, access))
     }
@@ -121,7 +121,7 @@ impl loading::Builder for Socks5ServerTcpAccessServerBuilder {
         &self.listen_addr
     }
 
-    fn build_hook(self) -> Result<Self::Hook, Self::Err> {
+    fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
         let access = Socks5ServerTcpAccess::new(
             self.proxy_table,
             self.speed_limit,
@@ -141,8 +141,8 @@ pub struct Socks5ServerTcpAccess {
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
     stream_context: ConcreteStreamContext,
 }
-impl Hook for Socks5ServerTcpAccess {}
-impl StreamServerHook for Socks5ServerTcpAccess {
+impl HandleConn for Socks5ServerTcpAccess {}
+impl StreamServerHandleConn for Socks5ServerTcpAccess {
     async fn handle_stream<S>(&self, stream: S)
     where
         S: IoStream + IoAddr + std::fmt::Debug,

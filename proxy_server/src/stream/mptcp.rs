@@ -41,20 +41,20 @@ pub struct MptcpProxyServerBuilder {
     pub inner: StreamProxyServerBuilder,
 }
 
-impl loading::Builder for MptcpProxyServerBuilder {
-    type Hook = StreamProxyServer;
-    type Server = MptcpServer<Self::Hook>;
+impl loading::Build for MptcpProxyServerBuilder {
+    type ConnHandler = StreamProxyServer;
+    type Server = MptcpServer<Self::ConnHandler>;
     type Err = MptcpProxyServerBuildError;
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
-        let stream_proxy = self.build_hook()?;
+        let stream_proxy = self.build_conn_handler()?;
         build_mptcp_proxy_server(listen_addr.as_ref(), stream_proxy)
             .await
             .map_err(|e| e.into())
     }
 
-    fn build_hook(self) -> Result<Self::Hook, Self::Err> {
+    fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
         self.inner.build().map_err(|e| e.into())
     }
 

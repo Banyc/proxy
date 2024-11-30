@@ -40,20 +40,20 @@ pub struct KcpProxyServerBuilder {
     pub listen_addr: Arc<str>,
     pub inner: StreamProxyServerBuilder,
 }
-impl loading::Builder for KcpProxyServerBuilder {
-    type Hook = StreamProxyServer;
-    type Server = KcpServer<Self::Hook>;
+impl loading::Build for KcpProxyServerBuilder {
+    type ConnHandler = StreamProxyServer;
+    type Server = KcpServer<Self::ConnHandler>;
     type Err = KcpProxyServerBuildError;
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
-        let stream_proxy = self.build_hook()?;
+        let stream_proxy = self.build_conn_handler()?;
         build_kcp_proxy_server(listen_addr.as_ref(), stream_proxy)
             .await
             .map_err(|e| e.into())
     }
 
-    fn build_hook(self) -> Result<Self::Hook, Self::Err> {
+    fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
         self.inner.build().map_err(|e| e.into())
     }
 

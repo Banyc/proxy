@@ -10,7 +10,7 @@ use common::{
         context::UdpContext,
         io_copy::{CopyBiError, CopyBidirectional, DownstreamParts, UpstreamParts},
         proxy_table::{UdpProxyGroup, UdpProxyGroupBuilder},
-        Flow, Packet, UdpServer, UdpServerHook, UpstreamAddr,
+        Flow, Packet, UdpServer, UdpServerHandleConn, UpstreamAddr,
     },
 };
 use proxy_client::udp::{EstablishError, UdpProxyClient};
@@ -75,14 +75,14 @@ pub struct UdpAccessServerBuilder {
     udp_context: UdpContext,
 }
 
-impl loading::Builder for UdpAccessServerBuilder {
-    type Hook = UdpAccess;
-    type Server = UdpServer<Self::Hook>;
+impl loading::Build for UdpAccessServerBuilder {
+    type ConnHandler = UdpAccess;
+    type Server = UdpServer<Self::ConnHandler>;
     type Err = io::Error;
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
-        let access = self.build_hook()?;
+        let access = self.build_conn_handler()?;
         let server = access.build(listen_addr.as_ref()).await?;
         Ok(server)
     }
@@ -91,7 +91,7 @@ impl loading::Builder for UdpAccessServerBuilder {
         &self.listen_addr
     }
 
-    fn build_hook(self) -> Result<Self::Hook, Self::Err> {
+    fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
         Ok(UdpAccess::new(
             self.proxy_group,
             self.destination.0,
@@ -109,7 +109,7 @@ pub struct UdpAccess {
     udp_context: UdpContext,
 }
 
-impl loading::Hook for UdpAccess {}
+impl loading::HandleConn for UdpAccess {}
 
 impl UdpAccess {
     pub fn new(
@@ -177,7 +177,7 @@ pub enum AccessProxyError {
     Copy(#[from] CopyBiError),
 }
 
-impl UdpServerHook for UdpAccess {
+impl UdpServerHandleConn for UdpAccess {
     fn parse_upstream_addr(&self, _buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
         Some(Some(UpstreamAddr(self.destination.clone())))
     }

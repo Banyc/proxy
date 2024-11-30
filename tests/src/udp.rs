@@ -6,7 +6,7 @@ mod tests {
     use common::{
         addr::InternetAddr,
         header::route::RouteErrorKind,
-        loading::Server,
+        loading::Serve,
         proxy_table::ProxyConfig,
         udp::{context::UdpContext, proxy_table::UdpProxyConfig, PACKET_BUFFER_LENGTH},
     };

@@ -2,7 +2,7 @@
 mod tests {
     use std::{io, time::Duration};
 
-    use common::{loading::Server, proxy_table::ProxyConfig, stream::addr::StreamAddr};
+    use common::{loading::Serve, proxy_table::ProxyConfig, stream::addr::StreamAddr};
     use protocol::stream::{
         addr::{ConcreteStreamAddr, ConcreteStreamType},
         connect::ConcreteStreamConnectorTable,

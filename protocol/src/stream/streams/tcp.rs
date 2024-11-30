@@ -12,27 +12,27 @@ use tracing::{info, instrument, trace, warn};
 use common::{
     error::AnyResult,
     loading,
-    stream::{connect::StreamConnect, IoAddr, IoStream, StreamServerHook},
+    stream::{connect::StreamConnect, IoAddr, IoStream, StreamServerHandleConn},
 };
 
 use crate::stream::connection::Connection;
 
 #[derive(Debug)]
-pub struct TcpServer<H> {
+pub struct TcpServer<ConnHandler> {
     listener: TcpListener,
-    hook: H,
-    handle: mpsc::Sender<H>,
-    set_hook_rx: mpsc::Receiver<H>,
+    conn_handler: ConnHandler,
+    handle: mpsc::Sender<ConnHandler>,
+    set_conn_handler_rx: mpsc::Receiver<ConnHandler>,
 }
 
-impl<H> TcpServer<H> {
-    pub fn new(listener: TcpListener, hook: H) -> Self {
-        let (set_hook_tx, set_hook_rx) = mpsc::channel(64);
+impl<ConnHandler> TcpServer<ConnHandler> {
+    pub fn new(listener: TcpListener, conn_handler: ConnHandler) -> Self {
+        let (set_conn_handler_tx, set_conn_handler_rx) = mpsc::channel(64);
         Self {
             listener,
-            hook,
-            handle: set_hook_tx,
-            set_hook_rx,
+            conn_handler,
+            handle: set_conn_handler_tx,
+            set_conn_handler_rx,
         }
     }
 
@@ -45,13 +45,13 @@ impl<H> TcpServer<H> {
     }
 }
 
-impl<H> loading::Server for TcpServer<H>
+impl<ConnHandler> loading::Serve for TcpServer<ConnHandler>
 where
-    H: StreamServerHook + Send + Sync + 'static,
+    ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
 {
-    type Hook = H;
+    type ConnHandler = ConnHandler;
 
-    fn handle(&self) -> mpsc::Sender<Self::Hook> {
+    fn handle(&self) -> mpsc::Sender<Self::ConnHandler> {
         self.handle.clone()
     }
 
@@ -60,9 +60,9 @@ where
     }
 }
 
-impl<H> TcpServer<H>
+impl<ConnHandler> TcpServer<ConnHandler>
 where
-    H: StreamServerHook + Send + Sync + 'static,
+    ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
 {
     #[instrument(skip(self))]
     async fn serve_(mut self) -> Result<(), ServeError> {
@@ -70,8 +70,8 @@ where
 
         let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
-        // Arc hook
-        let mut hook = Arc::new(self.hook);
+        // Arc conn_handler
+        let mut conn_handler = Arc::new(self.conn_handler);
         loop {
             trace!("Waiting for connection");
             tokio::select! {
@@ -85,19 +85,19 @@ where
                         }
                     };
                     counter!("stream.tcp.accepts").increment(1);
-                    // Arc hook
-                    let hook = Arc::clone(&hook);
+                    // Arc conn_handler
+                    let conn_handler = Arc::clone(&conn_handler);
                     tokio::spawn(async move {
-                        hook.handle_stream(IoTcpStream(stream)).await;
+                        conn_handler.handle_stream(IoTcpStream(stream)).await;
                     });
                 }
-                res = self.set_hook_rx.recv() => {
-                    let new_hook = match res {
-                        Some(new_hook) => new_hook,
+                res = self.set_conn_handler_rx.recv() => {
+                    let new_conn_handler = match res {
+                        Some(new_conn_handler) => new_conn_handler,
                         None => break,
                     };
-                    info!(?addr, "Hook set");
-                    hook = Arc::new(new_hook);
+                    info!(?addr, "Connection handler set");
+                    conn_handler = Arc::new(new_conn_handler);
                 }
             }
         }

@@ -8,7 +8,7 @@ use common::{
         io_copy::{CopyBidirectional, LogContext},
         pool::connect_with_pool,
         steer::{steer, SteerError},
-        IoAddr, IoStream, StreamServerHook,
+        IoAddr, IoStream, StreamServerHandleConn,
     },
 };
 use protocol::stream::{
@@ -159,8 +159,8 @@ impl StreamProxyServer {
     //         });
     // }
 }
-impl loading::Hook for StreamProxyServer {}
-impl StreamServerHook for StreamProxyServer {
+impl loading::HandleConn for StreamProxyServer {}
+impl StreamServerHandleConn for StreamProxyServer {
     #[instrument(skip(self))]
     async fn handle_stream<S>(&self, stream: S)
     where

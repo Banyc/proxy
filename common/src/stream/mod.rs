@@ -27,7 +27,7 @@ pub trait IoAddr {
     fn local_addr(&self) -> io::Result<SocketAddr>;
 }
 
-pub trait StreamServerHook: loading::Hook {
+pub trait StreamServerHandleConn: loading::HandleConn {
     fn handle_stream<S>(&self, stream: S) -> impl std::future::Future<Output = ()> + Send
     where
         S: IoStream + IoAddr + std::fmt::Debug;

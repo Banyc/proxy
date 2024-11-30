@@ -13,7 +13,7 @@ use common::{
         io_copy::{CopyBidirectional, DownstreamParts, UpstreamParts},
         respond::respond_with_error,
         steer::{decode_route_header, echo},
-        Flow, Packet, UdpServer, UdpServerHook, UpstreamAddr,
+        Flow, Packet, UdpServer, UdpServerHandleConn, UpstreamAddr,
     },
 };
 use serde::Deserialize;
@@ -38,19 +38,19 @@ pub struct UdpProxyServerBuilder {
     pub udp_context: UdpContext,
 }
 
-impl loading::Builder for UdpProxyServerBuilder {
-    type Hook = UdpProxy;
-    type Server = UdpServer<Self::Hook>;
+impl loading::Build for UdpProxyServerBuilder {
+    type ConnHandler = UdpProxy;
+    type Server = UdpServer<Self::ConnHandler>;
     type Err = UdpProxyServerBuildError;
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = Arc::clone(&self.config.listen_addr);
-        let udp_proxy = self.build_hook()?;
+        let udp_proxy = self.build_conn_handler()?;
         let server = udp_proxy.build(listen_addr.as_ref()).await?;
         Ok(server)
     }
 
-    fn build_hook(self) -> Result<Self::Hook, Self::Err> {
+    fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
         let header_crypto = self
             .config
             .header_key
@@ -255,9 +255,9 @@ fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
     }
 }
 
-impl loading::Hook for UdpProxy {}
+impl loading::HandleConn for UdpProxy {}
 
-impl UdpServerHook for UdpProxy {
+impl UdpServerHandleConn for UdpProxy {
     fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
         let res = decode_route_header(buf, &self.header_crypto);
         res.ok()
