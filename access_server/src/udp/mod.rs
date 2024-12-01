@@ -16,7 +16,7 @@ use common::{
 use proxy_client::udp::{EstablishError, UdpProxyClient};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::net::ToSocketAddrs;
+use tokio::net::{ToSocketAddrs, UdpSocket};
 use tracing::{error, warn};
 use udp_listener::Conn;
 
@@ -131,7 +131,7 @@ impl UdpAccess {
         Ok(UdpServer::new(listener, self))
     }
 
-    async fn proxy(&self, conn: Conn<Flow, Packet>) -> Result<(), AccessProxyError> {
+    async fn proxy(&self, conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), AccessProxyError> {
         // Connect to upstream
         let proxy_chain = self.proxy_group.choose_chain();
         let upstream =
@@ -182,7 +182,7 @@ impl UdpServerHandleConn for UdpAccess {
         Some(Some(UpstreamAddr(self.destination.clone())))
     }
 
-    async fn handle_flow(&self, accepted: Conn<common::udp::Flow, Packet>) {
+    async fn handle_flow(&self, accepted: Conn<UdpSocket, Flow, Packet>) {
         let res = self.proxy(accepted).await;
         match res {
             Ok(()) => (),

@@ -4,7 +4,7 @@ use hdv_derive::HdvSerde;
 use thiserror::Error;
 use tokio::{net::UdpSocket, sync::mpsc};
 use tracing::{error, info, instrument, trace, warn};
-use udp_listener::{Conn, UdpListener};
+use udp_listener::{Conn, UtpListener};
 
 use crate::{
     addr::{InternetAddr, InternetAddrHdv},
@@ -101,7 +101,7 @@ where
 
         let dispatcher_buffer_size = NonZeroUsize::new(64).unwrap();
         let downstream_listener =
-            UdpListener::new(self.listener, dispatcher_buffer_size, Arc::new(dispatch));
+            UtpListener::new(self.listener, dispatcher_buffer_size, Arc::new(dispatch));
 
         info!(?addr, "Listening");
         let mut warned = false;
@@ -156,8 +156,10 @@ pub enum ServeError {
 pub trait UdpServerHandleConn: loading::HandleConn {
     fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>>;
 
-    fn handle_flow(&self, conn: Conn<Flow, Packet>)
-        -> impl std::future::Future<Output = ()> + Send;
+    fn handle_flow(
+        &self,
+        conn: Conn<UdpSocket, Flow, Packet>,
+    ) -> impl std::future::Future<Output = ()> + Send;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

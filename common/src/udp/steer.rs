@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 
 use metrics::counter;
+use tokio::net::UdpSocket;
 use tracing::warn;
 use udp_listener::ConnWrite;
 
@@ -13,7 +14,7 @@ use super::{header::UdpRequestHeader, UpstreamAddr};
 
 pub async fn echo(
     buf: &[u8],
-    dn_writer: &ConnWrite,
+    dn_writer: &ConnWrite<UdpSocket>,
     header_crypto: &tokio_chacha20::config::Config,
 ) {
     let resp = RouteResponse { result: Ok(()) };

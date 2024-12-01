@@ -123,7 +123,7 @@ impl UdpProxy {
     }
 
     #[instrument(skip(self, conn))]
-    async fn proxy(&self, mut conn: Conn<Flow, Packet>) -> Result<(), ProxyError> {
+    async fn proxy(&self, mut conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), ProxyError> {
         let flow = conn.conn_key().clone();
 
         // Echo
@@ -207,7 +207,11 @@ impl UdpProxy {
         Ok(())
     }
 
-    async fn handle_proxy_result(&self, dn_write: &ConnWrite, res: Result<(), ProxyError>) {
+    async fn handle_proxy_result(
+        &self,
+        dn_write: &ConnWrite<UdpSocket>,
+        res: Result<(), ProxyError>,
+    ) {
         match res {
             Ok(()) => (),
             Err(e) => {
@@ -263,7 +267,7 @@ impl UdpServerHandleConn for UdpProxy {
         res.ok()
     }
 
-    async fn handle_flow(&self, accepted: Conn<common::udp::Flow, Packet>) {
+    async fn handle_flow(&self, accepted: Conn<UdpSocket, Flow, Packet>) {
         let dn_write = accepted.write().clone();
         let res = self.proxy(accepted).await;
         self.handle_proxy_result(&dn_write, res).await;

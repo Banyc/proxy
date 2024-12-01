@@ -56,7 +56,7 @@ pub struct UpstreamParts<R, W> {
 
 pub struct DownstreamParts {
     pub read: ConnRead<Packet>,
-    pub write: ConnWrite,
+    pub write: ConnWrite<UdpSocket>,
 }
 
 pub struct CopyBidirectional<R, W> {
@@ -430,7 +430,7 @@ pub enum CopyBiError {
     SendDownstream {
         #[source]
         source: io::Error,
-        downstream: ConnWrite,
+        downstream: ConnWrite<UdpSocket>,
     },
 }
 

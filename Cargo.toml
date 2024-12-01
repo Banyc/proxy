@@ -40,7 +40,7 @@ pin-project-lite = "0.2"
 primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.54" }
 rand = "0.8"
 regex = "1"
-rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.65" }
+rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.66" }
 scopeguard = "1"
 serde = "1"
 serde_json = "1"
@@ -58,7 +58,7 @@ tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", tag 
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.11" }
+udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.12" }
 
 [profile.profiling]
 inherits = "release"

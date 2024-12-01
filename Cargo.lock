@@ -1563,9 +1563,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.6.0"
+version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "707907fe3c25f5424cce2cb7e1cbcafee6bdbe735ca90ef77c29e84591e5b9da"
+checksum = "62f822373a4fe84d4bb149bf54e584a7f4abec90e072ed49cda0edea5b95471f"
 dependencies = [
  "equivalent",
  "hashbrown 0.15.2",
@@ -2765,16 +2765,6 @@ dependencies = [
 [[package]]
 name = "primitive"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.35#9d93e5916723519dc18e0723c841d1f171a54196"
-dependencies = [
- "anyhow",
- "num-traits",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "primitive"
-version = "0.1.0"
 source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.51#4a0803030cc0355f294d4bfb375f04e1002cd86b"
 dependencies = [
  "anyhow",
@@ -2786,6 +2776,16 @@ dependencies = [
 name = "primitive"
 version = "0.1.0"
 source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.54#c60c988c8bec55855a44ed2d020a8ba127a89728"
+dependencies = [
+ "anyhow",
+ "num-traits",
+ "thiserror 2.0.3",
+]
+
+[[package]]
+name = "primitive"
+version = "0.1.0"
+source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.55#57489ef98acfcfb819e048964805ef16a386787f"
 dependencies = [
  "anyhow",
  "num-traits",
@@ -3290,14 +3290,14 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.65#94a21e37d744e382c88c43572acc98f565958195"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.66#495445b4451cb17a5b3cb7a7d02886bd0182dc3b"
 dependencies = [
  "async-trait",
  "async_async_io",
  "byteorder",
  "csv",
  "dre",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.54)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.55)",
  "rand",
  "self_assign",
  "serde",
@@ -4261,10 +4261,10 @@ checksum = "42ff0bf0c66b8238c6f3b578df37d0b7848e55df8577b3f74f92a69acceeb825"
 [[package]]
 name = "udp_listener"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.11#35026640ab90a863f0846fb8870dbab98fecf07e"
+source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.12#500fe2651cbb4b11e93c34c0b58f25d71023322f"
 dependencies = [
  "bytes",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.35)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.55)",
  "tokio",
 ]
 

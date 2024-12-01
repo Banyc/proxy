@@ -1,5 +1,6 @@
 use std::io;
 
+use tokio::net::UdpSocket;
 use tracing::trace;
 use udp_listener::ConnWrite;
 
@@ -9,7 +10,7 @@ use crate::header::{
 };
 
 pub async fn respond_with_error(
-    dn_writer: &ConnWrite,
+    dn_writer: &ConnWrite<UdpSocket>,
     kind: RouteErrorKind,
     header_crypto: &tokio_chacha20::config::Config,
 ) -> Result<(), io::Error> {
