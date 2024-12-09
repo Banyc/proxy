@@ -80,7 +80,7 @@ where
 
         let dispatch = {
             let conn_handler = conn_handler.clone();
-            move |addr: SocketAddr, packet: udp_listener::Packet| -> Option<(Flow, Packet)> {
+            move |&addr: &SocketAddr, packet: udp_listener::Packet| -> Option<(Flow, Packet)> {
                 let conn_handler = conn_handler.clone();
                 let mut buf_reader = io::Cursor::new(&packet[..]);
                 let upstream_addr = conn_handler.parse_upstream_addr(&mut buf_reader)?;

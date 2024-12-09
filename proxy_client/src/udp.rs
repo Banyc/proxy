@@ -22,7 +22,7 @@ use common::{
     },
 };
 use metrics::counter;
-use primitive::arena::obj_pool::ArcObjectPool;
+use primitive::arena::obj_pool::ArcObjPool;
 use thiserror::Error;
 use tokio::net::UdpSocket;
 use tracing::{error, instrument, trace, warn};
@@ -321,11 +321,11 @@ impl TracerBuilder for UdpTracerBuilder {
 
 #[derive(Debug)]
 pub struct UdpTracer {
-    pool: ArcObjectPool<BytesMut>,
+    pool: ArcObjPool<BytesMut>,
 }
 impl UdpTracer {
     pub fn new() -> Self {
-        let pool = ArcObjectPool::new(
+        let pool = ArcObjPool::new(
             None,
             NonZeroUsize::new(1).unwrap(),
             || BytesMut::with_capacity(PACKET_BUFFER_LENGTH),
