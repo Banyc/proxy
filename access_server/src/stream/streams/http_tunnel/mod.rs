@@ -46,7 +46,6 @@ pub struct HttpAccessServerConfig {
     pub proxy_table: SharableConfig<StreamProxyTableBuilder>,
     pub speed_limit: Option<f64>,
 }
-
 impl HttpAccessServerConfig {
     pub fn into_builder(
         self,
@@ -70,7 +69,6 @@ impl HttpAccessServerConfig {
         })
     }
 }
-
 #[derive(Debug, Error)]
 pub enum BuildError {
     #[error("Proxy table key not found: {0}")]
@@ -86,7 +84,6 @@ pub struct HttpAccessServerBuilder {
     speed_limit: f64,
     stream_context: ConcreteStreamContext,
 }
-
 impl loading::Build for HttpAccessServerBuilder {
     type ConnHandler = HttpAccess;
     type Server = TcpServer<Self::ConnHandler>;
@@ -115,7 +112,6 @@ pub struct HttpAccess {
     speed_limiter: Limiter,
     stream_context: ConcreteStreamContext,
 }
-
 impl HttpAccess {
     pub fn new(
         proxy_table: StreamProxyTable,
@@ -310,7 +306,6 @@ impl HttpAccess {
         Ok(Response::new(empty()))
     }
 }
-
 async fn tls_http<S>(
     upstream: S,
     req: Request<Incoming>,
@@ -351,7 +346,6 @@ where
 
     Ok(resp.map(|b| b.boxed()))
 }
-
 async fn upgrade(
     req: Request<Incoming>,
     addr: InternetAddr,
@@ -419,7 +413,6 @@ async fn upgrade(
     .serve_as_access_server("HTTP CONNECT direct")
     .await;
 }
-
 #[derive(Debug, Error)]
 pub enum TunnelError {
     #[error("Failed to establish proxy chain: {0}")]
@@ -433,9 +426,7 @@ pub enum TunnelError {
     #[error("Invalid address: {0}")]
     Address(#[from] ParseInternetAddrError),
 }
-
 impl loading::HandleConn for HttpAccess {}
-
 impl StreamServerHandleConn for HttpAccess {
     #[instrument(skip(self, stream))]
     async fn handle_stream<S>(&self, stream: S)
@@ -454,7 +445,6 @@ struct HttpConnect {
     speed_limiter: Limiter,
     stream_context: ConcreteStreamContext,
 }
-
 impl HttpConnect {
     pub fn new(
         proxy_group: Arc<StreamProxyGroup>,
@@ -512,7 +502,6 @@ impl HttpConnect {
         Ok(())
     }
 }
-
 #[derive(Debug, Error)]
 pub enum HttpConnectError {
     #[error("Failed to establish proxy chain")]

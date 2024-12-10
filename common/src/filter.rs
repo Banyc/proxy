@@ -57,7 +57,6 @@ pub fn build_from_map(
 pub struct FilterBuilder {
     pub rules: Option<Vec<SharableConfig<RuleBuilder>>>,
 }
-
 impl FilterBuilder {
     pub fn build(
         self,
@@ -102,7 +101,6 @@ pub enum FilterBuildError {
 pub struct Filter {
     rules: Arc<[Rule]>,
 }
-
 impl Filter {
     pub fn filter(&self, addr: &InternetAddr) -> Action {
         match addr.deref() {
@@ -136,7 +134,6 @@ pub struct RuleBuilder {
     matcher: SharableConfig<MatcherBuilder>,
     action: Action,
 }
-
 impl RuleBuilder {
     pub fn build(self, matchers: &HashMap<Arc<str>, Matcher>) -> Result<Rule, FilterBuildError> {
         let matcher = match self.matcher {
@@ -162,7 +159,6 @@ pub struct Rule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MatcherBuilder(MatcherBuilderKind);
-
 impl MatcherBuilder {
     pub fn build(self) -> Result<Matcher, regex::Error> {
         self.0.build()
@@ -183,7 +179,6 @@ enum MatcherBuilderKind {
     },
     Many(Vec<MatcherBuilderKind>),
 }
-
 impl MatcherBuilderKind {
     pub fn build(self) -> Result<Matcher, regex::Error> {
         Ok(match self {
@@ -223,7 +218,6 @@ enum MatcherKind {
     },
     Many(Arc<[MatcherKind]>),
 }
-
 impl MatcherKind {
     pub fn is_match_domain_name(&self, addr: &str, port: u16) -> bool {
         match self {
@@ -266,7 +260,6 @@ enum AddrListMatcherBuilder {
     Single(AddrMatcherBuilder),
     Any,
 }
-
 impl AddrListMatcherBuilder {
     pub fn build(self) -> Result<AddrListMatcher, regex::Error> {
         Ok(match self {
@@ -281,7 +274,6 @@ impl AddrListMatcherBuilder {
         })
     }
 }
-
 impl Default for AddrListMatcherBuilder {
     fn default() -> Self {
         Self::Any
@@ -293,7 +285,6 @@ enum AddrListMatcher {
     Some(Arc<[AddrMatcher]>),
     Any,
 }
-
 impl AddrListMatcher {
     pub fn is_match_domain_name(&self, addr: &str) -> bool {
         match self {
@@ -322,7 +313,6 @@ enum AddrMatcherBuilder {
     Ipv4Range(RangeInclusive<Ipv4Addr>),
     Ipv6Range(RangeInclusive<Ipv6Addr>),
 }
-
 impl AddrMatcherBuilder {
     pub fn build(self) -> Result<AddrMatcher, regex::Error> {
         Ok(match self {
@@ -341,7 +331,6 @@ enum AddrMatcher {
     Ipv4(RangeInclusive<Ipv4Addr>),
     Ipv6(RangeInclusive<Ipv6Addr>),
 }
-
 impl AddrMatcher {
     pub fn is_match_domain_name(&self, addr: &str) -> bool {
         match self {
@@ -369,7 +358,6 @@ enum PortListMatcherBuilder {
     Single(PortMatcherBuilder),
     Any,
 }
-
 impl PortListMatcherBuilder {
     pub fn build(self) -> PortListMatcher {
         match self {
@@ -384,7 +372,6 @@ impl PortListMatcherBuilder {
         }
     }
 }
-
 impl Default for PortListMatcherBuilder {
     fn default() -> Self {
         Self::Any
@@ -398,22 +385,6 @@ enum PortMatcherBuilder {
     Single(u16),
     Range(RangeInclusive<u16>),
 }
-
-#[derive(Debug, Clone)]
-enum PortListMatcher {
-    Some(Arc<[PortMatcher]>),
-    Any,
-}
-
-impl PortListMatcher {
-    pub fn is_match(&self, port: u16) -> bool {
-        match self {
-            Self::Some(matcher) => matcher.iter().any(|range| range.is_match(port)),
-            Self::Any => true,
-        }
-    }
-}
-
 impl PortMatcherBuilder {
     pub fn build(self) -> PortMatcher {
         match self {
@@ -424,8 +395,21 @@ impl PortMatcherBuilder {
 }
 
 #[derive(Debug, Clone)]
-struct PortMatcher(RangeInclusive<u16>);
+enum PortListMatcher {
+    Some(Arc<[PortMatcher]>),
+    Any,
+}
+impl PortListMatcher {
+    pub fn is_match(&self, port: u16) -> bool {
+        match self {
+            Self::Some(matcher) => matcher.iter().any(|range| range.is_match(port)),
+            Self::Any => true,
+        }
+    }
+}
 
+#[derive(Debug, Clone)]
+struct PortMatcher(RangeInclusive<u16>);
 impl PortMatcher {
     pub fn is_match(&self, port: u16) -> bool {
         self.0.contains(&port)

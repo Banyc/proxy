@@ -24,7 +24,6 @@ pub struct KcpProxyServerConfig {
     #[serde(flatten)]
     pub inner: StreamProxyServerConfig,
 }
-
 impl KcpProxyServerConfig {
     pub fn into_builder(self, stream_context: ConcreteStreamContext) -> KcpProxyServerBuilder {
         let inner = self.inner.into_builder(stream_context);
@@ -61,7 +60,6 @@ impl loading::Build for KcpProxyServerBuilder {
         &self.listen_addr
     }
 }
-
 #[derive(Debug, Error)]
 pub enum KcpProxyServerBuildError {
     #[error("{0}")]
@@ -69,7 +67,6 @@ pub enum KcpProxyServerBuildError {
     #[error("{0}")]
     Server(#[from] ListenerBindError),
 }
-
 pub async fn build_kcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyServer,

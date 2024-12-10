@@ -15,7 +15,6 @@ pub struct ConcreteStreamConnectorTable {
     mptcp: MptcpConnector,
     rtp: RtpConnector,
 }
-
 impl ConcreteStreamConnectorTable {
     pub fn new() -> Self {
         Self {
@@ -26,7 +25,6 @@ impl ConcreteStreamConnectorTable {
         }
     }
 }
-
 impl StreamConnectorTable for ConcreteStreamConnectorTable {
     type Connection = Connection;
     type StreamType = ConcreteStreamType;
@@ -45,7 +43,6 @@ impl StreamConnectorTable for ConcreteStreamConnectorTable {
         }
     }
 }
-
 impl Default for ConcreteStreamConnectorTable {
     fn default() -> Self {
         Self::new()

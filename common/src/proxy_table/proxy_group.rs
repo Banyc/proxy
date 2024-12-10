@@ -200,7 +200,6 @@ pub enum ProxyGroupError {
 }
 
 type ScoreStore = CacheCell<Scores>;
-
 #[derive(Debug, Clone)]
 struct Scores {
     scores: Arc<[(usize, f64)]>,

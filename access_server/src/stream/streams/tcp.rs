@@ -32,7 +32,6 @@ pub struct TcpAccessServerConfig {
     pub proxy_group: SharableConfig<StreamProxyGroupBuilder>,
     pub speed_limit: Option<f64>,
 }
-
 impl TcpAccessServerConfig {
     pub fn into_builder(
         self,
@@ -57,7 +56,6 @@ impl TcpAccessServerConfig {
         })
     }
 }
-
 #[derive(Debug, Error)]
 pub enum BuildError {
     #[error("Proxy group key not found: {0}")]
@@ -74,7 +72,6 @@ pub struct TcpAccessServerBuilder {
     speed_limit: f64,
     stream_context: ConcreteStreamContext,
 }
-
 impl loading::Build for TcpAccessServerBuilder {
     type ConnHandler = TcpAccess;
     type Server = TcpServer<Self::ConnHandler>;
@@ -108,7 +105,6 @@ pub struct TcpAccess {
     speed_limiter: Limiter,
     stream_context: ConcreteStreamContext,
 }
-
 impl TcpAccess {
     pub fn new(
         proxy_group: StreamProxyGroup,
@@ -164,7 +160,6 @@ impl TcpAccess {
         Ok(())
     }
 }
-
 #[derive(Debug, Error)]
 pub enum ProxyError {
     #[error("Failed to get downstream address: {0}")]
@@ -172,9 +167,7 @@ pub enum ProxyError {
     #[error("Failed to establish proxy chain: {0}")]
     EstablishProxyChain(#[from] StreamEstablishError),
 }
-
 impl loading::HandleConn for TcpAccess {}
-
 impl StreamServerHandleConn for TcpAccess {
     #[instrument(skip(self, stream))]
     async fn handle_stream<S>(&self, stream: S)

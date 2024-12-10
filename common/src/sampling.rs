@@ -6,7 +6,6 @@ pub struct TopSample<T> {
     max_len: usize,
     fresh: Duration,
 }
-
 impl<T> TopSample<T> {
     pub fn new(max_len: usize, fresh: Duration) -> TopSample<T> {
         TopSample {
@@ -16,7 +15,6 @@ impl<T> TopSample<T> {
         }
     }
 }
-
 impl<T> TopSample<T>
 where
     T: Ord,
@@ -57,7 +55,6 @@ struct DataPoint<T> {
     fresh_until: Instant,
     value: T,
 }
-
 impl<T> DataPoint<T> {
     pub fn new(value: T, fresh: Duration) -> DataPoint<T> {
         Self {
@@ -70,7 +67,6 @@ impl<T> DataPoint<T> {
         Instant::now() > self.fresh_until
     }
 }
-
 impl<T> PartialEq for DataPoint<T>
 where
     T: PartialEq,
@@ -79,9 +75,7 @@ where
         self.value == other.value
     }
 }
-
 impl<T> Eq for DataPoint<T> where T: Eq {}
-
 impl<T> PartialOrd for DataPoint<T>
 where
     T: PartialOrd,
@@ -90,7 +84,6 @@ where
         self.value.partial_cmp(&other.value)
     }
 }
-
 impl<T> Ord for DataPoint<T>
 where
     T: Ord,

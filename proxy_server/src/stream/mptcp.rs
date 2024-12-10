@@ -24,7 +24,6 @@ pub struct MptcpProxyServerConfig {
     #[serde(flatten)]
     pub inner: StreamProxyServerConfig,
 }
-
 impl MptcpProxyServerConfig {
     pub fn into_builder(self, stream_context: ConcreteStreamContext) -> MptcpProxyServerBuilder {
         let inner = self.inner.into_builder(stream_context);
@@ -40,7 +39,6 @@ pub struct MptcpProxyServerBuilder {
     pub listen_addr: Arc<str>,
     pub inner: StreamProxyServerBuilder,
 }
-
 impl loading::Build for MptcpProxyServerBuilder {
     type ConnHandler = StreamProxyServer;
     type Server = MptcpServer<Self::ConnHandler>;
@@ -62,7 +60,6 @@ impl loading::Build for MptcpProxyServerBuilder {
         &self.listen_addr
     }
 }
-
 #[derive(Debug, Error)]
 pub enum MptcpProxyServerBuildError {
     #[error("{0}")]
@@ -70,7 +67,6 @@ pub enum MptcpProxyServerBuildError {
     #[error("{0}")]
     Server(#[from] ListenerBindError),
 }
-
 pub async fn build_mptcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyServer,

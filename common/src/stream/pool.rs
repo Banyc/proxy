@@ -203,7 +203,6 @@ where
         })?;
     Ok((stream, sock_addr))
 }
-
 #[derive(Debug, Error)]
 pub enum ConnectError<ST: std::fmt::Display> {
     #[error("Failed to resolve address: {source}, {addr}")]

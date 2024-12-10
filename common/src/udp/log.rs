@@ -32,7 +32,6 @@ pub struct FlowLog {
     pub up: TrafficLog,
     pub dn: TrafficLog,
 }
-
 impl fmt::Display for FlowLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let duration = self.timing.duration().as_secs_f64();

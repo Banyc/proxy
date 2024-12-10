@@ -20,7 +20,6 @@ pub struct RtpProxyServerConfig {
     #[serde(flatten)]
     pub inner: StreamProxyServerConfig,
 }
-
 impl RtpProxyServerConfig {
     pub fn into_builder(self, stream_context: ConcreteStreamContext) -> RtpProxyServerBuilder {
         let inner = self.inner.into_builder(stream_context);
@@ -57,7 +56,6 @@ impl loading::Build for RtpProxyServerBuilder {
         &self.listen_addr
     }
 }
-
 #[derive(Debug, Error)]
 pub enum RtpProxyServerBuildError {
     #[error("{0}")]
@@ -65,7 +63,6 @@ pub enum RtpProxyServerBuildError {
     #[error("{0}")]
     Server(#[from] ListenerBindError),
 }
-
 pub async fn build_rtp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyServer,

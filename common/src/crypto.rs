@@ -11,7 +11,6 @@ type Key = Arc<[u8]>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct XorCryptoBuilder(pub String);
-
 impl XorCryptoBuilder {
     pub fn build(&self) -> Result<XorCrypto, XorCryptoBuildError> {
         let key = BASE64_STANDARD_NO_PAD
@@ -23,7 +22,6 @@ impl XorCryptoBuilder {
         Ok(XorCrypto::new(key.into()))
     }
 }
-
 #[derive(Debug, Error)]
 #[error("{source}, key = `{key}`")]
 pub struct XorCryptoBuildError {
@@ -36,7 +34,6 @@ pub struct XorCryptoBuildError {
 pub struct XorCrypto {
     key: Key,
 }
-
 impl XorCrypto {
     pub fn new(key: Key) -> Self {
         Self { key }
@@ -48,7 +45,6 @@ pub struct XorCryptoCursor {
     key: Key,
     pos: usize,
 }
-
 impl XorCryptoCursor {
     pub fn new(config: &XorCrypto) -> Self {
         Self {
@@ -57,7 +53,6 @@ impl XorCryptoCursor {
         }
     }
 }
-
 impl XorCryptoCursor {
     pub fn xor(&mut self, buf: &mut [u8]) {
         if self.key.is_empty() {

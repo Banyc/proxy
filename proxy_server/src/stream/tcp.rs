@@ -21,7 +21,6 @@ pub struct TcpProxyServerConfig {
     #[serde(flatten)]
     pub inner: StreamProxyServerConfig,
 }
-
 impl TcpProxyServerConfig {
     pub fn into_builder(self, stream_context: ConcreteStreamContext) -> TcpProxyServerBuilder {
         let inner = self.inner.into_builder(stream_context);
@@ -37,7 +36,6 @@ pub struct TcpProxyServerBuilder {
     pub listen_addr: Arc<str>,
     pub inner: StreamProxyServerBuilder,
 }
-
 impl loading::Build for TcpProxyServerBuilder {
     type ConnHandler = StreamProxyServer;
     type Server = TcpServer<Self::ConnHandler>;
@@ -59,7 +57,6 @@ impl loading::Build for TcpProxyServerBuilder {
         &self.listen_addr
     }
 }
-
 #[derive(Debug, Error)]
 pub enum TcpProxyServerBuildError {
     #[error("{0}")]
@@ -67,7 +64,6 @@ pub enum TcpProxyServerBuildError {
     #[error("{0}")]
     Server(#[from] ListenerBindError),
 }
-
 pub async fn build_tcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyServer,

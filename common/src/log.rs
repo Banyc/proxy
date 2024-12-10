@@ -96,6 +96,7 @@ impl Timing {
         self.end - self.start.0
     }
 }
+
 #[derive(Debug, Clone, HdvSerde)]
 pub struct TimingHdv {
     pub start_ms: u64,

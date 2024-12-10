@@ -6,7 +6,6 @@ pub struct CacheCell<T> {
     last_update: Instant,
     lifetime: Duration,
 }
-
 impl<T> CacheCell<T> {
     pub fn new(item: Option<T>, lifetime: Duration) -> Self {
         Self {

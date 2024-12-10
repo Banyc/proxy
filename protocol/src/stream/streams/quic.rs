@@ -10,13 +10,11 @@ pub struct QuicServer<H> {
     listener: Endpoint,
     hook: H,
 }
-
 impl<H> QuicServer<H> {
     pub fn new(listener: Endpoint, hook: H) -> Self {
         Self { listener, hook }
     }
 }
-
 impl<H> QuicServer<H>
 where
     H: StreamServerHook + Send + Sync + 'static,
@@ -57,7 +55,6 @@ pub struct QuicIoStream {
     peer_addr: SocketAddr,
     local_addr: SocketAddr,
 }
-
 impl IoAddr for QuicIoStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.peer_addr)
@@ -67,9 +64,7 @@ impl IoAddr for QuicIoStream {
         Ok(self.local_addr)
     }
 }
-
 impl IoStream for QuicIoStream {}
-
 impl AsyncRead for QuicIoStream {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
@@ -79,7 +74,6 @@ impl AsyncRead for QuicIoStream {
         Pin::new(&mut self.recv).poll_read(cx, buf)
     }
 }
-
 impl AsyncWrite for QuicIoStream {
     fn poll_write(
         mut self: Pin<&mut Self>,

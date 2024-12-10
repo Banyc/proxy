@@ -25,7 +25,6 @@ pub enum MethodIdentifier {
     UsernamePassword,
     Other(u8),
 }
-
 impl From<MethodIdentifier> for u8 {
     fn from(value: MethodIdentifier) -> Self {
         match value {
@@ -35,7 +34,6 @@ impl From<MethodIdentifier> for u8 {
         }
     }
 }
-
 impl From<u8> for MethodIdentifier {
     fn from(code: u8) -> Self {
         match code {
@@ -57,7 +55,6 @@ impl From<u8> for MethodIdentifier {
 pub struct NegotiationRequest {
     pub methods: Vec<MethodIdentifier>,
 }
-
 impl NegotiationRequest {
     pub async fn decode<R>(reader: &mut R) -> io::Result<Self>
     where
@@ -103,7 +100,6 @@ impl NegotiationRequest {
 pub struct NegotiationResponse {
     pub method: Option<MethodIdentifier>,
 }
-
 impl NegotiationResponse {
     pub async fn decode<R>(reader: &mut R) -> io::Result<Self>
     where
@@ -153,7 +149,6 @@ pub enum Command {
     Bind,
     UdpAssociate,
 }
-
 impl From<Command> for u8 {
     fn from(value: Command) -> Self {
         match value {
@@ -163,7 +158,6 @@ impl From<Command> for u8 {
         }
     }
 }
-
 impl TryFrom<u8> for Command {
     type Error = ();
 
@@ -190,7 +184,6 @@ pub enum AddressType {
     DomainName,
     Ipv6,
 }
-
 impl From<AddressType> for u8 {
     fn from(value: AddressType) -> Self {
         match value {
@@ -200,7 +193,6 @@ impl From<AddressType> for u8 {
         }
     }
 }
-
 impl TryFrom<u8> for AddressType {
     type Error = ();
 
@@ -250,7 +242,6 @@ where
     };
     Ok(address)
 }
-
 pub async fn encode_address<W>(addr: &InternetAddr, writer: &mut W) -> io::Result<()>
 where
     W: AsyncWrite + Unpin,
@@ -292,7 +283,6 @@ pub struct RelayRequest {
     pub command: Command,
     pub destination: InternetAddr,
 }
-
 impl RelayRequest {
     pub async fn decode<R>(reader: &mut R) -> io::Result<Self>
     where
@@ -337,7 +327,6 @@ pub enum Reply {
     CommandNotSupported,
     Other(u8),
 }
-
 impl From<Reply> for u8 {
     fn from(value: Reply) -> Self {
         match value {
@@ -349,7 +338,6 @@ impl From<Reply> for u8 {
         }
     }
 }
-
 impl From<u8> for Reply {
     fn from(code: u8) -> Self {
         match code {
@@ -374,7 +362,6 @@ pub struct RelayResponse {
     pub reply: Reply,
     pub bind: InternetAddr,
 }
-
 impl RelayResponse {
     pub async fn decode<R>(reader: &mut R) -> io::Result<Self>
     where
@@ -417,7 +404,6 @@ pub struct UdpRequestHeader {
     pub fragment: u8,
     pub destination: InternetAddr,
 }
-
 impl UdpRequestHeader {
     pub async fn decode<R>(reader: &mut R) -> io::Result<Self>
     where

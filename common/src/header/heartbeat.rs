@@ -6,14 +6,6 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::codec::{read_header_async, write_header_async, CodecError, Header};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum HeartbeatRequest {
-    Noop,
-    Upgrade,
-}
-
-impl Header for HeartbeatRequest {}
-
 pub async fn send_noop<S>(
     stream: &mut S,
     timeout: Duration,
@@ -31,14 +23,6 @@ where
     .await;
     res.map_err(|_| HeartbeatError::Timeout(timeout))??;
     Ok(())
-}
-
-#[derive(Debug, Error)]
-pub enum HeartbeatError {
-    #[error("Failed to read/write header: {0}")]
-    Header(#[from] CodecError),
-    #[error("Timeout: {0:?}")]
-    Timeout(Duration),
 }
 
 pub async fn send_upgrade<S>(
@@ -78,4 +62,19 @@ where
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum HeartbeatRequest {
+    Noop,
+    Upgrade,
+}
+impl Header for HeartbeatRequest {}
+
+#[derive(Debug, Error)]
+pub enum HeartbeatError {
+    #[error("Failed to read/write header: {0}")]
+    Header(#[from] CodecError),
+    #[error("Timeout: {0:?}")]
+    Timeout(Duration),
 }

@@ -154,7 +154,6 @@ impl Tracer for StreamTracer {
             .map_err(|e| e.into())
     }
 }
-
 pub async fn trace_rtt(
     proxies: &ProxyChain<ConcreteStreamAddr>,
     stream_context: &ConcreteStreamContext,
@@ -197,7 +196,6 @@ pub async fn trace_rtt(
     counter!("stream.traces").increment(1);
     Ok(end.duration_since(start))
 }
-
 #[derive(Debug, Error)]
 pub enum TraceError {
     #[error("Connect error: {0}")]

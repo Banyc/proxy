@@ -134,7 +134,6 @@ pub struct ProxyServerLoader {
     mptcp_server: loading::Loader<StreamProxyServer>,
     rtp_server: loading::Loader<StreamProxyServer>,
 }
-
 impl ProxyServerLoader {
     pub fn new() -> Self {
         Self {
@@ -146,7 +145,6 @@ impl ProxyServerLoader {
         }
     }
 }
-
 impl Default for ProxyServerLoader {
     fn default() -> Self {
         Self::new()

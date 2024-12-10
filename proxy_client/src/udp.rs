@@ -33,7 +33,6 @@ pub struct UdpProxyClient {
     read: UdpProxyClientReadHalf,
     upstream_addr: InternetAddr,
 }
-
 impl UdpProxyClient {
     #[instrument(skip_all)]
     pub async fn establish(
@@ -126,7 +125,6 @@ impl UdpProxyClient {
         &self.upstream_addr
     }
 }
-
 #[derive(Debug, Error)]
 pub enum EstablishError {
     #[error("Failed to resolve destination address: {source}, {addr}")]
@@ -165,13 +163,11 @@ pub struct UdpProxyClientWriteHalf {
     headers_bytes: Arc<[u8]>,
     write_buf: Vec<u8>,
 }
-
 impl UdpSend for UdpProxyClientWriteHalf {
     async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
         Self::send(self, buf).await.map_err(|e| e.into())
     }
 }
-
 impl UdpProxyClientWriteHalf {
     pub fn new(upstream: Arc<UdpSocket>, headers_bytes: Arc<[u8]>) -> Self {
         Self {
@@ -207,7 +203,6 @@ impl UdpProxyClientWriteHalf {
         &self.upstream
     }
 }
-
 #[derive(Debug, Error)]
 #[error("Failed to send to upstream: {source}, {sock_addr:?}")]
 pub struct SendError {
@@ -223,13 +218,11 @@ pub struct UdpProxyClientReadHalf {
     proxies: Arc<UdpProxyChain>,
     read_buf: Vec<u8>,
 }
-
 impl UdpRecv for UdpProxyClientReadHalf {
     async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
         Self::recv(self, buf).await.map_err(|e| e.into())
     }
 }
-
 impl UdpProxyClientReadHalf {
     pub fn new(
         upstream: Arc<UdpSocket>,
@@ -285,7 +278,6 @@ impl UdpProxyClientReadHalf {
         &self.upstream
     }
 }
-
 #[derive(Debug, Error)]
 pub enum RecvError {
     #[error("Failed to recv from upstream: {source}, {sock_addr:?}")]
@@ -349,7 +341,6 @@ impl Tracer for UdpTracer {
         res
     }
 }
-
 pub async fn trace_rtt(
     pkt_buf: &mut BytesMut,
     proxies: &UdpProxyChain,
@@ -405,7 +396,6 @@ pub async fn trace_rtt(
     counter!("udp.traces").increment(1);
     Ok(end.duration_since(start))
 }
-
 #[derive(Debug, Error)]
 pub enum TraceError {
     #[error("IO error: {0}")]

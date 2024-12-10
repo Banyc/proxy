@@ -29,7 +29,6 @@ pub struct Session<ST> {
     pub up_gauge: Option<Mutex<GaugeHandle>>,
     pub dn_gauge: Option<Mutex<GaugeHandle>>,
 }
-
 impl<ST: fmt::Display> TableRow for Session<ST> {
     fn schema() -> Vec<(String, LiteralType)> {
         <SessionView as TableRow>::schema()

@@ -32,7 +32,6 @@ pub struct UdpAccessServerConfig {
     pub proxy_group: SharableConfig<UdpProxyGroupBuilder>,
     pub speed_limit: Option<f64>,
 }
-
 impl UdpAccessServerConfig {
     pub fn into_builder(
         self,
@@ -57,7 +56,6 @@ impl UdpAccessServerConfig {
         })
     }
 }
-
 #[derive(Debug, Error)]
 pub enum BuildError {
     #[error("Proxy group key not found: {0}")]
@@ -74,7 +72,6 @@ pub struct UdpAccessServerBuilder {
     speed_limit: f64,
     udp_context: UdpContext,
 }
-
 impl loading::Build for UdpAccessServerBuilder {
     type ConnHandler = UdpAccess;
     type Server = UdpServer<Self::ConnHandler>;
@@ -108,9 +105,7 @@ pub struct UdpAccess {
     speed_limiter: Limiter,
     udp_context: UdpContext,
 }
-
 impl loading::HandleConn for UdpAccess {}
-
 impl UdpAccess {
     pub fn new(
         proxy_table: UdpProxyGroup,
@@ -168,7 +163,6 @@ impl UdpAccess {
         Ok(())
     }
 }
-
 #[derive(Debug, Error)]
 pub enum AccessProxyError {
     #[error("Failed to establish proxy chain: {0}")]
@@ -176,7 +170,6 @@ pub enum AccessProxyError {
     #[error("Failed to copy: {0}")]
     Copy(#[from] CopyBiError),
 }
-
 impl UdpServerHandleConn for UdpAccess {
     fn parse_upstream_addr(&self, _buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
         Some(Some(UpstreamAddr(self.destination.clone())))

@@ -29,7 +29,6 @@ pub fn any_addr(ip_version: &IpAddr) -> SocketAddr {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct InternetAddr(InternetAddrKind);
-
 impl Deref for InternetAddr {
     type Target = InternetAddrKind;
 
@@ -38,13 +37,6 @@ impl Deref for InternetAddr {
         kind
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub enum InternetAddrKind {
-    SocketAddr(SocketAddr),
-    DomainName { addr: Arc<str>, port: u16 },
-}
-
 impl Display for InternetAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -53,13 +45,11 @@ impl Display for InternetAddr {
         }
     }
 }
-
 impl From<SocketAddr> for InternetAddr {
     fn from(addr: SocketAddr) -> Self {
         Self(InternetAddrKind::SocketAddr(addr))
     }
 }
-
 impl FromStr for InternetAddr {
     type Err = ParseInternetAddrError;
 
@@ -77,6 +67,12 @@ impl FromStr for InternetAddr {
         }
         Ok(Self(InternetAddrKind::DomainName { addr, port }))
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub enum InternetAddrKind {
+    SocketAddr(SocketAddr),
+    DomainName { addr: Arc<str>, port: u16 },
 }
 
 #[derive(Debug, Error, Clone, Copy)]

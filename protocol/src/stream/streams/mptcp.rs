@@ -26,7 +26,6 @@ pub struct MptcpServer<ConnHandler> {
     handle: mpsc::Sender<ConnHandler>,
     set_conn_handler_rx: mpsc::Receiver<ConnHandler>,
 }
-
 impl<ConnHandler> MptcpServer<ConnHandler> {
     pub fn new(listener: MptcpListener, conn_handler: ConnHandler) -> Self {
         let (set_conn_handler_tx, set_conn_handler_rx) = mpsc::channel(64);
@@ -46,7 +45,6 @@ impl<ConnHandler> MptcpServer<ConnHandler> {
         &mut self.listener
     }
 }
-
 impl<ConnHandler> loading::Serve for MptcpServer<ConnHandler>
 where
     ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
@@ -61,7 +59,6 @@ where
         self.serve_().await.map_err(|e| e.into())
     }
 }
-
 impl<ConnHandler> MptcpServer<ConnHandler>
 where
     ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
@@ -110,7 +107,6 @@ where
         Ok(())
     }
 }
-
 #[derive(Debug, Error)]
 pub enum ServeError {
     #[error("Failed to get local address: {0}")]
@@ -125,7 +121,6 @@ pub enum ServeError {
 
 #[derive(Debug, Clone, Copy)]
 pub struct MptcpConnector;
-
 impl StreamConnect for MptcpConnector {
     type Connection = Connection;
     async fn connect(&self, addr: SocketAddr) -> io::Result<Connection> {

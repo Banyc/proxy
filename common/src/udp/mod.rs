@@ -32,7 +32,6 @@ pub struct UdpServer<ConnHandler> {
     handle: mpsc::Sender<ConnHandler>,
     set_conn_handler_rx: mpsc::Receiver<ConnHandler>,
 }
-
 impl<ConnHandler> UdpServer<ConnHandler> {
     pub fn new(listener: UdpSocket, conn_handler: ConnHandler) -> Self {
         let (set_conn_handler_tx, set_conn_handler_rx) = mpsc::channel(64);
@@ -52,7 +51,6 @@ impl<ConnHandler> UdpServer<ConnHandler> {
         &mut self.listener
     }
 }
-
 impl<ConnHandler> loading::Serve for UdpServer<ConnHandler>
 where
     ConnHandler: UdpServerHandleConn + Send + Sync + 'static,
@@ -67,7 +65,6 @@ where
         self.serve_().await.map_err(|e| e.into())
     }
 }
-
 impl<ConnHandler> UdpServer<ConnHandler>
 where
     ConnHandler: UdpServerHandleConn + Send + Sync + 'static,
@@ -140,7 +137,6 @@ where
         Ok(())
     }
 }
-
 #[derive(Debug, Error)]
 pub enum ServeError {
     #[error("Failed to get local address: {0}")]

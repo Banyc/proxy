@@ -37,7 +37,6 @@ pub struct UdpProxyServerBuilder {
     pub config: UdpProxyServerConfig,
     pub udp_context: UdpContext,
 }
-
 impl loading::Build for UdpProxyServerBuilder {
     type ConnHandler = UdpProxy;
     type Server = UdpServer<Self::ConnHandler>;
@@ -75,7 +74,13 @@ impl loading::Build for UdpProxyServerBuilder {
         &self.config.listen_addr
     }
 }
-
+#[derive(Debug, Error)]
+pub enum UdpProxyServerBuildError {
+    #[error("{0}")]
+    Hook(#[from] UdpProxyBuildError),
+    #[error("{0}")]
+    Server(#[from] ListenerBindError),
+}
 #[derive(Debug, Error)]
 pub enum UdpProxyBuildError {
     #[error("HeaderCrypto: {0}")]
@@ -84,21 +89,12 @@ pub enum UdpProxyBuildError {
     PayloadCrypto(#[source] tokio_chacha20::config::ConfigBuildError),
 }
 
-#[derive(Debug, Error)]
-pub enum UdpProxyServerBuildError {
-    #[error("{0}")]
-    Hook(#[from] UdpProxyBuildError),
-    #[error("{0}")]
-    Server(#[from] ListenerBindError),
-}
-
 #[derive(Debug)]
 pub struct UdpProxy {
     header_crypto: tokio_chacha20::config::Config,
     payload_crypto: Option<tokio_chacha20::config::Config>,
     udp_context: UdpContext,
 }
-
 impl UdpProxy {
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
@@ -225,7 +221,6 @@ impl UdpProxy {
         }
     }
 }
-
 #[derive(Debug, Error)]
 pub enum ProxyError {
     #[error("Failed to resolve upstream address: {source}, {addr}")]
@@ -249,7 +244,6 @@ pub enum ProxyError {
         sock_addr: SocketAddr,
     },
 }
-
 fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
     match e {
         ProxyError::Resolve { .. }
@@ -260,7 +254,6 @@ fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
 }
 
 impl loading::HandleConn for UdpProxy {}
-
 impl UdpServerHandleConn for UdpProxy {
     fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
         let res = decode_route_header(buf, &self.header_crypto);

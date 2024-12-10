@@ -69,7 +69,6 @@ where
     };
     Ok(Some(addr))
 }
-
 #[derive(Debug, Error)]
 pub enum SteerError {
     #[error("Failed to read heartbeat header from downstream: {source}, {downstream_addr:?}")]

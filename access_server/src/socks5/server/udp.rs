@@ -28,7 +28,6 @@ pub struct Socks5ServerUdpAccessServerConfig {
     pub proxy_group: SharableConfig<UdpProxyGroupBuilder>,
     pub speed_limit: Option<f64>,
 }
-
 impl Socks5ServerUdpAccessServerConfig {
     pub fn into_builder(
         self,
@@ -52,7 +51,6 @@ impl Socks5ServerUdpAccessServerConfig {
         })
     }
 }
-
 #[derive(Debug, Error)]
 pub enum BuildError {
     #[error("Proxy group key not found: {0}")]
@@ -68,7 +66,6 @@ pub struct Socks5ServerUdpAccessServerBuilder {
     speed_limit: f64,
     udp_context: UdpContext,
 }
-
 impl loading::Build for Socks5ServerUdpAccessServerBuilder {
     type ConnHandler = Socks5ServerUdpAccess;
     type Server = UdpServer<Self::ConnHandler>;
@@ -100,9 +97,7 @@ pub struct Socks5ServerUdpAccess {
     speed_limiter: Limiter,
     udp_context: UdpContext,
 }
-
 impl loading::HandleConn for Socks5ServerUdpAccess {}
-
 impl Socks5ServerUdpAccess {
     pub fn new(proxy_group: UdpProxyGroup, speed_limit: f64, udp_context: UdpContext) -> Self {
         Self {
@@ -167,13 +162,11 @@ impl Socks5ServerUdpAccess {
         Ok(())
     }
 }
-
 #[derive(Debug, Error)]
 pub enum AccessProxyError {
     #[error("Failed to establish proxy chain: {0}")]
     Establish(#[from] EstablishError),
 }
-
 impl UdpServerHandleConn for Socks5ServerUdpAccess {
     fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
         let res = futures::executor::block_on(async move { UdpRequestHeader::decode(buf).await });

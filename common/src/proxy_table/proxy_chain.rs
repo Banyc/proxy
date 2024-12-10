@@ -159,6 +159,13 @@ where
         *self.loss.read().unwrap()
     }
 }
+impl<A> Drop for GaugedProxyChain<A> {
+    fn drop(&mut self) {
+        if let Some(h) = self.task_handle.as_ref() {
+            h.abort()
+        }
+    }
+}
 
 fn spawn_tracer<T, A>(
     tracer: Arc<T>,
@@ -234,16 +241,7 @@ where
     })
 }
 
-impl<A> Drop for GaugedProxyChain<A> {
-    fn drop(&mut self) {
-        if let Some(h) = self.task_handle.as_ref() {
-            h.abort()
-        }
-    }
-}
-
 pub struct DisplayChain<'chain, A>(&'chain ProxyChain<A>);
-
 impl<A> fmt::Display for DisplayChain<'_, A>
 where
     A: fmt::Display,

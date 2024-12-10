@@ -14,7 +14,6 @@ pub struct XorStream<S> {
     async_stream: S,
     buf: Option<Vec<u8>>,
 }
-
 impl<S> XorStream<S> {
     pub fn new(
         async_stream: S,
@@ -36,7 +35,6 @@ impl<S> XorStream<S> {
         XorStream::new(stream, write_crypto_cursor, read_crypto_cursor)
     }
 }
-
 impl<S> IoStream for XorStream<S> where S: IoStream {}
 impl<S> IoAddr for XorStream<S>
 where
@@ -49,7 +47,6 @@ where
         self.async_stream.local_addr()
     }
 }
-
 impl<S> AsyncWrite for XorStream<S>
 where
     S: AsyncWrite + Unpin,
@@ -104,7 +101,6 @@ where
         Pin::new(&mut self.async_stream).poll_shutdown(cx)
     }
 }
-
 impl<S> AsyncRead for XorStream<S>
 where
     S: AsyncRead + Unpin,

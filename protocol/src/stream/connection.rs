@@ -19,7 +19,6 @@ pub enum Connection {
     Mptcp(IoMptcpStream),
     Rtp(AddressedRtpStream),
 }
-
 impl IoStream for Connection {}
 impl IoAddr for Connection {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
@@ -42,7 +41,6 @@ impl IoAddr for Connection {
         }
     }
 }
-
 impl AsyncWrite for Connection {
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
@@ -84,7 +82,6 @@ impl AsyncWrite for Connection {
         }
     }
 }
-
 impl AsyncRead for Connection {
     fn poll_read(
         mut self: Pin<&mut Self>,

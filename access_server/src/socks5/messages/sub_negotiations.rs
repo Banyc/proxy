@@ -18,7 +18,6 @@ pub struct UsernamePasswordRequest {
     password_buf: [u8; u8::MAX as _],
     password_len: u8,
 }
-
 impl UsernamePasswordRequest {
     pub fn new(username: &[u8], password: &[u8]) -> io::Result<Self> {
         let username_len: u8 = username.len().try_into().map_err(|_| {
@@ -101,7 +100,6 @@ impl UsernamePasswordRequest {
 pub struct UsernamePasswordResponse {
     pub status: UsernamePasswordStatus,
 }
-
 impl UsernamePasswordResponse {
     pub async fn decode<R>(reader: &mut R) -> io::Result<Self>
     where
@@ -142,7 +140,6 @@ pub enum UsernamePasswordStatus {
     Success,
     Failure(NonZeroU8),
 }
-
 impl From<u8> for UsernamePasswordStatus {
     fn from(status: u8) -> Self {
         match status {
@@ -151,7 +148,6 @@ impl From<u8> for UsernamePasswordStatus {
         }
     }
 }
-
 impl From<UsernamePasswordStatus> for u8 {
     fn from(status: UsernamePasswordStatus) -> Self {
         match status {

@@ -11,7 +11,6 @@ pub struct MultiConfigReader<C> {
     config_file_paths: Arc<[Arc<str>]>,
     phantom_config: PhantomData<C>,
 }
-
 impl<C> MultiConfigReader<C> {
     pub fn new(config_file_paths: Arc<[Arc<str>]>) -> Self {
         Self {
@@ -20,7 +19,6 @@ impl<C> MultiConfigReader<C> {
         }
     }
 }
-
 impl<C> ConfigReader for MultiConfigReader<C>
 where
     for<'de> C: Deserialize<'de> + Send + Sync + 'static,

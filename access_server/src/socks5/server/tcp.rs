@@ -46,7 +46,6 @@ pub struct Socks5ServerTcpAccessServerConfig {
     #[serde(default)]
     pub users: Vec<User>,
 }
-
 impl Socks5ServerTcpAccessServerConfig {
     pub fn into_builder(
         self,
@@ -77,14 +76,6 @@ impl Socks5ServerTcpAccessServerConfig {
         })
     }
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct User {
-    pub username: String,
-    pub password: String,
-}
-
 #[derive(Debug, Error)]
 pub enum BuildError {
     #[error("Proxy table key not found: {0}")]
@@ -93,6 +84,13 @@ pub enum BuildError {
     FilterKeyNotFound(Arc<str>),
     #[error("{0}")]
     ProxyTable(#[from] ProxyTableBuildError),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct User {
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Debug, Clone)]
@@ -104,7 +102,6 @@ pub struct Socks5ServerTcpAccessServerBuilder {
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
     stream_context: ConcreteStreamContext,
 }
-
 impl loading::Build for Socks5ServerTcpAccessServerBuilder {
     type ConnHandler = Socks5ServerTcpAccess;
     type Server = TcpServer<Self::ConnHandler>;
@@ -530,13 +527,11 @@ impl Socks5ServerTcpAccess {
         Ok((res, proxy_chain.payload_crypto.clone()))
     }
 }
-
 #[derive(Debug, Error)]
 pub enum EstablishProxyChainError {
     #[error("{0}")]
     StreamEstablish(#[from] StreamEstablishError),
 }
-
 pub enum EstablishResult<S> {
     Blocked {
         destination: InternetAddr,
@@ -557,7 +552,6 @@ pub enum EstablishResult<S> {
         payload_crypto: Option<tokio_chacha20::config::Config>,
     },
 }
-
 enum RequestResult {
     Blocked {
         destination: InternetAddr,
@@ -574,13 +568,18 @@ enum RequestResult {
         payload_crypto: Option<tokio_chacha20::config::Config>,
     },
 }
-
 pub enum ProxyResult {
     Blocked,
     Udp,
     IoCopy,
 }
-
+#[derive(Debug, Error)]
+pub enum ProxyError {
+    #[error("Failed to establish connection: {0}")]
+    Establish(#[from] EstablishError),
+    #[error("Failed to get downstream address: {0}")]
+    DownstreamAddr(#[source] io::Error),
+}
 #[derive(Debug, Error)]
 pub enum EstablishError {
     #[error("Failed to negotiate: {0}")]
@@ -599,12 +598,4 @@ pub enum EstablishError {
     CmdBindNotSupported,
     #[error("No UDP server available")]
     NoUdpServerAvailable,
-}
-
-#[derive(Debug, Error)]
-pub enum ProxyError {
-    #[error("Failed to establish connection: {0}")]
-    Establish(#[from] EstablishError),
-    #[error("Failed to get downstream address: {0}")]
-    DownstreamAddr(#[source] io::Error),
 }
