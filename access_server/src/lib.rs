@@ -14,20 +14,20 @@ use protocol::{
 use proxy_client::{stream::StreamTracerBuilder, udp::UdpTracerBuilder};
 use serde::{Deserialize, Serialize};
 use socks5::server::{
-    tcp::{Socks5ServerTcpAccess, Socks5ServerTcpAccessServerConfig},
-    udp::{Socks5ServerUdpAccess, Socks5ServerUdpAccessServerConfig},
+    tcp::{Socks5ServerTcpAccessConnHandler, Socks5ServerTcpAccessServerConfig},
+    udp::{Socks5ServerUdpAccessConnHandler, Socks5ServerUdpAccessServerConfig},
 };
 use stream::{
     proxy_table::{StreamProxyGroupBuildContext, StreamProxyTableBuildContext},
     streams::{
-        http_tunnel::{HttpAccess, HttpAccessServerConfig},
-        tcp::{TcpAccess, TcpAccessServerConfig},
+        http_tunnel::{HttpAccessConnHandler, HttpAccessServerConfig},
+        tcp::{TcpAccessConnHandler, TcpAccessServerConfig},
     },
 };
 use tokio_util::sync::CancellationToken;
 use udp::{
     proxy_table::{UdpProxyGroupBuildContext, UdpProxyTableBuildContext},
-    UdpAccess, UdpAccessServerConfig,
+    UdpAccessConnHandler, UdpAccessServerConfig,
 };
 
 pub mod socks5;
@@ -315,11 +315,11 @@ impl Merge for AccessServerConfig {
 
 #[derive(Default)]
 pub struct AccessServerLoader {
-    tcp_server: loading::Loader<TcpAccess>,
-    udp_server: loading::Loader<UdpAccess>,
-    http_server: loading::Loader<HttpAccess>,
-    socks5_tcp_server: loading::Loader<Socks5ServerTcpAccess>,
-    socks5_udp_server: loading::Loader<Socks5ServerUdpAccess>,
+    tcp_server: loading::Loader<TcpAccessConnHandler>,
+    udp_server: loading::Loader<UdpAccessConnHandler>,
+    http_server: loading::Loader<HttpAccessConnHandler>,
+    socks5_tcp_server: loading::Loader<Socks5ServerTcpAccessConnHandler>,
+    socks5_udp_server: loading::Loader<Socks5ServerUdpAccessConnHandler>,
 }
 impl AccessServerLoader {
     pub fn new() -> Self {

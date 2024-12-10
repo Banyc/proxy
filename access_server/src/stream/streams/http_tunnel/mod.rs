@@ -85,7 +85,7 @@ pub struct HttpAccessServerBuilder {
     stream_context: ConcreteStreamContext,
 }
 impl loading::Build for HttpAccessServerBuilder {
-    type ConnHandler = HttpAccess;
+    type ConnHandler = HttpAccessConnHandler;
     type Server = TcpServer<Self::ConnHandler>;
     type Err = io::Error;
 
@@ -101,18 +101,19 @@ impl loading::Build for HttpAccessServerBuilder {
     }
 
     fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
-        let access = HttpAccess::new(self.proxy_table, self.speed_limit, self.stream_context);
+        let access =
+            HttpAccessConnHandler::new(self.proxy_table, self.speed_limit, self.stream_context);
         Ok(access)
     }
 }
 
 #[derive(Debug)]
-pub struct HttpAccess {
+pub struct HttpAccessConnHandler {
     proxy_table: Arc<StreamProxyTable>,
     speed_limiter: Limiter,
     stream_context: ConcreteStreamContext,
 }
-impl HttpAccess {
+impl HttpAccessConnHandler {
     pub fn new(
         proxy_table: StreamProxyTable,
         speed_limit: f64,
@@ -426,8 +427,8 @@ pub enum TunnelError {
     #[error("Invalid address: {0}")]
     Address(#[from] ParseInternetAddrError),
 }
-impl loading::HandleConn for HttpAccess {}
-impl StreamServerHandleConn for HttpAccess {
+impl loading::HandleConn for HttpAccessConnHandler {}
+impl StreamServerHandleConn for HttpAccessConnHandler {
     #[instrument(skip(self, stream))]
     async fn handle_stream<S>(&self, stream: S)
     where

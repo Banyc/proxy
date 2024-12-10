@@ -9,7 +9,7 @@ use tokio::net::ToSocketAddrs;
 use crate::ListenerBindError;
 
 use super::{
-    StreamProxyServer, StreamProxyServerBuildError, StreamProxyServerBuilder,
+    StreamProxyConnHandler, StreamProxyServerBuildError, StreamProxyConnHandlerBuilder,
     StreamProxyServerConfig,
 };
 
@@ -33,10 +33,10 @@ impl RtpProxyServerConfig {
 #[derive(Debug, Clone)]
 pub struct RtpProxyServerBuilder {
     pub listen_addr: Arc<str>,
-    pub inner: StreamProxyServerBuilder,
+    pub inner: StreamProxyConnHandlerBuilder,
 }
 impl loading::Build for RtpProxyServerBuilder {
-    type ConnHandler = StreamProxyServer;
+    type ConnHandler = StreamProxyConnHandler;
     type Server = RtpServer<Self::ConnHandler>;
     type Err = RtpProxyServerBuildError;
 
@@ -65,8 +65,8 @@ pub enum RtpProxyServerBuildError {
 }
 pub async fn build_rtp_proxy_server(
     listen_addr: impl ToSocketAddrs,
-    stream_proxy: StreamProxyServer,
-) -> Result<RtpServer<StreamProxyServer>, ListenerBindError> {
+    stream_proxy: StreamProxyConnHandler,
+) -> Result<RtpServer<StreamProxyConnHandler>, ListenerBindError> {
     let listener = rtp::udp::Listener::bind(listen_addr)
         .await
         .map_err(ListenerBindError)?;

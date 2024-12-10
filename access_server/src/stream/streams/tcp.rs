@@ -73,7 +73,7 @@ pub struct TcpAccessServerBuilder {
     stream_context: ConcreteStreamContext,
 }
 impl loading::Build for TcpAccessServerBuilder {
-    type ConnHandler = TcpAccess;
+    type ConnHandler = TcpAccessConnHandler;
     type Server = TcpServer<Self::ConnHandler>;
     type Err = io::Error;
 
@@ -89,7 +89,7 @@ impl loading::Build for TcpAccessServerBuilder {
     }
 
     fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
-        Ok(TcpAccess::new(
+        Ok(TcpAccessConnHandler::new(
             self.proxy_group,
             self.destination.0,
             self.speed_limit,
@@ -99,13 +99,13 @@ impl loading::Build for TcpAccessServerBuilder {
 }
 
 #[derive(Debug)]
-pub struct TcpAccess {
+pub struct TcpAccessConnHandler {
     proxy_group: StreamProxyGroup,
     destination: ConcreteStreamAddr,
     speed_limiter: Limiter,
     stream_context: ConcreteStreamContext,
 }
-impl TcpAccess {
+impl TcpAccessConnHandler {
     pub fn new(
         proxy_group: StreamProxyGroup,
         destination: ConcreteStreamAddr,
@@ -167,8 +167,8 @@ pub enum ProxyError {
     #[error("Failed to establish proxy chain: {0}")]
     EstablishProxyChain(#[from] StreamEstablishError),
 }
-impl loading::HandleConn for TcpAccess {}
-impl StreamServerHandleConn for TcpAccess {
+impl loading::HandleConn for TcpAccessConnHandler {}
+impl StreamServerHandleConn for TcpAccessConnHandler {
     #[instrument(skip(self, stream))]
     async fn handle_stream<S>(&self, stream: S)
     where

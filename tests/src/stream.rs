@@ -14,7 +14,7 @@ mod tests {
     use proxy_client::stream::{establish, trace_rtt};
     use proxy_server::stream::{
         kcp::build_kcp_proxy_server, mptcp::build_mptcp_proxy_server, rtp::build_rtp_proxy_server,
-        tcp::build_tcp_proxy_server, StreamProxyServer,
+        tcp::build_tcp_proxy_server, StreamProxyConnHandler,
     };
     use serial_test::serial;
     use swap::Swap;
@@ -44,7 +44,7 @@ mod tests {
         ty: ConcreteStreamType,
     ) -> StreamProxyConfig {
         let crypto = create_random_crypto();
-        let proxy = StreamProxyServer::new(crypto.clone(), None, stream_context());
+        let proxy = StreamProxyConnHandler::new(crypto.clone(), None, stream_context());
         let proxy_addr = match ty {
             ConcreteStreamType::Tcp => {
                 let server = build_tcp_proxy_server(addr, proxy).await.unwrap();

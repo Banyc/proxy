@@ -73,7 +73,7 @@ pub struct UdpAccessServerBuilder {
     udp_context: UdpContext,
 }
 impl loading::Build for UdpAccessServerBuilder {
-    type ConnHandler = UdpAccess;
+    type ConnHandler = UdpAccessConnHandler;
     type Server = UdpServer<Self::ConnHandler>;
     type Err = io::Error;
 
@@ -89,7 +89,7 @@ impl loading::Build for UdpAccessServerBuilder {
     }
 
     fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
-        Ok(UdpAccess::new(
+        Ok(UdpAccessConnHandler::new(
             self.proxy_group,
             self.destination.0,
             self.speed_limit,
@@ -99,14 +99,14 @@ impl loading::Build for UdpAccessServerBuilder {
 }
 
 #[derive(Debug)]
-pub struct UdpAccess {
+pub struct UdpAccessConnHandler {
     proxy_group: UdpProxyGroup,
     destination: InternetAddr,
     speed_limiter: Limiter,
     udp_context: UdpContext,
 }
-impl loading::HandleConn for UdpAccess {}
-impl UdpAccess {
+impl loading::HandleConn for UdpAccessConnHandler {}
+impl UdpAccessConnHandler {
     pub fn new(
         proxy_table: UdpProxyGroup,
         destination: InternetAddr,
@@ -170,7 +170,7 @@ pub enum AccessProxyError {
     #[error("Failed to copy: {0}")]
     Copy(#[from] CopyBiError),
 }
-impl UdpServerHandleConn for UdpAccess {
+impl UdpServerHandleConn for UdpAccessConnHandler {
     fn parse_upstream_addr(&self, _buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
         Some(Some(UpstreamAddr(self.destination.clone())))
     }

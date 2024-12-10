@@ -13,7 +13,7 @@ use tokio_kcp::KcpListener;
 use crate::ListenerBindError;
 
 use super::{
-    StreamProxyServer, StreamProxyServerBuildError, StreamProxyServerBuilder,
+    StreamProxyConnHandler, StreamProxyServerBuildError, StreamProxyConnHandlerBuilder,
     StreamProxyServerConfig,
 };
 
@@ -37,10 +37,10 @@ impl KcpProxyServerConfig {
 #[derive(Debug, Clone)]
 pub struct KcpProxyServerBuilder {
     pub listen_addr: Arc<str>,
-    pub inner: StreamProxyServerBuilder,
+    pub inner: StreamProxyConnHandlerBuilder,
 }
 impl loading::Build for KcpProxyServerBuilder {
-    type ConnHandler = StreamProxyServer;
+    type ConnHandler = StreamProxyConnHandler;
     type Server = KcpServer<Self::ConnHandler>;
     type Err = KcpProxyServerBuildError;
 
@@ -69,8 +69,8 @@ pub enum KcpProxyServerBuildError {
 }
 pub async fn build_kcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
-    stream_proxy: StreamProxyServer,
-) -> Result<KcpServer<StreamProxyServer>, ListenerBindError> {
+    stream_proxy: StreamProxyConnHandler,
+) -> Result<KcpServer<StreamProxyConnHandler>, ListenerBindError> {
     let config = fast_kcp_config();
     let listener = KcpListener::bind(config, listen_addr)
         .await

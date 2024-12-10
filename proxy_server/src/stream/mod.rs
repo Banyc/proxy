@@ -33,8 +33,11 @@ pub struct StreamProxyServerConfig {
 }
 
 impl StreamProxyServerConfig {
-    pub fn into_builder(self, stream_context: ConcreteStreamContext) -> StreamProxyServerBuilder {
-        StreamProxyServerBuilder {
+    pub fn into_builder(
+        self,
+        stream_context: ConcreteStreamContext,
+    ) -> StreamProxyConnHandlerBuilder {
+        StreamProxyConnHandlerBuilder {
             header_key: self.header_key,
             payload_key: self.payload_key,
             stream_context,
@@ -43,14 +46,13 @@ impl StreamProxyServerConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct StreamProxyServerBuilder {
+pub struct StreamProxyConnHandlerBuilder {
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
     pub stream_context: ConcreteStreamContext,
 }
-
-impl StreamProxyServerBuilder {
-    pub fn build(self) -> Result<StreamProxyServer, StreamProxyServerBuildError> {
+impl StreamProxyConnHandlerBuilder {
+    pub fn build(self) -> Result<StreamProxyConnHandler, StreamProxyServerBuildError> {
         let header_crypto = self
             .header_key
             .build()
@@ -62,14 +64,13 @@ impl StreamProxyServerBuilder {
             ),
             None => None,
         };
-        Ok(StreamProxyServer::new(
+        Ok(StreamProxyConnHandler::new(
             header_crypto,
             payload_crypto,
             self.stream_context,
         ))
     }
 }
-
 #[derive(Debug, Error)]
 pub enum StreamProxyServerBuildError {
     #[error("HeaderCrypto: {0}")]
@@ -81,13 +82,12 @@ pub enum StreamProxyServerBuildError {
 }
 
 #[derive(Debug)]
-pub struct StreamProxyServer {
+pub struct StreamProxyConnHandler {
     acceptor: StreamProxyAcceptor,
     payload_crypto: Option<tokio_chacha20::config::Config>,
     stream_context: ConcreteStreamContext,
 }
-
-impl StreamProxyServer {
+impl StreamProxyConnHandler {
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
         payload_crypto: Option<tokio_chacha20::config::Config>,
@@ -159,8 +159,8 @@ impl StreamProxyServer {
     //         });
     // }
 }
-impl loading::HandleConn for StreamProxyServer {}
-impl StreamServerHandleConn for StreamProxyServer {
+impl loading::HandleConn for StreamProxyConnHandler {}
+impl StreamServerHandleConn for StreamProxyConnHandler {
     #[instrument(skip(self))]
     async fn handle_stream<S>(&self, stream: S)
     where

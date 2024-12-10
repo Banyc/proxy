@@ -11,7 +11,7 @@ mod tests {
         udp::{context::UdpContext, proxy_table::UdpProxyConfig, PACKET_BUFFER_LENGTH},
     };
     use proxy_client::udp::{trace_rtt, RecvError, UdpProxyClient, UdpProxyClientReadHalf};
-    use proxy_server::udp::UdpProxy;
+    use proxy_server::udp::UdpProxyConnHandler;
     use serial_test::serial;
     use tokio::net::UdpSocket;
 
@@ -24,7 +24,7 @@ mod tests {
 
     async fn spawn_proxy(join_set: &mut tokio::task::JoinSet<()>, addr: &str) -> UdpProxyConfig {
         let crypto = create_random_crypto();
-        let proxy = UdpProxy::new(
+        let proxy = UdpProxyConnHandler::new(
             crypto.clone(),
             None,
             UdpContext {

@@ -103,7 +103,7 @@ pub struct Socks5ServerTcpAccessServerBuilder {
     stream_context: ConcreteStreamContext,
 }
 impl loading::Build for Socks5ServerTcpAccessServerBuilder {
-    type ConnHandler = Socks5ServerTcpAccess;
+    type ConnHandler = Socks5ServerTcpAccessConnHandler;
     type Server = TcpServer<Self::ConnHandler>;
     type Err = io::Error;
 
@@ -119,7 +119,7 @@ impl loading::Build for Socks5ServerTcpAccessServerBuilder {
     }
 
     fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
-        let access = Socks5ServerTcpAccess::new(
+        let access = Socks5ServerTcpAccessConnHandler::new(
             self.proxy_table,
             self.speed_limit,
             self.udp_server_addr,
@@ -131,15 +131,15 @@ impl loading::Build for Socks5ServerTcpAccessServerBuilder {
 }
 
 #[derive(Debug)]
-pub struct Socks5ServerTcpAccess {
+pub struct Socks5ServerTcpAccessConnHandler {
     proxy_table: StreamProxyTable,
     speed_limiter: Limiter,
     udp_listen_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
     stream_context: ConcreteStreamContext,
 }
-impl HandleConn for Socks5ServerTcpAccess {}
-impl StreamServerHandleConn for Socks5ServerTcpAccess {
+impl HandleConn for Socks5ServerTcpAccessConnHandler {}
+impl StreamServerHandleConn for Socks5ServerTcpAccessConnHandler {
     async fn handle_stream<S>(&self, stream: S)
     where
         S: IoStream + IoAddr + std::fmt::Debug,
@@ -153,7 +153,7 @@ impl StreamServerHandleConn for Socks5ServerTcpAccess {
         }
     }
 }
-impl Socks5ServerTcpAccess {
+impl Socks5ServerTcpAccessConnHandler {
     pub fn new(
         proxy_table: StreamProxyTable,
         speed_limit: f64,

@@ -38,7 +38,7 @@ pub struct UdpProxyServerBuilder {
     pub udp_context: UdpContext,
 }
 impl loading::Build for UdpProxyServerBuilder {
-    type ConnHandler = UdpProxy;
+    type ConnHandler = UdpProxyConnHandler;
     type Server = UdpServer<Self::ConnHandler>;
     type Err = UdpProxyServerBuildError;
 
@@ -63,7 +63,7 @@ impl loading::Build for UdpProxyServerBuilder {
             ),
             None => None,
         };
-        Ok(UdpProxy::new(
+        Ok(UdpProxyConnHandler::new(
             header_crypto,
             payload_crypto,
             self.udp_context,
@@ -90,12 +90,12 @@ pub enum UdpProxyBuildError {
 }
 
 #[derive(Debug)]
-pub struct UdpProxy {
+pub struct UdpProxyConnHandler {
     header_crypto: tokio_chacha20::config::Config,
     payload_crypto: Option<tokio_chacha20::config::Config>,
     udp_context: UdpContext,
 }
-impl UdpProxy {
+impl UdpProxyConnHandler {
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
         payload_crypto: Option<tokio_chacha20::config::Config>,
@@ -253,8 +253,8 @@ fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
     }
 }
 
-impl loading::HandleConn for UdpProxy {}
-impl UdpServerHandleConn for UdpProxy {
+impl loading::HandleConn for UdpProxyConnHandler {}
+impl UdpServerHandleConn for UdpProxyConnHandler {
     fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
         let res = decode_route_header(buf, &self.header_crypto);
         res.ok()

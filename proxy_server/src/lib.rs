@@ -5,10 +5,10 @@ use protocol::context::ConcreteContext;
 use serde::Deserialize;
 use stream::{
     kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, rtp::RtpProxyServerConfig,
-    tcp::TcpProxyServerConfig, StreamProxyServer,
+    tcp::TcpProxyServerConfig, StreamProxyConnHandler,
 };
 use thiserror::Error;
-use udp::{UdpProxy, UdpProxyServerBuilder, UdpProxyServerConfig};
+use udp::{UdpProxyConnHandler, UdpProxyServerBuilder, UdpProxyServerConfig};
 
 pub mod stream;
 pub mod udp;
@@ -128,11 +128,11 @@ impl Merge for ProxyServerConfig {
 }
 
 pub struct ProxyServerLoader {
-    tcp_server: loading::Loader<StreamProxyServer>,
-    udp_server: loading::Loader<UdpProxy>,
-    kcp_server: loading::Loader<StreamProxyServer>,
-    mptcp_server: loading::Loader<StreamProxyServer>,
-    rtp_server: loading::Loader<StreamProxyServer>,
+    tcp_server: loading::Loader<StreamProxyConnHandler>,
+    udp_server: loading::Loader<UdpProxyConnHandler>,
+    kcp_server: loading::Loader<StreamProxyConnHandler>,
+    mptcp_server: loading::Loader<StreamProxyConnHandler>,
+    rtp_server: loading::Loader<StreamProxyConnHandler>,
 }
 impl ProxyServerLoader {
     pub fn new() -> Self {

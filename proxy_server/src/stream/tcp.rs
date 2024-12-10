@@ -10,7 +10,7 @@ use tracing::error;
 use crate::ListenerBindError;
 
 use super::{
-    StreamProxyServer, StreamProxyServerBuildError, StreamProxyServerBuilder,
+    StreamProxyConnHandler, StreamProxyConnHandlerBuilder, StreamProxyServerBuildError,
     StreamProxyServerConfig,
 };
 
@@ -34,10 +34,10 @@ impl TcpProxyServerConfig {
 #[derive(Debug, Clone)]
 pub struct TcpProxyServerBuilder {
     pub listen_addr: Arc<str>,
-    pub inner: StreamProxyServerBuilder,
+    pub inner: StreamProxyConnHandlerBuilder,
 }
 impl loading::Build for TcpProxyServerBuilder {
-    type ConnHandler = StreamProxyServer;
+    type ConnHandler = StreamProxyConnHandler;
     type Server = TcpServer<Self::ConnHandler>;
     type Err = TcpProxyServerBuildError;
 
@@ -66,8 +66,8 @@ pub enum TcpProxyServerBuildError {
 }
 pub async fn build_tcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
-    stream_proxy: StreamProxyServer,
-) -> Result<TcpServer<StreamProxyServer>, ListenerBindError> {
+    stream_proxy: StreamProxyConnHandler,
+) -> Result<TcpServer<StreamProxyConnHandler>, ListenerBindError> {
     let listener = TcpListener::bind(listen_addr)
         .await
         .map_err(ListenerBindError)?;
@@ -100,7 +100,7 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
-            let proxy = StreamProxyServer::new(
+            let proxy = StreamProxyConnHandler::new(
                 crypto.clone(),
                 None,
                 ConcreteStreamContext {

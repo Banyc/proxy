@@ -67,7 +67,7 @@ pub struct Socks5ServerUdpAccessServerBuilder {
     udp_context: UdpContext,
 }
 impl loading::Build for Socks5ServerUdpAccessServerBuilder {
-    type ConnHandler = Socks5ServerUdpAccess;
+    type ConnHandler = Socks5ServerUdpAccessConnHandler;
     type Server = UdpServer<Self::ConnHandler>;
     type Err = io::Error;
 
@@ -83,7 +83,7 @@ impl loading::Build for Socks5ServerUdpAccessServerBuilder {
     }
 
     fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
-        Ok(Socks5ServerUdpAccess::new(
+        Ok(Socks5ServerUdpAccessConnHandler::new(
             self.proxy_group,
             self.speed_limit,
             self.udp_context,
@@ -92,13 +92,13 @@ impl loading::Build for Socks5ServerUdpAccessServerBuilder {
 }
 
 #[derive(Debug)]
-pub struct Socks5ServerUdpAccess {
+pub struct Socks5ServerUdpAccessConnHandler {
     proxy_group: UdpProxyGroup,
     speed_limiter: Limiter,
     udp_context: UdpContext,
 }
-impl loading::HandleConn for Socks5ServerUdpAccess {}
-impl Socks5ServerUdpAccess {
+impl loading::HandleConn for Socks5ServerUdpAccessConnHandler {}
+impl Socks5ServerUdpAccessConnHandler {
     pub fn new(proxy_group: UdpProxyGroup, speed_limit: f64, udp_context: UdpContext) -> Self {
         Self {
             proxy_group,
@@ -167,7 +167,7 @@ pub enum AccessProxyError {
     #[error("Failed to establish proxy chain: {0}")]
     Establish(#[from] EstablishError),
 }
-impl UdpServerHandleConn for Socks5ServerUdpAccess {
+impl UdpServerHandleConn for Socks5ServerUdpAccessConnHandler {
     fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
         let res = futures::executor::block_on(async move { UdpRequestHeader::decode(buf).await });
         let request_header = match res {
