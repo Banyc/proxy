@@ -113,8 +113,8 @@ mod tests {
             let server = build_tcp_proxy_server("localhost:0", proxy).await.unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
             tokio::spawn(async move {
-                let _handle = server.handle();
-                server.serve().await.unwrap();
+                let (_set_conn_handler_tx, set_conn_handler_rx) = tokio::sync::mpsc::channel(64);
+                server.serve(set_conn_handler_rx).await.unwrap();
             });
             proxy_addr
         };

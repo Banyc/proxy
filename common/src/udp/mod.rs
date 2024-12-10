@@ -2,7 +2,7 @@ use std::{io, net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use hdv_derive::HdvSerde;
 use thiserror::Error;
-use tokio::{net::UdpSocket, sync::mpsc};
+use tokio::net::UdpSocket;
 use tracing::{error, info, instrument, trace, warn};
 use udp_listener::{Conn, UtpListener};
 
@@ -29,17 +29,12 @@ pub const ACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 pub struct UdpServer<ConnHandler> {
     listener: UdpSocket,
     conn_handler: ConnHandler,
-    handle: mpsc::Sender<ConnHandler>,
-    set_conn_handler_rx: mpsc::Receiver<ConnHandler>,
 }
 impl<ConnHandler> UdpServer<ConnHandler> {
     pub fn new(listener: UdpSocket, conn_handler: ConnHandler) -> Self {
-        let (set_conn_handler_tx, set_conn_handler_rx) = mpsc::channel(64);
         Self {
             listener,
             conn_handler,
-            handle: set_conn_handler_tx,
-            set_conn_handler_rx,
         }
     }
 
@@ -57,12 +52,11 @@ where
 {
     type ConnHandler = ConnHandler;
 
-    fn handle(&self) -> mpsc::Sender<Self::ConnHandler> {
-        self.handle.clone()
-    }
-
-    async fn serve(self) -> AnyResult {
-        self.serve_().await.map_err(|e| e.into())
+    async fn serve(
+        self,
+        set_conn_handler_rx: tokio::sync::mpsc::Receiver<Self::ConnHandler>,
+    ) -> AnyResult {
+        self.serve_(set_conn_handler_rx).await.map_err(|e| e.into())
     }
 }
 impl<ConnHandler> UdpServer<ConnHandler>
@@ -70,9 +64,10 @@ where
     ConnHandler: UdpServerHandleConn + Send + Sync + 'static,
 {
     #[instrument(skip(self))]
-    async fn serve_(mut self) -> Result<(), ServeError> {
-        drop(self.handle);
-
+    async fn serve_(
+        self,
+        mut set_conn_handler_rx: tokio::sync::mpsc::Receiver<ConnHandler>,
+    ) -> Result<(), ServeError> {
         let mut conn_handler = Arc::new(self.conn_handler);
 
         let dispatch = {
@@ -124,7 +119,7 @@ where
                         conn_handler.handle_flow(flow).await;
                     });
                 }
-                res = self.set_conn_handler_rx.recv() => {
+                res = set_conn_handler_rx.recv() => {
                     let new_hook = match res {
                         Some(new_hook) => new_hook,
                         None => break,

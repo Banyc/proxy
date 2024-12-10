@@ -16,7 +16,7 @@ pub struct Loader<ConnHandler> {
 }
 impl<ConnHandler> Loader<ConnHandler>
 where
-    ConnHandler: HandleConn + std::fmt::Debug,
+    ConnHandler: HandleConn + std::fmt::Debug + Send + 'static,
 {
     pub fn new() -> Self {
         Self {
@@ -47,10 +47,11 @@ where
 
             // Spawn server
             let key = server.key().to_owned();
+            let (set_conn_handler_tx, set_conn_handler_rx) = tokio::sync::mpsc::channel(64);
             let server = server.build_server().await?;
-            self.handles.insert(key, server.handle());
+            self.handles.insert(key, set_conn_handler_tx);
             join_set.spawn(async move {
-                server.serve().await?;
+                server.serve(set_conn_handler_rx).await?;
                 Ok(())
             });
         }
@@ -62,7 +63,7 @@ where
 }
 impl<ConnHandler> Default for Loader<ConnHandler>
 where
-    ConnHandler: HandleConn + std::fmt::Debug,
+    ConnHandler: HandleConn + std::fmt::Debug + Send + 'static,
 {
     fn default() -> Self {
         Self::new()
@@ -87,10 +88,9 @@ pub trait Build {
 /// A listener including the business logic for the accepted connections
 pub trait Serve {
     type ConnHandler: HandleConn;
-    /// The handle of this server using the actor model
-    ///
-    /// If all the handle has been dropped, the listener must despawn eventually but still keep all its connections alive.
-    fn handle(&self) -> mpsc::Sender<Self::ConnHandler>;
-    /// Server ends if the caller does not hold a handle to the server.
-    fn serve(self) -> impl std::future::Future<Output = AnyResult> + Send;
+    /// If the other end of `set_conn_handler_rx` is dropped, the listener must despawn eventually but still keep all its connections alive.
+    fn serve(
+        self,
+        set_conn_handler_rx: tokio::sync::mpsc::Receiver<Self::ConnHandler>,
+    ) -> impl std::future::Future<Output = AnyResult> + Send;
 }

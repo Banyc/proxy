@@ -3,10 +3,7 @@ use std::{io, net::SocketAddr, sync::Arc};
 use metrics::counter;
 use mptcp::{listen::MptcpListener, stream::MptcpStream};
 use thiserror::Error;
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    sync::mpsc,
-};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{info, instrument, trace, warn};
 
 use common::{
@@ -23,17 +20,12 @@ const STREAMS: usize = 4;
 pub struct MptcpServer<ConnHandler> {
     listener: MptcpListener,
     conn_handler: ConnHandler,
-    handle: mpsc::Sender<ConnHandler>,
-    set_conn_handler_rx: mpsc::Receiver<ConnHandler>,
 }
 impl<ConnHandler> MptcpServer<ConnHandler> {
     pub fn new(listener: MptcpListener, conn_handler: ConnHandler) -> Self {
-        let (set_conn_handler_tx, set_conn_handler_rx) = mpsc::channel(64);
         Self {
             listener,
             conn_handler,
-            handle: set_conn_handler_tx,
-            set_conn_handler_rx,
         }
     }
 
@@ -51,12 +43,11 @@ where
 {
     type ConnHandler = ConnHandler;
 
-    fn handle(&self) -> mpsc::Sender<Self::ConnHandler> {
-        self.handle.clone()
-    }
-
-    async fn serve(self) -> AnyResult {
-        self.serve_().await.map_err(|e| e.into())
+    async fn serve(
+        self,
+        set_conn_handler_rx: tokio::sync::mpsc::Receiver<Self::ConnHandler>,
+    ) -> AnyResult {
+        self.serve_(set_conn_handler_rx).await.map_err(|e| e.into())
     }
 }
 impl<ConnHandler> MptcpServer<ConnHandler>
@@ -64,9 +55,10 @@ where
     ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
 {
     #[instrument(skip(self))]
-    async fn serve_(mut self) -> Result<(), ServeError> {
-        drop(self.handle);
-
+    async fn serve_(
+        mut self,
+        mut set_conn_handler_rx: tokio::sync::mpsc::Receiver<ConnHandler>,
+    ) -> Result<(), ServeError> {
         let addr = self
             .listener
             .local_addrs()
@@ -94,7 +86,7 @@ where
                         conn_handler.handle_stream(IoMptcpStream(stream)).await;
                     });
                 }
-                res = self.set_conn_handler_rx.recv() => {
+                res = set_conn_handler_rx.recv() => {
                     let new_conn_handler = match res {
                         Some(new_conn_handler) => new_conn_handler,
                         None => break,

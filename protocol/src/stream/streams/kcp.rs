@@ -2,10 +2,7 @@ use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
 
 use metrics::counter;
 use thiserror::Error;
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    sync::mpsc,
-};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
 use tracing::{error, info, instrument, trace, warn};
 
@@ -22,17 +19,12 @@ use crate::stream::connection::Connection;
 pub struct KcpServer<ConnHandler> {
     listener: KcpListener,
     conn_handler: ConnHandler,
-    handle: mpsc::Sender<ConnHandler>,
-    set_conn_handler_rx: mpsc::Receiver<ConnHandler>,
 }
 impl<ConnHandler> KcpServer<ConnHandler> {
     pub fn new(listener: KcpListener, conn_handler: ConnHandler) -> Self {
-        let (set_conn_handler_tx, set_conn_handler_rx) = mpsc::channel(64);
         Self {
             listener,
             conn_handler,
-            handle: set_conn_handler_tx,
-            set_conn_handler_rx,
         }
     }
 
@@ -50,12 +42,11 @@ where
 {
     type ConnHandler = ConnHandler;
 
-    fn handle(&self) -> mpsc::Sender<Self::ConnHandler> {
-        self.handle.clone()
-    }
-
-    async fn serve(self) -> AnyResult {
-        self.serve_().await.map_err(|e| e.into())
+    async fn serve(
+        self,
+        set_conn_handler_rx: tokio::sync::mpsc::Receiver<Self::ConnHandler>,
+    ) -> AnyResult {
+        self.serve_(set_conn_handler_rx).await.map_err(|e| e.into())
     }
 }
 impl<ConnHandler> KcpServer<ConnHandler>
@@ -63,9 +54,10 @@ where
     ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
 {
     #[instrument(skip(self))]
-    async fn serve_(mut self) -> Result<(), ServeError> {
-        drop(self.handle);
-
+    async fn serve_(
+        mut self,
+        mut set_conn_handler_rx: tokio::sync::mpsc::Receiver<ConnHandler>,
+    ) -> Result<(), ServeError> {
         let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
         // Arc conn_handler
@@ -94,7 +86,7 @@ where
                         conn_handler.handle_stream(stream).await;
                     });
                 }
-                res = self.set_conn_handler_rx.recv() => {
+                res = set_conn_handler_rx.recv() => {
                     let new_conn_handler = match res {
                         Some(new_conn_handler) => new_conn_handler,
                         None => break,

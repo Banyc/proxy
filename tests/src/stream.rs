@@ -50,8 +50,9 @@ mod tests {
                 let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
                 let proxy_addr = server.listener().local_addr().unwrap();
                 join_set.spawn(async move {
-                    let _handle = server.handle();
-                    server.serve().await.unwrap();
+                    let (_set_conn_handler_tx, set_conn_handler_rx) =
+                        tokio::sync::mpsc::channel(64);
+                    server.serve(set_conn_handler_rx).await.unwrap();
                 });
                 proxy_addr
             }
@@ -59,8 +60,9 @@ mod tests {
                 let server = build_kcp_proxy_server(addr, proxy).await.unwrap();
                 let proxy_addr = server.listener().local_addr().unwrap();
                 join_set.spawn(async move {
-                    let _handle = server.handle();
-                    server.serve().await.unwrap();
+                    let (_set_conn_handler_tx, set_conn_handler_rx) =
+                        tokio::sync::mpsc::channel(64);
+                    server.serve(set_conn_handler_rx).await.unwrap();
                 });
                 proxy_addr
             }
@@ -68,8 +70,9 @@ mod tests {
                 let server = build_mptcp_proxy_server(addr, proxy).await.unwrap();
                 let proxy_addr = server.listener().local_addrs().next().unwrap().unwrap();
                 join_set.spawn(async move {
-                    let _handle = server.handle();
-                    server.serve().await.unwrap();
+                    let (_set_conn_handler_tx, set_conn_handler_rx) =
+                        tokio::sync::mpsc::channel(64);
+                    server.serve(set_conn_handler_rx).await.unwrap();
                 });
                 proxy_addr
             }
@@ -77,8 +80,9 @@ mod tests {
                 let server = build_rtp_proxy_server(addr, proxy).await.unwrap();
                 let proxy_addr = server.listener().local_addr();
                 join_set.spawn(async move {
-                    let _handle = server.handle();
-                    server.serve().await.unwrap();
+                    let (_set_conn_handler_tx, set_conn_handler_rx) =
+                        tokio::sync::mpsc::channel(64);
+                    server.serve(set_conn_handler_rx).await.unwrap();
                 });
                 proxy_addr
             }
