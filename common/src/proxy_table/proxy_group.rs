@@ -8,7 +8,6 @@ use std::{
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::cache_cell::CacheCell;
@@ -46,12 +45,7 @@ impl<AS> ProxyGroupBuilder<AS> {
             true => Some(cx.tracer_builder.build()),
             false => None,
         };
-        Ok(ProxyGroup::new(
-            chains,
-            tracer,
-            self.active_chains,
-            cx.cancellation,
-        )?)
+        Ok(ProxyGroup::new(chains, tracer, self.active_chains)?)
     }
 }
 #[derive(Debug, Error)]
@@ -65,14 +59,12 @@ pub enum ProxyGroupBuildError {
 pub struct ProxyGroupBuildContext<'caller, A, TB> {
     pub proxy_server: &'caller HashMap<Arc<str>, ProxyConfig<A>>,
     pub tracer_builder: &'caller TB,
-    pub cancellation: CancellationToken,
 }
 impl<A, TB> Clone for ProxyGroupBuildContext<'_, A, TB> {
     fn clone(&self) -> Self {
         Self {
             proxy_server: self.proxy_server,
             tracer_builder: self.tracer_builder,
-            cancellation: self.cancellation.clone(),
         }
     }
 }
@@ -97,7 +89,6 @@ where
         chains: Vec<WeightedProxyChain<A>>,
         tracer: Option<T>,
         active_chains: Option<NonZeroUsize>,
-        cancellation: CancellationToken,
     ) -> Result<Self, ProxyGroupError>
     where
         T: Tracer<Address = A> + Send + Sync + 'static,
@@ -121,7 +112,7 @@ where
         let tracer = tracer.map(Arc::new);
         let chains = chains
             .into_iter()
-            .map(|c| GaugedProxyChain::new(c, tracer.clone(), cancellation.clone()))
+            .map(|c| GaugedProxyChain::new(c, tracer.clone()))
             .collect::<Arc<[_]>>();
         let score_store = Arc::new(RwLock::new(ScoreStore::new(None, TRACE_INTERVAL)));
         Ok(Self {

@@ -24,7 +24,6 @@ use stream::{
         tcp::{TcpAccess, TcpAccessServerConfig},
     },
 };
-use tokio_util::sync::CancellationToken;
 use udp::{
     proxy_table::{UdpProxyGroupBuildContext, UdpProxyTableBuildContext},
     UdpAccess, UdpAccessServerConfig,
@@ -120,7 +119,6 @@ impl AccessServerConfig {
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut AccessServerLoader,
-        cancellation: CancellationToken,
         context: ConcreteContext,
         stream_proxy_server: &HashMap<Arc<str>, StreamProxyConfig>,
         udp_proxy_server: &HashMap<Arc<str>, UdpProxyConfig>,
@@ -140,7 +138,6 @@ impl AccessServerConfig {
         let stream_proxy_group_cx = StreamProxyGroupBuildContext {
             proxy_server: stream_proxy_server,
             tracer_builder: &stream_trace_builder,
-            cancellation: cancellation.clone(),
         };
         let stream_proxy_group = self
             .stream
@@ -171,7 +168,6 @@ impl AccessServerConfig {
         let udp_proxy_group_cx = UdpProxyGroupBuildContext {
             proxy_server: udp_proxy_server,
             tracer_builder: &udp_trace_builder,
-            cancellation: cancellation.clone(),
         };
         let udp_proxy_group = self
             .udp

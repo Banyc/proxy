@@ -178,21 +178,21 @@ impl UdpProxy {
         let session_table = self.udp_context.session_table.clone();
         let upstream_local = upstream.local_addr().ok();
         let (dn_read, dn_write) = conn.split();
+        let io_copy = CopyBidirectional {
+            flow,
+            upstream: UpstreamParts {
+                read: upstream.clone(),
+                write: upstream,
+            },
+            downstream: DownstreamParts {
+                read: dn_read,
+                write: dn_write.clone(),
+            },
+            speed_limiter: Limiter::new(f64::INFINITY),
+            payload_crypto,
+            response_header: Some(response_header),
+        };
         tokio::spawn(async move {
-            let io_copy = CopyBidirectional {
-                flow,
-                upstream: UpstreamParts {
-                    read: upstream.clone(),
-                    write: upstream,
-                },
-                downstream: DownstreamParts {
-                    read: dn_read,
-                    write: dn_write.clone(),
-                },
-                speed_limiter: Limiter::new(f64::INFINITY),
-                payload_crypto,
-                response_header: Some(response_header),
-            };
             let res = io_copy
                 .serve_as_proxy_server(session_table, upstream_local, "UDP")
                 .await;

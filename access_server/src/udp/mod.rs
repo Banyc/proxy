@@ -16,7 +16,7 @@ use common::{
 use proxy_client::udp::{EstablishError, UdpProxyClient};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::net::{ToSocketAddrs, UdpSocket};
+use tokio::net::UdpSocket;
 use tracing::{error, warn};
 use udp_listener::Conn;
 
@@ -80,7 +80,8 @@ impl loading::Build for UdpAccessServerBuilder {
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let access = self.build_conn_handler()?;
-        let server = access.build(listen_addr.as_ref()).await?;
+        let listener = tokio::net::UdpSocket::bind(listen_addr.as_ref()).await?;
+        let server = UdpServer::new(listener, access);
         Ok(server)
     }
 
@@ -108,22 +109,17 @@ pub struct UdpAccess {
 impl loading::HandleConn for UdpAccess {}
 impl UdpAccess {
     pub fn new(
-        proxy_table: UdpProxyGroup,
+        proxy_group: UdpProxyGroup,
         destination: InternetAddr,
         speed_limit: f64,
         udp_context: UdpContext,
     ) -> Self {
         Self {
-            proxy_group: proxy_table,
+            proxy_group,
             destination,
             speed_limiter: Limiter::new(speed_limit),
             udp_context,
         }
-    }
-
-    pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<UdpServer<Self>> {
-        let listener = tokio::net::UdpSocket::bind(listen_addr).await?;
-        Ok(UdpServer::new(listener, self))
     }
 
     async fn proxy(&self, conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), AccessProxyError> {
@@ -141,21 +137,21 @@ impl UdpAccess {
         let upstream_local = upstream_read.inner().local_addr().ok();
         let flow = conn.conn_key().clone();
         let (dn_read, dn_write) = conn.split();
+        let io_copy = CopyBidirectional {
+            flow,
+            upstream: UpstreamParts {
+                read: upstream_read,
+                write: upstream_write,
+            },
+            downstream: DownstreamParts {
+                read: dn_read,
+                write: dn_write,
+            },
+            speed_limiter,
+            payload_crypto,
+            response_header: None,
+        };
         tokio::spawn(async move {
-            let io_copy = CopyBidirectional {
-                flow,
-                upstream: UpstreamParts {
-                    read: upstream_read,
-                    write: upstream_write,
-                },
-                downstream: DownstreamParts {
-                    read: dn_read,
-                    write: dn_write,
-                },
-                speed_limiter,
-                payload_crypto,
-                response_header: None,
-            };
             let _ = io_copy
                 .serve_as_access_server(session_table, upstream_local, upstream_remote, "UDP")
                 .await;
