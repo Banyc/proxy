@@ -15,7 +15,7 @@ use common::{
 use proxy_client::udp::{EstablishError, UdpProxyClient};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::net::UdpSocket;
+use tokio::net::{ToSocketAddrs, UdpSocket};
 use tracing::{error, warn};
 use udp_listener::Conn;
 
@@ -74,8 +74,7 @@ impl loading::Build for Socks5ServerUdpAccessServerBuilder {
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let access = self.build_conn_handler()?;
-        let listener = tokio::net::UdpSocket::bind(listen_addr.as_ref()).await?;
-        let server = UdpServer::new(listener, access);
+        let server = access.build(listen_addr.as_ref()).await?;
         Ok(server)
     }
 
@@ -106,6 +105,11 @@ impl Socks5ServerUdpAccess {
             speed_limiter: Limiter::new(speed_limit),
             udp_context,
         }
+    }
+
+    pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<UdpServer<Self>> {
+        let listener = tokio::net::UdpSocket::bind(listen_addr).await?;
+        Ok(UdpServer::new(listener, self))
     }
 
     async fn proxy(&self, conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), AccessProxyError> {

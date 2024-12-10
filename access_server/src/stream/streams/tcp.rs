@@ -19,6 +19,7 @@ use protocol::stream::{
 use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::net::ToSocketAddrs;
 use tracing::{error, instrument, warn};
 
 use crate::stream::proxy_table::StreamProxyGroupBuildContext;
@@ -79,8 +80,7 @@ impl loading::Build for TcpAccessServerBuilder {
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let access = self.build_conn_handler()?;
-        let tcp_listener = tokio::net::TcpListener::bind(listen_addr.as_ref()).await?;
-        let server = TcpServer::new(tcp_listener, access);
+        let server = access.build(listen_addr.as_ref()).await?;
         Ok(server)
     }
 
@@ -118,6 +118,11 @@ impl TcpAccess {
             speed_limiter: Limiter::new(speed_limit),
             stream_context,
         }
+    }
+
+    pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<TcpServer<Self>> {
+        let tcp_listener = tokio::net::TcpListener::bind(listen_addr).await?;
+        Ok(TcpServer::new(tcp_listener, self))
     }
 
     async fn proxy<S>(&self, downstream: S) -> Result<(), ProxyError>

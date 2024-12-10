@@ -23,6 +23,7 @@ use proxy_server::{ProxyServerConfig, ProxyServerLoader};
 use serde::Deserialize;
 use swap::Swap;
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 pub mod config;
@@ -61,13 +62,17 @@ where
         },
     };
 
+    let cancellation = CancellationToken::new();
     read_and_exec_config(
         &config_reader,
         &mut server_tasks,
         &mut server_loader,
+        cancellation.clone(),
         context.clone(),
     )
     .await?;
+
+    let mut _cancellation_guard = cancellation.drop_guard();
 
     loop {
         tokio::select! {
@@ -81,16 +86,19 @@ where
                 // Wait for file change to settle
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
+                let cancellation = CancellationToken::new();
                 if let Err(e) = read_and_exec_config(
                     &config_reader,
                     &mut server_tasks,
                     &mut server_loader,
+                    cancellation.clone(),
                     context.clone(),
                 ).await {
                     warn!(?e, "Failed to read and execute config");
                     continue;
                 }
 
+                _cancellation_guard = cancellation.drop_guard();
             }
         }
     }
@@ -106,6 +114,7 @@ async fn read_and_exec_config<CR>(
     config_reader: &CR,
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
+    cancellation: CancellationToken,
     context: ConcreteContext,
 ) -> Result<(), ServeError>
 where
@@ -115,7 +124,7 @@ where
         .read_config()
         .await
         .map_err(ServeError::Config)?;
-    spawn_and_clean(config, server_tasks, server_loader, context)
+    spawn_and_clean(config, server_tasks, server_loader, cancellation, context)
         .await
         .map_err(ServeError::Load)?;
     Ok(())
@@ -135,6 +144,7 @@ pub async fn spawn_and_clean(
     config: ServerConfig,
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
+    cancellation: CancellationToken,
     context: ConcreteContext,
 ) -> AnyResult {
     let mut stream_proxy_server = HashMap::new();
@@ -161,6 +171,7 @@ pub async fn spawn_and_clean(
         .spawn_and_clean(
             server_tasks,
             &mut server_loader.access_server,
+            cancellation,
             context.clone(),
             &stream_proxy_server,
             &udp_proxy,
