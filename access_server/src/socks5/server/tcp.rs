@@ -193,7 +193,7 @@ impl Socks5ServerTcpAccess {
                     stream_type: ConcreteStreamType::Tcp,
                     address: upstream_addr.clone(),
                 };
-                let metrics_context = LogContext {
+                let log_context = LogContext {
                     start: (std::time::Instant::now(), std::time::SystemTime::now()),
                     upstream_addr: upstream_addr.clone(),
                     upstream_sock_addr,
@@ -207,7 +207,7 @@ impl Socks5ServerTcpAccess {
                     upstream,
                     payload_crypto: None,
                     speed_limiter: self.speed_limiter.clone(),
-                    metrics_context,
+                    log_context,
                 }
                 .serve_as_access_server("SOCKS5 TCP direct");
                 tokio::spawn(async move {
@@ -231,7 +231,7 @@ impl Socks5ServerTcpAccess {
             } => (destination, downstream, upstream, payload_crypto),
         };
 
-        let metrics_context = LogContext {
+        let log_context = LogContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
             upstream_addr: upstream.addr,
             upstream_sock_addr: upstream.sock_addr,
@@ -248,7 +248,7 @@ impl Socks5ServerTcpAccess {
             upstream: upstream.stream,
             payload_crypto,
             speed_limiter: self.speed_limiter.clone(),
-            metrics_context,
+            log_context,
         }
         .serve_as_access_server("SOCKS5 TCP");
         tokio::spawn(async move {

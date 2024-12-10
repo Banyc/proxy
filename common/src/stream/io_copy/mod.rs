@@ -29,7 +29,7 @@ pub struct CopyBidirectional<DS, US, ST> {
     pub upstream: US,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
     pub speed_limiter: Limiter,
-    pub metrics_context: LogContext<ST>,
+    pub log_context: LogContext<ST>,
 }
 
 impl<DS, US, ST> CopyBidirectional<DS, US, ST>
@@ -43,7 +43,7 @@ where
         log_prefix: &str,
     ) -> Result<(), tokio_io::CopyBiErrorKind> {
         let session = self.session();
-        let destination = self.metrics_context.destination.clone();
+        let destination = self.log_context.destination.clone();
 
         let (metrics, res) = self
             .serve(session, EncryptionDirection::Decrypt, log_prefix)
@@ -58,7 +58,7 @@ where
         log_prefix: &str,
     ) -> Result<(), tokio_io::CopyBiErrorKind> {
         let session = self.session();
-        let destination = self.metrics_context.destination.clone();
+        let destination = self.log_context.destination.clone();
 
         let (metrics, res) = self
             .serve(session, EncryptionDirection::Encrypt, log_prefix)
@@ -69,7 +69,7 @@ where
     }
 
     fn session(&self) -> Option<(RowOwnedGuard<Session<ST>>, ReadGauge, WriteGauge)> {
-        self.metrics_context.session_table.as_ref().map(|s| {
+        self.log_context.session_table.as_ref().map(|s| {
             let (up_handle, up) = tokio_throughput::gauge();
             let (dn_handle, dn) = tokio_throughput::gauge();
             let r = ReadGauge(up);
@@ -78,10 +78,10 @@ where
             let session = Session {
                 start: SystemTime::now(),
                 end: None,
-                destination: self.metrics_context.destination.clone(),
-                upstream_local: self.metrics_context.upstream_local,
-                upstream_remote: self.metrics_context.upstream_addr.clone(),
-                downstream_remote: self.metrics_context.downstream_addr,
+                destination: self.log_context.destination.clone(),
+                upstream_local: self.log_context.upstream_local,
+                upstream_remote: self.log_context.upstream_addr.clone(),
+                downstream_remote: self.log_context.downstream_addr,
                 up_gauge: Some(Mutex::new(up_handle)),
                 dn_gauge: Some(Mutex::new(dn_handle)),
             };
@@ -134,7 +134,7 @@ where
             }
         };
 
-        let (log, res) = get_log_from_copy_result(self.metrics_context, res);
+        let (log, res) = get_log_from_copy_result(self.log_context, res);
         match &res {
             Ok(()) => {
                 info!(%log, "{log_prefix}: I/O copy finished");

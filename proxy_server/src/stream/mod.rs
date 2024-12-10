@@ -116,7 +116,7 @@ impl StreamProxyServer {
         };
 
         // Copy data
-        let metrics_context = LogContext {
+        let log_context = LogContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
             upstream_addr: upstream.addr,
             upstream_sock_addr: upstream.sock_addr,
@@ -130,7 +130,7 @@ impl StreamProxyServer {
             upstream: upstream.stream,
             payload_crypto: self.payload_crypto.clone(),
             speed_limiter: Limiter::new(f64::INFINITY),
-            metrics_context,
+            log_context,
         }
         .serve_as_proxy_server("Stream");
         tokio::spawn(async move {

@@ -141,7 +141,7 @@ impl TcpAccess {
         )
         .await?;
 
-        let metrics_context = LogContext {
+        let log_context = LogContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
             upstream_addr: upstream.addr,
             upstream_sock_addr: upstream.sock_addr,
@@ -155,7 +155,7 @@ impl TcpAccess {
             upstream: upstream.stream,
             payload_crypto: proxy_chain.payload_crypto.clone(),
             speed_limiter: self.speed_limiter.clone(),
-            metrics_context,
+            log_context,
         }
         .serve_as_access_server("TCP");
         tokio::spawn(async move {
