@@ -5,7 +5,8 @@ use protocol::context::ConcreteContext;
 use serde::Deserialize;
 use stream::{
     kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, rtp::RtpProxyServerConfig,
-    tcp::TcpProxyServerConfig, tcp_mux::TcpMuxProxyServerConfig, StreamProxyConnHandler,
+    rtp_mux::RtpMuxProxyServerConfig, tcp::TcpProxyServerConfig, tcp_mux::TcpMuxProxyServerConfig,
+    StreamProxyConnHandler,
 };
 use thiserror::Error;
 use udp::{UdpProxyConnHandler, UdpProxyServerBuilder, UdpProxyServerConfig};
@@ -28,6 +29,8 @@ pub struct ProxyServerConfig {
     pub mptcp_server: Vec<MptcpProxyServerConfig>,
     #[serde(default)]
     pub rtp_server: Vec<RtpProxyServerConfig>,
+    #[serde(default)]
+    pub rtp_mux_server: Vec<RtpMuxProxyServerConfig>,
 }
 impl ProxyServerConfig {
     pub fn new() -> Self {
@@ -38,6 +41,7 @@ impl ProxyServerConfig {
             kcp_server: Default::default(),
             mptcp_server: Default::default(),
             rtp_server: Default::default(),
+            rtp_mux_server: Default::default(),
         }
     }
 
@@ -116,6 +120,17 @@ impl ProxyServerConfig {
             )
             .await?;
 
+        loader
+            .rtp_mux_server
+            .spawn_and_clean(
+                join_set,
+                self.rtp_mux_server
+                    .into_iter()
+                    .map(|s| s.into_builder(context.stream.clone()))
+                    .collect(),
+            )
+            .await?;
+
         Ok(())
     }
 }
@@ -132,6 +147,7 @@ impl Merge for ProxyServerConfig {
         self.kcp_server.extend(other.kcp_server);
         self.mptcp_server.extend(other.mptcp_server);
         self.rtp_server.extend(other.rtp_server);
+        self.rtp_mux_server.extend(other.rtp_mux_server);
         Ok(Self {
             tcp_server: self.tcp_server,
             tcp_mux_server: self.tcp_mux_server,
@@ -139,6 +155,7 @@ impl Merge for ProxyServerConfig {
             kcp_server: self.kcp_server,
             mptcp_server: self.mptcp_server,
             rtp_server: self.rtp_server,
+            rtp_mux_server: self.rtp_mux_server,
         })
     }
 }
@@ -150,6 +167,7 @@ pub struct ProxyServerLoader {
     kcp_server: loading::Loader<StreamProxyConnHandler>,
     mptcp_server: loading::Loader<StreamProxyConnHandler>,
     rtp_server: loading::Loader<StreamProxyConnHandler>,
+    rtp_mux_server: loading::Loader<StreamProxyConnHandler>,
 }
 impl ProxyServerLoader {
     pub fn new() -> Self {
@@ -160,6 +178,7 @@ impl ProxyServerLoader {
             kcp_server: loading::Loader::new(),
             mptcp_server: loading::Loader::new(),
             rtp_server: loading::Loader::new(),
+            rtp_mux_server: loading::Loader::new(),
         }
     }
 }

@@ -6,8 +6,8 @@ use super::{
     addr::ConcreteStreamType,
     connection::Connection,
     streams::{
-        kcp::KcpConnector, mptcp::MptcpConnector, rtp::RtpConnector, tcp::TcpConnector,
-        tcp_mux::TcpMuxConnector,
+        kcp::KcpConnector, mptcp::MptcpConnector, rtp::RtpConnector, rtp_mux::RtpMuxConnector,
+        tcp::TcpConnector, tcp_mux::TcpMuxConnector,
     },
 };
 
@@ -18,6 +18,7 @@ pub struct ConcreteStreamConnectorTable {
     kcp: KcpConnector,
     mptcp: MptcpConnector,
     rtp: RtpConnector,
+    rtp_mux: RtpMuxConnector,
 }
 impl ConcreteStreamConnectorTable {
     pub fn new() -> Self {
@@ -27,6 +28,7 @@ impl ConcreteStreamConnectorTable {
             kcp: KcpConnector,
             mptcp: MptcpConnector,
             rtp: RtpConnector,
+            rtp_mux: RtpMuxConnector::new(),
         }
     }
 }
@@ -46,6 +48,7 @@ impl StreamConnectorTable for ConcreteStreamConnectorTable {
             ConcreteStreamType::Kcp => self.kcp.timed_connect(addr, timeout).await,
             ConcreteStreamType::Mptcp => self.mptcp.timed_connect(addr, timeout).await,
             ConcreteStreamType::Rtp => self.rtp.timed_connect(addr, timeout).await,
+            ConcreteStreamType::RtpMux => self.rtp_mux.timed_connect(addr, timeout).await,
         }
     }
 }

@@ -14,7 +14,8 @@ mod tests {
     use proxy_client::stream::{establish, trace_rtt};
     use proxy_server::stream::{
         kcp::build_kcp_proxy_server, mptcp::build_mptcp_proxy_server, rtp::build_rtp_proxy_server,
-        tcp::build_tcp_proxy_server, tcp_mux::build_tcp_mux_proxy_server, StreamProxyConnHandler,
+        rtp_mux::build_rtp_mux_proxy_server, tcp::build_tcp_proxy_server,
+        tcp_mux::build_tcp_mux_proxy_server, StreamProxyConnHandler,
     };
     use serial_test::serial;
     use swap::Swap;
@@ -96,6 +97,16 @@ mod tests {
                 });
                 proxy_addr
             }
+            ConcreteStreamType::RtpMux => {
+                let server = build_rtp_mux_proxy_server(addr, proxy).await.unwrap();
+                let proxy_addr = server.listener().local_addr();
+                join_set.spawn(async move {
+                    let (_set_conn_handler_tx, set_conn_handler_rx) =
+                        tokio::sync::mpsc::channel(64);
+                    server.serve(set_conn_handler_rx).await.unwrap();
+                });
+                proxy_addr
+            }
         };
         ProxyConfig {
             address: StreamAddr {
@@ -136,6 +147,12 @@ mod tests {
         addr: &str,
     ) -> StreamProxyConfig {
         spawn_proxy(join_set, addr, ConcreteStreamType::Rtp).await
+    }
+    async fn spawn_rtp_mux_proxy(
+        join_set: &mut tokio::task::JoinSet<()>,
+        addr: &str,
+    ) -> StreamProxyConfig {
+        spawn_proxy(join_set, addr, ConcreteStreamType::RtpMux).await
     }
 
     async fn spawn_greet(
@@ -308,6 +325,7 @@ mod tests {
                 ConcreteStreamType::Kcp => spawn_kcp_proxy(&mut join_set, "0.0.0.0:0").await,
                 ConcreteStreamType::Mptcp => spawn_mptcp_proxy(&mut join_set, "0.0.0.0:0").await,
                 ConcreteStreamType::Rtp => spawn_rtp_proxy(&mut join_set, "0.0.0.0:0").await,
+                ConcreteStreamType::RtpMux => spawn_rtp_mux_proxy(&mut join_set, "0.0.0.0:0").await,
             };
             proxies.push(proxy_config);
         }
