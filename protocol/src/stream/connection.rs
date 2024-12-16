@@ -7,8 +7,8 @@ use common::stream::{IoAddr, IoStream};
 use super::{
     addr::ConcreteStreamAddr,
     streams::{
-        kcp::AddressedKcpStream, mptcp::IoMptcpStream, rtp::AddressedRtpStream, tcp::IoTcpStream,
-        tcp_mux::IoTcpMuxStream,
+        kcp::AddressedKcpStream, mptcp::IoMptcpStream, mux::IoMuxStream, rtp::AddressedRtpStream,
+        tcp::IoTcpStream,
     },
 };
 
@@ -16,7 +16,7 @@ use super::{
 pub enum Connection {
     // Quic(QuicIoStream),
     Tcp(IoTcpStream),
-    TcpMux(IoTcpMuxStream),
+    Mux(IoMuxStream),
     Kcp(AddressedKcpStream),
     Mptcp(IoMptcpStream),
     Rtp(AddressedRtpStream),
@@ -27,7 +27,7 @@ impl IoAddr for Connection {
         match self {
             // CreatedStream::Quic(x) => x.peer_addr(),
             Connection::Tcp(x) => x.peer_addr(),
-            Connection::TcpMux(x) => x.peer_addr(),
+            Connection::Mux(x) => x.peer_addr(),
             Connection::Kcp(x) => x.peer_addr(),
             Connection::Mptcp(x) => IoAddr::peer_addr(x),
             Connection::Rtp(x) => IoAddr::peer_addr(x),
@@ -38,7 +38,7 @@ impl IoAddr for Connection {
         match self {
             // CreatedStream::Quic(x) => x.local_addr(),
             Connection::Tcp(x) => x.local_addr(),
-            Connection::TcpMux(x) => x.local_addr(),
+            Connection::Mux(x) => x.local_addr(),
             Connection::Kcp(x) => x.local_addr(),
             Connection::Mptcp(x) => IoAddr::local_addr(x),
             Connection::Rtp(x) => IoAddr::local_addr(x),
@@ -54,7 +54,7 @@ impl AsyncWrite for Connection {
         match self.deref_mut() {
             // CreatedStream::Quic(x) => Pin::new(x).poll_write(cx, buf),
             Connection::Tcp(x) => Pin::new(x).poll_write(cx, buf),
-            Connection::TcpMux(x) => Pin::new(x).poll_write(cx, buf),
+            Connection::Mux(x) => Pin::new(x).poll_write(cx, buf),
             Connection::Kcp(x) => Pin::new(x).poll_write(cx, buf),
             Connection::Mptcp(x) => Pin::new(x).poll_write(cx, buf),
             Connection::Rtp(x) => Pin::new(x).poll_write(cx, buf),
@@ -68,7 +68,7 @@ impl AsyncWrite for Connection {
         match self.deref_mut() {
             // CreatedStream::Quic(x) => Pin::new(x).poll_flush(cx),
             Connection::Tcp(x) => Pin::new(x).poll_flush(cx),
-            Connection::TcpMux(x) => Pin::new(x).poll_flush(cx),
+            Connection::Mux(x) => Pin::new(x).poll_flush(cx),
             Connection::Kcp(x) => Pin::new(x).poll_flush(cx),
             Connection::Mptcp(x) => Pin::new(x).poll_flush(cx),
             Connection::Rtp(x) => Pin::new(x).poll_flush(cx),
@@ -82,7 +82,7 @@ impl AsyncWrite for Connection {
         match self.deref_mut() {
             // CreatedStream::Quic(x) => Pin::new(x).poll_shutdown(cx),
             Connection::Tcp(x) => Pin::new(x).poll_shutdown(cx),
-            Connection::TcpMux(x) => Pin::new(x).poll_shutdown(cx),
+            Connection::Mux(x) => Pin::new(x).poll_shutdown(cx),
             Connection::Kcp(x) => Pin::new(x).poll_shutdown(cx),
             Connection::Mptcp(x) => Pin::new(x).poll_shutdown(cx),
             Connection::Rtp(x) => Pin::new(x).poll_shutdown(cx),
@@ -98,7 +98,7 @@ impl AsyncRead for Connection {
         match self.deref_mut() {
             // CreatedStream::Quic(x) => Pin::new(x).poll_read(cx, buf),
             Connection::Tcp(x) => Pin::new(x).poll_read(cx, buf),
-            Connection::TcpMux(x) => Pin::new(x).poll_read(cx, buf),
+            Connection::Mux(x) => Pin::new(x).poll_read(cx, buf),
             Connection::Kcp(x) => Pin::new(x).poll_read(cx, buf),
             Connection::Mptcp(x) => Pin::new(x).poll_read(cx, buf),
             Connection::Rtp(x) => Pin::new(x).poll_read(cx, buf),
