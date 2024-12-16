@@ -5,7 +5,7 @@ use protocol::context::ConcreteContext;
 use serde::Deserialize;
 use stream::{
     kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, rtp::RtpProxyServerConfig,
-    tcp::TcpProxyServerConfig, StreamProxyConnHandler,
+    tcp::TcpProxyServerConfig, tcp_mux::TcpMuxProxyServerConfig, StreamProxyConnHandler,
 };
 use thiserror::Error;
 use udp::{UdpProxyConnHandler, UdpProxyServerBuilder, UdpProxyServerConfig};
@@ -19,6 +19,8 @@ pub struct ProxyServerConfig {
     #[serde(default)]
     pub tcp_server: Vec<TcpProxyServerConfig>,
     #[serde(default)]
+    pub tcp_mux_server: Vec<TcpMuxProxyServerConfig>,
+    #[serde(default)]
     pub udp_server: Vec<UdpProxyServerConfig>,
     #[serde(default)]
     pub kcp_server: Vec<KcpProxyServerConfig>,
@@ -31,6 +33,7 @@ impl ProxyServerConfig {
     pub fn new() -> Self {
         Self {
             tcp_server: Default::default(),
+            tcp_mux_server: Default::default(),
             udp_server: Default::default(),
             kcp_server: Default::default(),
             mptcp_server: Default::default(),
@@ -49,6 +52,17 @@ impl ProxyServerConfig {
             .spawn_and_clean(
                 join_set,
                 self.tcp_server
+                    .into_iter()
+                    .map(|s| s.into_builder(context.stream.clone()))
+                    .collect(),
+            )
+            .await?;
+
+        loader
+            .tcp_mux_server
+            .spawn_and_clean(
+                join_set,
+                self.tcp_mux_server
                     .into_iter()
                     .map(|s| s.into_builder(context.stream.clone()))
                     .collect(),
@@ -113,12 +127,14 @@ impl Merge for ProxyServerConfig {
         Self: Sized,
     {
         self.tcp_server.extend(other.tcp_server);
+        self.tcp_mux_server.extend(other.tcp_mux_server);
         self.udp_server.extend(other.udp_server);
         self.kcp_server.extend(other.kcp_server);
         self.mptcp_server.extend(other.mptcp_server);
         self.rtp_server.extend(other.rtp_server);
         Ok(Self {
             tcp_server: self.tcp_server,
+            tcp_mux_server: self.tcp_mux_server,
             udp_server: self.udp_server,
             kcp_server: self.kcp_server,
             mptcp_server: self.mptcp_server,
@@ -129,6 +145,7 @@ impl Merge for ProxyServerConfig {
 
 pub struct ProxyServerLoader {
     tcp_server: loading::Loader<StreamProxyConnHandler>,
+    tcp_mux_server: loading::Loader<StreamProxyConnHandler>,
     udp_server: loading::Loader<UdpProxyConnHandler>,
     kcp_server: loading::Loader<StreamProxyConnHandler>,
     mptcp_server: loading::Loader<StreamProxyConnHandler>,
@@ -138,6 +155,7 @@ impl ProxyServerLoader {
     pub fn new() -> Self {
         Self {
             tcp_server: loading::Loader::new(),
+            tcp_mux_server: loading::Loader::new(),
             udp_server: loading::Loader::new(),
             kcp_server: loading::Loader::new(),
             mptcp_server: loading::Loader::new(),

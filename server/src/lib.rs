@@ -55,7 +55,7 @@ where
         stream: ConcreteStreamContext {
             session_table: serve_context.stream_session_table,
             pool: stream_pool,
-            connector_table: ConcreteStreamConnectorTable::new(),
+            connector_table: Arc::new(ConcreteStreamConnectorTable::new()),
         },
         udp: UdpContext {
             session_table: serve_context.udp_session_table,

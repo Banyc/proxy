@@ -106,7 +106,7 @@ mod tests {
                 ConcreteStreamContext {
                     session_table: None,
                     pool: Swap::new(ConcreteConnPool::empty()),
-                    connector_table: ConcreteStreamConnectorTable::new(),
+                    connector_table: Arc::new(ConcreteStreamConnectorTable::new()),
                 },
             );
 

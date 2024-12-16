@@ -39,7 +39,7 @@ where
 {
     pub fn build<C, CT>(
         self,
-        connector_table: CT,
+        connector_table: Arc<CT>,
         proxy_server: &HashMap<Arc<str>, ProxyConfig<StreamAddr<ST>>>,
     ) -> Result<ConnPool<StreamAddr<ST>, C>, PoolBuildError>
     where
@@ -89,11 +89,11 @@ impl<SAS> Merge for PoolBuilder<SAS> {
 
 fn pool_entries_from_proxy_configs<C, CT, ST>(
     proxy_configs: impl Iterator<Item = ProxyConfig<StreamAddr<ST>>>,
-    connector_table: CT,
+    connector_table: Arc<CT>,
 ) -> impl Iterator<Item = ConnPoolEntry<StreamAddr<ST>, C>>
 where
     C: std::fmt::Debug + IoStream,
-    CT: Clone + StreamConnectorTable<Connection = C, StreamType = ST> + Sync + Send + 'static,
+    CT: StreamConnectorTable<Connection = C, StreamType = ST> + Sync + Send + 'static,
     ST: StreamType,
 {
     proxy_configs.map(move |c| ConnPoolEntry {
@@ -112,7 +112,7 @@ where
 #[derive(Debug)]
 struct PoolConnector<ST, CT> {
     proxy_server: ProxyConfig<StreamAddr<ST>>,
-    connector_table: CT,
+    connector_table: Arc<CT>,
 }
 #[async_trait]
 impl<C, CT, ST> tokio_conn_pool::Connect for PoolConnector<ST, CT>

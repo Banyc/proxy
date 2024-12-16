@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use std::{io, time::Duration};
+    use std::{io, sync::Arc, time::Duration};
 
     use common::{loading::Serve, proxy_table::ProxyConfig, stream::addr::StreamAddr};
     use protocol::stream::{
@@ -14,7 +14,7 @@ mod tests {
     use proxy_client::stream::{establish, trace_rtt};
     use proxy_server::stream::{
         kcp::build_kcp_proxy_server, mptcp::build_mptcp_proxy_server, rtp::build_rtp_proxy_server,
-        tcp::build_tcp_proxy_server, StreamProxyConnHandler,
+        tcp::build_tcp_proxy_server, tcp_mux::build_tcp_mux_proxy_server, StreamProxyConnHandler,
     };
     use serial_test::serial;
     use swap::Swap;
@@ -34,7 +34,7 @@ mod tests {
         ConcreteStreamContext {
             session_table: None,
             pool: Swap::new(ConcreteConnPool::empty()),
-            connector_table: ConcreteStreamConnectorTable::new(),
+            connector_table: Arc::new(ConcreteStreamConnectorTable::new()),
         }
     }
 
@@ -48,6 +48,16 @@ mod tests {
         let proxy_addr = match ty {
             ConcreteStreamType::Tcp => {
                 let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
+                let proxy_addr = server.listener().local_addr().unwrap();
+                join_set.spawn(async move {
+                    let (_set_conn_handler_tx, set_conn_handler_rx) =
+                        tokio::sync::mpsc::channel(64);
+                    server.serve(set_conn_handler_rx).await.unwrap();
+                });
+                proxy_addr
+            }
+            ConcreteStreamType::TcpMux => {
+                let server = build_tcp_mux_proxy_server(addr, proxy).await.unwrap();
                 let proxy_addr = server.listener().local_addr().unwrap();
                 join_set.spawn(async move {
                     let (_set_conn_handler_tx, set_conn_handler_rx) =
@@ -103,21 +113,24 @@ mod tests {
     ) -> StreamProxyConfig {
         spawn_proxy(join_set, addr, ConcreteStreamType::Tcp).await
     }
-
+    async fn spawn_tcp_mux_proxy(
+        join_set: &mut tokio::task::JoinSet<()>,
+        addr: &str,
+    ) -> StreamProxyConfig {
+        spawn_proxy(join_set, addr, ConcreteStreamType::TcpMux).await
+    }
     async fn spawn_kcp_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
     ) -> StreamProxyConfig {
         spawn_proxy(join_set, addr, ConcreteStreamType::Kcp).await
     }
-
     async fn spawn_mptcp_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
     ) -> StreamProxyConfig {
         spawn_proxy(join_set, addr, ConcreteStreamType::Mptcp).await
     }
-
     async fn spawn_rtp_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
@@ -176,7 +189,7 @@ mod tests {
         let stream_context = ConcreteStreamContext {
             session_table: None,
             pool: Swap::new(ConcreteConnPool::empty()),
-            connector_table: ConcreteStreamConnectorTable::new(),
+            connector_table: Arc::new(ConcreteStreamConnectorTable::new()),
         };
 
         let mut join_set = tokio::task::JoinSet::new();
@@ -291,6 +304,7 @@ mod tests {
         for _ in 0..STRESS_CHAINS {
             let proxy_config = match ty {
                 ConcreteStreamType::Tcp => spawn_tcp_proxy(&mut join_set, "0.0.0.0:0").await,
+                ConcreteStreamType::TcpMux => spawn_tcp_mux_proxy(&mut join_set, "0.0.0.0:0").await,
                 ConcreteStreamType::Kcp => spawn_kcp_proxy(&mut join_set, "0.0.0.0:0").await,
                 ConcreteStreamType::Mptcp => spawn_mptcp_proxy(&mut join_set, "0.0.0.0:0").await,
                 ConcreteStreamType::Rtp => spawn_rtp_proxy(&mut join_set, "0.0.0.0:0").await,

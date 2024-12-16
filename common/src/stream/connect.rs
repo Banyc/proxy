@@ -29,7 +29,7 @@ pub trait StreamConnectExt: StreamConnect {
 }
 impl<T: StreamConnect> StreamConnectExt for T {}
 
-pub trait StreamConnectorTable: std::fmt::Debug + Clone + Sync + Send + 'static {
+pub trait StreamConnectorTable: std::fmt::Debug + Sync + Send + 'static {
     type Connection;
     type StreamType;
 

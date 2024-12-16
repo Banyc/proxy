@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use swap::Swap;
 use tokio_conn_pool::ConnPool;
 
@@ -9,7 +11,7 @@ use super::{addr::StreamAddr, connect::StreamConnectorTable};
 pub struct StreamContext<C, CT, ST> {
     pub session_table: Option<StreamSessionTable<ST>>,
     pub pool: Swap<ConnPool<StreamAddr<ST>, C>>,
-    pub connector_table: CT,
+    pub connector_table: Arc<CT>,
 }
 impl<C, CT, ST> Clone for StreamContext<C, CT, ST>
 where
