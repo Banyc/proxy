@@ -2014,9 +2014,9 @@ dependencies = [
 
 [[package]]
 name = "notify-types"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7393c226621f817964ffb3dc5704f9509e107a8b024b489cc2c1b217378785df"
+checksum = "585d3cb5e12e01aed9e8a1f70d5c6b5e86fe2a6e48fc8cd0b3e0b8df6f6eb174"
 dependencies = [
  "instant",
 ]
@@ -3313,7 +3313,7 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.67#296154927bef1b2f445af579fdc6a636291af1b5"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.68#9c725138b1f0991952daef36a5a2ad27fbca5e28"
 dependencies = [
  "async-trait",
  "async_async_io",
