@@ -89,9 +89,17 @@ where
                         }
                     };
                     counter!("stream.tcp_mux.tcp.accepts").increment(1);
-                    let addr = SocketAddrPair {
-                        local_addr: stream.local_addr().unwrap(),
-                        peer_addr: stream.peer_addr().unwrap(),
+                    let addr = || -> io::Result<SocketAddrPair> {
+                        Ok(SocketAddrPair {
+                            local_addr: stream.local_addr()?,
+                            peer_addr: stream.peer_addr()?,
+                        })
+                    };
+                    let addr = match addr() {
+                        Ok(addr) => addr,
+                        Err(_) => {
+                            continue;
+                        }
                     };
                     let (r, w) = stream.into_split();
                     let (_, accepter) = spawn_mux_no_reconnection(r, w, server_mux_config(), &mut self.mux);
