@@ -9,7 +9,7 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{instrument, trace};
 
-use crate::header::timestamp::{ReplayValidator, TimestampMsg, TIME_FRAME};
+use crate::{anti_replay::ReplayValidator, header::timestamp::TimestampMsg};
 
 pub const MAX_HEADER_LEN: usize = 1024;
 
@@ -24,6 +24,7 @@ pub trait Header {}
 pub async fn read_header<'cursor, R, H>(
     reader: &mut R,
     cursor: &mut tokio_chacha20::cursor::DecryptCursor,
+    replay_validator: &ReplayValidator,
 ) -> Result<H, CodecError>
 where
     R: reader_bounds,
@@ -37,6 +38,9 @@ where
         let buf = &mut buf[..size];
         let res = reader.read_exact(buf);
         add_await([res])?;
+        if !replay_validator.nonce_validates(buf.try_into().unwrap()) {
+            return Err(CodecError::Integrity);
+        }
         let i = cursor.decrypt(buf);
         if i.is_some() {
             return Err(CodecError::Integrity);
@@ -87,7 +91,7 @@ where
         let mut timestamp_buf = [0; TimestampMsg::SIZE];
         Read::read_exact(&mut rdr, &mut timestamp_buf).unwrap();
         let timestamp = TimestampMsg::decode(timestamp_buf);
-        if !ReplayValidator::new(TIME_FRAME).validates(timestamp.timestamp()) {
+        if !replay_validator.time_validates(timestamp.timestamp()) {
             return Err(CodecError::Integrity);
         }
         let header = bincode::deserialize_from(&mut rdr)?;
@@ -159,13 +163,15 @@ where
 pub async fn timed_read_header_async<'cursor, R, H>(
     reader: &mut R,
     cursor: &mut tokio_chacha20::cursor::DecryptCursor,
+    replay_validator: &ReplayValidator,
     timeout: Duration,
 ) -> Result<H, CodecError>
 where
     R: AsyncRead + Unpin,
     H: for<'de> Deserialize<'de> + std::fmt::Debug + Header,
 {
-    let res = tokio::time::timeout(timeout, read_header_async(reader, cursor)).await;
+    let res =
+        tokio::time::timeout(timeout, read_header_async(reader, cursor, replay_validator)).await;
     match res {
         Ok(res) => res,
         Err(_) => Err(CodecError::Io(io::Error::new(

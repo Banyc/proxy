@@ -38,7 +38,10 @@ mod tests {
 
     use tracing::trace;
 
-    use crate::header::codec::{read_header_async, write_header_async, MAX_HEADER_LEN};
+    use crate::{
+        anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
+        header::codec::{read_header_async, write_header_async, MAX_HEADER_LEN},
+    };
 
     use super::*;
 
@@ -52,6 +55,7 @@ mod tests {
         let mut buf = [0; 4 + MAX_HEADER_LEN];
         let mut stream = io::Cursor::new(&mut buf[..]);
         let crypto = create_random_crypto();
+        let replay_validator = ReplayValidator::new(VALIDATOR_TIME_FRAME, VALIDATOR_CAPACITY);
 
         // Encode header
         let original_header = RouteResponse {
@@ -70,7 +74,7 @@ mod tests {
         // Decode header
         let mut stream = io::Cursor::new(buf);
         let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new(*crypto.key());
-        let decoded_header = read_header_async(&mut stream, &mut crypto_cursor)
+        let decoded_header = read_header_async(&mut stream, &mut crypto_cursor, &replay_validator)
             .await
             .unwrap();
         assert_eq!(original_header, decoded_header);

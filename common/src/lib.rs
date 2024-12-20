@@ -2,6 +2,7 @@
 extern crate test;
 
 pub mod addr;
+pub mod anti_replay;
 pub mod cache_cell;
 pub mod config;
 pub mod context;

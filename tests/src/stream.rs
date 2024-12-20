@@ -2,7 +2,12 @@
 mod tests {
     use std::{io, sync::Arc, time::Duration};
 
-    use common::{loading::Serve, proxy_table::ProxyConfig, stream::addr::StreamAddr};
+    use common::{
+        anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
+        loading::Serve,
+        proxy_table::ProxyConfig,
+        stream::addr::StreamAddr,
+    };
     use protocol::stream::{
         addr::{ConcreteStreamAddr, ConcreteStreamType},
         connect::ConcreteStreamConnectorTable,
@@ -36,6 +41,10 @@ mod tests {
             session_table: None,
             pool: Swap::new(ConcreteConnPool::empty()),
             connector_table: Arc::new(ConcreteStreamConnectorTable::new()),
+            replay_validator: Arc::new(ReplayValidator::new(
+                VALIDATOR_TIME_FRAME,
+                VALIDATOR_CAPACITY,
+            )),
         }
     }
 
@@ -203,11 +212,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_proxies() {
-        let stream_context = ConcreteStreamContext {
-            session_table: None,
-            pool: Swap::new(ConcreteConnPool::empty()),
-            connector_table: Arc::new(ConcreteStreamConnectorTable::new()),
-        };
+        let stream_context = stream_context();
 
         let mut join_set = tokio::task::JoinSet::new();
 

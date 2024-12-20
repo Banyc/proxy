@@ -205,7 +205,13 @@ impl StreamProxyAcceptor {
     where
         S: IoStream + IoAddr + std::fmt::Debug,
     {
-        let addr = match steer(downstream, &self.crypto).await? {
+        let addr = match steer(
+            downstream,
+            &self.crypto,
+            &self.stream_context.replay_validator,
+        )
+        .await?
+        {
             Some(addr) => addr,
             None => return Ok(None), // Echo
         };

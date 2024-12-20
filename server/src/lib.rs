@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use access_server::{AccessServerConfig, AccessServerLoader};
 use common::{
+    anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
     config::{merge_map, Merge},
     context::Context,
     error::{AnyError, AnyResult},
@@ -50,15 +51,20 @@ where
     let mut server_tasks = tokio::task::JoinSet::new();
 
     let stream_pool = Swap::new(ConcreteConnPool::empty());
-
+    let replay_validator = Arc::new(ReplayValidator::new(
+        VALIDATOR_TIME_FRAME,
+        VALIDATOR_CAPACITY,
+    ));
     let context = Context {
         stream: ConcreteStreamContext {
             session_table: serve_context.stream_session_table,
             pool: stream_pool,
             connector_table: Arc::new(ConcreteStreamConnectorTable::new()),
+            replay_validator: Arc::clone(&replay_validator),
         },
         udp: UdpContext {
             session_table: serve_context.udp_session_table,
+            replay_validator: Arc::clone(&replay_validator),
         },
     };
 

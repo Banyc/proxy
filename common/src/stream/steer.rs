@@ -5,10 +5,13 @@ use serde::de::DeserializeOwned;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 
-use crate::header::{
-    codec::{timed_read_header_async, timed_write_header_async, CodecError},
-    heartbeat::{self, HeartbeatError},
-    route::RouteResponse,
+use crate::{
+    anti_replay::ReplayValidator,
+    header::{
+        codec::{timed_read_header_async, timed_write_header_async, CodecError},
+        heartbeat::{self, HeartbeatError},
+        route::RouteResponse,
+    },
 };
 
 use super::{addr::StreamAddr, header::StreamRequestHeader, IoAddr, IoStream};
@@ -18,12 +21,13 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 pub async fn steer<S, ST: std::fmt::Debug + DeserializeOwned>(
     downstream: &mut S,
     crypto: &tokio_chacha20::config::Config,
+    replay_validator: &ReplayValidator,
 ) -> Result<Option<StreamAddr<ST>>, SteerError>
 where
     S: IoStream + IoAddr + std::fmt::Debug,
 {
     // Wait for heartbeat upgrade
-    heartbeat::wait_upgrade(downstream, IO_TIMEOUT, crypto)
+    heartbeat::wait_upgrade(downstream, IO_TIMEOUT, crypto, replay_validator)
         .await
         .map_err(|e| {
             let downstream_addr = downstream.peer_addr().ok();
@@ -35,16 +39,20 @@ where
 
     // Decode header
     let mut read_crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new(*crypto.key());
-    let header: StreamRequestHeader<ST> =
-        timed_read_header_async(downstream, &mut read_crypto_cursor, IO_TIMEOUT)
-            .await
-            .map_err(|e| {
-                let downstream_addr = downstream.peer_addr().ok();
-                SteerError::ReadStreamRequestHeader {
-                    source: e,
-                    downstream_addr,
-                }
-            })?;
+    let header: StreamRequestHeader<ST> = timed_read_header_async(
+        downstream,
+        &mut read_crypto_cursor,
+        replay_validator,
+        IO_TIMEOUT,
+    )
+    .await
+    .map_err(|e| {
+        let downstream_addr = downstream.peer_addr().ok();
+        SteerError::ReadStreamRequestHeader {
+            source: e,
+            downstream_addr,
+        }
+    })?;
 
     // Echo
     let addr = match header.upstream {

@@ -185,8 +185,13 @@ pub async fn trace_rtt(
     // Read response
     let mut crypto_cursor =
         tokio_chacha20::cursor::DecryptCursor::new(*pairs.last().unwrap().1.key());
-    let resp: RouteResponse =
-        timed_read_header_async(&mut stream, &mut crypto_cursor, IO_TIMEOUT).await?;
+    let resp: RouteResponse = timed_read_header_async(
+        &mut stream,
+        &mut crypto_cursor,
+        &stream_context.replay_validator,
+        IO_TIMEOUT,
+    )
+    .await?;
     if let Err(err) = resp.result {
         return Err(TraceError::Response { err });
     }

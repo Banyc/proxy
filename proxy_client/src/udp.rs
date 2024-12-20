@@ -9,6 +9,7 @@ use std::{
 use bytes::BytesMut;
 use common::{
     addr::{any_addr, InternetAddr},
+    anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
     error::AnyError,
     header::{
         codec::{read_header, write_header, CodecError},
@@ -217,6 +218,7 @@ pub struct UdpProxyClientReadHalf {
     headers_bytes: Arc<[u8]>,
     proxies: Arc<UdpProxyChain>,
     read_buf: Vec<u8>,
+    replay_validator: ReplayValidator,
 }
 impl UdpRecv for UdpProxyClientReadHalf {
     async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
@@ -234,6 +236,7 @@ impl UdpProxyClientReadHalf {
             headers_bytes,
             proxies,
             read_buf: vec![],
+            replay_validator: ReplayValidator::new(VALIDATOR_TIME_FRAME, VALIDATOR_CAPACITY),
         }
     }
 
@@ -257,7 +260,8 @@ impl UdpProxyClientReadHalf {
             trace!(?node.address, "Reading response");
             let mut crypto_cursor =
                 tokio_chacha20::cursor::DecryptCursor::new(*node.header_crypto.key());
-            let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor)?;
+            let resp: RouteResponse =
+                read_header(&mut reader, &mut crypto_cursor, &self.replay_validator)?;
             if let Err(err) = resp.result {
                 warn!(?err, %node.address, "Upstream responded with an error");
                 return Err(RecvError::Response {
@@ -314,6 +318,7 @@ impl TracerBuilder for UdpTracerBuilder {
 #[derive(Debug)]
 pub struct UdpTracer {
     pool: ArcObjPool<BytesMut>,
+    replay_validator: ReplayValidator,
 }
 impl UdpTracer {
     pub fn new() -> Self {
@@ -323,7 +328,10 @@ impl UdpTracer {
             || BytesMut::with_capacity(PACKET_BUFFER_LENGTH),
             |buf| buf.clear(),
         );
-        Self { pool }
+        Self {
+            pool,
+            replay_validator: ReplayValidator::new(VALIDATOR_TIME_FRAME, VALIDATOR_CAPACITY),
+        }
     }
 }
 impl Default for UdpTracer {
@@ -336,7 +344,9 @@ impl Tracer for UdpTracer {
 
     async fn trace_rtt(&self, chain: &UdpProxyChain) -> Result<Duration, AnyError> {
         let mut pkt_buf = self.pool.take();
-        let res = trace_rtt(&mut pkt_buf, chain).await.map_err(|e| e.into());
+        let res = trace_rtt(&mut pkt_buf, chain, &self.replay_validator)
+            .await
+            .map_err(|e| e.into());
         self.pool.put(pkt_buf);
         res
     }
@@ -344,6 +354,7 @@ impl Tracer for UdpTracer {
 pub async fn trace_rtt(
     pkt_buf: &mut BytesMut,
     proxies: &UdpProxyChain,
+    replay_validator: &ReplayValidator,
 ) -> Result<Duration, TraceError> {
     if proxies.is_empty() {
         return Ok(Duration::from_secs(0));
@@ -383,7 +394,7 @@ pub async fn trace_rtt(
         trace!(?node.address, "Reading response");
         let mut crypto_cursor =
             tokio_chacha20::cursor::DecryptCursor::new(*node.header_crypto.key());
-        let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor)?;
+        let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor, replay_validator)?;
         if let Err(err) = resp.result {
             warn!(?err, %node.address, "Upstream responded with an error");
             return Err(TraceError::Response {

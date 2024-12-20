@@ -38,7 +38,7 @@ mptcp = { git = "https://github.com/Banyc/mptcp.git", tag = "v0.0.2" }
 mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.4" }
 notify = "7"
 pin-project-lite = "0.2"
-primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.56" }
+primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.57" }
 rand = "0.8"
 regex = "1"
 rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.68" }

@@ -256,7 +256,7 @@ fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
 impl loading::HandleConn for UdpProxyConnHandler {}
 impl UdpServerHandleConn for UdpProxyConnHandler {
     fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
-        let res = decode_route_header(buf, &self.header_crypto);
+        let res = decode_route_header(buf, &self.header_crypto, &self.udp_context.replay_validator);
         res.ok()
     }
 

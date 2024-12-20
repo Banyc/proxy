@@ -81,6 +81,7 @@ mod tests {
 
     use super::*;
     use common::{
+        anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         header::{codec::write_header_async, heartbeat},
         loading::Serve,
         stream::{addr::StreamAddr, header::StreamRequestHeader},
@@ -107,6 +108,10 @@ mod tests {
                     session_table: None,
                     pool: Swap::new(ConcreteConnPool::empty()),
                     connector_table: Arc::new(ConcreteStreamConnectorTable::new()),
+                    replay_validator: Arc::new(ReplayValidator::new(
+                        VALIDATOR_TIME_FRAME,
+                        VALIDATOR_CAPACITY,
+                    )),
                 },
             );
 
