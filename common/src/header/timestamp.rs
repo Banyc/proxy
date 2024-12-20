@@ -4,7 +4,7 @@ pub const TIME_FRAME: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct TimestampMsg {
-    pub timestamp_sec: u64,
+    timestamp_sec: u64,
 }
 impl TimestampMsg {
     pub fn now() -> Self {
