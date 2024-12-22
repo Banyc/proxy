@@ -33,26 +33,25 @@ impl ReplayValidator {
 
 #[derive(Debug)]
 pub struct NonceValidator {
-    window: ExpiringHashMap<[u8; tokio_chacha20::NONCE_BYTES], (), Instant, Duration>,
+    seen: ExpiringHashMap<[u8; tokio_chacha20::NONCE_BYTES], (), Instant, Duration>,
     capacity: usize,
 }
 impl NonceValidator {
     pub fn new(time_frame: Duration, capacity: usize) -> Self {
         Self {
-            window: ExpiringHashMap::new(time_frame),
+            seen: ExpiringHashMap::new(time_frame),
             capacity,
         }
     }
     pub fn validates(&mut self, nonce: [u8; tokio_chacha20::NONCE_BYTES]) -> bool {
         let now = Instant::now();
-        let has_recently_seen = self.window.contains_key(&nonce, now, |_, _, _| {});
-        if self.window.len() == self.capacity {
+        self.seen.cleanup(now, |_, _, _| {});
+        if self.seen.len() == self.capacity {
             return false;
         }
-        let is_valid = !has_recently_seen;
-        if is_valid {
-            self.window.insert(nonce, (), now);
+        if self.seen.insert(nonce, (), now).is_some() {
+            return false;
         }
-        is_valid
+        true
     }
 }
