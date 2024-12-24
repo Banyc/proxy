@@ -468,7 +468,7 @@ fn en_dec<'buf>(
 ) -> Option<&'buf [u8]> {
     Some(match en_dir {
         EncryptionDirection::Encrypt => {
-            let mut cursor = tokio_chacha20::cursor::EncryptCursor::new(*config.key());
+            let mut cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*config.key());
 
             let (f, t) = cursor.encrypt(pkt, buf);
             if pkt.len() != f {
@@ -478,7 +478,7 @@ fn en_dec<'buf>(
             &buf[..t]
         }
         EncryptionDirection::Decrypt => {
-            let mut cursor = tokio_chacha20::cursor::DecryptCursor::new(*config.key());
+            let mut cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*config.key());
             let i = cursor.decrypt(pkt).unwrap();
             &pkt[i..]
         }

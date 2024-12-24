@@ -38,7 +38,7 @@ where
         })?;
 
     // Decode header
-    let mut read_crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new(*crypto.key());
+    let mut read_crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*crypto.key());
     let header: StreamRequestHeader<ST> = timed_read_header_async(
         downstream,
         &mut read_crypto_cursor,
@@ -59,7 +59,8 @@ where
         Some(upstream) => upstream,
         None => {
             let resp = RouteResponse { result: Ok(()) };
-            let mut write_crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
+            let mut write_crypto_cursor =
+                tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
             timed_write_header_async(downstream, &resp, &mut write_crypto_cursor, IO_TIMEOUT)
                 .await
                 .map_err(|e| {

@@ -102,7 +102,7 @@ impl UdpProxyClient {
         let mut writer = io::Cursor::new(&mut buf);
         for (header, crypto) in &pairs {
             trace!(?header, "Writing header to buffer");
-            let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
+            let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
             write_header(&mut writer, header, &mut crypto_cursor).unwrap();
         }
 
@@ -259,7 +259,7 @@ impl UdpProxyClientReadHalf {
         for node in self.proxies.iter() {
             trace!(?node.address, "Reading response");
             let mut crypto_cursor =
-                tokio_chacha20::cursor::DecryptCursor::new(*node.header_crypto.key());
+                tokio_chacha20::cursor::DecryptCursor::new_x(*node.header_crypto.key());
             let resp: RouteResponse =
                 read_header(&mut reader, &mut crypto_cursor, &self.replay_validator)?;
             if let Err(err) = resp.result {
@@ -374,7 +374,7 @@ pub async fn trace_rtt(
     let mut buf = Vec::new();
     let mut writer = io::Cursor::new(&mut buf);
     for (header, crypto) in &pairs {
-        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
+        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
         write_header(&mut writer, header, &mut crypto_cursor).unwrap();
     }
 
@@ -393,7 +393,7 @@ pub async fn trace_rtt(
     for node in proxies.iter() {
         trace!(?node.address, "Reading response");
         let mut crypto_cursor =
-            tokio_chacha20::cursor::DecryptCursor::new(*node.header_crypto.key());
+            tokio_chacha20::cursor::DecryptCursor::new_x(*node.header_crypto.key());
         let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor, replay_validator)?;
         if let Err(err) = resp.result {
             warn!(?err, %node.address, "Upstream responded with an error");

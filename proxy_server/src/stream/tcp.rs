@@ -158,7 +158,7 @@ mod tests {
                     stream_type: ConcreteStreamType::Tcp,
                 }),
             };
-            let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
+            let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
             write_header_async(&mut stream, &header, &mut crypto_cursor)
                 .await
                 .unwrap();

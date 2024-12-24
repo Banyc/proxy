@@ -63,7 +63,7 @@ mod tests {
                 kind: RouteErrorKind::Io,
             }),
         };
-        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
+        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
         write_header_async(&mut stream, &original_header, &mut crypto_cursor)
             .await
             .unwrap();
@@ -73,7 +73,7 @@ mod tests {
 
         // Decode header
         let mut stream = io::Cursor::new(buf);
-        let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new(*crypto.key());
+        let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*crypto.key());
         let decoded_header = read_header_async(&mut stream, &mut crypto_cursor, &replay_validator)
             .await
             .unwrap();

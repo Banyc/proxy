@@ -137,9 +137,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.94"
+version = "1.0.95"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1fd03a028ef38ba2276dce7e33fcd6369c158a1bca17946c4b1b701891c1ff7"
+checksum = "34ac096ce696dc2fcabef30516bb13c0a68a11d30131d3df6f04711467681b04"
 
 [[package]]
 name = "arc-swap"
@@ -3174,7 +3174,7 @@ dependencies = [
 [[package]]
 name = "tokio_chacha20"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/tokio_chacha20.git?tag=v0.0.1#dbda6eb25febd4eab84357f8d3a4c18b3d1c0be5"
+source = "git+https://github.com/Banyc/tokio_chacha20.git?tag=v0.0.2#1c80ae96bf955f64be9faccbdc9fa85c87c5ed6d"
 dependencies = [
  "arrayvec",
  "base64 0.22.1",
@@ -3183,7 +3183,7 @@ dependencies = [
  "rand",
  "rayon",
  "serde",
- "thiserror 1.0.69",
+ "thiserror 2.0.9",
  "tokio",
 ]
 
@@ -3693,9 +3693,9 @@ dependencies = [
 
 [[package]]
 name = "xxhash-rust"
-version = "0.8.13"
+version = "0.8.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a08fd76779ae1883bbf1e46c2c46a75a0c4e37c445e68a24b01479d438f26ae6"
+checksum = "d7d48f1b18be023c95e7b75f481cac649d74be7c507ff4a407c55cfb957f7934"
 
 [[package]]
 name = "yansi"

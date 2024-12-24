@@ -35,6 +35,7 @@ where
     // Read nonce
     {
         let size = cursor.remaining_nonce_size();
+        dbg!(size);
         let buf = &mut buf[..size];
         let res = reader.read_exact(buf);
         add_await([res])?;

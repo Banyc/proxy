@@ -22,7 +22,7 @@ pub async fn echo(
 ) {
     let resp = RouteResponse { result: Ok(()) };
     let mut wtr = Vec::new();
-    let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*header_crypto.key());
+    let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*header_crypto.key());
     write_header(&mut wtr, &resp, &mut crypto_cursor).unwrap();
     wtr.write_all(buf).unwrap();
     let dn_writer = dn_writer.clone();
@@ -40,7 +40,7 @@ pub fn decode_route_header(
     replay_validator: &ReplayValidator,
 ) -> Result<Option<UpstreamAddr>, CodecError> {
     // Decode header
-    let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new(*header_crypto.key());
+    let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*header_crypto.key());
     let header: UdpRequestHeader = read_header(buf, &mut crypto_cursor, replay_validator)?;
 
     Ok(header.upstream.map(UpstreamAddr))

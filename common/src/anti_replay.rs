@@ -26,14 +26,14 @@ impl ReplayValidator {
             .unwrap();
         now.abs_diff(timestamp) < self.time_frame
     }
-    pub fn nonce_validates(&self, nonce: [u8; tokio_chacha20::NONCE_BYTES]) -> bool {
+    pub fn nonce_validates(&self, nonce: [u8; tokio_chacha20::X_NONCE_BYTES]) -> bool {
         self.nonce.lock().unwrap().validates(nonce)
     }
 }
 
 #[derive(Debug)]
 pub struct NonceValidator {
-    seen: ExpiringHashMap<[u8; tokio_chacha20::NONCE_BYTES], (), Instant, Duration>,
+    seen: ExpiringHashMap<[u8; tokio_chacha20::X_NONCE_BYTES], (), Instant, Duration>,
     capacity: usize,
 }
 impl NonceValidator {
@@ -43,7 +43,7 @@ impl NonceValidator {
             capacity,
         }
     }
-    pub fn validates(&mut self, nonce: [u8; tokio_chacha20::NONCE_BYTES]) -> bool {
+    pub fn validates(&mut self, nonce: [u8; tokio_chacha20::X_NONCE_BYTES]) -> bool {
         let now = Instant::now();
         self.seen.cleanup(now, |_, _, _| {});
         if self.seen.len() == self.capacity {

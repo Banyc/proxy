@@ -16,7 +16,7 @@ pub async fn send_noop<S>(
 where
     S: AsyncWrite + Unpin,
 {
-    let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
+    let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
     let req = HeartbeatRequest::Noop;
     let res = tokio::time::timeout(
         timeout,
@@ -35,7 +35,7 @@ pub async fn send_upgrade<S>(
 where
     S: AsyncWrite + Unpin,
 {
-    let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
+    let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
     let req = HeartbeatRequest::Upgrade;
     let res = tokio::time::timeout(
         timeout,
@@ -56,7 +56,7 @@ where
     S: AsyncRead + Unpin,
 {
     loop {
-        let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new(*crypto.key());
+        let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*crypto.key());
         let res = tokio::time::timeout(
             timeout,
             read_header_async(stream, &mut crypto_cursor, replay_validator),

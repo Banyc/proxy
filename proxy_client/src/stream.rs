@@ -59,7 +59,7 @@ pub async fn establish(
                 source: e,
                 upstream_addr: addr.clone(),
             })?;
-        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
+        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
         timed_write_header_async(&mut stream, header, &mut crypto_cursor, IO_TIMEOUT)
             .await
             .map_err(|e| StreamEstablishError::WriteStreamRequestHeader {
@@ -178,13 +178,13 @@ pub async fn trace_rtt(
     // Write headers to stream
     for (header, crypto) in &pairs {
         heartbeat::send_upgrade(&mut stream, IO_TIMEOUT, crypto).await?;
-        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new(*crypto.key());
+        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
         timed_write_header_async(&mut stream, header, &mut crypto_cursor, IO_TIMEOUT).await?;
     }
 
     // Read response
     let mut crypto_cursor =
-        tokio_chacha20::cursor::DecryptCursor::new(*pairs.last().unwrap().1.key());
+        tokio_chacha20::cursor::DecryptCursor::new_x(*pairs.last().unwrap().1.key());
     let resp: RouteResponse = timed_read_header_async(
         &mut stream,
         &mut crypto_cursor,
