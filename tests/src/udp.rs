@@ -5,7 +5,7 @@ mod tests {
     use bytes::BytesMut;
     use common::{
         addr::InternetAddr,
-        anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
+        anti_replay::{TimeValidator, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         header::route::RouteErrorKind,
         loading::Serve,
         proxy_table::ProxyConfig,
@@ -25,16 +25,15 @@ mod tests {
 
     async fn spawn_proxy(join_set: &mut tokio::task::JoinSet<()>, addr: &str) -> UdpProxyConfig {
         let crypto = create_random_crypto();
-        let replay_validator = Arc::new(ReplayValidator::new(
-            VALIDATOR_TIME_FRAME,
-            VALIDATOR_CAPACITY,
+        let time_validator = Arc::new(TimeValidator::new(
+            VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
         ));
         let proxy = UdpProxyConnHandler::new(
             crypto.clone(),
             None,
             UdpContext {
                 session_table: None,
-                replay_validator,
+                time_validator,
             },
         );
         let server = proxy.build(addr).await.unwrap();
@@ -115,8 +114,8 @@ mod tests {
         read_response(&mut client_read, resp_msg).await.unwrap();
 
         // Trace
-        let replay_validator = ReplayValidator::new(VALIDATOR_TIME_FRAME, VALIDATOR_CAPACITY);
-        let rtt = trace_rtt(&mut pkt_buf, &proxies, &replay_validator)
+        let time_validator = TimeValidator::new(VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL);
+        let rtt = trace_rtt(&mut pkt_buf, &proxies, &time_validator)
             .await
             .unwrap();
         assert!(rtt > Duration::from_secs(0));

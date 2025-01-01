@@ -11,7 +11,7 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::cache_cell::CacheCell;
+use crate::ttl_cell::TtlCell;
 
 use super::{
     AddressString, GaugedProxyChain, ProxyConfig, Tracer, WeightedProxyChain,
@@ -199,7 +199,7 @@ pub enum ProxyGroupError {
     TooManyActiveChains,
 }
 
-type ScoreStore = CacheCell<Scores>;
+type ScoreStore = TtlCell<Scores>;
 #[derive(Debug, Clone)]
 struct Scores {
     scores: Arc<[(usize, f64)]>,

@@ -6,7 +6,7 @@ use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 
 use crate::{
-    anti_replay::ReplayValidator,
+    anti_replay::{ReplayValidator, ValidatorRef},
     header::{
         codec::{timed_read_header_async, timed_write_header_async, CodecError},
         heartbeat::{self, HeartbeatError},
@@ -26,8 +26,9 @@ pub async fn steer<S, ST: std::fmt::Debug + DeserializeOwned>(
 where
     S: IoStream + IoAddr + std::fmt::Debug,
 {
+    let validator = ValidatorRef::Replay(replay_validator);
     // Wait for heartbeat upgrade
-    heartbeat::wait_upgrade(downstream, IO_TIMEOUT, crypto, replay_validator)
+    heartbeat::wait_upgrade(downstream, IO_TIMEOUT, crypto, &validator)
         .await
         .map_err(|e| {
             let downstream_addr = downstream.peer_addr().ok();
@@ -39,20 +40,16 @@ where
 
     // Decode header
     let mut read_crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*crypto.key());
-    let header: StreamRequestHeader<ST> = timed_read_header_async(
-        downstream,
-        &mut read_crypto_cursor,
-        Some(replay_validator),
-        IO_TIMEOUT,
-    )
-    .await
-    .map_err(|e| {
-        let downstream_addr = downstream.peer_addr().ok();
-        SteerError::ReadStreamRequestHeader {
-            source: e,
-            downstream_addr,
-        }
-    })?;
+    let header: StreamRequestHeader<ST> =
+        timed_read_header_async(downstream, &mut read_crypto_cursor, &validator, IO_TIMEOUT)
+            .await
+            .map_err(|e| {
+                let downstream_addr = downstream.peer_addr().ok();
+                SteerError::ReadStreamRequestHeader {
+                    source: e,
+                    downstream_addr,
+                }
+            })?;
 
     // Echo
     let addr = match header.upstream {

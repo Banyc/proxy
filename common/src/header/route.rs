@@ -39,7 +39,7 @@ mod tests {
     use tracing::trace;
 
     use crate::{
-        anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
+        anti_replay::{ReplayValidator, ValidatorRef, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         header::codec::{read_header_async, write_header_async, MAX_HEADER_LEN},
     };
 
@@ -74,10 +74,10 @@ mod tests {
         // Decode header
         let mut stream = io::Cursor::new(buf);
         let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*crypto.key());
-        let decoded_header =
-            read_header_async(&mut stream, &mut crypto_cursor, Some(&replay_validator))
-                .await
-                .unwrap();
+        let validator = ValidatorRef::Replay(&replay_validator);
+        let decoded_header = read_header_async(&mut stream, &mut crypto_cursor, &validator)
+            .await
+            .unwrap();
         assert_eq!(original_header, decoded_header);
     }
 }

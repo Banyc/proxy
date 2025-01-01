@@ -126,13 +126,18 @@ impl Socks5ServerUdpAccessConnHandler {
         let (upstream_read, upstream_write) = upstream.into_split();
 
         let response_header = {
-            let mut wtr = Vec::new();
-            let udp_request_header = UdpRequestHeader {
-                fragment: 0,
-                destination: flow.upstream.as_ref().unwrap().0.clone(),
-            };
-            udp_request_header.encode(&mut wtr).await.unwrap();
-            wtr.into()
+            let destination = flow.upstream.as_ref().unwrap().0.clone();
+            move || {
+                let mut wtr = Vec::new();
+                let udp_request_header = UdpRequestHeader {
+                    fragment: 0,
+                    destination: destination.clone(),
+                };
+                futures::executor::block_on(async {
+                    udp_request_header.encode(&mut wtr).await.unwrap();
+                    wtr.into()
+                })
+            }
         };
 
         let speed_limiter = self.speed_limiter.clone();
@@ -153,7 +158,7 @@ impl Socks5ServerUdpAccessConnHandler {
                 },
                 speed_limiter,
                 payload_crypto,
-                response_header: Some(response_header),
+                response_header: Some(Box::new(response_header)),
             };
             let _ = io_copy
                 .serve_as_access_server(session_table, upstream_local, upstream_remote, "SOCKS UDP")

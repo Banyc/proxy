@@ -2,7 +2,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use access_server::{AccessServerConfig, AccessServerLoader};
 use common::{
-    anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
+    anti_replay::{
+        ReplayValidator, TimeValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME,
+        VALIDATOR_UDP_HDR_TTL,
+    },
     config::{merge_map, Merge},
     context::Context,
     error::{AnyError, AnyResult},
@@ -55,6 +58,9 @@ where
         VALIDATOR_TIME_FRAME,
         VALIDATOR_CAPACITY,
     ));
+    let time_validator = Arc::new(TimeValidator::new(
+        VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
+    ));
     let context = Context {
         stream: ConcreteStreamContext {
             session_table: serve_context.stream_session_table,
@@ -64,7 +70,7 @@ where
         },
         udp: UdpContext {
             session_table: serve_context.udp_session_table,
-            replay_validator: Arc::clone(&replay_validator),
+            time_validator: Arc::clone(&time_validator),
         },
     };
 

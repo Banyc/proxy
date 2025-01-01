@@ -5,9 +5,12 @@ use tokio::net::UdpSocket;
 use tracing::warn;
 use udp_listener::ConnWrite;
 
-use crate::header::{
-    codec::{read_header, write_header, CodecError},
-    route::RouteResponse,
+use crate::{
+    anti_replay::{TimeValidator, ValidatorRef},
+    header::{
+        codec::{read_header, write_header, CodecError},
+        route::RouteResponse,
+    },
 };
 
 use super::{header::UdpRequestHeader, UpstreamAddr};
@@ -34,10 +37,12 @@ pub async fn echo(
 pub fn decode_route_header(
     buf: &mut io::Cursor<&[u8]>,
     header_crypto: &tokio_chacha20::config::Config,
+    time_validator: &TimeValidator,
 ) -> Result<Option<UpstreamAddr>, CodecError> {
     // Decode header
     let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*header_crypto.key());
-    let header: UdpRequestHeader = read_header(buf, &mut crypto_cursor, None)?;
+    let validator = ValidatorRef::Time(time_validator);
+    let header: UdpRequestHeader = read_header(buf, &mut crypto_cursor, &validator)?;
 
     Ok(header.upstream.map(UpstreamAddr))
 }

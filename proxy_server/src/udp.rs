@@ -163,12 +163,13 @@ impl UdpProxyConnHandler {
             })?;
         let upstream = Arc::new(upstream);
 
-        let response_header = {
+        let header_crypto = self.header_crypto.clone();
+        let response_header = move || {
             // Write header
             let mut wtr = Vec::new();
             let header = RouteResponse { result: Ok(()) };
             let mut crypto_cursor =
-                tokio_chacha20::cursor::EncryptCursor::new_x(*self.header_crypto.key());
+                tokio_chacha20::cursor::EncryptCursor::new_x(*header_crypto.key());
             write_header(&mut wtr, &header, &mut crypto_cursor).unwrap();
             wtr.into()
         };
@@ -191,7 +192,7 @@ impl UdpProxyConnHandler {
                 },
                 speed_limiter: Limiter::new(f64::INFINITY),
                 payload_crypto,
-                response_header: Some(response_header),
+                response_header: Some(Box::new(response_header)),
             };
             let res = io_copy
                 .serve_as_proxy_server(session_table, upstream_local, "UDP")
@@ -256,7 +257,7 @@ fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
 impl loading::HandleConn for UdpProxyConnHandler {}
 impl UdpServerHandleConn for UdpProxyConnHandler {
     fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
-        let res = decode_route_header(buf, &self.header_crypto);
+        let res = decode_route_header(buf, &self.header_crypto, &self.udp_context.time_validator);
         res.ok()
     }
 

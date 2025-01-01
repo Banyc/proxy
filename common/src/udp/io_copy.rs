@@ -19,8 +19,10 @@ use udp_listener::{ConnRead, ConnWrite};
 
 use crate::{
     addr::InternetAddr,
+    anti_replay::VALIDATOR_UDP_HDR_TTL,
     error::AnyError,
     log::Timing,
+    ttl_cell::TtlCell,
     udp::{
         log::{TrafficLog, LOGGER},
         PACKET_BUFFER_LENGTH, TIMEOUT,
@@ -65,7 +67,7 @@ pub struct CopyBidirectional<R, W> {
     pub downstream: DownstreamParts,
     pub speed_limiter: Limiter,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
-    pub response_header: Option<Arc<[u8]>>,
+    pub response_header: Option<Box<dyn Fn() -> Arc<[u8]> + Send>>,
 }
 
 impl<R, W> CopyBidirectional<R, W>
@@ -204,7 +206,7 @@ pub async fn copy_bidirectional<R, W>(
     streams: (UpstreamParts<R, W>, DownstreamParts),
     speed_limiter: Limiter,
     payload_crypto: Option<tokio_chacha20::config::Config>,
-    response_header: Option<Arc<[u8]>>,
+    response_header: Option<Box<dyn Fn() -> Arc<[u8]> + Send>>,
     en_dir: EncryptionDirection,
     gauges: Option<(ReadGauge, WriteGauge)>,
 ) -> Result<FlowLog, CopyBiError>
@@ -297,6 +299,8 @@ where
         let payload_crypto = payload_crypto.clone();
         let mut downlink_buf = [0; PACKET_BUFFER_LENGTH];
         let mut downlink_protocol_buf = Vec::new();
+        let mut response_header_ttl =
+            TtlCell::new(response_header.as_ref().map(|f| f()), VALIDATOR_UDP_HDR_TTL);
         async move {
             loop {
                 let res = upstream.read.trait_recv(&mut downlink_buf).await;
@@ -336,10 +340,13 @@ where
                     // Set up protocol buffer writer
                     downlink_protocol_buf.clear();
 
+                    let hdr = match response_header_ttl.get() {
+                        Some(hdr) => hdr,
+                        None => response_header_ttl.set(response_header()),
+                    };
+
                     // Write header
-                    downlink_protocol_buf
-                        .write_all(response_header.as_ref())
-                        .unwrap();
+                    downlink_protocol_buf.write_all(hdr.as_ref()).unwrap();
 
                     // Write payload
                     downlink_protocol_buf.write_all(pkt).unwrap();

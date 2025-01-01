@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use common::{
+    anti_replay::ValidatorRef,
     error::AnyError,
     header::{
         codec::{timed_read_header_async, timed_write_header_async, CodecError},
@@ -185,13 +186,9 @@ pub async fn trace_rtt(
     // Read response
     let mut crypto_cursor =
         tokio_chacha20::cursor::DecryptCursor::new_x(*pairs.last().unwrap().1.key());
-    let resp: RouteResponse = timed_read_header_async(
-        &mut stream,
-        &mut crypto_cursor,
-        Some(&stream_context.replay_validator),
-        IO_TIMEOUT,
-    )
-    .await?;
+    let validator = ValidatorRef::Replay(&stream_context.replay_validator);
+    let resp: RouteResponse =
+        timed_read_header_async(&mut stream, &mut crypto_cursor, &validator, IO_TIMEOUT).await?;
     if let Err(err) = resp.result {
         return Err(TraceError::Response { err });
     }

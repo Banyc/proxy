@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::anti_replay::ReplayValidator;
+use crate::anti_replay::ValidatorRef;
 
 use super::codec::{read_header_async, write_header_async, CodecError, Header};
 
@@ -50,7 +50,7 @@ pub async fn wait_upgrade<S>(
     stream: &mut S,
     timeout: Duration,
     crypto: &tokio_chacha20::config::Config,
-    replay_validator: &ReplayValidator,
+    validator: &ValidatorRef<'_>,
 ) -> Result<(), HeartbeatError>
 where
     S: AsyncRead + Unpin,
@@ -59,7 +59,7 @@ where
         let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*crypto.key());
         let res = tokio::time::timeout(
             timeout,
-            read_header_async(stream, &mut crypto_cursor, Some(replay_validator)),
+            read_header_async(stream, &mut crypto_cursor, validator),
         )
         .await;
         let header: HeartbeatRequest = res.map_err(|_| HeartbeatError::Timeout(timeout))??;

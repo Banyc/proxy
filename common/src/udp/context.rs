@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use crate::anti_replay::ReplayValidator;
+use crate::anti_replay::TimeValidator;
 
 use super::metrics::UdpSessionTable;
 
 #[derive(Debug, Clone)]
 pub struct UdpContext {
     pub session_table: Option<UdpSessionTable>,
-    pub replay_validator: Arc<ReplayValidator>,
+    pub time_validator: Arc<TimeValidator>,
 }

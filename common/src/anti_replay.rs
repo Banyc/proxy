@@ -5,26 +5,54 @@ use std::{
 
 use primitive::{map::expiring_map::ExpiringHashMap, ops::len::Len};
 
+pub const VALIDATOR_UDP_HDR_TTL: Duration = Duration::from_secs(60);
 pub const VALIDATOR_TIME_FRAME: Duration = Duration::from_secs(5);
 pub const VALIDATOR_CAPACITY: usize = 1 << 16;
 
 #[derive(Debug)]
-pub struct ReplayValidator {
+pub enum ValidatorRef<'a> {
+    Time(&'a TimeValidator),
+    Replay(&'a ReplayValidator),
+}
+impl ValidatorRef<'_> {
+    pub fn time_validates(&self, timestamp: Duration) -> bool {
+        match self {
+            Self::Time(validator) => validator.validates(timestamp),
+            Self::Replay(validator) => validator.time_validates(timestamp),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct TimeValidator {
     time_frame: Duration,
+}
+impl TimeValidator {
+    pub fn new(time_frame: Duration) -> Self {
+        Self { time_frame }
+    }
+    pub fn validates(&self, timestamp: Duration) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
+        now.abs_diff(timestamp) < self.time_frame
+    }
+}
+
+#[derive(Debug)]
+pub struct ReplayValidator {
+    time: TimeValidator,
     nonce: Mutex<NonceValidator>,
 }
 impl ReplayValidator {
     pub fn new(time_frame: Duration, capacity: usize) -> Self {
         Self {
-            time_frame,
+            time: TimeValidator::new(time_frame),
             nonce: Mutex::new(NonceValidator::new(time_frame, capacity)),
         }
     }
     pub fn time_validates(&self, timestamp: Duration) -> bool {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap();
-        now.abs_diff(timestamp) < self.time_frame
+        self.time.validates(timestamp)
     }
     pub fn nonce_validates(&self, nonce: [u8; tokio_chacha20::X_NONCE_BYTES]) -> bool {
         self.nonce.lock().unwrap().validates(nonce)

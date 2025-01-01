@@ -9,13 +9,14 @@ use std::{
 use bytes::BytesMut;
 use common::{
     addr::{any_addr, InternetAddr},
-    anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
+    anti_replay::{TimeValidator, ValidatorRef, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     error::AnyError,
     header::{
-        codec::{read_header, write_header, CodecError},
+        codec::{read_header, write_header, CodecError, MAX_HEADER_LEN},
         route::{RouteError, RouteResponse},
     },
     proxy_table::{convert_proxies_to_header_crypto_pairs, Tracer, TracerBuilder},
+    ttl_cell::TtlCell,
     udp::{
         io_copy::{UdpRecv, UdpSend},
         proxy_table::UdpProxyChain,
@@ -62,8 +63,8 @@ impl UdpProxyClient {
                 })?;
 
             let upstream = Arc::new(upstream);
-            let write = UdpProxyClientWriteHalf::new(upstream.clone(), Vec::new().into());
-            let read = UdpProxyClientReadHalf::new(upstream, Vec::new().into(), proxies);
+            let write = UdpProxyClientWriteHalf::new(upstream.clone(), None);
+            let read = UdpProxyClientReadHalf::new(upstream, 0, proxies);
             return Ok(UdpProxyClient {
                 write,
                 read,
@@ -98,19 +99,28 @@ impl UdpProxyClient {
         let pairs = convert_proxies_to_header_crypto_pairs(&proxies, Some(destination));
 
         // Save headers to buffer
-        let mut buf = Vec::new();
-        let mut writer = io::Cursor::new(&mut buf);
-        for (header, crypto) in &pairs {
-            trace!(?header, "Writing header to buffer");
-            let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
-            write_header(&mut writer, header, &mut crypto_cursor).unwrap();
-        }
+        let request_header = {
+            let pairs = pairs
+                .into_iter()
+                .map(|(header, crypto)| (header, crypto.clone()))
+                .collect::<Vec<_>>();
+            move || {
+                let mut buf = Vec::new();
+                let mut writer = io::Cursor::new(&mut buf);
+                for (header, crypto) in &pairs {
+                    trace!(?header, "Writing header to buffer");
+                    let mut crypto_cursor =
+                        tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
+                    write_header(&mut writer, header, &mut crypto_cursor).unwrap();
+                }
+                buf.into()
+            }
+        };
 
         // Return stream
         let upstream = Arc::new(upstream);
-        let header_bytes: Arc<[_]> = buf.into();
-        let write = UdpProxyClientWriteHalf::new(upstream.clone(), header_bytes.clone());
-        let read = UdpProxyClientReadHalf::new(upstream, header_bytes, proxies);
+        let write = UdpProxyClientWriteHalf::new(upstream.clone(), Some(Box::new(request_header)));
+        let read = UdpProxyClientReadHalf::new(upstream, MAX_HEADER_LEN, proxies);
         Ok(UdpProxyClient {
             write,
             read,
@@ -158,11 +168,19 @@ pub enum EstablishError {
     },
 }
 
-#[derive(Debug)]
 pub struct UdpProxyClientWriteHalf {
     upstream: Arc<UdpSocket>,
-    headers_bytes: Arc<[u8]>,
+    request_header: Option<Box<dyn Fn() -> Arc<[u8]> + Send>>,
+    request_header_ttl: TtlCell<Arc<[u8]>>,
     write_buf: Vec<u8>,
+}
+impl core::fmt::Debug for UdpProxyClientWriteHalf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UdpProxyClientWriteHalf")
+            .field("upstream", &self.upstream)
+            .field("write_buf", &self.write_buf)
+            .finish()
+    }
 }
 impl UdpSend for UdpProxyClientWriteHalf {
     async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
@@ -170,11 +188,15 @@ impl UdpSend for UdpProxyClientWriteHalf {
     }
 }
 impl UdpProxyClientWriteHalf {
-    pub fn new(upstream: Arc<UdpSocket>, headers_bytes: Arc<[u8]>) -> Self {
+    pub fn new(
+        upstream: Arc<UdpSocket>,
+        request_header: Option<Box<dyn Fn() -> Arc<[u8]> + Send>>,
+    ) -> Self {
         Self {
             upstream,
-            headers_bytes,
+            request_header,
             write_buf: vec![],
+            request_header_ttl: TtlCell::new(None, VALIDATOR_UDP_HDR_TTL),
         }
     }
 
@@ -182,8 +204,14 @@ impl UdpProxyClientWriteHalf {
     pub async fn send(&mut self, buf: &[u8]) -> Result<usize, SendError> {
         self.write_buf.clear();
 
-        // Write header
-        self.write_buf.write_all(&self.headers_bytes).unwrap();
+        if let Some(request_header) = &self.request_header {
+            let hdr = match self.request_header_ttl.get() {
+                Some(hdr) => hdr,
+                None => self.request_header_ttl.set(request_header()),
+            };
+            // Write header
+            self.write_buf.write_all(hdr).unwrap();
+        }
 
         // Write payload
         self.write_buf.write_all(buf).unwrap();
@@ -212,13 +240,17 @@ pub struct SendError {
     sock_addr: Option<SocketAddr>,
 }
 
+fn time_validator() -> TimeValidator {
+    TimeValidator::new(VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL)
+}
+
 #[derive(Debug)]
 pub struct UdpProxyClientReadHalf {
     upstream: Arc<UdpSocket>,
-    headers_bytes: Arc<[u8]>,
+    max_response_header_size: usize,
     proxies: Arc<UdpProxyChain>,
     read_buf: Vec<u8>,
-    _replay_validator: ReplayValidator,
+    time_validator: TimeValidator,
 }
 impl UdpRecv for UdpProxyClientReadHalf {
     async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
@@ -228,21 +260,21 @@ impl UdpRecv for UdpProxyClientReadHalf {
 impl UdpProxyClientReadHalf {
     pub fn new(
         upstream: Arc<UdpSocket>,
-        headers_bytes: Arc<[u8]>,
+        max_response_header_size: usize,
         proxies: Arc<UdpProxyChain>,
     ) -> Self {
         Self {
             upstream,
-            headers_bytes,
+            max_response_header_size,
             proxies,
             read_buf: vec![],
-            _replay_validator: ReplayValidator::new(VALIDATOR_TIME_FRAME, VALIDATOR_CAPACITY),
+            time_validator: time_validator(),
         }
     }
 
     #[instrument(skip_all)]
     pub async fn recv(&mut self, buf: &mut [u8]) -> Result<usize, RecvError> {
-        let cap = self.headers_bytes.len() + buf.len();
+        let cap = self.max_response_header_size + buf.len();
         self.read_buf.resize(cap, 0);
 
         // Read data
@@ -260,7 +292,8 @@ impl UdpProxyClientReadHalf {
             trace!(?node.address, "Reading response");
             let mut crypto_cursor =
                 tokio_chacha20::cursor::DecryptCursor::new_x(*node.header_crypto.key());
-            let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor, None)?;
+            let validator = ValidatorRef::Time(&self.time_validator);
+            let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor, &validator)?;
             if let Err(err) = resp.result {
                 warn!(?err, %node.address, "Upstream responded with an error");
                 return Err(RecvError::Response {
@@ -317,7 +350,7 @@ impl TracerBuilder for UdpTracerBuilder {
 #[derive(Debug)]
 pub struct UdpTracer {
     pool: ArcObjPool<BytesMut>,
-    replay_validator: ReplayValidator,
+    time_validator: TimeValidator,
 }
 impl UdpTracer {
     pub fn new() -> Self {
@@ -329,7 +362,7 @@ impl UdpTracer {
         );
         Self {
             pool,
-            replay_validator: ReplayValidator::new(VALIDATOR_TIME_FRAME, VALIDATOR_CAPACITY),
+            time_validator: time_validator(),
         }
     }
 }
@@ -343,7 +376,7 @@ impl Tracer for UdpTracer {
 
     async fn trace_rtt(&self, chain: &UdpProxyChain) -> Result<Duration, AnyError> {
         let mut pkt_buf = self.pool.take();
-        let res = trace_rtt(&mut pkt_buf, chain, &self.replay_validator)
+        let res = trace_rtt(&mut pkt_buf, chain, &self.time_validator)
             .await
             .map_err(|e| e.into());
         self.pool.put(pkt_buf);
@@ -353,7 +386,7 @@ impl Tracer for UdpTracer {
 pub async fn trace_rtt(
     pkt_buf: &mut BytesMut,
     proxies: &UdpProxyChain,
-    _replay_validator: &ReplayValidator,
+    time_validator: &TimeValidator,
 ) -> Result<Duration, TraceError> {
     if proxies.is_empty() {
         return Ok(Duration::from_secs(0));
@@ -393,7 +426,8 @@ pub async fn trace_rtt(
         trace!(?node.address, "Reading response");
         let mut crypto_cursor =
             tokio_chacha20::cursor::DecryptCursor::new_x(*node.header_crypto.key());
-        let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor, None)?;
+        let validator = ValidatorRef::Time(time_validator);
+        let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor, &validator)?;
         if let Err(err) = resp.result {
             warn!(?err, %node.address, "Upstream responded with an error");
             return Err(TraceError::Response {
