@@ -59,7 +59,7 @@ where
         let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*crypto.key());
         let res = tokio::time::timeout(
             timeout,
-            read_header_async(stream, &mut crypto_cursor, replay_validator),
+            read_header_async(stream, &mut crypto_cursor, Some(replay_validator)),
         )
         .await;
         let header: HeartbeatRequest = res.map_err(|_| HeartbeatError::Timeout(timeout))??;

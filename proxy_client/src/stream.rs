@@ -188,7 +188,7 @@ pub async fn trace_rtt(
     let resp: RouteResponse = timed_read_header_async(
         &mut stream,
         &mut crypto_cursor,
-        &stream_context.replay_validator,
+        Some(&stream_context.replay_validator),
         IO_TIMEOUT,
     )
     .await?;

@@ -24,7 +24,7 @@ pub trait Header {}
 pub async fn read_header<'cursor, R, H>(
     reader: &mut R,
     cursor: &mut tokio_chacha20::cursor::DecryptCursor,
-    replay_validator: &ReplayValidator,
+    replay_validator: Option<&ReplayValidator>,
 ) -> Result<H, CodecError>
 where
     R: reader_bounds,
@@ -39,8 +39,10 @@ where
         let buf = &mut buf[..size];
         let res = reader.read_exact(buf);
         add_await([res])?;
-        if !replay_validator.nonce_validates(buf.try_into().unwrap()) {
-            return Err(CodecError::Integrity);
+        if let Some(replay_validator) = replay_validator {
+            if !replay_validator.nonce_validates(buf.try_into().unwrap()) {
+                return Err(CodecError::Integrity);
+            }
         }
         let i = cursor.decrypt(buf);
         if i.is_some() {
@@ -92,8 +94,10 @@ where
         let mut timestamp_buf = [0; TimestampMsg::SIZE];
         Read::read_exact(&mut rdr, &mut timestamp_buf).unwrap();
         let timestamp = TimestampMsg::decode(timestamp_buf);
-        if !replay_validator.time_validates(timestamp.timestamp()) {
-            return Err(CodecError::Integrity);
+        if let Some(replay_validator) = replay_validator {
+            if !replay_validator.time_validates(timestamp.timestamp()) {
+                return Err(CodecError::Integrity);
+            }
         }
         let header = bincode::deserialize_from(&mut rdr)?;
         trace!(?timestamp, ?header, "Read header");
@@ -164,7 +168,7 @@ where
 pub async fn timed_read_header_async<'cursor, R, H>(
     reader: &mut R,
     cursor: &mut tokio_chacha20::cursor::DecryptCursor,
-    replay_validator: &ReplayValidator,
+    replay_validator: Option<&ReplayValidator>,
     timeout: Duration,
 ) -> Result<H, CodecError>
 where

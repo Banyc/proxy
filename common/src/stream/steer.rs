@@ -42,7 +42,7 @@ where
     let header: StreamRequestHeader<ST> = timed_read_header_async(
         downstream,
         &mut read_crypto_cursor,
-        replay_validator,
+        Some(replay_validator),
         IO_TIMEOUT,
     )
     .await

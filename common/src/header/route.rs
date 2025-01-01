@@ -74,9 +74,10 @@ mod tests {
         // Decode header
         let mut stream = io::Cursor::new(buf);
         let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*crypto.key());
-        let decoded_header = read_header_async(&mut stream, &mut crypto_cursor, &replay_validator)
-            .await
-            .unwrap();
+        let decoded_header =
+            read_header_async(&mut stream, &mut crypto_cursor, Some(&replay_validator))
+                .await
+                .unwrap();
         assert_eq!(original_header, decoded_header);
     }
 }

@@ -218,7 +218,7 @@ pub struct UdpProxyClientReadHalf {
     headers_bytes: Arc<[u8]>,
     proxies: Arc<UdpProxyChain>,
     read_buf: Vec<u8>,
-    replay_validator: ReplayValidator,
+    _replay_validator: ReplayValidator,
 }
 impl UdpRecv for UdpProxyClientReadHalf {
     async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
@@ -236,7 +236,7 @@ impl UdpProxyClientReadHalf {
             headers_bytes,
             proxies,
             read_buf: vec![],
-            replay_validator: ReplayValidator::new(VALIDATOR_TIME_FRAME, VALIDATOR_CAPACITY),
+            _replay_validator: ReplayValidator::new(VALIDATOR_TIME_FRAME, VALIDATOR_CAPACITY),
         }
     }
 
@@ -260,8 +260,7 @@ impl UdpProxyClientReadHalf {
             trace!(?node.address, "Reading response");
             let mut crypto_cursor =
                 tokio_chacha20::cursor::DecryptCursor::new_x(*node.header_crypto.key());
-            let resp: RouteResponse =
-                read_header(&mut reader, &mut crypto_cursor, &self.replay_validator)?;
+            let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor, None)?;
             if let Err(err) = resp.result {
                 warn!(?err, %node.address, "Upstream responded with an error");
                 return Err(RecvError::Response {
@@ -354,7 +353,7 @@ impl Tracer for UdpTracer {
 pub async fn trace_rtt(
     pkt_buf: &mut BytesMut,
     proxies: &UdpProxyChain,
-    replay_validator: &ReplayValidator,
+    _replay_validator: &ReplayValidator,
 ) -> Result<Duration, TraceError> {
     if proxies.is_empty() {
         return Ok(Duration::from_secs(0));
@@ -394,7 +393,7 @@ pub async fn trace_rtt(
         trace!(?node.address, "Reading response");
         let mut crypto_cursor =
             tokio_chacha20::cursor::DecryptCursor::new_x(*node.header_crypto.key());
-        let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor, replay_validator)?;
+        let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor, None)?;
         if let Err(err) = resp.result {
             warn!(?err, %node.address, "Upstream responded with an error");
             return Err(TraceError::Response {
