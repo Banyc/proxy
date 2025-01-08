@@ -9,7 +9,7 @@ use tokio::net::ToSocketAddrs;
 use crate::ListenerBindError;
 
 use super::{
-    StreamProxyConnHandler, StreamProxyServerBuildError, StreamProxyConnHandlerBuilder,
+    StreamProxyConnHandler, StreamProxyConnHandlerBuilder, StreamProxyServerBuildError,
     StreamProxyServerConfig,
 };
 
@@ -22,7 +22,8 @@ pub struct RtpProxyServerConfig {
 }
 impl RtpProxyServerConfig {
     pub fn into_builder(self, stream_context: ConcreteStreamContext) -> RtpProxyServerBuilder {
-        let inner = self.inner.into_builder(stream_context);
+        let listen_addr = Arc::clone(&self.listen_addr);
+        let inner = self.inner.into_builder(stream_context, listen_addr);
         RtpProxyServerBuilder {
             listen_addr: self.listen_addr,
             inner,

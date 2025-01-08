@@ -50,14 +50,15 @@ mod tests {
 
     async fn spawn_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
-        addr: &str,
+        addr: &Arc<str>,
         ty: ConcreteStreamType,
     ) -> StreamProxyConfig {
         let crypto = create_random_crypto();
-        let proxy = StreamProxyConnHandler::new(crypto.clone(), None, stream_context());
+        let proxy =
+            StreamProxyConnHandler::new(crypto.clone(), None, stream_context(), Arc::clone(addr));
         let proxy_addr = match ty {
             ConcreteStreamType::Tcp => {
-                let server = build_tcp_proxy_server(addr, proxy).await.unwrap();
+                let server = build_tcp_proxy_server(addr.as_ref(), proxy).await.unwrap();
                 let proxy_addr = server.listener().local_addr().unwrap();
                 join_set.spawn(async move {
                     let (_set_conn_handler_tx, set_conn_handler_rx) =
@@ -67,7 +68,9 @@ mod tests {
                 proxy_addr
             }
             ConcreteStreamType::TcpMux => {
-                let server = build_tcp_mux_proxy_server(addr, proxy).await.unwrap();
+                let server = build_tcp_mux_proxy_server(addr.as_ref(), proxy)
+                    .await
+                    .unwrap();
                 let proxy_addr = server.listener().local_addr().unwrap();
                 join_set.spawn(async move {
                     let (_set_conn_handler_tx, set_conn_handler_rx) =
@@ -77,7 +80,7 @@ mod tests {
                 proxy_addr
             }
             ConcreteStreamType::Kcp => {
-                let server = build_kcp_proxy_server(addr, proxy).await.unwrap();
+                let server = build_kcp_proxy_server(addr.as_ref(), proxy).await.unwrap();
                 let proxy_addr = server.listener().local_addr().unwrap();
                 join_set.spawn(async move {
                     let (_set_conn_handler_tx, set_conn_handler_rx) =
@@ -87,7 +90,9 @@ mod tests {
                 proxy_addr
             }
             ConcreteStreamType::Mptcp => {
-                let server = build_mptcp_proxy_server(addr, proxy).await.unwrap();
+                let server = build_mptcp_proxy_server(addr.as_ref(), proxy)
+                    .await
+                    .unwrap();
                 let proxy_addr = server.listener().local_addrs().next().unwrap().unwrap();
                 join_set.spawn(async move {
                     let (_set_conn_handler_tx, set_conn_handler_rx) =
@@ -97,7 +102,7 @@ mod tests {
                 proxy_addr
             }
             ConcreteStreamType::Rtp => {
-                let server = build_rtp_proxy_server(addr, proxy).await.unwrap();
+                let server = build_rtp_proxy_server(addr.as_ref(), proxy).await.unwrap();
                 let proxy_addr = server.listener().local_addr();
                 join_set.spawn(async move {
                     let (_set_conn_handler_tx, set_conn_handler_rx) =
@@ -107,7 +112,9 @@ mod tests {
                 proxy_addr
             }
             ConcreteStreamType::RtpMux => {
-                let server = build_rtp_mux_proxy_server(addr, proxy).await.unwrap();
+                let server = build_rtp_mux_proxy_server(addr.as_ref(), proxy)
+                    .await
+                    .unwrap();
                 let proxy_addr = server.listener().local_addr();
                 join_set.spawn(async move {
                     let (_set_conn_handler_tx, set_conn_handler_rx) =
@@ -129,37 +136,37 @@ mod tests {
 
     async fn spawn_tcp_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
-        addr: &str,
+        addr: &Arc<str>,
     ) -> StreamProxyConfig {
         spawn_proxy(join_set, addr, ConcreteStreamType::Tcp).await
     }
     async fn spawn_tcp_mux_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
-        addr: &str,
+        addr: &Arc<str>,
     ) -> StreamProxyConfig {
         spawn_proxy(join_set, addr, ConcreteStreamType::TcpMux).await
     }
     async fn spawn_kcp_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
-        addr: &str,
+        addr: &Arc<str>,
     ) -> StreamProxyConfig {
         spawn_proxy(join_set, addr, ConcreteStreamType::Kcp).await
     }
     async fn spawn_mptcp_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
-        addr: &str,
+        addr: &Arc<str>,
     ) -> StreamProxyConfig {
         spawn_proxy(join_set, addr, ConcreteStreamType::Mptcp).await
     }
     async fn spawn_rtp_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
-        addr: &str,
+        addr: &Arc<str>,
     ) -> StreamProxyConfig {
         spawn_proxy(join_set, addr, ConcreteStreamType::Rtp).await
     }
     async fn spawn_rtp_mux_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
-        addr: &str,
+        addr: &Arc<str>,
     ) -> StreamProxyConfig {
         spawn_proxy(join_set, addr, ConcreteStreamType::RtpMux).await
     }
@@ -217,9 +224,10 @@ mod tests {
         let mut join_set = tokio::task::JoinSet::new();
 
         // Start proxy servers
-        let proxy_1_config = spawn_tcp_proxy(&mut join_set, "0.0.0.0:0").await;
-        let proxy_2_config = spawn_tcp_proxy(&mut join_set, "0.0.0.0:0").await;
-        let proxy_3_config = spawn_tcp_proxy(&mut join_set, "0.0.0.0:0").await;
+        let addr = Arc::from("0.0.0.0:0");
+        let proxy_1_config = spawn_tcp_proxy(&mut join_set, &addr).await;
+        let proxy_2_config = spawn_tcp_proxy(&mut join_set, &addr).await;
+        let proxy_3_config = spawn_tcp_proxy(&mut join_set, &addr).await;
         let proxies = vec![proxy_1_config, proxy_2_config, proxy_3_config];
 
         // Message to send
@@ -253,8 +261,9 @@ mod tests {
         let mut join_set = tokio::task::JoinSet::new();
 
         // Start proxy servers
-        let proxy_1_config = spawn_tcp_proxy(&mut join_set, "0.0.0.0:0").await;
-        let proxy_2_config = spawn_tcp_proxy(&mut join_set, "0.0.0.0:0").await;
+        let addr = Arc::from("0.0.0.0:0");
+        let proxy_1_config = spawn_tcp_proxy(&mut join_set, &addr).await;
+        let proxy_2_config = spawn_tcp_proxy(&mut join_set, &addr).await;
         let proxies = vec![proxy_1_config, proxy_2_config];
 
         // Message to send
@@ -323,14 +332,15 @@ mod tests {
 
         // Start proxy servers
         let mut proxies = Vec::new();
+        let addr = Arc::from("0.0.0.0:0");
         for _ in 0..STRESS_CHAINS {
             let proxy_config = match ty {
-                ConcreteStreamType::Tcp => spawn_tcp_proxy(&mut join_set, "0.0.0.0:0").await,
-                ConcreteStreamType::TcpMux => spawn_tcp_mux_proxy(&mut join_set, "0.0.0.0:0").await,
-                ConcreteStreamType::Kcp => spawn_kcp_proxy(&mut join_set, "0.0.0.0:0").await,
-                ConcreteStreamType::Mptcp => spawn_mptcp_proxy(&mut join_set, "0.0.0.0:0").await,
-                ConcreteStreamType::Rtp => spawn_rtp_proxy(&mut join_set, "0.0.0.0:0").await,
-                ConcreteStreamType::RtpMux => spawn_rtp_mux_proxy(&mut join_set, "0.0.0.0:0").await,
+                ConcreteStreamType::Tcp => spawn_tcp_proxy(&mut join_set, &addr).await,
+                ConcreteStreamType::TcpMux => spawn_tcp_mux_proxy(&mut join_set, &addr).await,
+                ConcreteStreamType::Kcp => spawn_kcp_proxy(&mut join_set, &addr).await,
+                ConcreteStreamType::Mptcp => spawn_mptcp_proxy(&mut join_set, &addr).await,
+                ConcreteStreamType::Rtp => spawn_rtp_proxy(&mut join_set, &addr).await,
+                ConcreteStreamType::RtpMux => spawn_rtp_mux_proxy(&mut join_set, &addr).await,
             };
             proxies.push(proxy_config);
         }

@@ -13,7 +13,7 @@ use tokio_kcp::KcpListener;
 use crate::ListenerBindError;
 
 use super::{
-    StreamProxyConnHandler, StreamProxyServerBuildError, StreamProxyConnHandlerBuilder,
+    StreamProxyConnHandler, StreamProxyConnHandlerBuilder, StreamProxyServerBuildError,
     StreamProxyServerConfig,
 };
 
@@ -26,7 +26,8 @@ pub struct KcpProxyServerConfig {
 }
 impl KcpProxyServerConfig {
     pub fn into_builder(self, stream_context: ConcreteStreamContext) -> KcpProxyServerBuilder {
-        let inner = self.inner.into_builder(stream_context);
+        let listen_addr = Arc::clone(&self.listen_addr);
+        let inner = self.inner.into_builder(stream_context, listen_addr);
         KcpProxyServerBuilder {
             listen_addr: self.listen_addr,
             inner,

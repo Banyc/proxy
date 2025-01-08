@@ -11,7 +11,7 @@ use tracing::error;
 use crate::ListenerBindError;
 
 use super::{
-    StreamProxyConnHandler, StreamProxyServerBuildError, StreamProxyConnHandlerBuilder,
+    StreamProxyConnHandler, StreamProxyConnHandlerBuilder, StreamProxyServerBuildError,
     StreamProxyServerConfig,
 };
 
@@ -26,7 +26,8 @@ pub struct MptcpProxyServerConfig {
 }
 impl MptcpProxyServerConfig {
     pub fn into_builder(self, stream_context: ConcreteStreamContext) -> MptcpProxyServerBuilder {
-        let inner = self.inner.into_builder(stream_context);
+        let listen_addr = Arc::clone(&self.listen_addr);
+        let inner = self.inner.into_builder(stream_context, listen_addr);
         MptcpProxyServerBuilder {
             listen_addr: self.listen_addr,
             inner,

@@ -23,7 +23,8 @@ pub struct TcpProxyServerConfig {
 }
 impl TcpProxyServerConfig {
     pub fn into_builder(self, stream_context: ConcreteStreamContext) -> TcpProxyServerBuilder {
-        let inner = self.inner.into_builder(stream_context);
+        let listen_addr = Arc::clone(&self.listen_addr);
+        let inner = self.inner.into_builder(stream_context, listen_addr);
         TcpProxyServerBuilder {
             listen_addr: self.listen_addr,
             inner,
@@ -101,6 +102,7 @@ mod tests {
 
         // Start proxy server
         let proxy_addr = {
+            let listen_addr = Arc::from("localhost:0");
             let proxy = StreamProxyConnHandler::new(
                 crypto.clone(),
                 None,
@@ -113,9 +115,12 @@ mod tests {
                         VALIDATOR_CAPACITY,
                     )),
                 },
+                Arc::clone(&listen_addr),
             );
 
-            let server = build_tcp_proxy_server("localhost:0", proxy).await.unwrap();
+            let server = build_tcp_proxy_server(listen_addr.as_ref(), proxy)
+                .await
+                .unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
             tokio::spawn(async move {
                 let (_set_conn_handler_tx, set_conn_handler_rx) = tokio::sync::mpsc::channel(64);

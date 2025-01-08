@@ -10,7 +10,7 @@ use common::{
     proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{
         addr::StreamAddr,
-        io_copy::{CopyBidirectional, LogContext, DEAD_SESSION_RETENTION_DURATION},
+        io_copy::{ConnContext, CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
         log::{SimplifiedStreamLog, SimplifiedStreamProxyLog, LOGGER},
         metrics::{Session, StreamSessionTable},
         IoAddr, IoStream, StreamServerHandleConn,
@@ -31,10 +31,7 @@ use protocol::stream::{
 use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::ToSocketAddrs,
-};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{error, info, instrument, trace, warn};
 
 use crate::stream::proxy_table::StreamProxyTableBuildContext;
@@ -92,7 +89,8 @@ impl loading::Build for HttpAccessServerBuilder {
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let access = self.build_conn_handler()?;
-        let server = access.build(listen_addr.as_ref()).await?;
+        let tcp_listener = tokio::net::TcpListener::bind(listen_addr.as_ref()).await?;
+        let server = TcpServer::new(tcp_listener, access);
         Ok(server)
     }
 
@@ -101,8 +99,12 @@ impl loading::Build for HttpAccessServerBuilder {
     }
 
     fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
-        let access =
-            HttpAccessConnHandler::new(self.proxy_table, self.speed_limit, self.stream_context);
+        let access = HttpAccessConnHandler::new(
+            self.proxy_table,
+            self.speed_limit,
+            self.stream_context,
+            Arc::clone(&self.listen_addr),
+        );
         Ok(access)
     }
 }
@@ -112,24 +114,21 @@ pub struct HttpAccessConnHandler {
     proxy_table: Arc<StreamProxyTable>,
     speed_limiter: Limiter,
     stream_context: ConcreteStreamContext,
+    listen_addr: Arc<str>,
 }
 impl HttpAccessConnHandler {
     pub fn new(
         proxy_table: StreamProxyTable,
         speed_limit: f64,
         stream_context: ConcreteStreamContext,
+        listen_addr: Arc<str>,
     ) -> Self {
         Self {
             proxy_table: Arc::new(proxy_table),
             speed_limiter: Limiter::new(speed_limit),
             stream_context,
+            listen_addr,
         }
-    }
-
-    #[instrument(skip(self, listen_addr))]
-    pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<TcpServer<Self>> {
-        let tcp_listener = tokio::net::TcpListener::bind(listen_addr).await?;
-        Ok(TcpServer::new(tcp_listener, self))
     }
 
     async fn proxy<S>(&self, downstream: S) -> Result<(), TunnelError>
@@ -194,6 +193,7 @@ impl HttpAccessConnHandler {
                         destination: Some(addr.clone()),
                         upstream_local: upstream.local_addr().ok(),
                         upstream_remote: addr.clone(),
+                        downstream_local: Arc::clone(&self.listen_addr),
                         downstream_remote: None,
                         up_gauge: None,
                         dn_gauge: None,
@@ -216,6 +216,7 @@ impl HttpAccessConnHandler {
                 destination: Some(addr.clone()),
                 upstream_local: upstream.stream.local_addr().ok(),
                 upstream_remote: upstream.addr.clone(),
+                downstream_local: Arc::clone(&self.listen_addr),
                 downstream_remote: None,
                 up_gauge: None,
                 dn_gauge: None,
@@ -289,6 +290,7 @@ impl HttpAccessConnHandler {
                 Arc::clone(proxy_group),
                 self.speed_limiter.clone(),
                 self.stream_context.clone(),
+                Arc::clone(&self.listen_addr),
             )),
             ProxyAction::Block => {
                 trace!(?addr, "Blocked CONNECT");
@@ -299,8 +301,17 @@ impl HttpAccessConnHandler {
 
         let speed_limiter = self.speed_limiter.clone();
         let session_table = self.stream_context.session_table.clone();
+        let listen_addr = Arc::clone(&self.listen_addr);
         tokio::task::spawn(async move {
-            upgrade(req, addr, http_connect, speed_limiter, session_table).await;
+            upgrade(
+                req,
+                addr,
+                http_connect,
+                speed_limiter,
+                session_table,
+                listen_addr,
+            )
+            .await;
         });
 
         // Return STATUS_OK
@@ -353,6 +364,7 @@ async fn upgrade(
     http_connect: Option<HttpConnect>,
     speed_limiter: Limiter,
     session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+    listen_addr: Arc<str>,
 ) {
     let upgraded = match hyper::upgrade::on(req).await {
         Ok(upgraded) => upgraded,
@@ -395,12 +407,13 @@ async fn upgrade(
         stream_type: ConcreteStreamType::Tcp,
         address: addr.clone(),
     };
-    let log_context = LogContext {
+    let conn_context = ConnContext {
         start: (std::time::Instant::now(), std::time::SystemTime::now()),
-        upstream_addr: upstream_addr.clone(),
-        upstream_sock_addr: sock_addr,
-        downstream_addr: None,
+        upstream_remote: upstream_addr.clone(),
+        upstream_remote_sock: sock_addr,
         upstream_local: upstream.local_addr().ok(),
+        downstream_remote: None,
+        downstream_local: listen_addr,
         session_table,
         destination: Some(upstream_addr),
     };
@@ -409,7 +422,7 @@ async fn upgrade(
         upstream,
         payload_crypto: None,
         speed_limiter,
-        log_context,
+        conn_context,
     }
     .serve_as_access_server("HTTP CONNECT direct")
     .await;
@@ -445,17 +458,20 @@ struct HttpConnect {
     proxy_group: Arc<StreamProxyGroup>,
     speed_limiter: Limiter,
     stream_context: ConcreteStreamContext,
+    listen_addr: Arc<str>,
 }
 impl HttpConnect {
     pub fn new(
         proxy_group: Arc<StreamProxyGroup>,
         speed_limiter: Limiter,
         stream_context: ConcreteStreamContext,
+        listen_addr: Arc<str>,
     ) -> Self {
         Self {
             proxy_group,
             speed_limiter,
             stream_context,
+            listen_addr,
         }
     }
 
@@ -480,11 +496,12 @@ impl HttpConnect {
         )
         .await?;
 
-        let log_context = LogContext {
+        let conn_context = ConnContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
-            upstream_addr: upstream.addr,
-            upstream_sock_addr: upstream.sock_addr,
-            downstream_addr: None,
+            upstream_remote: upstream.addr,
+            upstream_remote_sock: upstream.sock_addr,
+            downstream_remote: None,
+            downstream_local: Arc::clone(&self.listen_addr),
             upstream_local: upstream.stream.local_addr().ok(),
             session_table: self.stream_context.session_table.clone(),
             destination: Some(destination),
@@ -494,7 +511,7 @@ impl HttpConnect {
             upstream: upstream.stream,
             payload_crypto: proxy_chain.payload_crypto.clone(),
             speed_limiter: self.speed_limiter.clone(),
-            log_context,
+            conn_context,
         }
         .serve_as_access_server("HTTP CONNECT");
         tokio::spawn(async move {

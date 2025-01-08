@@ -23,7 +23,8 @@ pub struct RtpMuxProxyServerConfig {
 }
 impl RtpMuxProxyServerConfig {
     pub fn into_builder(self, stream_context: ConcreteStreamContext) -> RtpMuxProxyServerBuilder {
-        let inner = self.inner.into_builder(stream_context);
+        let listen_addr = Arc::clone(&self.listen_addr);
+        let inner = self.inner.into_builder(stream_context, listen_addr);
         RtpMuxProxyServerBuilder {
             listen_addr: self.listen_addr,
             inner,

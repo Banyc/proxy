@@ -6,7 +6,7 @@ use common::{
     loading,
     proxy_table::ProxyGroupBuildError,
     stream::{
-        io_copy::{CopyBidirectional, LogContext},
+        io_copy::{ConnContext, CopyBidirectional},
         IoAddr, IoStream, StreamServerHandleConn,
     },
 };
@@ -19,7 +19,6 @@ use protocol::stream::{
 use proxy_client::stream::{establish, StreamEstablishError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::net::ToSocketAddrs;
 use tracing::{error, instrument, warn};
 
 use crate::stream::proxy_table::StreamProxyGroupBuildContext;
@@ -80,7 +79,8 @@ impl loading::Build for TcpAccessServerBuilder {
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let access = self.build_conn_handler()?;
-        let server = access.build(listen_addr.as_ref()).await?;
+        let tcp_listener = tokio::net::TcpListener::bind(listen_addr.as_ref()).await?;
+        let server = TcpServer::new(tcp_listener, access);
         Ok(server)
     }
 
@@ -94,6 +94,7 @@ impl loading::Build for TcpAccessServerBuilder {
             self.destination.0,
             self.speed_limit,
             self.stream_context,
+            Arc::clone(&self.listen_addr),
         ))
     }
 }
@@ -104,6 +105,7 @@ pub struct TcpAccessConnHandler {
     destination: ConcreteStreamAddr,
     speed_limiter: Limiter,
     stream_context: ConcreteStreamContext,
+    listen_addr: Arc<str>,
 }
 impl TcpAccessConnHandler {
     pub fn new(
@@ -111,18 +113,15 @@ impl TcpAccessConnHandler {
         destination: ConcreteStreamAddr,
         speed_limit: f64,
         stream_context: ConcreteStreamContext,
+        listen_addr: Arc<str>,
     ) -> Self {
         Self {
             proxy_group,
             destination,
             speed_limiter: Limiter::new(speed_limit),
             stream_context,
+            listen_addr,
         }
-    }
-
-    pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<TcpServer<Self>> {
-        let tcp_listener = tokio::net::TcpListener::bind(listen_addr).await?;
-        Ok(TcpServer::new(tcp_listener, self))
     }
 
     async fn proxy<S>(&self, downstream: S) -> Result<(), ProxyError>
@@ -137,12 +136,13 @@ impl TcpAccessConnHandler {
         )
         .await?;
 
-        let log_context = LogContext {
+        let conn_context = ConnContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
-            upstream_addr: upstream.addr,
-            upstream_sock_addr: upstream.sock_addr,
-            downstream_addr: downstream.peer_addr().ok(),
+            upstream_remote: upstream.addr,
+            upstream_remote_sock: upstream.sock_addr,
             upstream_local: upstream.stream.local_addr().ok(),
+            downstream_remote: downstream.peer_addr().ok(),
+            downstream_local: Arc::clone(&self.listen_addr),
             session_table: self.stream_context.session_table.clone(),
             destination: Some(self.destination.clone()),
         };
@@ -151,7 +151,7 @@ impl TcpAccessConnHandler {
             upstream: upstream.stream,
             payload_crypto: proxy_chain.payload_crypto.clone(),
             speed_limiter: self.speed_limiter.clone(),
-            log_context,
+            conn_context,
         }
         .serve_as_access_server("TCP");
         tokio::spawn(async move {

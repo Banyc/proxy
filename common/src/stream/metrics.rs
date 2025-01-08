@@ -1,7 +1,7 @@
 use std::{
     fmt,
     net::SocketAddr,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -25,6 +25,7 @@ pub struct Session<ST> {
     pub destination: Option<StreamAddr<ST>>,
     pub upstream_local: Option<SocketAddr>,
     pub upstream_remote: StreamAddr<ST>,
+    pub downstream_local: Arc<str>,
     pub downstream_remote: Option<SocketAddr>,
     pub up_gauge: Option<Mutex<GaugeHandle>>,
     pub dn_gauge: Option<Mutex<GaugeHandle>>,
@@ -53,6 +54,7 @@ struct SessionView {
     pub end_ms: Option<u64>,
     pub upstream_local: Option<InternetAddrHdv>,
     pub upstream_remote: StreamAddrHdv,
+    pub downstream_local: Arc<str>,
     pub downstream_remote: Option<InternetAddrHdv>,
     pub up: Option<GaugeView>,
     pub dn: Option<GaugeView>,
@@ -78,6 +80,7 @@ impl SessionView {
             .map(|e| e.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64);
         let upstream_local = s.upstream_local.map(|x| x.into());
         let upstream_remote = (&s.upstream_remote).into();
+        let downstream_local = Arc::clone(&s.downstream_local);
         let downstream_remote = s.downstream_remote.map(|x| x.into());
         let now = Instant::now();
         let up = s
@@ -96,6 +99,7 @@ impl SessionView {
             end_ms,
             upstream_local,
             upstream_remote,
+            downstream_local,
             downstream_remote,
             up,
             dn,

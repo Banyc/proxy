@@ -8,7 +8,7 @@ use common::{
     proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{
         addr::StreamAddr,
-        io_copy::{CopyBidirectional, LogContext},
+        io_copy::{ConnContext, CopyBidirectional},
         IoAddr, IoStream, StreamServerHandleConn,
     },
 };
@@ -125,6 +125,7 @@ impl loading::Build for Socks5ServerTcpAccessServerBuilder {
             self.udp_server_addr,
             self.users,
             self.stream_context,
+            Arc::clone(&self.listen_addr),
         );
         Ok(access)
     }
@@ -137,6 +138,7 @@ pub struct Socks5ServerTcpAccessConnHandler {
     udp_listen_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
     stream_context: ConcreteStreamContext,
+    listen_addr: Arc<str>,
 }
 impl HandleConn for Socks5ServerTcpAccessConnHandler {}
 impl StreamServerHandleConn for Socks5ServerTcpAccessConnHandler {
@@ -160,6 +162,7 @@ impl Socks5ServerTcpAccessConnHandler {
         udp_listen_addr: Option<InternetAddr>,
         users: HashMap<Arc<[u8]>, Arc<[u8]>>,
         stream_context: ConcreteStreamContext,
+        listen_addr: Arc<str>,
     ) -> Self {
         Self {
             proxy_table,
@@ -167,6 +170,7 @@ impl Socks5ServerTcpAccessConnHandler {
             udp_listen_addr,
             users,
             stream_context,
+            listen_addr,
         }
     }
 
@@ -190,12 +194,13 @@ impl Socks5ServerTcpAccessConnHandler {
                     stream_type: ConcreteStreamType::Tcp,
                     address: upstream_addr.clone(),
                 };
-                let log_context = LogContext {
+                let conn_context = ConnContext {
                     start: (std::time::Instant::now(), std::time::SystemTime::now()),
-                    upstream_addr: upstream_addr.clone(),
-                    upstream_sock_addr,
-                    downstream_addr: downstream.peer_addr().ok(),
+                    upstream_remote: upstream_addr.clone(),
+                    upstream_remote_sock: upstream_sock_addr,
                     upstream_local: upstream.local_addr().ok(),
+                    downstream_remote: downstream.peer_addr().ok(),
+                    downstream_local: Arc::clone(&self.listen_addr),
                     session_table: self.stream_context.session_table.clone(),
                     destination: Some(upstream_addr),
                 };
@@ -204,7 +209,7 @@ impl Socks5ServerTcpAccessConnHandler {
                     upstream,
                     payload_crypto: None,
                     speed_limiter: self.speed_limiter.clone(),
-                    log_context,
+                    conn_context,
                 }
                 .serve_as_access_server("SOCKS5 TCP direct");
                 tokio::spawn(async move {
@@ -228,12 +233,13 @@ impl Socks5ServerTcpAccessConnHandler {
             } => (destination, downstream, upstream, payload_crypto),
         };
 
-        let log_context = LogContext {
+        let conn_context = ConnContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
-            upstream_addr: upstream.addr,
-            upstream_sock_addr: upstream.sock_addr,
-            downstream_addr: downstream.peer_addr().ok(),
+            upstream_remote: upstream.addr,
+            upstream_remote_sock: upstream.sock_addr,
             upstream_local: upstream.stream.local_addr().ok(),
+            downstream_remote: downstream.peer_addr().ok(),
+            downstream_local: Arc::clone(&self.listen_addr),
             session_table: self.stream_context.session_table.clone(),
             destination: Some(StreamAddr {
                 stream_type: ConcreteStreamType::Tcp,
@@ -245,7 +251,7 @@ impl Socks5ServerTcpAccessConnHandler {
             upstream: upstream.stream,
             payload_crypto,
             speed_limiter: self.speed_limiter.clone(),
-            log_context,
+            conn_context,
         }
         .serve_as_access_server("SOCKS5 TCP");
         tokio::spawn(async move {

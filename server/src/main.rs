@@ -50,10 +50,10 @@ async fn main() -> AnyResult {
         let router = Router::new();
 
         let (session_tables, monitor_router) = monitor_router();
-        let router = router.nest("/", monitor_router);
+        let router = router.merge(monitor_router);
 
         #[cfg(feature = "dhat-heap")]
-        let router = router.nest("/", server::profiling::profiler_router(profiler));
+        let router = router.merge(server::profiling::profiler_router(profiler));
 
         let listener = tokio::net::TcpListener::bind(&monitor_addr).await.unwrap();
         let listen_addr = listener.local_addr().unwrap();

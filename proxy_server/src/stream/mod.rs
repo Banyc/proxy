@@ -1,11 +1,11 @@
-use std::{io, net::SocketAddr, time::Duration};
+use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_speed_limit::Limiter;
 use common::{
     addr::ParseInternetAddrError,
     loading,
     stream::{
-        io_copy::{CopyBidirectional, LogContext},
+        io_copy::{ConnContext, CopyBidirectional},
         pool::connect_with_pool,
         steer::{steer, SteerError},
         IoAddr, IoStream, StreamServerHandleConn,
@@ -38,11 +38,13 @@ impl StreamProxyServerConfig {
     pub fn into_builder(
         self,
         stream_context: ConcreteStreamContext,
+        listen_addr: Arc<str>,
     ) -> StreamProxyConnHandlerBuilder {
         StreamProxyConnHandlerBuilder {
             header_key: self.header_key,
             payload_key: self.payload_key,
             stream_context,
+            listen_addr,
         }
     }
 }
@@ -52,6 +54,7 @@ pub struct StreamProxyConnHandlerBuilder {
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
     pub stream_context: ConcreteStreamContext,
+    pub listen_addr: Arc<str>,
 }
 impl StreamProxyConnHandlerBuilder {
     pub fn build(self) -> Result<StreamProxyConnHandler, StreamProxyServerBuildError> {
@@ -70,6 +73,7 @@ impl StreamProxyConnHandlerBuilder {
             header_crypto,
             payload_crypto,
             self.stream_context,
+            Arc::clone(&self.listen_addr),
         ))
     }
 }
@@ -88,17 +92,20 @@ pub struct StreamProxyConnHandler {
     acceptor: StreamProxyAcceptor,
     payload_crypto: Option<tokio_chacha20::config::Config>,
     stream_context: ConcreteStreamContext,
+    listen_addr: Arc<str>,
 }
 impl StreamProxyConnHandler {
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
         payload_crypto: Option<tokio_chacha20::config::Config>,
         stream_context: ConcreteStreamContext,
+        listen_addr: Arc<str>,
     ) -> Self {
         Self {
             acceptor: StreamProxyAcceptor::new(header_crypto, stream_context.clone()),
             payload_crypto,
             stream_context,
+            listen_addr,
         }
     }
 
@@ -118,12 +125,13 @@ impl StreamProxyConnHandler {
         };
 
         // Copy data
-        let log_context = LogContext {
+        let conn_context = ConnContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
-            upstream_addr: upstream.addr,
-            upstream_sock_addr: upstream.sock_addr,
-            downstream_addr: downstream.peer_addr().ok(),
+            upstream_remote: upstream.addr,
+            upstream_remote_sock: upstream.sock_addr,
             upstream_local: upstream.stream.local_addr().ok(),
+            downstream_remote: downstream.peer_addr().ok(),
+            downstream_local: Arc::clone(&self.listen_addr),
             session_table: self.stream_context.session_table.clone(),
             destination: None,
         };
@@ -132,7 +140,7 @@ impl StreamProxyConnHandler {
             upstream: upstream.stream,
             payload_crypto: self.payload_crypto.clone(),
             speed_limiter: Limiter::new(f64::INFINITY),
-            log_context,
+            conn_context,
         }
         .serve_as_proxy_server("Stream");
         tokio::spawn(async move {

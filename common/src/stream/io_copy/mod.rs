@@ -1,6 +1,6 @@
 use std::{
     net::SocketAddr,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -29,7 +29,7 @@ pub struct CopyBidirectional<DS, US, ST> {
     pub upstream: US,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
     pub speed_limiter: Limiter,
-    pub log_context: LogContext<ST>,
+    pub conn_context: ConnContext<ST>,
 }
 
 impl<DS, US, ST> CopyBidirectional<DS, US, ST>
@@ -43,7 +43,7 @@ where
         log_prefix: &str,
     ) -> Result<(), tokio_io::CopyBiErrorKind> {
         let session = self.session();
-        let destination = self.log_context.destination.clone();
+        let destination = self.conn_context.destination.clone();
 
         let (metrics, res) = self
             .serve(session, EncryptionDirection::Decrypt, log_prefix)
@@ -58,7 +58,7 @@ where
         log_prefix: &str,
     ) -> Result<(), tokio_io::CopyBiErrorKind> {
         let session = self.session();
-        let destination = self.log_context.destination.clone();
+        let destination = self.conn_context.destination.clone();
 
         let (metrics, res) = self
             .serve(session, EncryptionDirection::Encrypt, log_prefix)
@@ -69,7 +69,7 @@ where
     }
 
     fn session(&self) -> Option<(RowOwnedGuard<Session<ST>>, ReadGauge, WriteGauge)> {
-        self.log_context.session_table.as_ref().map(|s| {
+        self.conn_context.session_table.as_ref().map(|s| {
             let (up_handle, up) = tokio_throughput::gauge();
             let (dn_handle, dn) = tokio_throughput::gauge();
             let r = ReadGauge(up);
@@ -78,10 +78,11 @@ where
             let session = Session {
                 start: SystemTime::now(),
                 end: None,
-                destination: self.log_context.destination.clone(),
-                upstream_local: self.log_context.upstream_local,
-                upstream_remote: self.log_context.upstream_addr.clone(),
-                downstream_remote: self.log_context.downstream_addr,
+                destination: self.conn_context.destination.clone(),
+                upstream_local: self.conn_context.upstream_local,
+                upstream_remote: self.conn_context.upstream_remote.clone(),
+                downstream_local: Arc::clone(&self.conn_context.downstream_local),
+                downstream_remote: self.conn_context.downstream_remote,
                 up_gauge: Some(Mutex::new(up_handle)),
                 dn_gauge: Some(Mutex::new(dn_handle)),
             };
@@ -134,7 +135,7 @@ where
             }
         };
 
-        let (log, res) = get_log_from_copy_result(self.log_context, res);
+        let (log, res) = get_log_from_copy_result(self.conn_context, res);
         match &res {
             Ok(()) => {
                 info!(%log, "{log_prefix}: I/O copy finished");
@@ -147,11 +148,12 @@ where
     }
 }
 
-pub struct LogContext<ST> {
+pub struct ConnContext<ST> {
     pub start: (Instant, SystemTime),
-    pub upstream_addr: StreamAddr<ST>,
-    pub upstream_sock_addr: SocketAddr,
-    pub downstream_addr: Option<SocketAddr>,
+    pub upstream_remote: StreamAddr<ST>,
+    pub upstream_remote_sock: SocketAddr,
+    pub downstream_remote: Option<SocketAddr>,
+    pub downstream_local: Arc<str>,
     pub upstream_local: Option<SocketAddr>,
     pub session_table: Option<StreamSessionTable<ST>>,
     pub destination: Option<StreamAddr<ST>>,
@@ -223,7 +225,7 @@ where
 }
 
 fn get_log_from_copy_result<ST>(
-    log_context: LogContext<ST>,
+    conn_context: ConnContext<ST>,
     result: tokio_io::TimedCopyBidirectionalResult,
 ) -> (StreamLog<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
     let (bytes_uplink, bytes_downlink) = result.amounts;
@@ -231,16 +233,16 @@ fn get_log_from_copy_result<ST>(
     counter!("stream.up.bytes").increment(bytes_uplink);
     counter!("stream.dn.bytes").increment(bytes_downlink);
     let timing = Timing {
-        start: log_context.start,
+        start: conn_context.start,
         end: result.end,
     };
     let log = StreamLog {
         timing,
         bytes_uplink,
         bytes_downlink,
-        upstream_addr: log_context.upstream_addr,
-        upstream_sock_addr: log_context.upstream_sock_addr,
-        downstream_addr: log_context.downstream_addr,
+        upstream_addr: conn_context.upstream_remote,
+        upstream_sock_addr: conn_context.upstream_remote_sock,
+        downstream_addr: conn_context.downstream_remote,
     };
 
     (log, result.io_result)
