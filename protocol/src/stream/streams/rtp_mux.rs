@@ -1,4 +1,8 @@
-use std::{io, net::SocketAddr, sync::Arc};
+use std::{
+    io,
+    net::SocketAddr,
+    sync::{Arc, RwLock},
+};
 
 use metrics::counter;
 use mux::{
@@ -11,6 +15,7 @@ use tracing::{info, instrument, trace, warn};
 
 use common::{
     addr::any_addr,
+    connect::ConnectorConfig,
     error::AnyResult,
     loading,
     stream::{connect::StreamConnect, StreamServerHandleConn},
@@ -135,25 +140,30 @@ pub struct RtpMuxConnector {
     _connector: JoinSet<()>,
 }
 impl RtpMuxConnector {
-    pub fn new() -> Self {
+    pub fn new(config: Arc<RwLock<ConnectorConfig>>) -> Self {
         let (connect_request_tx, connect_request_rx) = connect_request_channel();
         let mut connector = JoinSet::new();
         connector.spawn(async move {
-            run_mux_connector(connect_request_rx, move |listen_addr| async move {
-                let connected = rtp::udp::connect_without_handshake(
-                    any_addr(&listen_addr.ip()),
-                    listen_addr,
-                    None,
-                )
-                .await?;
-                let addr = SocketAddrPair {
-                    local_addr: connected.local_addr,
-                    peer_addr: connected.peer_addr,
-                };
-                counter!("stream.rtp_mux.rtp.connects").increment(1);
-                let r = connected.read.into_async_read();
-                let w = connected.write.into_async_write();
-                Ok(((r, w), addr))
+            run_mux_connector(connect_request_rx, move |addr| {
+                let config = config.clone();
+                async move {
+                    let bind = config
+                        .read()
+                        .unwrap()
+                        .bind
+                        .get_matched(&addr.ip())
+                        .map(|ip| SocketAddr::new(ip, 0))
+                        .unwrap_or_else(|| any_addr(&addr.ip()));
+                    let connected = rtp::udp::connect_without_handshake(bind, addr, None).await?;
+                    let addr = SocketAddrPair {
+                        local_addr: connected.local_addr,
+                        peer_addr: connected.peer_addr,
+                    };
+                    counter!("stream.rtp_mux.rtp.connects").increment(1);
+                    let r = connected.read.into_async_read();
+                    let w = connected.write.into_async_write();
+                    Ok(((r, w), addr))
+                }
             })
             .await;
         });
@@ -161,11 +171,6 @@ impl RtpMuxConnector {
             connect_request_tx,
             _connector: connector,
         }
-    }
-}
-impl Default for RtpMuxConnector {
-    fn default() -> Self {
-        Self::new()
     }
 }
 impl StreamConnect for RtpMuxConnector {

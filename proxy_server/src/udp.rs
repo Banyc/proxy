@@ -2,7 +2,7 @@ use std::{io, net::SocketAddr, sync::Arc};
 
 use async_speed_limit::Limiter;
 use common::{
-    addr::{any_addr, InternetAddr},
+    addr::InternetAddr,
     header::{
         codec::write_header,
         route::{RouteErrorKind, RouteResponse},
@@ -147,13 +147,10 @@ impl UdpProxyConnHandler {
                 sock_addr: resolved_upstream,
             });
         }
-
         // Connect to upstream
-        let any_addr = any_addr(&resolved_upstream.ip());
-        let upstream = UdpSocket::bind(any_addr)
-            .await
-            .map_err(ProxyError::ClientBindAny)?;
-        upstream
+        let upstream = self
+            .udp_context
+            .connector
             .connect(resolved_upstream)
             .await
             .map_err(|e| ProxyError::ConnectUpstream {
@@ -235,8 +232,6 @@ pub enum ProxyError {
         addr: InternetAddr,
         sock_addr: SocketAddr,
     },
-    #[error("Failed to created a client socket: {0}")]
-    ClientBindAny(#[source] io::Error),
     #[error("Failed to connect to upstream: {source}, {addr}, {sock_addr}")]
     ConnectUpstream {
         #[source]
@@ -247,9 +242,7 @@ pub enum ProxyError {
 }
 fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
     match e {
-        ProxyError::Resolve { .. }
-        | ProxyError::ClientBindAny(_)
-        | ProxyError::ConnectUpstream { .. } => RouteErrorKind::Io,
+        ProxyError::Resolve { .. } | ProxyError::ConnectUpstream { .. } => RouteErrorKind::Io,
         ProxyError::Loopback { .. } => RouteErrorKind::Loopback,
     }
 }

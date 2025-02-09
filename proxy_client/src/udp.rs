@@ -8,7 +8,7 @@ use std::{
 
 use bytes::BytesMut;
 use common::{
-    addr::{any_addr, InternetAddr},
+    addr::InternetAddr,
     anti_replay::{TimeValidator, ValidatorRef, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     error::AnyError,
     header::{
@@ -18,6 +18,7 @@ use common::{
     proxy_table::{convert_proxies_to_header_crypto_pairs, Tracer, TracerBuilder},
     ttl_cell::TtlCell,
     udp::{
+        context::UdpContext,
         io_copy::{UdpRecv, UdpSend},
         proxy_table::UdpProxyChain,
         PACKET_BUFFER_LENGTH,
@@ -40,6 +41,7 @@ impl UdpProxyClient {
     pub async fn establish(
         proxies: Arc<UdpProxyChain>,
         destination: InternetAddr,
+        context: &UdpContext,
     ) -> Result<UdpProxyClient, EstablishError> {
         // If there are no proxy configs, just connect to the destination
         if proxies.is_empty() {
@@ -49,18 +51,13 @@ impl UdpProxyClient {
                     addr: destination.clone(),
                 }
             })?;
-            let any_addr = any_addr(&addr.ip());
-            let upstream = UdpSocket::bind(any_addr)
-                .await
-                .map_err(EstablishError::ClientBindAny)?;
-            upstream
-                .connect(addr)
-                .await
-                .map_err(|e| EstablishError::ConnectDestination {
+            let upstream = context.connector.connect(addr).await.map_err(|e| {
+                EstablishError::ConnectDestination {
                     source: e,
                     addr: destination.clone(),
                     sock_addr: addr,
-                })?;
+                }
+            })?;
 
             let upstream = Arc::new(upstream);
             let write = UdpProxyClientWriteHalf::new(upstream.clone(), None);
@@ -82,18 +79,13 @@ impl UdpProxyClient {
                     source: e,
                     addr: proxy_addr.clone(),
                 })?;
-        let any_addr = any_addr(&addr.ip());
-        let upstream = UdpSocket::bind(any_addr)
-            .await
-            .map_err(EstablishError::ClientBindAny)?;
-        upstream
-            .connect(addr)
-            .await
-            .map_err(|e| EstablishError::ConnectFirstProxy {
+        let upstream = context.connector.connect(addr).await.map_err(|e| {
+            EstablishError::ConnectFirstProxy {
                 source: e,
                 addr: proxy_addr.clone(),
                 sock_addr: addr,
-            })?;
+            }
+        })?;
 
         // Convert addresses to headers
         let pairs = convert_proxies_to_header_crypto_pairs(&proxies, Some(destination));
@@ -144,8 +136,6 @@ pub enum EstablishError {
         source: io::Error,
         addr: InternetAddr,
     },
-    #[error("Failed to created a client socket: {0}")]
-    ClientBindAny(#[source] io::Error),
     #[error("Failed to connect to destination: {source}, {addr}, {sock_addr}")]
     ConnectDestination {
         #[source]
@@ -328,47 +318,36 @@ pub enum RecvError {
     Response { err: RouteError, addr: InternetAddr },
 }
 
-pub struct UdpTracerBuilder {}
-impl UdpTracerBuilder {
-    pub fn new() -> Self {
-        Self {}
-    }
+pub struct UdpTracerBuilder {
+    context: UdpContext,
 }
-impl Default for UdpTracerBuilder {
-    fn default() -> Self {
-        Self::new()
+impl UdpTracerBuilder {
+    pub fn new(context: UdpContext) -> Self {
+        Self { context }
     }
 }
 impl TracerBuilder for UdpTracerBuilder {
     type Tracer = UdpTracer;
 
     fn build(&self) -> Self::Tracer {
-        UdpTracer::new()
+        UdpTracer::new(self.context.clone())
     }
 }
 
 #[derive(Debug)]
 pub struct UdpTracer {
     pool: ArcObjPool<BytesMut>,
-    time_validator: TimeValidator,
+    context: UdpContext,
 }
 impl UdpTracer {
-    pub fn new() -> Self {
+    pub fn new(context: UdpContext) -> Self {
         let pool = ArcObjPool::new(
             None,
             NonZeroUsize::new(1).unwrap(),
             || BytesMut::with_capacity(PACKET_BUFFER_LENGTH),
             |buf| buf.clear(),
         );
-        Self {
-            pool,
-            time_validator: time_validator(),
-        }
-    }
-}
-impl Default for UdpTracer {
-    fn default() -> Self {
-        Self::new()
+        Self { pool, context }
     }
 }
 impl Tracer for UdpTracer {
@@ -376,7 +355,7 @@ impl Tracer for UdpTracer {
 
     async fn trace_rtt(&self, chain: &UdpProxyChain) -> Result<Duration, AnyError> {
         let mut pkt_buf = self.pool.take();
-        let res = trace_rtt(&mut pkt_buf, chain, &self.time_validator)
+        let res = trace_rtt(&mut pkt_buf, chain, &self.context)
             .await
             .map_err(|e| e.into());
         self.pool.put(pkt_buf);
@@ -386,7 +365,7 @@ impl Tracer for UdpTracer {
 pub async fn trace_rtt(
     pkt_buf: &mut BytesMut,
     proxies: &UdpProxyChain,
-    time_validator: &TimeValidator,
+    context: &UdpContext,
 ) -> Result<Duration, TraceError> {
     if proxies.is_empty() {
         return Ok(Duration::from_secs(0));
@@ -395,9 +374,7 @@ pub async fn trace_rtt(
     // Connect to upstream
     let proxy_addr = &proxies[0].address;
     let addr = proxy_addr.to_socket_addr().await?;
-    let any_addr = any_addr(&addr.ip());
-    let upstream = UdpSocket::bind(any_addr).await?;
-    upstream.connect(addr).await?;
+    let upstream = context.connector.connect(addr).await?;
 
     // Convert addresses to headers
     let pairs = convert_proxies_to_header_crypto_pairs(proxies, None);
@@ -426,7 +403,7 @@ pub async fn trace_rtt(
         trace!(?node.address, "Reading response");
         let mut crypto_cursor =
             tokio_chacha20::cursor::DecryptCursor::new_x(*node.header_crypto.key());
-        let validator = ValidatorRef::Time(time_validator);
+        let validator = ValidatorRef::Time(&context.time_validator);
         let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor, &validator)?;
         if let Err(err) = resp.result {
             warn!(?err, %node.address, "Upstream responded with an error");

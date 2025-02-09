@@ -4,6 +4,7 @@ mod tests {
 
     use common::{
         anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
+        connect::ConnectorConfig,
         loading::Serve,
         proxy_table::ProxyConfig,
         stream::addr::StreamAddr,
@@ -40,7 +41,9 @@ mod tests {
         ConcreteStreamContext {
             session_table: None,
             pool: Swap::new(ConcreteConnPool::empty()),
-            connector_table: Arc::new(ConcreteStreamConnectorTable::new()),
+            connector_table: Arc::new(
+                ConcreteStreamConnectorTable::new(ConnectorConfig::default()),
+            ),
             replay_validator: Arc::new(ReplayValidator::new(
                 VALIDATOR_TIME_FRAME,
                 VALIDATOR_CAPACITY,

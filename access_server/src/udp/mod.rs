@@ -129,8 +129,12 @@ impl UdpAccessConnHandler {
     async fn proxy(&self, conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), AccessProxyError> {
         // Connect to upstream
         let proxy_chain = self.proxy_group.choose_chain();
-        let upstream =
-            UdpProxyClient::establish(proxy_chain.chain.clone(), self.destination.clone()).await?;
+        let upstream = UdpProxyClient::establish(
+            proxy_chain.chain.clone(),
+            self.destination.clone(),
+            &self.udp_context,
+        )
+        .await?;
         let upstream_remote = upstream.remote_addr().clone();
 
         let (upstream_read, upstream_write) = upstream.into_split();

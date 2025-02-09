@@ -1,13 +1,22 @@
-use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
+use std::{
+    io,
+    net::SocketAddr,
+    pin::Pin,
+    sync::{Arc, RwLock},
+};
 
 use metrics::counter;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::UdpSocket,
+};
 use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
 use tracing::{error, info, instrument, trace, warn};
 
 use common::{
     addr::any_addr,
+    connect::ConnectorConfig,
     error::AnyResult,
     loading,
     stream::{connect::StreamConnect, IoAddr, IoStream, StreamServerHandleConn},
@@ -112,12 +121,28 @@ pub enum ServeError {
 }
 
 #[derive(Debug, Clone)]
-pub struct KcpConnector;
+pub struct KcpConnector {
+    config: Arc<RwLock<ConnectorConfig>>,
+}
+impl KcpConnector {
+    pub fn new(config: Arc<RwLock<ConnectorConfig>>) -> Self {
+        Self { config }
+    }
+}
 impl StreamConnect for KcpConnector {
     type Connection = Connection;
     async fn connect(&self, addr: SocketAddr) -> io::Result<Connection> {
+        let bind = self
+            .config
+            .read()
+            .unwrap()
+            .bind
+            .get_matched(&addr.ip())
+            .map(|ip| SocketAddr::new(ip, 0))
+            .unwrap_or_else(|| any_addr(&addr.ip()));
+        let socket = UdpSocket::bind(bind).await?;
         let config = fast_kcp_config();
-        let stream = KcpStream::connect(&config, addr).await?;
+        let stream = KcpStream::connect_with_socket(&config, socket, addr).await?;
         let local_addr = any_addr(&addr.ip());
         let stream = AddressedKcpStream {
             stream,

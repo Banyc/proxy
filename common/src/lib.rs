@@ -4,6 +4,7 @@ extern crate test;
 pub mod addr;
 pub mod anti_replay;
 pub mod config;
+pub mod connect;
 pub mod context;
 pub mod crypto;
 pub mod error;

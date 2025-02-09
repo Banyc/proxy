@@ -12,6 +12,7 @@ use crate::{
     loading,
 };
 
+pub mod connect;
 pub mod context;
 pub mod header;
 pub mod io_copy;

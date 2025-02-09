@@ -82,7 +82,9 @@ mod tests {
 
     use super::*;
     use common::{
+        addr::BothVerIp,
         anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
+        connect::ConnectorConfig,
         header::{codec::write_header_async, heartbeat},
         loading::Serve,
         stream::{addr::StreamAddr, header::StreamRequestHeader},
@@ -103,13 +105,16 @@ mod tests {
         // Start proxy server
         let proxy_addr = {
             let listen_addr = Arc::from("localhost:0");
+            let connector_config = ConnectorConfig {
+                bind: BothVerIp { v4: None, v6: None },
+            };
             let proxy = StreamProxyConnHandler::new(
                 crypto.clone(),
                 None,
                 ConcreteStreamContext {
                     session_table: None,
                     pool: Swap::new(ConcreteConnPool::empty()),
-                    connector_table: Arc::new(ConcreteStreamConnectorTable::new()),
+                    connector_table: Arc::new(ConcreteStreamConnectorTable::new(connector_config)),
                     replay_validator: Arc::new(ReplayValidator::new(
                         VALIDATOR_TIME_FRAME,
                         VALIDATOR_CAPACITY,

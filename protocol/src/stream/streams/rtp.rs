@@ -1,4 +1,9 @@
-use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
+use std::{
+    io,
+    net::SocketAddr,
+    pin::Pin,
+    sync::{Arc, RwLock},
+};
 
 use metrics::counter;
 use thiserror::Error;
@@ -7,6 +12,7 @@ use tracing::{error, info, instrument, trace, warn};
 
 use common::{
     addr::any_addr,
+    connect::ConnectorConfig,
     error::AnyResult,
     loading,
     stream::{connect::StreamConnect, IoAddr, IoStream, StreamServerHandleConn},
@@ -109,12 +115,26 @@ pub enum ServeError {
 }
 
 #[derive(Debug, Clone)]
-pub struct RtpConnector;
+pub struct RtpConnector {
+    config: Arc<RwLock<ConnectorConfig>>,
+}
+impl RtpConnector {
+    pub fn new(config: Arc<RwLock<ConnectorConfig>>) -> Self {
+        Self { config }
+    }
+}
 impl StreamConnect for RtpConnector {
     type Connection = Connection;
     async fn connect(&self, addr: SocketAddr) -> io::Result<Connection> {
-        let connected =
-            rtp::udp::connect_without_handshake(any_addr(&addr.ip()), addr, None).await?;
+        let bind = self
+            .config
+            .read()
+            .unwrap()
+            .bind
+            .get_matched(&addr.ip())
+            .map(|ip| SocketAddr::new(ip, 0))
+            .unwrap_or_else(|| any_addr(&addr.ip()));
+        let connected = rtp::udp::connect_without_handshake(bind, addr, None).await?;
         let stream = AddressedRtpStream {
             read: connected.read.into_async_read(),
             write: connected.write.into_async_write(),

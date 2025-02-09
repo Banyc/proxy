@@ -1,4 +1,8 @@
-use std::{io, net::SocketAddr, sync::Arc};
+use std::{
+    io,
+    net::SocketAddr,
+    sync::{Arc, RwLock},
+};
 
 use metrics::counter;
 use mux::{
@@ -7,12 +11,14 @@ use mux::{
 };
 use thiserror::Error;
 use tokio::{
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpSocket},
     task::JoinSet,
 };
 use tracing::{info, instrument, trace, warn};
 
 use common::{
+    addr::any_addr,
+    connect::ConnectorConfig,
     error::AnyResult,
     loading,
     stream::{connect::StreamConnect, StreamServerHandleConn},
@@ -146,19 +152,34 @@ pub struct TcpMuxConnector {
     _connector: JoinSet<()>,
 }
 impl TcpMuxConnector {
-    pub fn new() -> Self {
+    pub fn new(config: Arc<RwLock<ConnectorConfig>>) -> Self {
         let (connect_request_tx, connect_request_rx) = connect_request_channel();
         let mut connector = JoinSet::new();
         connector.spawn(async move {
-            run_mux_connector(connect_request_rx, move |listen_addr| async move {
-                let stream = TcpStream::connect(listen_addr).await?;
-                let addr = SocketAddrPair {
-                    local_addr: stream.local_addr().unwrap(),
-                    peer_addr: stream.peer_addr().unwrap(),
-                };
-                counter!("stream.tcp_mux.tcp.connects").increment(1);
-                let (r, w) = stream.into_split();
-                Ok(((r, w), addr))
+            run_mux_connector(connect_request_rx, move |addr| {
+                let config = config.clone();
+                async move {
+                    let bind = config
+                        .read()
+                        .unwrap()
+                        .bind
+                        .get_matched(&addr.ip())
+                        .map(|ip| SocketAddr::new(ip, 0))
+                        .unwrap_or_else(|| any_addr(&addr.ip()));
+                    let socket = match addr.ip() {
+                        std::net::IpAddr::V4(_) => TcpSocket::new_v4()?,
+                        std::net::IpAddr::V6(_) => TcpSocket::new_v6()?,
+                    };
+                    socket.bind(bind)?;
+                    let stream = socket.connect(addr).await?;
+                    let addr = SocketAddrPair {
+                        local_addr: stream.local_addr().unwrap(),
+                        peer_addr: stream.peer_addr().unwrap(),
+                    };
+                    counter!("stream.tcp_mux.tcp.connects").increment(1);
+                    let (r, w) = stream.into_split();
+                    Ok(((r, w), addr))
+                }
             })
             .await;
         });
@@ -166,11 +187,6 @@ impl TcpMuxConnector {
             connect_request_tx,
             _connector: connector,
         }
-    }
-}
-impl Default for TcpMuxConnector {
-    fn default() -> Self {
-        Self::new()
     }
 }
 impl StreamConnect for TcpMuxConnector {

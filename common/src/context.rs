@@ -1,5 +1,5 @@
 use crate::{
-    stream::{connect::StreamConnectorTable, context::StreamContext},
+    stream::{connect::StreamTypedConnect, context::StreamContext},
     udp::context::UdpContext,
 };
 
@@ -10,7 +10,7 @@ pub struct Context<C, CT, ST> {
 }
 impl<C, CT, ST> Clone for Context<C, CT, ST>
 where
-    CT: StreamConnectorTable<Connection = C, StreamType = ST>,
+    CT: StreamTypedConnect<Connection = C, StreamType = ST>,
 {
     fn clone(&self) -> Self {
         Self {

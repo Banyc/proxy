@@ -5,7 +5,7 @@ use tokio_conn_pool::ConnPool;
 
 use crate::{anti_replay::ReplayValidator, stream::metrics::StreamSessionTable};
 
-use super::{addr::StreamAddr, connect::StreamConnectorTable};
+use super::{addr::StreamAddr, connect::StreamTypedConnect};
 
 #[derive(Debug)]
 pub struct StreamContext<C, CT, ST> {
@@ -16,7 +16,7 @@ pub struct StreamContext<C, CT, ST> {
 }
 impl<C, CT, ST> Clone for StreamContext<C, CT, ST>
 where
-    CT: StreamConnectorTable<Connection = C, StreamType = ST>,
+    CT: StreamTypedConnect<Connection = C, StreamType = ST>,
 {
     fn clone(&self) -> Self {
         Self {

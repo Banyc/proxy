@@ -10,11 +10,13 @@ use common::{
     proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{
         addr::StreamAddr,
+        connect::StreamConnectExt,
         io_copy::{ConnContext, CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
         log::{SimplifiedStreamLog, SimplifiedStreamProxyLog, LOGGER},
         metrics::{Session, StreamSessionTable},
         IoAddr, IoStream, StreamServerHandleConn,
     },
+    udp::TIMEOUT,
 };
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::{
@@ -24,6 +26,7 @@ use hyper_util::rt::TokioIo;
 use monitor_table::table::RowOwnedGuard;
 use protocol::stream::{
     addr::ConcreteStreamType,
+    connect::ConcreteStreamConnectorTable,
     context::ConcreteStreamContext,
     proxy_table::{StreamProxyGroup, StreamProxyTable, StreamProxyTableBuilder},
     streams::tcp::TcpServer,
@@ -183,7 +186,11 @@ impl HttpAccessConnHandler {
                     .await
                     .map_err(TunnelError::Direct)?;
 
-                let upstream = tokio::net::TcpStream::connect(sock_addr)
+                let upstream = self
+                    .stream_context
+                    .connector_table
+                    .tcp()
+                    .timed_connect(sock_addr, TIMEOUT)
                     .await
                     .map_err(TunnelError::Direct)?;
                 let session_guard = self.stream_context.session_table.as_ref().map(|s| {
@@ -302,6 +309,7 @@ impl HttpAccessConnHandler {
         let speed_limiter = self.speed_limiter.clone();
         let session_table = self.stream_context.session_table.clone();
         let listen_addr = Arc::clone(&self.listen_addr);
+        let connector_table = self.stream_context.connector_table.clone();
         tokio::task::spawn(async move {
             upgrade(
                 req,
@@ -310,6 +318,7 @@ impl HttpAccessConnHandler {
                 speed_limiter,
                 session_table,
                 listen_addr,
+                connector_table,
             )
             .await;
         });
@@ -365,6 +374,7 @@ async fn upgrade(
     speed_limiter: Limiter,
     session_table: Option<StreamSessionTable<ConcreteStreamType>>,
     listen_addr: Arc<str>,
+    connector_table: Arc<ConcreteStreamConnectorTable>,
 ) {
     let upgraded = match hyper::upgrade::on(req).await {
         Ok(upgraded) => upgraded,
@@ -391,7 +401,11 @@ async fn upgrade(
             return;
         }
     };
-    let upstream = match tokio::net::TcpStream::connect(sock_addr).await {
+    let upstream = match connector_table
+        .tcp()
+        .timed_connect(sock_addr, TIMEOUT)
+        .await
+    {
         Ok(upstream) => upstream,
         Err(e) => {
             warn!(

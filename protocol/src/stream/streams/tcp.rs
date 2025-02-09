@@ -1,20 +1,25 @@
-use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
+use std::{
+    io,
+    net::SocketAddr,
+    pin::Pin,
+    sync::{Arc, RwLock},
+};
 
 use metrics::counter;
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpSocket, TcpStream},
 };
 use tracing::{info, instrument, trace, warn};
 
 use common::{
+    addr::any_addr,
+    connect::ConnectorConfig,
     error::AnyResult,
     loading,
     stream::{connect::StreamConnect, IoAddr, IoStream, StreamServerHandleConn},
 };
-
-use crate::stream::connection::Connection;
 
 #[derive(Debug)]
 pub struct TcpServer<ConnHandler> {
@@ -107,15 +112,34 @@ pub enum ServeError {
     },
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct TcpConnector;
+#[derive(Debug, Clone)]
+pub struct TcpConnector {
+    config: Arc<RwLock<ConnectorConfig>>,
+}
+impl TcpConnector {
+    pub fn new(config: Arc<RwLock<ConnectorConfig>>) -> Self {
+        Self { config }
+    }
+}
 impl StreamConnect for TcpConnector {
-    type Connection = Connection;
-
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Connection> {
-        let stream = TcpStream::connect(addr).await?;
+    type Connection = TcpStream;
+    async fn connect(&self, addr: SocketAddr) -> io::Result<TcpStream> {
+        let bind = self
+            .config
+            .read()
+            .unwrap()
+            .bind
+            .get_matched(&addr.ip())
+            .map(|ip| SocketAddr::new(ip, 0))
+            .unwrap_or_else(|| any_addr(&addr.ip()));
+        let socket = match addr.ip() {
+            std::net::IpAddr::V4(_) => TcpSocket::new_v4()?,
+            std::net::IpAddr::V6(_) => TcpSocket::new_v6()?,
+        };
+        socket.bind(bind)?;
+        let stream = socket.connect(addr).await?;
         counter!("stream.tcp.connects").increment(1);
-        Ok(Connection::Tcp(IoTcpStream(stream)))
+        Ok(stream)
     }
 }
 

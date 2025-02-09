@@ -17,7 +17,7 @@ use crate::{
 
 use super::{
     addr::{StreamAddr, StreamType},
-    connect::StreamConnectorTable,
+    connect::StreamTypedConnect,
     context::StreamContext,
     IoStream,
 };
@@ -45,7 +45,7 @@ where
     where
         ST: StreamType + Clone,
         C: std::fmt::Debug + IoStream,
-        CT: StreamConnectorTable<Connection = C, StreamType = ST>,
+        CT: StreamTypedConnect<Connection = C, StreamType = ST>,
     {
         let c = self
             .0
@@ -93,7 +93,7 @@ fn pool_entries_from_proxy_configs<C, CT, ST>(
 ) -> impl Iterator<Item = ConnPoolEntry<StreamAddr<ST>, C>>
 where
     C: std::fmt::Debug + IoStream,
-    CT: StreamConnectorTable<Connection = C, StreamType = ST> + Sync + Send + 'static,
+    CT: StreamTypedConnect<Connection = C, StreamType = ST> + Sync + Send + 'static,
     ST: StreamType,
 {
     proxy_configs.map(move |c| ConnPoolEntry {
@@ -118,7 +118,7 @@ struct PoolConnector<ST, CT> {
 impl<C, CT, ST> tokio_conn_pool::Connect for PoolConnector<ST, CT>
 where
     C: IoStream,
-    CT: StreamConnectorTable<Connection = C, StreamType = ST> + Sync + Send + 'static,
+    CT: StreamTypedConnect<Connection = C, StreamType = ST> + Sync + Send + 'static,
     ST: StreamType,
 {
     type Connection = C;
@@ -168,7 +168,7 @@ pub async fn connect_with_pool<C, CT, ST>(
 ) -> Result<(C, SocketAddr), ConnectError<ST>>
 where
     C: IoAddr + Sync + Send + 'static,
-    CT: StreamConnectorTable<Connection = C, StreamType = ST>,
+    CT: StreamTypedConnect<Connection = C, StreamType = ST>,
     ST: StreamType,
 {
     let stream = stream_context.pool.inner().pull(addr);

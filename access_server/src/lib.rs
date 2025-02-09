@@ -167,7 +167,7 @@ impl AccessServerConfig {
             .collect::<Result<HashMap<_, _>, _>>()?;
 
         // UDP
-        let udp_trace_builder = UdpTracerBuilder::new();
+        let udp_trace_builder = UdpTracerBuilder::new(context.udp.clone());
         let udp_proxy_group_cx = UdpProxyGroupBuildContext {
             proxy_server: udp_proxy_server,
             tracer_builder: &udp_trace_builder,

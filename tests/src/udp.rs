@@ -1,15 +1,22 @@
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{
+        sync::{Arc, RwLock},
+        time::Duration,
+    };
 
     use bytes::BytesMut;
     use common::{
         addr::InternetAddr,
         anti_replay::{TimeValidator, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
+        connect::ConnectorConfig,
         header::route::RouteErrorKind,
         loading::Serve,
         proxy_table::ProxyConfig,
-        udp::{context::UdpContext, proxy_table::UdpProxyConfig, PACKET_BUFFER_LENGTH},
+        udp::{
+            connect::UdpConnector, context::UdpContext, proxy_table::UdpProxyConfig,
+            PACKET_BUFFER_LENGTH,
+        },
     };
     use proxy_client::udp::{trace_rtt, RecvError, UdpProxyClient, UdpProxyClientReadHalf};
     use proxy_server::udp::UdpProxyConnHandler;
@@ -23,19 +30,21 @@ mod tests {
         tokio_chacha20::config::Config::new(key.into())
     }
 
+    fn udp_context() -> UdpContext {
+        UdpContext {
+            session_table: None,
+            connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
+                ConnectorConfig::default(),
+            )))),
+            time_validator: Arc::new(TimeValidator::new(
+                VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
+            )),
+        }
+    }
+
     async fn spawn_proxy(join_set: &mut tokio::task::JoinSet<()>, addr: &str) -> UdpProxyConfig {
         let crypto = create_random_crypto();
-        let time_validator = Arc::new(TimeValidator::new(
-            VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
-        ));
-        let proxy = UdpProxyConnHandler::new(
-            crypto.clone(),
-            None,
-            UdpContext {
-                session_table: None,
-                time_validator,
-            },
-        );
+        let proxy = UdpProxyConnHandler::new(crypto.clone(), None, udp_context());
         let server = proxy.build(addr).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         join_set.spawn(async move {
@@ -85,6 +94,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_proxies() {
+        let context = udp_context();
+
         let mut pkt_buf = BytesMut::with_capacity(PACKET_BUFFER_LENGTH);
         let mut join_set = tokio::task::JoinSet::new();
 
@@ -102,7 +113,7 @@ mod tests {
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let client = UdpProxyClient::establish(proxies.clone(), greet_addr)
+        let client = UdpProxyClient::establish(proxies.clone(), greet_addr, &context)
             .await
             .unwrap();
         let (mut client_read, mut client_write) = client.into_split();
@@ -114,16 +125,15 @@ mod tests {
         read_response(&mut client_read, resp_msg).await.unwrap();
 
         // Trace
-        let time_validator = TimeValidator::new(VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL);
-        let rtt = trace_rtt(&mut pkt_buf, &proxies, &time_validator)
-            .await
-            .unwrap();
+        let rtt = trace_rtt(&mut pkt_buf, &proxies, &context).await.unwrap();
         assert!(rtt > Duration::from_secs(0));
         assert!(rtt < Duration::from_secs(1));
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_clients() {
+        let context = udp_context();
+
         let mut join_set = tokio::task::JoinSet::new();
 
         // Start proxy servers
@@ -145,9 +155,10 @@ mod tests {
         for _ in 0..clients {
             let proxies = proxies.clone();
             let greet_addr = greet_addr.clone();
+            let context = context.clone();
             handles.spawn(async move {
                 // Connect to proxy server
-                let client = UdpProxyClient::establish(proxies, greet_addr)
+                let client = UdpProxyClient::establish(proxies, greet_addr, &context)
                     .await
                     .unwrap();
                 let (mut client_read, mut client_write) = client.into_split();
@@ -168,6 +179,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn stress_test() {
+        let context = udp_context();
+
         let mut join_set = tokio::task::JoinSet::new();
 
         // Start proxy servers
@@ -190,11 +203,12 @@ mod tests {
         for _ in 0..STRESS_PARALLEL {
             let proxies = proxies.clone();
             let greet_addr = greet_addr.clone();
+            let context = context.clone();
             handles.spawn(async move {
                 for _ in 0..STRESS_SERIAL {
                     let greet_addr = greet_addr.clone();
                     // Connect to proxy server
-                    let client = UdpProxyClient::establish(proxies.clone(), greet_addr)
+                    let client = UdpProxyClient::establish(proxies.clone(), greet_addr, &context)
                         .await
                         .unwrap();
                     let (mut client_read, mut client_write) = client.into_split();
@@ -215,6 +229,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_bad_proxy() {
+        let context = udp_context();
+
         let mut join_set = tokio::task::JoinSet::new();
 
         // Start proxy servers
@@ -233,6 +249,7 @@ mod tests {
         let client = UdpProxyClient::establish(
             vec![proxy_1_config.clone(), proxy_2_config, proxy_3_config].into(),
             greet_addr,
+            &context,
         )
         .await
         .unwrap();
@@ -258,6 +275,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_no_proxies() {
+        let context = udp_context();
+
         // Start proxy servers
 
         let mut join_set = tokio::task::JoinSet::new();
@@ -270,7 +289,7 @@ mod tests {
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let client = UdpProxyClient::establish(vec![].into(), greet_addr)
+        let client = UdpProxyClient::establish(vec![].into(), greet_addr, &context)
             .await
             .unwrap();
         let (mut client_read, mut client_write) = client.into_split();

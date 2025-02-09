@@ -1,18 +1,31 @@
-use std::{io, net::SocketAddr, time::Duration};
+use std::{
+    io,
+    net::SocketAddr,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
-use common::stream::connect::{StreamConnectExt, StreamConnectorTable};
+use common::{
+    connect::ConnectorConfig,
+    stream::connect::{StreamConnectExt, StreamTypedConnect},
+};
 
 use super::{
     addr::ConcreteStreamType,
     connection::Connection,
     streams::{
-        kcp::KcpConnector, mptcp::MptcpConnector, rtp::RtpConnector, rtp_mux::RtpMuxConnector,
-        tcp::TcpConnector, tcp_mux::TcpMuxConnector,
+        kcp::KcpConnector,
+        mptcp::MptcpConnector,
+        rtp::RtpConnector,
+        rtp_mux::RtpMuxConnector,
+        tcp::{IoTcpStream, TcpConnector},
+        tcp_mux::TcpMuxConnector,
     },
 };
 
 #[derive(Debug)]
 pub struct ConcreteStreamConnectorTable {
+    config: Arc<RwLock<ConnectorConfig>>,
     tcp: TcpConnector,
     tcp_mux: TcpMuxConnector,
     kcp: KcpConnector,
@@ -21,18 +34,26 @@ pub struct ConcreteStreamConnectorTable {
     rtp_mux: RtpMuxConnector,
 }
 impl ConcreteStreamConnectorTable {
-    pub fn new() -> Self {
+    pub fn new(config: ConnectorConfig) -> Self {
+        let config = Arc::new(RwLock::new(config));
         Self {
-            tcp: TcpConnector,
-            tcp_mux: TcpMuxConnector::new(),
-            kcp: KcpConnector,
+            tcp: TcpConnector::new(config.clone()),
+            tcp_mux: TcpMuxConnector::new(config.clone()),
+            kcp: KcpConnector::new(config.clone()),
             mptcp: MptcpConnector,
-            rtp: RtpConnector,
-            rtp_mux: RtpMuxConnector::new(),
+            rtp: RtpConnector::new(config.clone()),
+            rtp_mux: RtpMuxConnector::new(config.clone()),
+            config,
         }
     }
+    pub fn tcp(&self) -> &TcpConnector {
+        &self.tcp
+    }
+    pub fn replaced_by(&self, config: ConnectorConfig) {
+        *self.config.write().unwrap() = config;
+    }
 }
-impl StreamConnectorTable for ConcreteStreamConnectorTable {
+impl StreamTypedConnect for ConcreteStreamConnectorTable {
     type Connection = Connection;
     type StreamType = ConcreteStreamType;
 
@@ -43,17 +64,14 @@ impl StreamConnectorTable for ConcreteStreamConnectorTable {
         timeout: Duration,
     ) -> io::Result<Connection> {
         match stream_type {
-            ConcreteStreamType::Tcp => self.tcp.timed_connect(addr, timeout).await,
+            ConcreteStreamType::Tcp => Ok(Connection::Tcp(IoTcpStream(
+                self.tcp.timed_connect(addr, timeout).await?,
+            ))),
             ConcreteStreamType::TcpMux => self.tcp_mux.timed_connect(addr, timeout).await,
             ConcreteStreamType::Kcp => self.kcp.timed_connect(addr, timeout).await,
             ConcreteStreamType::Mptcp => self.mptcp.timed_connect(addr, timeout).await,
             ConcreteStreamType::Rtp => self.rtp.timed_connect(addr, timeout).await,
             ConcreteStreamType::RtpMux => self.rtp_mux.timed_connect(addr, timeout).await,
         }
-    }
-}
-impl Default for ConcreteStreamConnectorTable {
-    fn default() -> Self {
-        Self::new()
     }
 }

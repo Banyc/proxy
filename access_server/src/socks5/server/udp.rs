@@ -119,6 +119,7 @@ impl Socks5ServerUdpAccessConnHandler {
         let upstream = UdpProxyClient::establish(
             proxy_chain.chain.clone(),
             flow.upstream.as_ref().unwrap().0.clone(),
+            &self.udp_context,
         )
         .await?;
         let upstream_remote = upstream.remote_addr().clone();

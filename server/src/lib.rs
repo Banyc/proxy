@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use access_server::{AccessServerConfig, AccessServerLoader};
 use common::{
@@ -7,10 +10,14 @@ use common::{
         VALIDATOR_UDP_HDR_TTL,
     },
     config::{merge_map, Merge},
+    connect::ConnectorConfig,
     context::Context,
     error::{AnyError, AnyResult},
     stream::metrics::StreamSessionTable,
-    udp::{context::UdpContext, metrics::UdpSessionTable, proxy_table::UdpProxyConfigBuilder},
+    udp::{
+        connect::UdpConnector, context::UdpContext, metrics::UdpSessionTable,
+        proxy_table::UdpProxyConfigBuilder,
+    },
 };
 use config::ConfigReader;
 use protocol::{
@@ -54,23 +61,28 @@ where
     let mut server_tasks = tokio::task::JoinSet::new();
 
     let stream_pool = Swap::new(ConcreteConnPool::empty());
-    let replay_validator = Arc::new(ReplayValidator::new(
+    let stream_validator = Arc::new(ReplayValidator::new(
         VALIDATOR_TIME_FRAME,
         VALIDATOR_CAPACITY,
     ));
-    let time_validator = Arc::new(TimeValidator::new(
+    let udp_validator = Arc::new(TimeValidator::new(
         VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
     ));
     let context = Context {
         stream: ConcreteStreamContext {
             session_table: serve_context.stream_session_table,
             pool: stream_pool,
-            connector_table: Arc::new(ConcreteStreamConnectorTable::new()),
-            replay_validator: Arc::clone(&replay_validator),
+            connector_table: Arc::new(
+                ConcreteStreamConnectorTable::new(ConnectorConfig::default()),
+            ),
+            replay_validator: Arc::clone(&stream_validator),
         },
         udp: UdpContext {
             session_table: serve_context.udp_session_table,
-            time_validator: Arc::clone(&time_validator),
+            time_validator: Arc::clone(&udp_validator),
+            connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
+                ConnectorConfig::default(),
+            )))),
         },
     };
 
@@ -177,6 +189,11 @@ pub async fn spawn_and_clean(
             .pool
             .build(context.stream.connector_table.clone(), &stream_proxy_server)?,
     );
+    context
+        .stream
+        .connector_table
+        .replaced_by(config.connector.clone());
+    *context.udp.connector.config().write().unwrap() = config.connector.clone();
 
     config
         .access_server
@@ -243,6 +260,8 @@ impl Merge for UdpConfig {
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     #[serde(default)]
+    pub connector: ConnectorConfig,
+    #[serde(default)]
     pub access_server: AccessServerConfig,
     #[serde(default)]
     pub proxy_server: ProxyServerConfig,
@@ -258,6 +277,7 @@ impl Merge for ServerConfig {
     where
         Self: Sized,
     {
+        let connector = self.connector.merge(other.connector)?;
         let access_server = self.access_server.merge(other.access_server)?;
         let proxy_server = self.proxy_server.merge(other.proxy_server)?;
         let stream = self.stream.merge(other.stream)?;
@@ -267,6 +287,7 @@ impl Merge for ServerConfig {
             proxy_server,
             stream,
             udp,
+            connector,
         })
     }
 }

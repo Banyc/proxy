@@ -8,9 +8,11 @@ use common::{
     proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{
         addr::StreamAddr,
+        connect::StreamConnectExt,
         io_copy::{ConnContext, CopyBidirectional},
         IoAddr, IoStream, StreamServerHandleConn,
     },
+    udp::TIMEOUT,
 };
 use protocol::stream::{
     addr::ConcreteStreamType,
@@ -360,7 +362,13 @@ impl Socks5ServerTcpAccessConnHandler {
                         );
                     }
                 };
-                let upstream = match tokio::net::TcpStream::connect(sock_addr).await {
+                let upstream = match self
+                    .stream_context
+                    .connector_table
+                    .tcp()
+                    .timed_connect(sock_addr, TIMEOUT)
+                    .await
+                {
                     Ok(upstream) => upstream,
                     Err(e) => {
                         return (

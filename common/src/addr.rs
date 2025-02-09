@@ -19,6 +19,21 @@ const RESOLVED_SOCKET_ADDR_SIZE: usize = 128;
 static RESOLVED_SOCKET_ADDR: LazyLock<Mutex<WeakLru<Arc<str>, IpAddr, RESOLVED_SOCKET_ADDR_SIZE>>> =
     LazyLock::new(|| Mutex::new(WeakLru::new()));
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BothVerIp {
+    pub v4: Option<Ipv4Addr>,
+    pub v6: Option<Ipv6Addr>,
+}
+impl BothVerIp {
+    pub fn get_matched(&self, ip_version: &IpAddr) -> Option<IpAddr> {
+        Some(match ip_version {
+            IpAddr::V4(_) => self.v4?.into(),
+            IpAddr::V6(_) => self.v6?.into(),
+        })
+    }
+}
+
 pub fn any_addr(ip_version: &IpAddr) -> SocketAddr {
     let any_ip = match ip_version {
         IpAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),
@@ -70,6 +85,7 @@ impl FromStr for InternetAddr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub enum InternetAddrKind {
     SocketAddr(SocketAddr),
     DomainName { addr: Arc<str>, port: u16 },
