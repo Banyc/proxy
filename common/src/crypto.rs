@@ -90,10 +90,10 @@ pub mod tests {
     use super::*;
 
     pub fn create_random_crypto(len: usize) -> XorCrypto {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut key = Vec::new();
         for _ in 0..len {
-            key.push(rng.gen());
+            key.push(rng.random());
         }
         XorCrypto::new(key.into())
     }

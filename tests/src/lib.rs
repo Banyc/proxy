@@ -9,10 +9,10 @@ pub const STRESS_SERIAL: usize = 2;
 pub const STRESS_CHAINS: usize = 2;
 
 pub fn create_random_crypto() -> XorCrypto {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut key = Vec::new();
     for _ in 0..MAX_HEADER_LEN {
-        key.push(rng.gen());
+        key.push(rng.random());
     }
     XorCrypto::new(key.into())
 }

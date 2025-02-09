@@ -150,12 +150,12 @@ where
             }
         };
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         if scores.sum == 0. {
-            let i = rng.gen_range(0..self.chains.len());
+            let i = rng.random_range(0..self.chains.len());
             return self.chains[i].weighted();
         }
-        let mut rand_score = rng.gen_range(0. ..scores.sum);
+        let mut rand_score = rng.random_range(0. ..scores.sum);
         for &(i, score) in scores.scores.iter() {
             if rand_score < score {
                 return self.chains[i].weighted();

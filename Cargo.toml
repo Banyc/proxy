@@ -39,7 +39,7 @@ mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.4" }
 notify = "7"
 pin-project-lite = "0.2"
 primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.58" }
-rand = "0.8"
+rand = "0.9"
 regex = "1"
 rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.68" }
 scopeguard = "1"
