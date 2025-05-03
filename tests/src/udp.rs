@@ -265,11 +265,11 @@ mod tests {
             RecvError::Response { err, addr } => {
                 match err.kind {
                     RouteErrorKind::Loopback => {}
-                    _ => panic!("Unexpected error: {:?}", err),
+                    _ => panic!("Unexpected error: {err:?}"),
                 }
                 assert_eq!(addr, proxy_1_config.address);
             }
-            _ => panic!("Unexpected error: {:?}", err),
+            _ => panic!("Unexpected error: {err:?}"),
         }
     }
 

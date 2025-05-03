@@ -55,7 +55,7 @@ impl Deref for InternetAddr {
 impl Display for InternetAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self(InternetAddrKind::SocketAddr(addr)) => write!(f, "{}", addr),
+            Self(InternetAddrKind::SocketAddr(addr)) => write!(f, "{addr}"),
             Self(InternetAddrKind::DomainName { addr, port }) => write!(f, "{addr}:{port}",),
         }
     }

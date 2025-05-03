@@ -141,7 +141,7 @@ impl<ST: Display> Display for StreamLog<ST> {
             upstream_addrs,
         )?;
         if let Some(downstream_addr) = self.downstream_addr {
-            write!(f, ",dn:{}", downstream_addr)?;
+            write!(f, ",dn:{downstream_addr}")?;
         }
         Ok(())
     }
@@ -156,9 +156,9 @@ impl<ST: Display> Display for SimplifiedStreamLog<ST> {
                 format!("{},{}", self.upstream_addr, self.upstream_sock_addr.ip())
             }
         };
-        write!(f, "{:.1}s,up{{{}}}", duration, upstream_addrs)?;
+        write!(f, "{duration:.1}s,up{{{upstream_addrs}}}")?;
         if let Some(downstream_addr) = self.downstream_addr {
-            write!(f, ",dn:{}", downstream_addr)?;
+            write!(f, ",dn:{downstream_addr}")?;
         }
         Ok(())
     }

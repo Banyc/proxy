@@ -116,7 +116,7 @@ pub struct MptcpConnector;
 impl StreamConnect for MptcpConnector {
     type Connection = Connection;
     async fn connect(&self, addr: SocketAddr) -> io::Result<Connection> {
-        let addrs = core::iter::repeat(()).take(STREAMS).map(|()| addr);
+        let addrs = std::iter::repeat_n((), STREAMS).map(|()| addr);
         let stream = MptcpStream::connect(addrs).await?;
         counter!("stream.mptcp.connects").increment(1);
         Ok(Connection::Mptcp(IoMptcpStream(stream)))

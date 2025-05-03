@@ -352,7 +352,7 @@ mod test {
         match r {
             Ok(_) => panic!("unexpected success"),
             Err(ref e) if e.kind() == io::ErrorKind::TimedOut => (),
-            Err(e) => panic!("{:?}", e),
+            Err(e) => panic!("{e:?}"),
         }
     }
 }

@@ -46,7 +46,7 @@ impl UsernamePasswordRequest {
         if version != USERNAME_PASSWORD_VERSION {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("Unsupported version: {}", version),
+                format!("Unsupported version: {version}"),
             ));
         }
         let mut username_buf = [0u8; u8::MAX as _];
@@ -109,7 +109,7 @@ impl UsernamePasswordResponse {
         if version != USERNAME_PASSWORD_VERSION {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("Unsupported version: {}", version),
+                format!("Unsupported version: {version}"),
             ));
         }
         let status = reader.read_u8().await?;

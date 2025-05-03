@@ -467,10 +467,7 @@ impl Socks5ServerTcpAccessConnHandler {
         {
             let negotiation_response = NegotiationResponse { method: None };
             negotiation_response.encode(&mut stream).await?;
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "No auth method supported",
-            ));
+            return Err(io::Error::other("No auth method supported"));
         }
         let negotiation_response = NegotiationResponse {
             method: Some(MethodIdentifier::NoAuth),
@@ -492,13 +489,10 @@ impl Socks5ServerTcpAccessConnHandler {
                     status: UsernamePasswordStatus::Failure(NonZeroU8::new(1).unwrap()),
                 };
                 response.encode(&mut stream).await?;
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!(
-                        "Username not found: {}",
-                        String::from_utf8_lossy(request.username())
-                    ),
-                ));
+                return Err(io::Error::other(format!(
+                    "Username not found: {}",
+                    String::from_utf8_lossy(request.username())
+                )));
             }
         };
         if request.password() != password.as_ref() {
@@ -506,14 +500,11 @@ impl Socks5ServerTcpAccessConnHandler {
                 status: UsernamePasswordStatus::Failure(NonZeroU8::new(2).unwrap()),
             };
             response.encode(&mut stream).await?;
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!(
-                    "Password incorrect: {{ username: {}, password: {} }}",
-                    String::from_utf8_lossy(request.username()),
-                    String::from_utf8_lossy(request.password()),
-                ),
-            ));
+            return Err(io::Error::other(format!(
+                "Password incorrect: {{ username: {}, password: {} }}",
+                String::from_utf8_lossy(request.username()),
+                String::from_utf8_lossy(request.password()),
+            )));
         }
         let response = UsernamePasswordResponse {
             status: UsernamePasswordStatus::Success,
@@ -546,6 +537,7 @@ pub enum EstablishProxyChainError {
     #[error("{0}")]
     StreamEstablish(#[from] StreamEstablishError),
 }
+#[allow(clippy::large_enum_variant)]
 pub enum EstablishResult<S> {
     Blocked {
         destination: InternetAddr,
@@ -566,6 +558,7 @@ pub enum EstablishResult<S> {
         payload_crypto: Option<tokio_chacha20::config::Config>,
     },
 }
+#[allow(clippy::large_enum_variant)]
 enum RequestResult {
     Blocked {
         destination: InternetAddr,

@@ -14,8 +14,8 @@ use tracing::info;
 use crate::ttl_cell::TtlCell;
 
 use super::{
-    AddressString, GaugedProxyChain, ProxyConfig, Tracer, WeightedProxyChain,
-    WeightedProxyChainBuildError, WeightedProxyChainBuilder, TRACE_INTERVAL,
+    AddressString, GaugedProxyChain, ProxyConfig, TRACE_INTERVAL, Tracer, WeightedProxyChain,
+    WeightedProxyChainBuildError, WeightedProxyChainBuilder,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,5 +227,6 @@ fn normalize(list: &[Option<f64>]) -> Vec<f64> {
             }
         }
     };
+    #[allow(clippy::let_and_return)]
     hat
 }
