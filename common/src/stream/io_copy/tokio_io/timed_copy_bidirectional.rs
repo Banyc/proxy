@@ -6,7 +6,7 @@ use std::{
 use async_speed_limit::Limiter;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::{copy_bidirectional, CopyBiErrorKind, TimeoutStreamShared};
+use super::{CopyBiErrorKind, TimeoutStreamShared, copy_bidirectional};
 
 const TIMEOUT: Duration = Duration::from_secs(60);
 

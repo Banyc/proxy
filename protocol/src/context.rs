@@ -1,7 +1,7 @@
 use common::context::Context;
 
 use crate::stream::{
-    addr::ConcreteStreamType, connect::ConcreteStreamConnectorTable, connection::Connection,
+    addr::ConcreteStreamType, connect::ConcreteStreamConnectorTable, connection::Conn,
 };
 
-pub type ConcreteContext = Context<Connection, ConcreteStreamConnectorTable, ConcreteStreamType>;
+pub type ConcreteContext = Context<Conn, ConcreteStreamConnectorTable, ConcreteStreamType>;

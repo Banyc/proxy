@@ -17,18 +17,18 @@ pub mod pool;
 pub mod steer;
 pub mod xor;
 
-pub trait IoStream:
+pub trait OwnIoStream:
     std::fmt::Debug + AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static
 {
 }
 
-pub trait IoAddr {
+pub trait HasIoAddr {
     fn peer_addr(&self) -> io::Result<SocketAddr>;
     fn local_addr(&self) -> io::Result<SocketAddr>;
 }
 
 pub trait StreamServerHandleConn: loading::HandleConn {
-    fn handle_stream<S>(&self, stream: S) -> impl std::future::Future<Output = ()> + Send
+    fn handle_stream<Stream>(&self, stream: Stream) -> impl std::future::Future<Output = ()> + Send
     where
-        S: IoStream + IoAddr + std::fmt::Debug;
+        Stream: OwnIoStream + HasIoAddr + std::fmt::Debug;
 }

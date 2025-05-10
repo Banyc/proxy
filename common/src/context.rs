@@ -4,13 +4,13 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct Context<C, CT, ST> {
-    pub stream: StreamContext<C, CT, ST>,
+pub struct Context<Conn, ConnectorTable, StreamType> {
+    pub stream: StreamContext<Conn, ConnectorTable, StreamType>,
     pub udp: UdpContext,
 }
-impl<C, CT, ST> Clone for Context<C, CT, ST>
+impl<Conn, ConnectorTable, StreamType> Clone for Context<Conn, ConnectorTable, StreamType>
 where
-    CT: StreamTypedConnect<Connection = C, StreamType = ST>,
+    ConnectorTable: StreamTypedConnect<Conn = Conn, StreamType = StreamType>,
 {
     fn clone(&self) -> Self {
         Self {

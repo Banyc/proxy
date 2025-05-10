@@ -11,41 +11,43 @@ use tokio_conn_pool::{ConnPool, ConnPoolEntry};
 use crate::{
     config::{Merge, SharableConfig},
     header::heartbeat::send_noop,
-    proxy_table::{AddressString, ProxyConfig, ProxyConfigBuildError, ProxyConfigBuilder},
-    stream::IoAddr,
+    proxy_table::{IntoAddr, ProxyConfig, ProxyConfigBuildError, ProxyConfigBuilder},
+    stream::HasIoAddr,
 };
 
 use super::{
-    addr::{StreamAddr, StreamType},
+    OwnIoStream,
+    addr::{AsStreamType, StreamAddr},
     connect::StreamTypedConnect,
     context::StreamContext,
-    IoStream,
 };
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[serde(bound(deserialize = "AS: Deserialize<'de>"))]
-pub struct PoolBuilder<AS>(#[serde(default)] pub Vec<SharableConfig<ProxyConfigBuilder<AS>>>);
-impl<AS> PoolBuilder<AS> {
+#[serde(bound(deserialize = "AddrStr: Deserialize<'de>"))]
+pub struct PoolBuilder<AddrStr>(
+    #[serde(default)] pub Vec<SharableConfig<ProxyConfigBuilder<AddrStr>>>,
+);
+impl<AddrStr> PoolBuilder<AddrStr> {
     pub fn new() -> Self {
         Self(vec![])
     }
 }
-impl<AS, ST> PoolBuilder<AS>
+impl<AddrStr, StreamType> PoolBuilder<AddrStr>
 where
-    AS: AddressString<Address = StreamAddr<ST>>,
+    AddrStr: IntoAddr<Addr = StreamAddr<StreamType>>,
 {
-    pub fn build<C, CT>(
+    pub fn build<Conn, ConnectorTable>(
         self,
-        connector_table: Arc<CT>,
-        proxy_server: &HashMap<Arc<str>, ProxyConfig<StreamAddr<ST>>>,
-    ) -> Result<ConnPool<StreamAddr<ST>, C>, PoolBuildError>
+        connector_table: Arc<ConnectorTable>,
+        proxy_server: &HashMap<Arc<str>, ProxyConfig<StreamAddr<StreamType>>>,
+    ) -> Result<ConnPool<StreamAddr<StreamType>, Conn>, PoolBuildError>
     where
-        ST: StreamType + Clone,
-        C: std::fmt::Debug + IoStream,
-        CT: StreamTypedConnect<Connection = C, StreamType = ST>,
+        StreamType: AsStreamType + Clone,
+        Conn: std::fmt::Debug + OwnIoStream,
+        ConnectorTable: StreamTypedConnect<Conn = Conn, StreamType = StreamType>,
     {
         let c = self
             .0
@@ -70,12 +72,12 @@ pub enum PoolBuildError {
     #[error("Proxy server key not found: {0}")]
     ProxyServerKeyNotFound(Arc<str>),
 }
-impl<SAS> Default for PoolBuilder<SAS> {
+impl<AddrStr> Default for PoolBuilder<AddrStr> {
     fn default() -> Self {
         Self::new()
     }
 }
-impl<SAS> Merge for PoolBuilder<SAS> {
+impl<AddrStr> Merge for PoolBuilder<AddrStr> {
     type Error = Infallible;
 
     fn merge(mut self, other: Self) -> Result<Self, Self::Error>
@@ -87,14 +89,15 @@ impl<SAS> Merge for PoolBuilder<SAS> {
     }
 }
 
-fn pool_entries_from_proxy_configs<C, CT, ST>(
-    proxy_configs: impl Iterator<Item = ProxyConfig<StreamAddr<ST>>>,
-    connector_table: Arc<CT>,
-) -> impl Iterator<Item = ConnPoolEntry<StreamAddr<ST>, C>>
+fn pool_entries_from_proxy_configs<Conn, ConnectorTable, StreamType>(
+    proxy_configs: impl Iterator<Item = ProxyConfig<StreamAddr<StreamType>>>,
+    connector_table: Arc<ConnectorTable>,
+) -> impl Iterator<Item = ConnPoolEntry<StreamAddr<StreamType>, Conn>>
 where
-    C: std::fmt::Debug + IoStream,
-    CT: StreamTypedConnect<Connection = C, StreamType = ST> + Sync + Send + 'static,
-    ST: StreamType,
+    Conn: std::fmt::Debug + OwnIoStream,
+    ConnectorTable:
+        StreamTypedConnect<Conn = Conn, StreamType = StreamType> + Sync + Send + 'static,
+    StreamType: AsStreamType,
 {
     proxy_configs.map(move |c| ConnPoolEntry {
         key: c.address.clone(),
@@ -110,18 +113,20 @@ where
 }
 
 #[derive(Debug)]
-struct PoolConnector<ST, CT> {
-    proxy_server: ProxyConfig<StreamAddr<ST>>,
-    connector_table: Arc<CT>,
+struct PoolConnector<StreamType, ConnectorTable> {
+    proxy_server: ProxyConfig<StreamAddr<StreamType>>,
+    connector_table: Arc<ConnectorTable>,
 }
 #[async_trait]
-impl<C, CT, ST> tokio_conn_pool::Connect for PoolConnector<ST, CT>
+impl<Conn, ConnectorTable, StreamType> tokio_conn_pool::Connect
+    for PoolConnector<StreamType, ConnectorTable>
 where
-    C: IoStream,
-    CT: StreamTypedConnect<Connection = C, StreamType = ST> + Sync + Send + 'static,
-    ST: StreamType,
+    Conn: OwnIoStream,
+    ConnectorTable:
+        StreamTypedConnect<Conn = Conn, StreamType = StreamType> + Sync + Send + 'static,
+    StreamType: AsStreamType,
 {
-    type Connection = C;
+    type Connection = Conn;
     async fn connect(&self) -> Option<Self::Connection> {
         let addr = self.proxy_server.address.clone();
         let sock_addr = addr.address.to_socket_addr().await.ok()?;
@@ -137,17 +142,17 @@ where
 }
 
 #[derive(Debug)]
-struct PoolHeartbeat<C, ST> {
-    proxy_server: ProxyConfig<StreamAddr<ST>>,
-    connection: PhantomData<C>,
+struct PoolHeartbeat<Conn, StreamType> {
+    proxy_server: ProxyConfig<StreamAddr<StreamType>>,
+    connection: PhantomData<Conn>,
 }
 #[async_trait]
-impl<C, ST> tokio_conn_pool::Heartbeat for PoolHeartbeat<C, ST>
+impl<Conn, StreamType> tokio_conn_pool::Heartbeat for PoolHeartbeat<Conn, StreamType>
 where
-    C: IoStream,
-    ST: StreamType,
+    Conn: OwnIoStream,
+    StreamType: AsStreamType,
 {
-    type Connection = C;
+    type Connection = Conn;
     async fn heartbeat(&self, mut conn: Self::Connection) -> Option<Self::Connection> {
         send_noop(
             &mut conn,
@@ -160,16 +165,16 @@ where
     }
 }
 
-pub async fn connect_with_pool<C, CT, ST>(
-    addr: &StreamAddr<ST>,
-    stream_context: &StreamContext<C, CT, ST>,
+pub async fn connect_with_pool<Conn, ConnectorTable, StreamType>(
+    addr: &StreamAddr<StreamType>,
+    stream_context: &StreamContext<Conn, ConnectorTable, StreamType>,
     allow_loopback: bool,
     timeout: Duration,
-) -> Result<(C, SocketAddr), ConnectError<ST>>
+) -> Result<(Conn, SocketAddr), ConnectError<StreamType>>
 where
-    C: IoAddr + Sync + Send + 'static,
-    CT: StreamTypedConnect<Connection = C, StreamType = ST>,
-    ST: StreamType,
+    Conn: HasIoAddr + Sync + Send + 'static,
+    ConnectorTable: StreamTypedConnect<Conn = Conn, StreamType = StreamType>,
+    StreamType: AsStreamType,
 {
     let stream = stream_context.pool.inner().pull(addr);
     let sock_addr = stream.as_ref().and_then(|s| s.peer_addr().ok());
@@ -204,23 +209,23 @@ where
     Ok((stream, sock_addr))
 }
 #[derive(Debug, Error)]
-pub enum ConnectError<ST: std::fmt::Display> {
+pub enum ConnectError<StreamType: std::fmt::Display> {
     #[error("Failed to resolve address: {source}, {addr}")]
     ResolveAddr {
         #[source]
         source: io::Error,
-        addr: StreamAddr<ST>,
+        addr: StreamAddr<StreamType>,
     },
     #[error("Refused to connect to loopback address: {addr}, {sock_addr}")]
     Loopback {
-        addr: StreamAddr<ST>,
+        addr: StreamAddr<StreamType>,
         sock_addr: SocketAddr,
     },
     #[error("Failed to connect to address: {source}, {addr}, {sock_addr}")]
     ConnectAddr {
         #[source]
         source: io::Error,
-        addr: StreamAddr<ST>,
+        addr: StreamAddr<StreamType>,
         sock_addr: SocketAddr,
     },
 }

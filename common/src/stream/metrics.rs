@@ -16,21 +16,21 @@ use crate::{addr::InternetAddrHdv, metrics::display_value};
 
 use super::addr::{StreamAddr, StreamAddrHdv};
 
-pub type StreamSessionTable<ST> = Table<Session<ST>>;
+pub type StreamSessionTable<StreamType> = Table<Session<StreamType>>;
 
 #[derive(Debug)]
-pub struct Session<ST> {
+pub struct Session<StreamType> {
     pub start: SystemTime,
     pub end: Option<SystemTime>,
-    pub destination: Option<StreamAddr<ST>>,
+    pub destination: Option<StreamAddr<StreamType>>,
     pub upstream_local: Option<SocketAddr>,
-    pub upstream_remote: StreamAddr<ST>,
+    pub upstream_remote: StreamAddr<StreamType>,
     pub downstream_local: Arc<str>,
     pub downstream_remote: Option<SocketAddr>,
     pub up_gauge: Option<Mutex<GaugeHandle>>,
     pub dn_gauge: Option<Mutex<GaugeHandle>>,
 }
-impl<ST: fmt::Display> TableRow for Session<ST> {
+impl<StreamType: fmt::Display> TableRow for Session<StreamType> {
     fn schema() -> Vec<(String, LiteralType)> {
         <SessionView as TableRow>::schema()
     }
@@ -40,7 +40,7 @@ impl<ST: fmt::Display> TableRow for Session<ST> {
         TableRow::fields(&view)
     }
 }
-impl<ST> ValueDisplay for Session<ST> {
+impl<StreamType> ValueDisplay for Session<StreamType> {
     fn display_value(header: &str, value: Option<LiteralValue>) -> String {
         display_value(header, value)
     }
@@ -60,7 +60,7 @@ struct SessionView {
     pub dn: Option<GaugeView>,
 }
 impl SessionView {
-    pub fn from_session<ST: fmt::Display>(s: &Session<ST>) -> Self {
+    pub fn from_session<StreamType: fmt::Display>(s: &Session<StreamType>) -> Self {
         let start_unix = s.start.duration_since(UNIX_EPOCH).unwrap();
         let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
 

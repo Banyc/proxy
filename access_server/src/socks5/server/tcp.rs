@@ -7,10 +7,10 @@ use common::{
     loading::{self, HandleConn},
     proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{
+        HasIoAddr, OwnIoStream, StreamServerHandleConn,
         addr::StreamAddr,
         connect::StreamConnectExt,
         io_copy::{ConnContext, CopyBidirectional},
-        IoAddr, IoStream, StreamServerHandleConn,
     },
     udp::TIMEOUT,
 };
@@ -29,11 +29,11 @@ use tracing::{error, trace, warn};
 
 use crate::{
     socks5::messages::{
+        Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,
+        RelayResponse, Reply,
         sub_negotiations::{
             UsernamePasswordRequest, UsernamePasswordResponse, UsernamePasswordStatus,
         },
-        Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,
-        RelayResponse, Reply,
     },
     stream::proxy_table::StreamProxyTableBuildContext,
 };
@@ -144,9 +144,9 @@ pub struct Socks5ServerTcpAccessConnHandler {
 }
 impl HandleConn for Socks5ServerTcpAccessConnHandler {}
 impl StreamServerHandleConn for Socks5ServerTcpAccessConnHandler {
-    async fn handle_stream<S>(&self, stream: S)
+    async fn handle_stream<Stream>(&self, stream: Stream)
     where
-        S: IoStream + IoAddr + std::fmt::Debug,
+        Stream: OwnIoStream + HasIoAddr + std::fmt::Debug,
     {
         let res = self.proxy(stream).await;
         match res {
@@ -176,9 +176,9 @@ impl Socks5ServerTcpAccessConnHandler {
         }
     }
 
-    async fn proxy<S>(&self, downstream: S) -> Result<ProxyResult, ProxyError>
+    async fn proxy<Downstream>(&self, downstream: Downstream) -> Result<ProxyResult, ProxyError>
     where
-        S: IoStream + IoAddr + std::fmt::Debug,
+        Downstream: OwnIoStream + HasIoAddr + std::fmt::Debug,
     {
         let res = self.establish(downstream).await?;
         let (destination, downstream, upstream, payload_crypto) = match res {
@@ -262,9 +262,12 @@ impl Socks5ServerTcpAccessConnHandler {
         Ok(ProxyResult::IoCopy)
     }
 
-    async fn establish<S>(&self, stream: S) -> Result<EstablishResult<S>, EstablishError>
+    async fn establish<Stream>(
+        &self,
+        stream: Stream,
+    ) -> Result<EstablishResult<Stream>, EstablishError>
     where
-        S: IoStream + IoAddr + std::fmt::Debug,
+        Stream: OwnIoStream + HasIoAddr + std::fmt::Debug,
     {
         let (mut stream, relay_request) = self
             .steer(stream)
@@ -426,9 +429,9 @@ impl Socks5ServerTcpAccessConnHandler {
         }
     }
 
-    async fn steer<S>(&self, stream: S) -> io::Result<(S, RelayRequest)>
+    async fn steer<Stream>(&self, stream: Stream) -> io::Result<(Stream, RelayRequest)>
     where
-        S: IoStream + IoAddr + std::fmt::Debug,
+        Stream: OwnIoStream + HasIoAddr + std::fmt::Debug,
     {
         let mut stream = self.negotiate(stream).await?;
 
@@ -437,9 +440,9 @@ impl Socks5ServerTcpAccessConnHandler {
         Ok((stream, relay_request))
     }
 
-    async fn negotiate<S>(&self, mut stream: S) -> io::Result<S>
+    async fn negotiate<Stream>(&self, mut stream: Stream) -> io::Result<Stream>
     where
-        S: IoStream + IoAddr + std::fmt::Debug,
+        Stream: OwnIoStream + HasIoAddr + std::fmt::Debug,
     {
         let negotiation_request = NegotiationRequest::decode(&mut stream).await?;
 
@@ -477,9 +480,9 @@ impl Socks5ServerTcpAccessConnHandler {
         Ok(stream)
     }
 
-    async fn username_password<S>(&self, mut stream: S) -> io::Result<S>
+    async fn username_password<Stream>(&self, mut stream: Stream) -> io::Result<Stream>
     where
-        S: IoStream + IoAddr + std::fmt::Debug,
+        Stream: OwnIoStream + HasIoAddr + std::fmt::Debug,
     {
         let request = UsernamePasswordRequest::decode(&mut stream).await?;
         let password = match self.users.get(request.username()) {

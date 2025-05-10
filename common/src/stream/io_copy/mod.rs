@@ -15,8 +15,8 @@ use tracing::info;
 use crate::log::Timing;
 
 use super::{
-    addr::{StreamAddr, StreamType},
-    log::{StreamLog, StreamProxyLog, LOGGER},
+    addr::{AsStreamType, StreamAddr},
+    log::{LOGGER, StreamLog, StreamProxyLog},
     metrics::{Session, StreamSessionTable},
 };
 
@@ -24,19 +24,19 @@ pub mod tokio_io;
 
 pub const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
 
-pub struct CopyBidirectional<DS, US, ST> {
-    pub downstream: DS,
-    pub upstream: US,
+pub struct CopyBidirectional<Downstream, Upstream, StreamType> {
+    pub downstream: Downstream,
+    pub upstream: Upstream,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
     pub speed_limiter: Limiter,
-    pub conn_context: ConnContext<ST>,
+    pub conn_context: ConnContext<StreamType>,
 }
 
-impl<DS, US, ST> CopyBidirectional<DS, US, ST>
+impl<Downstream, Upstream, StreamType> CopyBidirectional<Downstream, Upstream, StreamType>
 where
-    US: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    DS: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    ST: StreamType,
+    Upstream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Downstream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    StreamType: AsStreamType,
 {
     pub async fn serve_as_proxy_server(
         self,
@@ -68,7 +68,7 @@ where
         res
     }
 
-    fn session(&self) -> Option<(RowOwnedGuard<Session<ST>>, ReadGauge, WriteGauge)> {
+    fn session(&self) -> Option<(RowOwnedGuard<Session<StreamType>>, ReadGauge, WriteGauge)> {
         self.conn_context.session_table.as_ref().map(|s| {
             let (up_handle, up) = tokio_throughput::gauge();
             let (dn_handle, dn) = tokio_throughput::gauge();
@@ -94,13 +94,13 @@ where
     async fn serve(
         self,
         session: Option<(
-            monitor_table::table::RowOwnedGuard<Session<ST>>,
+            monitor_table::table::RowOwnedGuard<Session<StreamType>>,
             ReadGauge,
             WriteGauge,
         )>,
         en_dir: EncryptionDirection,
         log_prefix: &str,
-    ) -> (StreamLog<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
+    ) -> (StreamLog<StreamType>, Result<(), tokio_io::CopyBiErrorKind>) {
         let res = match session {
             Some((session, r, w)) => {
                 let downstream = tokio_throughput::WholeStream::new(self.downstream, r, w);
@@ -148,18 +148,21 @@ where
     }
 }
 
-pub struct ConnContext<ST> {
+pub struct ConnContext<StreamType> {
     pub start: (Instant, SystemTime),
-    pub upstream_remote: StreamAddr<ST>,
+    pub upstream_remote: StreamAddr<StreamType>,
     pub upstream_remote_sock: SocketAddr,
     pub downstream_remote: Option<SocketAddr>,
     pub downstream_local: Arc<str>,
     pub upstream_local: Option<SocketAddr>,
-    pub session_table: Option<StreamSessionTable<ST>>,
-    pub destination: Option<StreamAddr<ST>>,
+    pub session_table: Option<StreamSessionTable<StreamType>>,
+    pub destination: Option<StreamAddr<StreamType>>,
 }
 
-fn log<ST: StreamType>(log: StreamLog<ST>, destination: Option<StreamAddr<ST>>) {
+fn log<StreamType: AsStreamType>(
+    log: StreamLog<StreamType>,
+    destination: Option<StreamAddr<StreamType>>,
+) {
     match destination {
         Some(d) => {
             let log = StreamProxyLog {
@@ -185,16 +188,16 @@ pub enum EncryptionDirection {
     Decrypt,
 }
 
-pub async fn copy_bidirectional_with_payload_crypto<DS, US>(
-    downstream: DS,
-    upstream: US,
+pub async fn copy_bidirectional_with_payload_crypto<Downstream, Upstream>(
+    downstream: Downstream,
+    upstream: Upstream,
     payload_crypto: Option<&tokio_chacha20::config::Config>,
     speed_limiter: Limiter,
     en_dir: EncryptionDirection,
 ) -> tokio_io::TimedCopyBidirectionalResult
 where
-    US: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    DS: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Upstream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Downstream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     counter!("stream.io_copies").increment(1);
     gauge!("stream.current_io_copies").increment(1.);
@@ -224,10 +227,10 @@ where
     }
 }
 
-fn get_log_from_copy_result<ST>(
-    conn_context: ConnContext<ST>,
+fn get_log_from_copy_result<StreamType>(
+    conn_context: ConnContext<StreamType>,
     result: tokio_io::TimedCopyBidirectionalResult,
-) -> (StreamLog<ST>, Result<(), tokio_io::CopyBiErrorKind>) {
+) -> (StreamLog<StreamType>, Result<(), tokio_io::CopyBiErrorKind>) {
     let (bytes_uplink, bytes_downlink) = result.amounts;
 
     counter!("stream.up.bytes").increment(bytes_uplink);

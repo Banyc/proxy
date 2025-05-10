@@ -4,11 +4,11 @@ use common::{
     anti_replay::ValidatorRef,
     error::AnyError,
     header::{
-        codec::{timed_read_header_async, timed_write_header_async, CodecError},
+        codec::{CodecError, timed_read_header_async, timed_write_header_async},
         heartbeat::{self, HeartbeatError},
         route::{RouteError, RouteResponse},
     },
-    proxy_table::{convert_proxies_to_header_crypto_pairs, ProxyChain, Tracer, TracerBuilder},
+    proxy_table::{ProxyChain, TraceRtt, BuildTracer, convert_proxies_to_header_crypto_pairs},
     stream::pool::connect_with_pool,
 };
 use metrics::counter;
@@ -126,7 +126,7 @@ impl StreamTracerBuilder {
         Self { stream_context }
     }
 }
-impl TracerBuilder for StreamTracerBuilder {
+impl BuildTracer for StreamTracerBuilder {
     type Tracer = StreamTracer;
 
     fn build(&self) -> Self::Tracer {
@@ -143,8 +143,8 @@ impl StreamTracer {
         Self { stream_context }
     }
 }
-impl Tracer for StreamTracer {
-    type Address = ConcreteStreamAddr;
+impl TraceRtt for StreamTracer {
+    type Addr = ConcreteStreamAddr;
 
     async fn trace_rtt(
         &self,

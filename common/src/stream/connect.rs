@@ -30,7 +30,7 @@ pub trait StreamConnectExt: StreamConnect {
 impl<T: StreamConnect> StreamConnectExt for T {}
 
 pub trait StreamTypedConnect: std::fmt::Debug + Sync + Send + 'static {
-    type Connection;
+    type Conn;
     type StreamType;
 
     fn timed_connect(
@@ -38,5 +38,5 @@ pub trait StreamTypedConnect: std::fmt::Debug + Sync + Send + 'static {
         stream_type: &Self::StreamType,
         addr: SocketAddr,
         timeout: Duration,
-    ) -> impl std::future::Future<Output = io::Result<Self::Connection>> + Send;
+    ) -> impl std::future::Future<Output = io::Result<Self::Conn>> + Send;
 }

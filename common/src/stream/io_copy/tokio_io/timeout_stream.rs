@@ -12,7 +12,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::time::{sleep_until, Instant, Sleep};
+use tokio::time::{Instant, Sleep, sleep_until};
 
 pin_project! {
     #[derive(Debug)]
@@ -85,22 +85,22 @@ impl TimeoutState {
 pin_project! {
     /// An `AsyncRead` and `AsyncWrite`er which applies a timeout to read and write operations.
     #[derive(Debug)]
-    pub struct TimeoutStreamShared<S> {
+    pub struct TimeoutStreamShared<Stream> {
         #[pin]
-        stream: S,
+        stream: Stream,
         #[pin]
         state: TimeoutState,
     }
 }
 
-impl<S> TimeoutStreamShared<S>
+impl<Stream> TimeoutStreamShared<Stream>
 where
-    S: AsyncRead + AsyncWrite,
+    Stream: AsyncRead + AsyncWrite,
 {
     /// Returns a new `TimeoutStreamShared` wrapping the specified stream.
     ///
     /// There is initially no timeout.
-    pub fn new(stream: S) -> TimeoutStreamShared<S> {
+    pub fn new(stream: Stream) -> TimeoutStreamShared<Stream> {
         TimeoutStreamShared {
             stream,
             state: TimeoutState::new(),
@@ -129,22 +129,22 @@ where
     }
 
     /// Returns a shared reference to the inner stream.
-    pub fn get_ref(&self) -> &S {
+    pub fn get_ref(&self) -> &Stream {
         &self.stream
     }
 
     /// Returns a mutable reference to the inner stream.
-    pub fn get_mut(&mut self) -> &mut S {
+    pub fn get_mut(&mut self) -> &mut Stream {
         &mut self.stream
     }
 
     /// Returns a pinned mutable reference to the inner stream.
-    pub fn get_pin_mut(self: Pin<&mut Self>) -> Pin<&mut S> {
+    pub fn get_pin_mut(self: Pin<&mut Self>) -> Pin<&mut Stream> {
         self.project().stream
     }
 
     /// Consumes the `TimeoutStreamShared`, returning the inner stream.
-    pub fn into_inner(self) -> S {
+    pub fn into_inner(self) -> Stream {
         self.stream
     }
 }

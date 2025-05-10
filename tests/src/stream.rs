@@ -180,9 +180,9 @@ mod tests {
         }
     }
 
-    async fn read_response<S>(stream: &mut S, resp_msg: &[u8]) -> io::Result<()>
+    async fn read_response<Stream>(stream: &mut Stream, resp_msg: &[u8]) -> io::Result<()>
     where
-        S: AsyncRead + Unpin,
+        Stream: AsyncRead + Unpin,
     {
         let mut buf = [0; 1024];
         let msg_buf = &mut buf[..resp_msg.len()];

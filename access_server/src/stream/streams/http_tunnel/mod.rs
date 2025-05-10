@@ -9,18 +9,18 @@ use common::{
     log::Timing,
     proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{
+        HasIoAddr, OwnIoStream, StreamServerHandleConn,
         addr::StreamAddr,
         connect::StreamConnectExt,
         io_copy::{ConnContext, CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
-        log::{SimplifiedStreamLog, SimplifiedStreamProxyLog, LOGGER},
+        log::{LOGGER, SimplifiedStreamLog, SimplifiedStreamProxyLog},
         metrics::{Session, StreamSessionTable},
-        IoAddr, IoStream, StreamServerHandleConn,
     },
     udp::TIMEOUT,
 };
-use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
+use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use hyper::{
-    body::Incoming, http, service::service_fn, upgrade::Upgraded, Method, Request, Response,
+    Method, Request, Response, body::Incoming, http, service::service_fn, upgrade::Upgraded,
 };
 use hyper_util::rt::TokioIo;
 use monitor_table::table::RowOwnedGuard;
@@ -31,7 +31,7 @@ use protocol::stream::{
     proxy_table::{StreamProxyGroup, StreamProxyTable, StreamProxyTableBuilder},
     streams::tcp::TcpServer,
 };
-use proxy_client::stream::{establish, StreamEstablishError};
+use proxy_client::stream::{StreamEstablishError, establish};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -134,9 +134,9 @@ impl HttpAccessConnHandler {
         }
     }
 
-    async fn proxy<S>(&self, downstream: S) -> Result<(), TunnelError>
+    async fn proxy<Downstream>(&self, downstream: Downstream) -> Result<(), TunnelError>
     where
-        S: IoStream,
+        Downstream: OwnIoStream,
     {
         hyper::server::conn::http1::Builder::new()
             .preserve_header_case(true)
@@ -327,13 +327,13 @@ impl HttpAccessConnHandler {
         Ok(Response::new(empty()))
     }
 }
-async fn tls_http<S>(
-    upstream: S,
+async fn tls_http<Upstream>(
+    upstream: Upstream,
     req: Request<Incoming>,
     session_guard: Option<RowOwnedGuard<Session<ConcreteStreamType>>>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>
 where
-    S: AsyncWrite + AsyncRead + Send + Unpin + 'static,
+    Upstream: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
     // Establish TLS connection
     let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
@@ -457,9 +457,9 @@ pub enum TunnelError {
 impl loading::HandleConn for HttpAccessConnHandler {}
 impl StreamServerHandleConn for HttpAccessConnHandler {
     #[instrument(skip(self, stream))]
-    async fn handle_stream<S>(&self, stream: S)
+    async fn handle_stream<Stream>(&self, stream: Stream)
     where
-        S: IoStream,
+        Stream: OwnIoStream,
     {
         let res = self.proxy(stream).await;
         if let Err(e) = res {

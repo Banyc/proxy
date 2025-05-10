@@ -10,17 +10,17 @@ use crate::{
 };
 
 use super::{
-    AddressString, ProxyConfigBuildError, ProxyGroup, ProxyGroupBuildContext, ProxyGroupBuildError,
-    ProxyGroupBuilder, Tracer, TracerBuilder,
+    BuildTracer, IntoAddr, ProxyConfigBuildError, ProxyGroup, ProxyGroupBuildContext,
+    ProxyGroupBuildError, ProxyGroupBuilder, TraceRtt,
 };
 
 #[derive(Debug)]
-pub struct ProxyTableBuildContext<'caller, A, TB> {
+pub struct ProxyTableBuildContext<'caller, Addr, TracerBuilder> {
     pub matcher: &'caller HashMap<Arc<str>, Matcher>,
-    pub proxy_group: &'caller HashMap<Arc<str>, ProxyGroup<A>>,
-    pub proxy_group_cx: ProxyGroupBuildContext<'caller, A, TB>,
+    pub proxy_group: &'caller HashMap<Arc<str>, ProxyGroup<Addr>>,
+    pub proxy_group_cx: ProxyGroupBuildContext<'caller, Addr, TracerBuilder>,
 }
-impl<A, TB> Clone for ProxyTableBuildContext<'_, A, TB> {
+impl<Addr, TracerBuilder> Clone for ProxyTableBuildContext<'_, Addr, TracerBuilder> {
     fn clone(&self) -> Self {
         Self {
             matcher: self.matcher,
@@ -33,20 +33,20 @@ impl<A, TB> Clone for ProxyTableBuildContext<'_, A, TB> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(transparent)]
-pub struct ProxyTableBuilder<AS> {
+pub struct ProxyTableBuilder<AddrStr> {
     #[serde(flatten)]
-    pub entries: Vec<ProxyTableEntryBuilder<AS>>,
+    pub entries: Vec<ProxyTableEntryBuilder<AddrStr>>,
 }
-impl<AS> ProxyTableBuilder<AS> {
-    pub fn build<A, TB, T>(
+impl<AddrStr> ProxyTableBuilder<AddrStr> {
+    pub fn build<Addr, TracerBuilder, Tracer>(
         self,
-        cx: ProxyTableBuildContext<'_, A, TB>,
-    ) -> Result<ProxyTable<A>, ProxyTableBuildError>
+        cx: ProxyTableBuildContext<'_, Addr, TracerBuilder>,
+    ) -> Result<ProxyTable<Addr>, ProxyTableBuildError>
     where
-        A: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
-        AS: AddressString<Address = A>,
-        TB: TracerBuilder<Tracer = T>,
-        T: Tracer<Address = A> + Sync + Send + 'static,
+        Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
+        AddrStr: IntoAddr<Addr = Addr>,
+        TracerBuilder: BuildTracer<Tracer = Tracer>,
+        Tracer: TraceRtt<Addr = Addr> + Sync + Send + 'static,
     {
         let mut built = vec![];
         for entry in self.entries {
@@ -58,20 +58,20 @@ impl<AS> ProxyTableBuilder<AS> {
 }
 
 #[derive(Debug, Clone)]
-pub struct ProxyTable<A> {
-    entries: Vec<ProxyTableEntry<A>>,
+pub struct ProxyTable<Addr> {
+    entries: Vec<ProxyTableEntry<Addr>>,
 }
-impl<A> ProxyTable<A>
+impl<Addr> ProxyTable<Addr>
 where
-    A: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
+    Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
 {
-    const BLOCK_ACTION: ProxyAction<A> = ProxyAction::Block;
+    const BLOCK_ACTION: ProxyAction<Addr> = ProxyAction::Block;
 
-    pub fn new(entries: Vec<ProxyTableEntry<A>>) -> Self {
+    pub fn new(entries: Vec<ProxyTableEntry<Addr>>) -> Self {
         Self { entries }
     }
 
-    pub fn action(&self, addr: &InternetAddr) -> &ProxyAction<A> {
+    pub fn action(&self, addr: &InternetAddr) -> &ProxyAction<Addr> {
         self.entries
             .iter()
             .find(|&entry| entry.matcher().matches(addr))
@@ -82,20 +82,20 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProxyTableEntryBuilder<AS> {
+pub struct ProxyTableEntryBuilder<AddrStr> {
     matcher: SharableConfig<MatcherBuilder>,
-    action: ProxyActionBuilder<AS>,
+    action: ProxyActionBuilder<AddrStr>,
 }
-impl<AS> ProxyTableEntryBuilder<AS> {
-    pub fn build<A, TB, T>(
+impl<AddrStr> ProxyTableEntryBuilder<AddrStr> {
+    pub fn build<Addr, TracerBuilder, Tracer>(
         self,
-        cx: ProxyTableBuildContext<'_, A, TB>,
-    ) -> Result<ProxyTableEntry<A>, ProxyTableBuildError>
+        cx: ProxyTableBuildContext<'_, Addr, TracerBuilder>,
+    ) -> Result<ProxyTableEntry<Addr>, ProxyTableBuildError>
     where
-        A: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
-        AS: AddressString<Address = A>,
-        TB: TracerBuilder<Tracer = T>,
-        T: Tracer<Address = A> + Sync + Send + 'static,
+        Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
+        AddrStr: IntoAddr<Addr = Addr>,
+        TracerBuilder: BuildTracer<Tracer = Tracer>,
+        Tracer: TraceRtt<Addr = Addr> + Sync + Send + 'static,
     {
         let matcher = match self.matcher {
             SharableConfig::SharingKey(k) => cx
@@ -111,15 +111,15 @@ impl<AS> ProxyTableEntryBuilder<AS> {
 }
 
 #[derive(Debug, Clone)]
-pub struct ProxyTableEntry<A> {
+pub struct ProxyTableEntry<Addr> {
     matcher: Matcher,
-    action: ProxyAction<A>,
+    action: ProxyAction<Addr>,
 }
-impl<A> ProxyTableEntry<A>
+impl<Addr> ProxyTableEntry<Addr>
 where
-    A: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
+    Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
 {
-    pub fn new(matcher: Matcher, action: ProxyAction<A>) -> Self {
+    pub fn new(matcher: Matcher, action: ProxyAction<Addr>) -> Self {
         Self { matcher, action }
     }
 
@@ -127,7 +127,7 @@ where
         &self.matcher
     }
 
-    pub fn action(&self) -> &ProxyAction<A> {
+    pub fn action(&self) -> &ProxyAction<Addr> {
         &self.action
     }
 }
@@ -143,21 +143,21 @@ pub enum ProxyActionTagBuilder {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
-pub enum ProxyActionBuilder<AS> {
+pub enum ProxyActionBuilder<AddrStr> {
     Tagged(ProxyActionTagBuilder),
-    ProxyGroup(SharableConfig<ProxyGroupBuilder<AS>>),
+    ProxyGroup(SharableConfig<ProxyGroupBuilder<AddrStr>>),
 }
-impl<AS> ProxyActionBuilder<AS> {
-    pub fn build<A, TB, T>(
+impl<AddrStr> ProxyActionBuilder<AddrStr> {
+    pub fn build<Addr, TracerBuilder, Tracer>(
         self,
-        proxy_group: &HashMap<Arc<str>, ProxyGroup<A>>,
-        proxy_group_cx: ProxyGroupBuildContext<'_, A, TB>,
-    ) -> Result<ProxyAction<A>, ProxyTableBuildError>
+        proxy_group: &HashMap<Arc<str>, ProxyGroup<Addr>>,
+        proxy_group_cx: ProxyGroupBuildContext<'_, Addr, TracerBuilder>,
+    ) -> Result<ProxyAction<Addr>, ProxyTableBuildError>
     where
-        A: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
-        AS: AddressString<Address = A>,
-        TB: TracerBuilder<Tracer = T>,
-        T: Tracer<Address = A> + Sync + Send + 'static,
+        Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
+        AddrStr: IntoAddr<Addr = Addr>,
+        TracerBuilder: BuildTracer<Tracer = Tracer>,
+        Tracer: TraceRtt<Addr = Addr> + Sync + Send + 'static,
     {
         Ok(match self {
             ProxyActionBuilder::Tagged(ProxyActionTagBuilder::Direct) => ProxyAction::Direct,
@@ -174,10 +174,10 @@ impl<AS> ProxyActionBuilder<AS> {
 }
 
 #[derive(Debug, Clone)]
-pub enum ProxyAction<A> {
+pub enum ProxyAction<Addr> {
     Direct,
     Block,
-    ProxyGroup(Arc<ProxyGroup<A>>),
+    ProxyGroup(Arc<ProxyGroup<Addr>>),
 }
 
 #[derive(Debug, Error)]

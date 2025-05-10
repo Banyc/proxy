@@ -8,12 +8,12 @@ use std::{
 };
 
 use hdv_derive::HdvSerde;
-use primitive::map::{hash_map::HashGetMut, weak_lru::WeakLru, MapInsert};
-use serde::{de::Visitor, Deserialize, Serialize};
+use primitive::map::{MapInsert, hash_map::HashGetMut, weak_lru::WeakLru};
+use serde::{Deserialize, Serialize, de::Visitor};
 use thiserror::Error;
 use tokio::net::lookup_host;
 
-use crate::proxy_table::AddressString;
+use crate::proxy_table::IntoAddr;
 
 const RESOLVED_SOCKET_ADDR_SIZE: usize = 128;
 static RESOLVED_SOCKET_ADDR: LazyLock<Mutex<WeakLru<Arc<str>, IpAddr, RESOLVED_SOCKET_ADDR_SIZE>>> =
@@ -181,10 +181,10 @@ impl From<SocketAddr> for InternetAddrHdv {
 
 #[derive(Debug, Clone)]
 pub struct InternetAddrStr(pub InternetAddr);
-impl AddressString for InternetAddrStr {
-    type Address = InternetAddr;
+impl IntoAddr for InternetAddrStr {
+    type Addr = InternetAddr;
 
-    fn into_address(self) -> Self::Address {
+    fn into_address(self) -> Self::Addr {
         self.0
     }
 }

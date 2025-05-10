@@ -9,10 +9,10 @@ use tracing::{info, instrument, trace, warn};
 use common::{
     error::AnyResult,
     loading,
-    stream::{connect::StreamConnect, IoAddr, IoStream, StreamServerHandleConn},
+    stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn, connect::StreamConnect},
 };
 
-use crate::stream::connection::Connection;
+use crate::stream::connection::Conn;
 
 const STREAMS: usize = 4;
 
@@ -114,12 +114,12 @@ pub enum ServeError {
 #[derive(Debug, Clone, Copy)]
 pub struct MptcpConnector;
 impl StreamConnect for MptcpConnector {
-    type Connection = Connection;
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Connection> {
+    type Connection = Conn;
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Conn> {
         let addrs = std::iter::repeat_n((), STREAMS).map(|()| addr);
         let stream = MptcpStream::connect(addrs).await?;
         counter!("stream.mptcp.connects").increment(1);
-        Ok(Connection::Mptcp(IoMptcpStream(stream)))
+        Ok(Conn::Mptcp(IoMptcpStream(stream)))
     }
 }
 
@@ -157,8 +157,8 @@ impl AsyncRead for IoMptcpStream {
         std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
     }
 }
-impl IoStream for IoMptcpStream {}
-impl IoAddr for IoMptcpStream {
+impl OwnIoStream for IoMptcpStream {}
+impl HasIoAddr for IoMptcpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         self.0.peer_addr().ok_or_else(|| {
             io::Error::new(

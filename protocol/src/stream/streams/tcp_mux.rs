@@ -6,8 +6,9 @@ use std::{
 
 use metrics::counter;
 use mux::{
-    async_async_io::{read::PollRead, write::PollWrite, PollIo},
-    spawn_mux_no_reconnection, MuxError,
+    MuxError,
+    async_async_io::{PollIo, read::PollRead, write::PollWrite},
+    spawn_mux_no_reconnection,
 };
 use thiserror::Error;
 use tokio::{
@@ -21,16 +22,16 @@ use common::{
     connect::ConnectorConfig,
     error::AnyResult,
     loading,
-    stream::{connect::StreamConnect, StreamServerHandleConn},
+    stream::{StreamServerHandleConn, connect::StreamConnect},
 };
 
 use crate::stream::{
-    connection::Connection,
+    connection::Conn,
     streams::mux::{run_mux_accepter, server_mux_config},
 };
 
 use super::mux::{
-    connect_request_channel, run_mux_connector, ConnectRequestTx, IoMuxStream, SocketAddrPair,
+    ConnectRequestTx, IoMuxStream, SocketAddrPair, connect_request_channel, run_mux_connector,
 };
 
 #[derive(Debug)]
@@ -190,12 +191,12 @@ impl TcpMuxConnector {
     }
 }
 impl StreamConnect for TcpMuxConnector {
-    type Connection = Connection;
+    type Connection = Conn;
 
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Connection> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Conn> {
         let ((r, w), addr) = self.connect_request_tx.send(addr).await?;
         counter!("stream.tcp_mux.mux.connects").increment(1);
         let stream = PollIo::new(PollRead::new(r), PollWrite::new(w));
-        Ok(Connection::Mux(IoMuxStream::new(stream, addr)))
+        Ok(Conn::Mux(IoMuxStream::new(stream, addr)))
     }
 }

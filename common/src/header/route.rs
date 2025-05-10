@@ -4,10 +4,10 @@ use thiserror::Error;
 use super::codec::Header;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct RouteRequest<A> {
-    pub upstream: Option<A>,
+pub struct RouteRequest<Addr> {
+    pub upstream: Option<Addr>,
 }
-impl<A> Header for RouteRequest<A> {}
+impl<Addr> Header for RouteRequest<Addr> {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct RouteResponse {
@@ -39,8 +39,8 @@ mod tests {
     use tracing::trace;
 
     use crate::{
-        anti_replay::{ReplayValidator, ValidatorRef, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
-        header::codec::{read_header_async, write_header_async, MAX_HEADER_LEN},
+        anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, ValidatorRef},
+        header::codec::{MAX_HEADER_LEN, read_header_async, write_header_async},
     };
 
     use super::*;

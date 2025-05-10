@@ -4,7 +4,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{
     crypto::{XorCrypto, XorCryptoCursor},
-    stream::{IoAddr, IoStream},
+    stream::{HasIoAddr, OwnIoStream},
 };
 
 #[derive(Debug)]
@@ -35,10 +35,10 @@ impl<S> XorStream<S> {
         XorStream::new(stream, write_crypto_cursor, read_crypto_cursor)
     }
 }
-impl<S> IoStream for XorStream<S> where S: IoStream {}
-impl<S> IoAddr for XorStream<S>
+impl<Stream> OwnIoStream for XorStream<Stream> where Stream: OwnIoStream {}
+impl<Stream> HasIoAddr for XorStream<Stream>
 where
-    S: IoAddr,
+    Stream: HasIoAddr,
 {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         self.async_stream.peer_addr()
@@ -47,9 +47,9 @@ where
         self.async_stream.local_addr()
     }
 }
-impl<S> AsyncWrite for XorStream<S>
+impl<Stream> AsyncWrite for XorStream<Stream>
 where
-    S: AsyncWrite + Unpin,
+    Stream: AsyncWrite + Unpin,
 {
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
@@ -101,9 +101,9 @@ where
         Pin::new(&mut self.async_stream).poll_shutdown(cx)
     }
 }
-impl<S> AsyncRead for XorStream<S>
+impl<Stream> AsyncRead for XorStream<Stream>
 where
-    S: AsyncRead + Unpin,
+    Stream: AsyncRead + Unpin,
 {
     fn poll_read(
         mut self: Pin<&mut Self>,

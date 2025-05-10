@@ -23,7 +23,7 @@ use common::{
 };
 
 use crate::stream::{
-    connection::Connection,
+    connection::Conn,
     streams::mux::{run_mux_accepter, server_mux_config},
 };
 
@@ -178,12 +178,12 @@ impl RtpMuxConnector {
     }
 }
 impl StreamConnect for RtpMuxConnector {
-    type Connection = Connection;
+    type Connection = Conn;
 
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Connection> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Conn> {
         let ((r, w), addr) = self.connect_request_tx.send(addr).await?;
         counter!("stream.rtp_mux.mux.connects").increment(1);
         let stream = PollIo::new(PollRead::new(r), PollWrite::new(w));
-        Ok(Connection::Mux(IoMuxStream::new(stream, addr)))
+        Ok(Conn::Mux(IoMuxStream::new(stream, addr)))
     }
 }

@@ -1,17 +1,17 @@
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProxyConfigBuilder<AS> {
-    pub address: AS,
+pub struct ProxyConfigBuilder<AddrStr> {
+    pub address: AddrStr,
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
 }
-impl<AS> ProxyConfigBuilder<AS> {
-    pub fn build<A>(self) -> Result<ProxyConfig<A>, ProxyConfigBuildError>
+impl<AddrStr> ProxyConfigBuilder<AddrStr> {
+    pub fn build<Addr>(self) -> Result<ProxyConfig<Addr>, ProxyConfigBuildError>
     where
-        AS: AddressString<Address = A>,
+        AddrStr: IntoAddr<Addr = Addr>,
     {
         let header_crypto = self.header_key.build()?;
         let payload_crypto = self.payload_key.map(|p| p.build()).transpose()?;
@@ -29,14 +29,14 @@ pub enum ProxyConfigBuildError {
     Crypto(#[from] tokio_chacha20::config::ConfigBuildError),
 }
 
-pub trait AddressString: Serialize + DeserializeOwned {
-    type Address;
-    fn into_address(self) -> Self::Address;
+pub trait IntoAddr: Serialize + DeserializeOwned {
+    type Addr;
+    fn into_address(self) -> Self::Addr;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct ProxyConfig<A> {
-    pub address: A,
+pub struct ProxyConfig<Addr> {
+    pub address: Addr,
     pub header_crypto: tokio_chacha20::config::Config,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
 }

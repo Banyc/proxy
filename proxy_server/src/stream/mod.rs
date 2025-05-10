@@ -5,10 +5,10 @@ use common::{
     addr::ParseInternetAddrError,
     loading,
     stream::{
+        HasIoAddr, OwnIoStream, StreamServerHandleConn,
         io_copy::{ConnContext, CopyBidirectional},
         pool::connect_with_pool,
-        steer::{steer, SteerError},
-        IoAddr, IoStream, StreamServerHandleConn,
+        steer::{SteerError, steer},
     },
 };
 use protocol::stream::{
@@ -110,9 +110,12 @@ impl StreamProxyConnHandler {
     }
 
     #[instrument(skip(self))]
-    async fn proxy<S>(&self, mut downstream: S) -> Result<ProxyResult, StreamProxyServerError>
+    async fn proxy<Downstream>(
+        &self,
+        mut downstream: Downstream,
+    ) -> Result<ProxyResult, StreamProxyServerError>
     where
-        S: IoStream + IoAddr + std::fmt::Debug,
+        Downstream: OwnIoStream + HasIoAddr + std::fmt::Debug,
     {
         // Establish proxy chain
         let upstream = match self.acceptor.establish(&mut downstream).await {
@@ -172,9 +175,9 @@ impl StreamProxyConnHandler {
 impl loading::HandleConn for StreamProxyConnHandler {}
 impl StreamServerHandleConn for StreamProxyConnHandler {
     #[instrument(skip(self))]
-    async fn handle_stream<S>(&self, stream: S)
+    async fn handle_stream<Stream>(&self, stream: Stream)
     where
-        S: IoStream + IoAddr + std::fmt::Debug,
+        Stream: OwnIoStream + HasIoAddr + std::fmt::Debug,
     {
         match self.proxy(stream).await {
             Ok(ProxyResult::IoCopy) => (),
@@ -206,12 +209,12 @@ impl StreamProxyAcceptor {
     }
 
     #[instrument(skip(self))]
-    async fn establish<S>(
+    async fn establish<Downstream>(
         &self,
-        downstream: &mut S,
+        downstream: &mut Downstream,
     ) -> Result<Option<ConnAndAddr>, StreamProxyAcceptorError>
     where
-        S: IoStream + IoAddr + std::fmt::Debug,
+        Downstream: OwnIoStream + HasIoAddr + std::fmt::Debug,
     {
         let addr = match steer(
             downstream,

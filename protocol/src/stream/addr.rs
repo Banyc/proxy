@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize, de::Visitor};
 
 use common::{
     addr::ParseInternetAddrError,
-    proxy_table::AddressString,
-    stream::addr::{StreamAddr, StreamType},
+    proxy_table::IntoAddr,
+    stream::addr::{AsStreamType, StreamAddr},
 };
 
 pub type ConcreteStreamAddr = StreamAddr<ConcreteStreamType>;
@@ -21,7 +21,7 @@ pub enum ConcreteStreamType {
     RtpMux,
     RtpMuxFec,
 }
-impl StreamType for ConcreteStreamType {}
+impl AsStreamType for ConcreteStreamType {}
 impl fmt::Display for ConcreteStreamType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -54,10 +54,10 @@ impl FromStr for ConcreteStreamType {
 
 #[derive(Debug, Clone)]
 pub struct ConcreteStreamAddrStr(pub ConcreteStreamAddr);
-impl AddressString for ConcreteStreamAddrStr {
-    type Address = ConcreteStreamAddr;
+impl IntoAddr for ConcreteStreamAddrStr {
+    type Addr = ConcreteStreamAddr;
 
-    fn into_address(self) -> Self::Address {
+    fn into_address(self) -> Self::Addr {
         self.0
     }
 }

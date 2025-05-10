@@ -9,19 +9,19 @@ use std::{
 use bytes::BytesMut;
 use common::{
     addr::InternetAddr,
-    anti_replay::{TimeValidator, ValidatorRef, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
+    anti_replay::{TimeValidator, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL, ValidatorRef},
     error::AnyError,
     header::{
-        codec::{read_header, write_header, CodecError, MAX_HEADER_LEN},
+        codec::{CodecError, MAX_HEADER_LEN, read_header, write_header},
         route::{RouteError, RouteResponse},
     },
-    proxy_table::{convert_proxies_to_header_crypto_pairs, Tracer, TracerBuilder},
+    proxy_table::{TraceRtt, BuildTracer, convert_proxies_to_header_crypto_pairs},
     ttl_cell::TtlCell,
     udp::{
+        PACKET_BUFFER_LENGTH,
         context::UdpContext,
         io_copy::{UdpRecv, UdpSend},
         proxy_table::UdpProxyChain,
-        PACKET_BUFFER_LENGTH,
     },
 };
 use metrics::counter;
@@ -326,7 +326,7 @@ impl UdpTracerBuilder {
         Self { context }
     }
 }
-impl TracerBuilder for UdpTracerBuilder {
+impl BuildTracer for UdpTracerBuilder {
     type Tracer = UdpTracer;
 
     fn build(&self) -> Self::Tracer {
@@ -350,8 +350,8 @@ impl UdpTracer {
         Self { pool, context }
     }
 }
-impl Tracer for UdpTracer {
-    type Address = InternetAddr;
+impl TraceRtt for UdpTracer {
+    type Addr = InternetAddr;
 
     async fn trace_rtt(&self, chain: &UdpProxyChain) -> Result<Duration, AnyError> {
         let mut pkt_buf = self.pool.take();

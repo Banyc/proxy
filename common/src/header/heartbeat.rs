@@ -6,15 +6,15 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::anti_replay::ValidatorRef;
 
-use super::codec::{read_header_async, write_header_async, CodecError, Header};
+use super::codec::{CodecError, Header, read_header_async, write_header_async};
 
-pub async fn send_noop<S>(
-    stream: &mut S,
+pub async fn send_noop<Stream>(
+    stream: &mut Stream,
     timeout: Duration,
     crypto: &tokio_chacha20::config::Config,
 ) -> Result<(), HeartbeatError>
 where
-    S: AsyncWrite + Unpin,
+    Stream: AsyncWrite + Unpin,
 {
     let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
     let req = HeartbeatRequest::Noop;
@@ -27,13 +27,13 @@ where
     Ok(())
 }
 
-pub async fn send_upgrade<S>(
-    stream: &mut S,
+pub async fn send_upgrade<Stream>(
+    stream: &mut Stream,
     timeout: Duration,
     crypto: &tokio_chacha20::config::Config,
 ) -> Result<(), HeartbeatError>
 where
-    S: AsyncWrite + Unpin,
+    Stream: AsyncWrite + Unpin,
 {
     let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
     let req = HeartbeatRequest::Upgrade;
@@ -46,14 +46,14 @@ where
     Ok(())
 }
 
-pub async fn wait_upgrade<S>(
-    stream: &mut S,
+pub async fn wait_upgrade<Stream>(
+    stream: &mut Stream,
     timeout: Duration,
     crypto: &tokio_chacha20::config::Config,
     validator: &ValidatorRef<'_>,
 ) -> Result<(), HeartbeatError>
 where
-    S: AsyncRead + Unpin,
+    Stream: AsyncRead + Unpin,
 {
     loop {
         let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*crypto.key());

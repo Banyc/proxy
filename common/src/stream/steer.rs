@@ -8,23 +8,23 @@ use tokio::io::AsyncWriteExt;
 use crate::{
     anti_replay::{ReplayValidator, ValidatorRef},
     header::{
-        codec::{timed_read_header_async, timed_write_header_async, CodecError},
+        codec::{CodecError, timed_read_header_async, timed_write_header_async},
         heartbeat::{self, HeartbeatError},
         route::RouteResponse,
     },
 };
 
-use super::{addr::StreamAddr, header::StreamRequestHeader, IoAddr, IoStream};
+use super::{HasIoAddr, OwnIoStream, addr::StreamAddr, header::StreamRequestHeader};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
-pub async fn steer<S, ST: std::fmt::Debug + DeserializeOwned>(
-    downstream: &mut S,
+pub async fn steer<Downstream, StreamType: std::fmt::Debug + DeserializeOwned>(
+    downstream: &mut Downstream,
     crypto: &tokio_chacha20::config::Config,
     replay_validator: &ReplayValidator,
-) -> Result<Option<StreamAddr<ST>>, SteerError>
+) -> Result<Option<StreamAddr<StreamType>>, SteerError>
 where
-    S: IoStream + IoAddr + std::fmt::Debug,
+    Downstream: OwnIoStream + HasIoAddr + std::fmt::Debug,
 {
     let validator = ValidatorRef::Replay(replay_validator);
     // Wait for heartbeat upgrade
@@ -40,7 +40,7 @@ where
 
     // Decode header
     let mut read_crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*crypto.key());
-    let header: StreamRequestHeader<ST> =
+    let header: StreamRequestHeader<StreamType> =
         timed_read_header_async(downstream, &mut read_crypto_cursor, &validator, IO_TIMEOUT)
             .await
             .map_err(|e| {

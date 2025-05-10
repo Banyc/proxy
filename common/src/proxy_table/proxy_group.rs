@@ -14,27 +14,27 @@ use tracing::info;
 use crate::ttl_cell::TtlCell;
 
 use super::{
-    AddressString, GaugedProxyChain, ProxyConfig, TRACE_INTERVAL, Tracer, WeightedProxyChain,
+    GaugedProxyChain, IntoAddr, ProxyConfig, TRACE_INTERVAL, TraceRtt, WeightedProxyChain,
     WeightedProxyChainBuildError, WeightedProxyChainBuilder,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProxyGroupBuilder<AS> {
-    pub chains: Vec<WeightedProxyChainBuilder<AS>>,
+pub struct ProxyGroupBuilder<AddrStr> {
+    pub chains: Vec<WeightedProxyChainBuilder<AddrStr>>,
     pub trace_rtt: bool,
     pub active_chains: Option<NonZeroUsize>,
 }
-impl<AS> ProxyGroupBuilder<AS> {
-    pub fn build<A, TB, T>(
+impl<AddrStr> ProxyGroupBuilder<AddrStr> {
+    pub fn build<Addr, TracerBuilder, Tracer>(
         self,
-        cx: ProxyGroupBuildContext<'_, A, TB>,
-    ) -> Result<ProxyGroup<A>, ProxyGroupBuildError>
+        cx: ProxyGroupBuildContext<'_, Addr, TracerBuilder>,
+    ) -> Result<ProxyGroup<Addr>, ProxyGroupBuildError>
     where
-        A: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
-        AS: AddressString<Address = A>,
-        TB: TracerBuilder<Tracer = T>,
-        T: Tracer<Address = A> + Sync + Send + 'static,
+        Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
+        AddrStr: IntoAddr<Addr = Addr>,
+        TracerBuilder: BuildTracer<Tracer = Tracer>,
+        Tracer: TraceRtt<Addr = Addr> + Sync + Send + 'static,
     {
         let chains = self
             .chains
@@ -62,12 +62,12 @@ pub enum ProxyGroupBuildError {
     ProxyGroup(#[from] ProxyGroupError),
 }
 #[derive(Debug)]
-pub struct ProxyGroupBuildContext<'caller, A, TB> {
-    pub proxy_server: &'caller HashMap<Arc<str>, ProxyConfig<A>>,
-    pub tracer_builder: &'caller TB,
+pub struct ProxyGroupBuildContext<'caller, Addr, TracerBuilder> {
+    pub proxy_server: &'caller HashMap<Arc<str>, ProxyConfig<Addr>>,
+    pub tracer_builder: &'caller TracerBuilder,
     pub cancellation: CancellationToken,
 }
-impl<A, TB> Clone for ProxyGroupBuildContext<'_, A, TB> {
+impl<Addr, TracerBuilder> Clone for ProxyGroupBuildContext<'_, Addr, TracerBuilder> {
     fn clone(&self) -> Self {
         Self {
             proxy_server: self.proxy_server,
@@ -77,30 +77,30 @@ impl<A, TB> Clone for ProxyGroupBuildContext<'_, A, TB> {
     }
 }
 
-pub trait TracerBuilder {
-    type Tracer: Tracer + Send + Sync + 'static;
+pub trait BuildTracer {
+    type Tracer: TraceRtt + Send + Sync + 'static;
     fn build(&self) -> Self::Tracer;
 }
 
 #[derive(Debug, Clone)]
-pub struct ProxyGroup<A> {
-    chains: Arc<[GaugedProxyChain<A>]>,
+pub struct ProxyGroup<Addr> {
+    chains: Arc<[GaugedProxyChain<Addr>]>,
     cum_weight: NonZeroUsize,
     score_store: Arc<RwLock<ScoreStore>>,
     active_chains: NonZeroUsize,
 }
-impl<A> ProxyGroup<A>
+impl<Addr> ProxyGroup<Addr>
 where
-    A: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
+    Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
 {
     pub fn new<T>(
-        chains: Vec<WeightedProxyChain<A>>,
+        chains: Vec<WeightedProxyChain<Addr>>,
         tracer: Option<T>,
         active_chains: Option<NonZeroUsize>,
         cancellation: CancellationToken,
     ) -> Result<Self, ProxyGroupError>
     where
-        T: Tracer<Address = A> + Send + Sync + 'static,
+        T: TraceRtt<Addr = Addr> + Send + Sync + 'static,
     {
         let cum_weight = chains.iter().map(|c| c.weight).sum();
         if cum_weight == 0 {
@@ -132,7 +132,7 @@ where
         })
     }
 
-    pub fn choose_chain(&self) -> &WeightedProxyChain<A> {
+    pub fn choose_chain(&self) -> &WeightedProxyChain<Addr> {
         if self.chains.len() == 1 {
             return self.chains[0].weighted();
         }

@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map, HashMap},
+    collections::{HashMap, hash_map},
     future::Future,
     io,
     net::SocketAddr,
@@ -7,11 +7,12 @@ use std::{
     time::Duration,
 };
 
-use common::stream::{IoAddr, IoStream};
+use common::stream::{HasIoAddr, OwnIoStream};
 use mux::{
-    async_async_io::{read::PollRead, write::PollWrite, PollIo},
-    spawn_mux_no_reconnection, DeadControl, Initiation, MuxConfig, MuxError, StreamAccepter,
-    StreamOpener, StreamReader, StreamWriter, TooManyOpenStreams,
+    DeadControl, Initiation, MuxConfig, MuxError, StreamAccepter, StreamOpener, StreamReader,
+    StreamWriter, TooManyOpenStreams,
+    async_async_io::{PollIo, read::PollRead, write::PollWrite},
+    spawn_mux_no_reconnection,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -209,8 +210,8 @@ impl AsyncRead for IoMuxStream {
         std::pin::Pin::new(&mut self.stream).poll_read(cx, buf)
     }
 }
-impl IoStream for IoMuxStream {}
-impl IoAddr for IoMuxStream {
+impl OwnIoStream for IoMuxStream {}
+impl HasIoAddr for IoMuxStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.addr.peer_addr)
     }

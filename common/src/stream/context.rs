@@ -8,15 +8,15 @@ use crate::{anti_replay::ReplayValidator, stream::metrics::StreamSessionTable};
 use super::{addr::StreamAddr, connect::StreamTypedConnect};
 
 #[derive(Debug)]
-pub struct StreamContext<C, CT, ST> {
-    pub session_table: Option<StreamSessionTable<ST>>,
-    pub pool: Swap<ConnPool<StreamAddr<ST>, C>>,
-    pub connector_table: Arc<CT>,
+pub struct StreamContext<Conn, ConnectorTable, StreamType> {
+    pub session_table: Option<StreamSessionTable<StreamType>>,
+    pub pool: Swap<ConnPool<StreamAddr<StreamType>, Conn>>,
+    pub connector_table: Arc<ConnectorTable>,
     pub replay_validator: Arc<ReplayValidator>,
 }
-impl<C, CT, ST> Clone for StreamContext<C, CT, ST>
+impl<Conn, ConnectorTable, StreamType> Clone for StreamContext<Conn, ConnectorTable, StreamType>
 where
-    CT: StreamTypedConnect<Connection = C, StreamType = ST>,
+    ConnectorTable: StreamTypedConnect<Conn = Conn, StreamType = StreamType>,
 {
     fn clone(&self) -> Self {
         Self {

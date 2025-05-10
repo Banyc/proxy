@@ -24,14 +24,14 @@ where
         }
     }
 
-    pub async fn spawn_and_clean<S, B>(
+    pub async fn spawn_and_clean<Server, Builder>(
         &mut self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
-        builders: Vec<B>,
+        builders: Vec<Builder>,
     ) -> AnyResult
     where
-        S: Serve<ConnHandler = ConnHandler> + Send + 'static,
-        B: Build<ConnHandler = ConnHandler, Server = S>,
+        Server: Serve<ConnHandler = ConnHandler> + Send + 'static,
+        Builder: Build<ConnHandler = ConnHandler, Server = Server>,
     {
         // Spawn servers
         let mut keys = HashSet::new();

@@ -12,7 +12,7 @@ use common::{
 
 use super::{
     addr::ConcreteStreamType,
-    connection::Connection,
+    connection::Conn,
     streams::{
         kcp::KcpConnector,
         mptcp::MptcpConnector,
@@ -56,7 +56,7 @@ impl ConcreteStreamConnectorTable {
     }
 }
 impl StreamTypedConnect for ConcreteStreamConnectorTable {
-    type Connection = Connection;
+    type Conn = Conn;
     type StreamType = ConcreteStreamType;
 
     async fn timed_connect(
@@ -64,9 +64,9 @@ impl StreamTypedConnect for ConcreteStreamConnectorTable {
         stream_type: &ConcreteStreamType,
         addr: SocketAddr,
         timeout: Duration,
-    ) -> io::Result<Connection> {
+    ) -> io::Result<Conn> {
         match stream_type {
-            ConcreteStreamType::Tcp => Ok(Connection::Tcp(IoTcpStream(
+            ConcreteStreamType::Tcp => Ok(Conn::Tcp(IoTcpStream(
                 self.tcp.timed_connect(addr, timeout).await?,
             ))),
             ConcreteStreamType::TcpMux => self.tcp_mux.timed_connect(addr, timeout).await,

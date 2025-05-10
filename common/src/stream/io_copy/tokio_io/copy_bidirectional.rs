@@ -53,7 +53,9 @@ where
                         ErrorKind::NotConnected
                         | ErrorKind::ConnectionReset
                         | ErrorKind::BrokenPipe => {
-                            debug!("tokio copy bidirectional: shutting down: ignore NotConnected/ConnectionReset/BrokenPipe error ignored");
+                            debug!(
+                                "tokio copy bidirectional: shutting down: ignore NotConnected/ConnectionReset/BrokenPipe error ignored"
+                            );
                             Ok(())
                         }
                         _ => Err(err),

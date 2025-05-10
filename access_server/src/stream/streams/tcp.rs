@@ -6,8 +6,8 @@ use common::{
     loading,
     proxy_table::ProxyGroupBuildError,
     stream::{
+        HasIoAddr, OwnIoStream, StreamServerHandleConn,
         io_copy::{ConnContext, CopyBidirectional},
-        IoAddr, IoStream, StreamServerHandleConn,
     },
 };
 use protocol::stream::{
@@ -16,7 +16,7 @@ use protocol::stream::{
     proxy_table::{StreamProxyGroup, StreamProxyGroupBuilder},
     streams::tcp::TcpServer,
 };
-use proxy_client::stream::{establish, StreamEstablishError};
+use proxy_client::stream::{StreamEstablishError, establish};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{error, instrument, warn};
@@ -124,9 +124,9 @@ impl TcpAccessConnHandler {
         }
     }
 
-    async fn proxy<S>(&self, downstream: S) -> Result<(), ProxyError>
+    async fn proxy<Downstream>(&self, downstream: Downstream) -> Result<(), ProxyError>
     where
-        S: IoStream + IoAddr,
+        Downstream: OwnIoStream + HasIoAddr,
     {
         let proxy_chain = self.proxy_group.choose_chain();
         let upstream = establish(
@@ -170,9 +170,9 @@ pub enum ProxyError {
 impl loading::HandleConn for TcpAccessConnHandler {}
 impl StreamServerHandleConn for TcpAccessConnHandler {
     #[instrument(skip(self, stream))]
-    async fn handle_stream<S>(&self, stream: S)
+    async fn handle_stream<Stream>(&self, stream: Stream)
     where
-        S: IoStream + IoAddr,
+        Stream: OwnIoStream + HasIoAddr,
     {
         match self.proxy(stream).await {
             Ok(()) => (),
