@@ -41,7 +41,7 @@ pin-project-lite = "0.2"
 primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.58" }
 rand = "0.9"
 regex = "1"
-rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.69" }
+rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.70" }
 scopeguard = "1"
 serde = "1"
 serde_json = "1"
