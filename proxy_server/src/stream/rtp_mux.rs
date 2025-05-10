@@ -16,17 +16,25 @@ use super::{
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RtpMuxProxyServerConfig {
+pub struct RtpMuxListenerConfig {
     pub listen_addr: Arc<str>,
+    pub fec: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RtpMuxProxyServerConfig {
+    #[serde(flatten)]
+    pub listener: RtpMuxListenerConfig,
     #[serde(flatten)]
     pub inner: StreamProxyServerConfig,
 }
 impl RtpMuxProxyServerConfig {
     pub fn into_builder(self, stream_context: ConcreteStreamContext) -> RtpMuxProxyServerBuilder {
-        let listen_addr = Arc::clone(&self.listen_addr);
+        let listen_addr = Arc::clone(&self.listener.listen_addr);
         let inner = self.inner.into_builder(stream_context, listen_addr);
         RtpMuxProxyServerBuilder {
-            listen_addr: self.listen_addr,
+            listener: self.listener,
             inner,
         }
     }
@@ -34,7 +42,7 @@ impl RtpMuxProxyServerConfig {
 
 #[derive(Debug, Clone)]
 pub struct RtpMuxProxyServerBuilder {
-    pub listen_addr: Arc<str>,
+    pub listener: RtpMuxListenerConfig,
     pub inner: StreamProxyConnHandlerBuilder,
 }
 impl loading::Build for RtpMuxProxyServerBuilder {
@@ -43,9 +51,9 @@ impl loading::Build for RtpMuxProxyServerBuilder {
     type Err = RtpMuxProxyServerBuildError;
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
-        let listen_addr = self.listen_addr.clone();
+        let listener = self.listener.clone();
         let stream_proxy = self.build_conn_handler()?;
-        build_rtp_mux_proxy_server(listen_addr.as_ref(), stream_proxy)
+        build_rtp_mux_proxy_server(listener.listen_addr.as_ref(), stream_proxy, listener.fec)
             .await
             .map_err(|e| e.into())
     }
@@ -55,7 +63,7 @@ impl loading::Build for RtpMuxProxyServerBuilder {
     }
 
     fn key(&self) -> &Arc<str> {
-        &self.listen_addr
+        &self.listener.listen_addr
     }
 }
 #[derive(Debug, Error)]
@@ -68,10 +76,11 @@ pub enum RtpMuxProxyServerBuildError {
 pub async fn build_rtp_mux_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyConnHandler,
+    fec: bool,
 ) -> Result<RtpMuxServer<StreamProxyConnHandler>, ListenerBindError> {
     let listener = rtp::udp::Listener::bind(listen_addr)
         .await
         .map_err(ListenerBindError)?;
-    let server = RtpMuxServer::new(listener, stream_proxy);
+    let server = RtpMuxServer::new(listener, stream_proxy, fec);
     Ok(server)
 }

@@ -32,6 +32,7 @@ pub struct ConcreteStreamConnectorTable {
     mptcp: MptcpConnector,
     rtp: RtpConnector,
     rtp_mux: RtpMuxConnector,
+    rtp_mux_fec: RtpMuxConnector,
 }
 impl ConcreteStreamConnectorTable {
     pub fn new(config: ConnectorConfig) -> Self {
@@ -41,8 +42,9 @@ impl ConcreteStreamConnectorTable {
             tcp_mux: TcpMuxConnector::new(config.clone()),
             kcp: KcpConnector::new(config.clone()),
             mptcp: MptcpConnector,
-            rtp: RtpConnector::new(config.clone()),
-            rtp_mux: RtpMuxConnector::new(config.clone()),
+            rtp: RtpConnector::new(config.clone(), false),
+            rtp_mux: RtpMuxConnector::new(config.clone(), false),
+            rtp_mux_fec: RtpMuxConnector::new(config.clone(), true),
             config,
         }
     }
@@ -72,6 +74,7 @@ impl StreamTypedConnect for ConcreteStreamConnectorTable {
             ConcreteStreamType::Mptcp => self.mptcp.timed_connect(addr, timeout).await,
             ConcreteStreamType::Rtp => self.rtp.timed_connect(addr, timeout).await,
             ConcreteStreamType::RtpMux => self.rtp_mux.timed_connect(addr, timeout).await,
+            ConcreteStreamType::RtpMuxFec => self.rtp_mux_fec.timed_connect(addr, timeout).await,
         }
     }
 }

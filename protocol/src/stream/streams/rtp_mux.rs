@@ -6,8 +6,9 @@ use std::{
 
 use metrics::counter;
 use mux::{
-    async_async_io::{read::PollRead, write::PollWrite, PollIo},
-    spawn_mux_no_reconnection, MuxError,
+    MuxError,
+    async_async_io::{PollIo, read::PollRead, write::PollWrite},
+    spawn_mux_no_reconnection,
 };
 use thiserror::Error;
 use tokio::task::JoinSet;
@@ -18,7 +19,7 @@ use common::{
     connect::ConnectorConfig,
     error::AnyResult,
     loading,
-    stream::{connect::StreamConnect, StreamServerHandleConn},
+    stream::{StreamServerHandleConn, connect::StreamConnect},
 };
 
 use crate::stream::{
@@ -27,7 +28,7 @@ use crate::stream::{
 };
 
 use super::mux::{
-    connect_request_channel, run_mux_connector, ConnectRequestTx, IoMuxStream, SocketAddrPair,
+    ConnectRequestTx, IoMuxStream, SocketAddrPair, connect_request_channel, run_mux_connector,
 };
 
 #[derive(Debug)]
@@ -35,13 +36,15 @@ pub struct RtpMuxServer<ConnHandler> {
     listener: rtp::udp::Listener,
     mux: JoinSet<MuxError>,
     conn_handler: ConnHandler,
+    fec: bool,
 }
 impl<ConnHandler> RtpMuxServer<ConnHandler> {
-    pub fn new(listener: rtp::udp::Listener, conn_handler: ConnHandler) -> Self {
+    pub fn new(listener: rtp::udp::Listener, conn_handler: ConnHandler, fec: bool) -> Self {
         Self {
             listener,
             mux: JoinSet::new(),
             conn_handler,
+            fec,
         }
     }
     pub fn listener(&self) -> &rtp::udp::Listener {
@@ -82,7 +85,7 @@ where
                     let e = res.unwrap();
                     warn!(?e, ?addr, "MUX error");
                 }
-                res = self.listener.accept_without_handshake() => {
+                res = self.listener.accept_without_handshake(self.fec) => {
                     let stream = match res {
                         Ok(res) => res,
                         Err(e) => {
@@ -140,7 +143,7 @@ pub struct RtpMuxConnector {
     _connector: JoinSet<()>,
 }
 impl RtpMuxConnector {
-    pub fn new(config: Arc<RwLock<ConnectorConfig>>) -> Self {
+    pub fn new(config: Arc<RwLock<ConnectorConfig>>, fec: bool) -> Self {
         let (connect_request_tx, connect_request_rx) = connect_request_channel();
         let mut connector = JoinSet::new();
         connector.spawn(async move {
@@ -154,7 +157,8 @@ impl RtpMuxConnector {
                         .get_matched(&addr.ip())
                         .map(|ip| SocketAddr::new(ip, 0))
                         .unwrap_or_else(|| any_addr(&addr.ip()));
-                    let connected = rtp::udp::connect_without_handshake(bind, addr, None).await?;
+                    let connected =
+                        rtp::udp::connect_without_handshake(bind, addr, None, fec).await?;
                     let addr = SocketAddrPair {
                         local_addr: connected.local_addr,
                         peer_addr: connected.peer_addr,

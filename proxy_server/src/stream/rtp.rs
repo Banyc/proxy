@@ -68,9 +68,10 @@ pub async fn build_rtp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyConnHandler,
 ) -> Result<RtpServer<StreamProxyConnHandler>, ListenerBindError> {
+    let fec = false;
     let listener = rtp::udp::Listener::bind(listen_addr)
         .await
         .map_err(ListenerBindError)?;
-    let server = RtpServer::new(listener, stream_proxy);
+    let server = RtpServer::new(listener, stream_proxy, fec);
     Ok(server)
 }

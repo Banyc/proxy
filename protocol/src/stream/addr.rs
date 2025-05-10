@@ -1,6 +1,6 @@
 use std::{fmt, str::FromStr};
 
-use serde::{de::Visitor, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::Visitor};
 
 use common::{
     addr::ParseInternetAddrError,
@@ -19,6 +19,7 @@ pub enum ConcreteStreamType {
     Mptcp,
     Rtp,
     RtpMux,
+    RtpMuxFec,
 }
 impl StreamType for ConcreteStreamType {}
 impl fmt::Display for ConcreteStreamType {
@@ -30,6 +31,7 @@ impl fmt::Display for ConcreteStreamType {
             ConcreteStreamType::Mptcp => write!(f, "mptcp"),
             ConcreteStreamType::Rtp => write!(f, "rtp"),
             ConcreteStreamType::RtpMux => write!(f, "rtpmux"),
+            ConcreteStreamType::RtpMuxFec => write!(f, "rtpmuxfec"),
         }
     }
 }
@@ -44,6 +46,7 @@ impl FromStr for ConcreteStreamType {
             "mptcp" => Ok(Self::Mptcp),
             "rtp" => Ok(Self::Rtp),
             "rtpmux" => Ok(Self::RtpMux),
+            "rtpmuxfec" => Ok(Self::RtpMuxFec),
             _ => Err(ParseInternetAddrError),
         }
     }

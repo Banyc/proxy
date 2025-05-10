@@ -15,7 +15,7 @@ use common::{
     connect::ConnectorConfig,
     error::AnyResult,
     loading,
-    stream::{connect::StreamConnect, IoAddr, IoStream, StreamServerHandleConn},
+    stream::{IoAddr, IoStream, StreamServerHandleConn, connect::StreamConnect},
 };
 
 use crate::stream::connection::Connection;
@@ -24,12 +24,14 @@ use crate::stream::connection::Connection;
 pub struct RtpServer<ConnHandler> {
     listener: rtp::udp::Listener,
     conn_handler: ConnHandler,
+    fec: bool,
 }
 impl<ConnHandler> RtpServer<ConnHandler> {
-    pub fn new(listener: rtp::udp::Listener, conn_handler: ConnHandler) -> Self {
+    pub fn new(listener: rtp::udp::Listener, conn_handler: ConnHandler, fec: bool) -> Self {
         Self {
             listener,
             conn_handler,
+            fec,
         }
     }
 
@@ -70,7 +72,7 @@ where
         loop {
             trace!("Waiting for connection");
             tokio::select! {
-                res = self.listener.accept_without_handshake() => {
+                res = self.listener.accept_without_handshake(self.fec) => {
                     let stream = match res {
                         Ok(res) => res,
                         Err(e) => {
@@ -117,10 +119,11 @@ pub enum ServeError {
 #[derive(Debug, Clone)]
 pub struct RtpConnector {
     config: Arc<RwLock<ConnectorConfig>>,
+    fec: bool,
 }
 impl RtpConnector {
-    pub fn new(config: Arc<RwLock<ConnectorConfig>>) -> Self {
-        Self { config }
+    pub fn new(config: Arc<RwLock<ConnectorConfig>>, fec: bool) -> Self {
+        Self { config, fec }
     }
 }
 impl StreamConnect for RtpConnector {
@@ -134,7 +137,7 @@ impl StreamConnect for RtpConnector {
             .get_matched(&addr.ip())
             .map(|ip| SocketAddr::new(ip, 0))
             .unwrap_or_else(|| any_addr(&addr.ip()));
-        let connected = rtp::udp::connect_without_handshake(bind, addr, None).await?;
+        let connected = rtp::udp::connect_without_handshake(bind, addr, None, self.fec).await?;
         let stream = AddressedRtpStream {
             read: connected.read.into_async_read(),
             write: connected.write.into_async_write(),

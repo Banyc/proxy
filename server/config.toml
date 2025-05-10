@@ -90,6 +90,7 @@ header_key = "base64"
 
 [[proxy_server.rtp_server]]
 listen_addr = "0.0.0.0:80"
+fec = false
 header_key = "base64"
 # payload_key = "base64"
 
