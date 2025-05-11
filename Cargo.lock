@@ -530,9 +530,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.37"
+version = "4.5.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eccb054f56cbd38340b380d4a8e69ef1f02f1af43db2f0cc817a4774d80ae071"
+checksum = "ed93b9805f8ba930df42c2590f05453d5ec36cbb85d018868a5b24d31f6ac000"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -540,9 +540,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.37"
+version = "4.5.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efd9466fac8543255d3b1fcad4762c5e116ffe808c8a3043d4263cd4fd4862a2"
+checksum = "379026ff283facf611b0ea629334361c4211d1b12ee01024eec1591133b04120"
 dependencies = [
  "anstream",
  "anstyle",
@@ -2836,7 +2836,7 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.70#1fb623f3897199883bd293421ab230efc35d2781"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.70#ff98080c744b4c2734976446ecfe163310bb364d"
 dependencies = [
  "async-trait",
  "async_async_io",
@@ -3408,13 +3408,13 @@ dependencies = [
 [[package]]
 name = "tokio_chacha20"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/tokio_chacha20.git?tag=v0.0.2#1c80ae96bf955f64be9faccbdc9fa85c87c5ed6d"
+source = "git+https://github.com/Banyc/tokio_chacha20.git?tag=v0.0.3#c51c2037cc52f31c1752a2e4a42d4b1d360d6960"
 dependencies = [
  "arrayvec",
  "base64 0.22.1",
  "blake3",
  "num-bigint",
- "rand 0.8.5",
+ "rand 0.9.1",
  "rayon",
  "serde",
  "thiserror 2.0.12",

@@ -6,7 +6,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::anti_replay::ValidatorRef;
 
-use super::codec::{CodecError, Header, read_header_async, write_header_async};
+use super::codec::{AsHeader, CodecError, read_header_async, write_header_async};
 
 pub async fn send_noop<Stream>(
     stream: &mut Stream,
@@ -75,7 +75,7 @@ pub enum HeartbeatRequest {
     Noop,
     Upgrade,
 }
-impl Header for HeartbeatRequest {}
+impl AsHeader for HeartbeatRequest {}
 
 #[derive(Debug, Error)]
 pub enum HeartbeatError {

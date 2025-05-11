@@ -7,13 +7,14 @@ use duplicate::duplicate_item;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio_chacha20::cursor::{DecryptResult, EncryptResult};
 use tracing::{instrument, trace};
 
 use crate::{anti_replay::ValidatorRef, header::timestamp::TimestampMsg};
 
 pub const MAX_HEADER_LEN: usize = 1024;
 
-pub trait Header {}
+pub trait AsHeader {}
 
 #[duplicate_item(
     read_header         async   reader_bounds       add_await(code) ;
@@ -21,14 +22,14 @@ pub trait Header {}
     [read_header_async] [async] [AsyncRead + Unpin] [code.await]    ;
 )]
 #[instrument(skip_all)]
-pub async fn read_header<'cursor, R, H>(
-    reader: &mut R,
+pub async fn read_header<'cursor, Reader, Header>(
+    reader: &mut Reader,
     cursor: &mut tokio_chacha20::cursor::DecryptCursor,
     validator: &ValidatorRef<'_>,
-) -> Result<H, CodecError>
+) -> Result<Header, CodecError>
 where
-    R: reader_bounds,
-    H: for<'de> Deserialize<'de> + std::fmt::Debug + Header,
+    Reader: reader_bounds,
+    Header: for<'de> Deserialize<'de> + std::fmt::Debug + AsHeader,
 {
     let mut buf = [0; MAX_HEADER_LEN * 2];
 
@@ -46,9 +47,11 @@ where
             }
             ValidatorRef::Time(_) => {}
         }
-        let i = cursor.decrypt(buf);
-        if i.is_some() {
-            return Err(CodecError::Integrity);
+        match cursor.decrypt(buf) {
+            DecryptResult::StillAtNonce => (),
+            DecryptResult::WithUserData { user_data_start: _ } => {
+                return Err(CodecError::Integrity);
+            }
         }
     }
     // Decode header length
@@ -57,7 +60,10 @@ where
         let buf = &mut buf[..size];
         let res = reader.read_exact(buf);
         add_await([res])?;
-        let i = cursor.decrypt(buf).unwrap();
+        let i = match cursor.decrypt(buf) {
+            DecryptResult::StillAtNonce => panic!(),
+            DecryptResult::WithUserData { user_data_start } => user_data_start,
+        };
         if i != 0 {
             return Err(CodecError::Integrity);
         }
@@ -90,8 +96,10 @@ where
     }
     // Decode header
     let header = {
-        let i = cursor.decrypt(hdr_buf).unwrap();
-        assert_eq!(i, 0);
+        match cursor.decrypt(hdr_buf) {
+            DecryptResult::StillAtNonce => panic!(),
+            DecryptResult::WithUserData { user_data_start } => assert_eq!(user_data_start, 0),
+        }
         let mut rdr = io::Cursor::new(&hdr_buf[..]);
         let mut timestamp_buf = [0; TimestampMsg::SIZE];
         Read::read_exact(&mut rdr, &mut timestamp_buf).unwrap();
@@ -120,7 +128,7 @@ pub async fn write_header<'cursor, W, H>(
 ) -> Result<(), CodecError>
 where
     W: writer_bounds,
-    H: Serialize + std::fmt::Debug + Header,
+    H: Serialize + std::fmt::Debug + AsHeader,
 {
     // Encode header
     let mut hdr_buf = [0; TimestampMsg::SIZE + MAX_HEADER_LEN];
@@ -136,31 +144,31 @@ where
     };
 
     let mut buf = [0; MAX_HEADER_LEN * 2];
-    let mut n = 0;
+    let mut pos = 0;
 
     // Write header length
     {
         let len = hdr_buf.len() as u32;
         let len = len.to_be_bytes();
-        let (f, t) = cursor.encrypt(&len, &mut buf[n..]);
-        assert_eq!(len.len(), f);
-        n += t;
+        let EncryptResult { read, written } = cursor.encrypt(&len, &mut buf[pos..]);
+        assert_eq!(len.len(), read);
+        pos += written;
     }
     // Write header
     let encrypted_hdr = {
-        let (f, t) = cursor.encrypt(hdr_buf, &mut buf[n..]);
-        assert_eq!(hdr_buf.len(), f);
-        let encrypted_hdr = &buf[n..n + t];
-        n += t;
+        let EncryptResult { read, written } = cursor.encrypt(hdr_buf, &mut buf[pos..]);
+        assert_eq!(hdr_buf.len(), read);
+        let encrypted_hdr = &buf[pos..pos + written];
+        pos += written;
         encrypted_hdr
     };
     // Write tag
     let key = cursor.poly1305_key();
     let tag = tokio_chacha20::mac::poly1305_mac(key, encrypted_hdr);
-    buf[n..n + tag.len()].copy_from_slice(&tag);
-    n += tag.len();
+    buf[pos..pos + tag.len()].copy_from_slice(&tag);
+    pos += tag.len();
 
-    add_await([writer.write_all(&buf[..n])])?;
+    add_await([writer.write_all(&buf[..pos])])?;
 
     Ok(())
 }
@@ -173,7 +181,7 @@ pub async fn timed_read_header_async<'cursor, R, H>(
 ) -> Result<H, CodecError>
 where
     R: AsyncRead + Unpin,
-    H: for<'de> Deserialize<'de> + std::fmt::Debug + Header,
+    H: for<'de> Deserialize<'de> + std::fmt::Debug + AsHeader,
 {
     let res = tokio::time::timeout(timeout, read_header_async(reader, cursor, validator)).await;
     match res {
@@ -193,7 +201,7 @@ pub async fn timed_write_header_async<W, H>(
 ) -> Result<(), CodecError>
 where
     W: AsyncWrite + Unpin,
-    H: Serialize + std::fmt::Debug + Header,
+    H: Serialize + std::fmt::Debug + AsHeader,
 {
     let res = tokio::time::timeout(timeout, write_header_async(writer, header, cursor)).await;
     match res {

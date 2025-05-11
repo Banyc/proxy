@@ -2,8 +2,8 @@ use std::{
     io::{self, Write},
     net::SocketAddr,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex, RwLock,
+        atomic::{AtomicU64, Ordering},
     },
     time::{Duration, SystemTime},
 };
@@ -13,6 +13,7 @@ use metrics::{counter, gauge};
 use scopeguard::defer;
 use thiserror::Error;
 use tokio::net::UdpSocket;
+use tokio_chacha20::cursor::{DecryptResult, EncryptResult};
 use tokio_throughput::{ReadGauge, WriteGauge};
 use tracing::{info, trace, warn};
 use udp_listener::{ConnRead, ConnWrite};
@@ -24,15 +25,15 @@ use crate::{
     log::Timing,
     ttl_cell::TtlCell,
     udp::{
-        log::{TrafficLog, LOGGER},
         PACKET_BUFFER_LENGTH, TIMEOUT,
+        log::{LOGGER, TrafficLog},
     },
 };
 
 use super::{
+    ACTIVITY_CHECK_INTERVAL, Flow, Packet,
     log::FlowLog,
     metrics::{Session, UdpSessionTable},
-    Flow, Packet, ACTIVITY_CHECK_INTERVAL,
 };
 
 const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
@@ -476,17 +477,19 @@ fn en_dec<'buf>(
     Some(match en_dir {
         EncryptionDirection::Encrypt => {
             let mut cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*config.key());
-
-            let (f, t) = cursor.encrypt(pkt, buf);
-            if pkt.len() != f {
+            let EncryptResult { read, written } = cursor.encrypt(&pkt[..], buf);
+            if pkt.len() != read {
                 // Not fully copied.
                 return None;
             }
-            &buf[..t]
+            &buf[..written]
         }
         EncryptionDirection::Decrypt => {
             let mut cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*config.key());
-            let i = cursor.decrypt(pkt).unwrap();
+            let i = match cursor.decrypt(pkt) {
+                DecryptResult::StillAtNonce => return None,
+                DecryptResult::WithUserData { user_data_start } => user_data_start,
+            };
             &pkt[i..]
         }
     })

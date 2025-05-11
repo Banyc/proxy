@@ -1,19 +1,19 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::codec::Header;
+use super::codec::AsHeader;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct RouteRequest<Addr> {
     pub upstream: Option<Addr>,
 }
-impl<Addr> Header for RouteRequest<Addr> {}
+impl<Addr> AsHeader for RouteRequest<Addr> {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct RouteResponse {
     pub result: Result<(), RouteError>,
 }
-impl Header for RouteResponse {}
+impl AsHeader for RouteResponse {}
 
 #[derive(Debug, Error, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[error("{kind}")]
