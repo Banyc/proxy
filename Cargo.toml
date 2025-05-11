@@ -23,7 +23,7 @@ clap = "4"
 dhat = "0.3"
 duplicate = "2"
 file_rotating_log = { git = "https://github.com/Banyc/file_rotating_log.git", tag = "v0.0.2" }
-file_watcher_tokio = "0.4"
+file_watcher_tokio = "0.5"
 futures = "0.3"
 futures-core = "0.3"
 http-body-util = "0.1"
@@ -36,7 +36,6 @@ metrics-exporter-prometheus = { version = "0.16", default-features = false }
 monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.0.13" }
 mptcp = { git = "https://github.com/Banyc/mptcp.git", tag = "v0.0.2" }
 mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.5" }
-notify = "7"
 pin-project-lite = "0.2"
 primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.58" }
 rand = "0.9"

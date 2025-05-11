@@ -1,18 +1,16 @@
 use std::sync::Arc;
 
 use common::error::AnyError;
-use file_watcher_tokio::EventActor;
 
 pub mod multi_file_config;
 pub mod toml;
 
 pub trait ConfigReader {
     type Config;
-    fn read_config(
-        &self,
-    ) -> impl std::future::Future<Output = Result<Self::Config, AnyError>> + Send;
+    fn read_config(&self) -> impl Future<Output = Result<Self::Config, AnyError>> + Send;
 }
 
+#[derive(Debug, Clone)]
 pub struct ConfigWatcher {
     tx: Arc<tokio::sync::Notify>,
 }
@@ -31,8 +29,8 @@ impl Default for ConfigWatcher {
         Self::new()
     }
 }
-impl EventActor for ConfigWatcher {
-    async fn notify(&self, _event: notify::Event) {
+impl file_watcher_tokio::HandleEvent for ConfigWatcher {
+    async fn handle_event(&mut self, _event: file_watcher_tokio::Event) {
         self.tx.notify_one();
     }
 }
@@ -40,9 +38,8 @@ impl EventActor for ConfigWatcher {
 pub fn spawn_watch_tasks(config_file_paths: &[Arc<str>]) -> Arc<tokio::sync::Notify> {
     let watcher = ConfigWatcher::new();
     let notify_rx = Arc::clone(watcher.notify_rx());
-    let watcher = Arc::new(watcher);
     config_file_paths.iter().cloned().for_each(|path| {
-        let watcher = Arc::clone(&watcher);
+        let watcher = watcher.clone();
         tokio::spawn(async move { file_watcher_tokio::watch_file(path.as_ref(), watcher).await });
     });
     notify_rx

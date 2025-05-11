@@ -19,7 +19,6 @@ dhat = { workspace = true, optional = true }
 file_watcher_tokio = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
-notify = { workspace = true }
 protocol = { path = "../protocol" }
 proxy_server = { path = "../proxy_server" }
 serde = { workspace = true, features = ["derive"] }
