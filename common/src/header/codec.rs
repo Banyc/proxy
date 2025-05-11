@@ -4,7 +4,6 @@ use std::{
 };
 
 use duplicate::duplicate_item;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_chacha20::cursor::{DecryptResult, EncryptResult};
@@ -13,6 +12,11 @@ use tracing::{instrument, trace};
 use crate::{anti_replay::ValidatorRef, header::timestamp::TimestampMsg};
 
 pub const MAX_HEADER_LEN: usize = 1024;
+const BINCODE_CONFIG: bincode::config::Configuration<
+    bincode::config::LittleEndian,
+    bincode::config::Fixint,
+    bincode::config::NoLimit,
+> = bincode::config::legacy();
 
 pub trait AsHeader {}
 
@@ -22,14 +26,14 @@ pub trait AsHeader {}
     [read_header_async] [async] [AsyncRead + Unpin] [code.await]    ;
 )]
 #[instrument(skip_all)]
-pub async fn read_header<'cursor, Reader, Header>(
+pub async fn read_header<Reader, Header>(
     reader: &mut Reader,
     cursor: &mut tokio_chacha20::cursor::DecryptCursor,
     validator: &ValidatorRef<'_>,
 ) -> Result<Header, CodecError>
 where
     Reader: reader_bounds,
-    Header: for<'de> Deserialize<'de> + std::fmt::Debug + AsHeader,
+    Header: std::fmt::Debug + AsHeader + bincode::Decode<()>,
 {
     let mut buf = [0; MAX_HEADER_LEN * 2];
 
@@ -107,7 +111,7 @@ where
         if !validator.time_validates(timestamp.timestamp()) {
             return Err(CodecError::Integrity);
         }
-        let header = bincode::deserialize_from(&mut rdr)?;
+        let header = bincode::decode_from_std_read(&mut rdr, BINCODE_CONFIG)?;
         trace!(?timestamp, ?header, "Read header");
         header
     };
@@ -121,14 +125,14 @@ where
     [write_header_async] [async] [AsyncWrite + Unpin] [code.await]    ;
 )]
 #[instrument(skip_all)]
-pub async fn write_header<'cursor, W, H>(
-    writer: &mut W,
-    header: &H,
+pub async fn write_header<Writer, Header>(
+    writer: &mut Writer,
+    header: &Header,
     cursor: &mut tokio_chacha20::cursor::EncryptCursor,
 ) -> Result<(), CodecError>
 where
-    W: writer_bounds,
-    H: Serialize + std::fmt::Debug + AsHeader,
+    Writer: writer_bounds,
+    Header: std::fmt::Debug + AsHeader + bincode::Encode,
 {
     // Encode header
     let mut hdr_buf = [0; TimestampMsg::SIZE + MAX_HEADER_LEN];
@@ -136,7 +140,7 @@ where
         let mut hdr_wtr = io::Cursor::new(&mut hdr_buf[..]);
         let timestamp = TimestampMsg::now();
         Write::write_all(&mut hdr_wtr, &timestamp.encode()).unwrap();
-        bincode::serialize_into(&mut hdr_wtr, header)?;
+        bincode::encode_into_std_write(header, &mut hdr_wtr, BINCODE_CONFIG)?;
         let len = hdr_wtr.position();
         let hdr = &mut hdr_buf[..len as usize];
         trace!(?timestamp, ?header, ?len, "Encoded header");
@@ -173,15 +177,15 @@ where
     Ok(())
 }
 
-pub async fn timed_read_header_async<'cursor, R, H>(
-    reader: &mut R,
+pub async fn timed_read_header_async<Reader, Header>(
+    reader: &mut Reader,
     cursor: &mut tokio_chacha20::cursor::DecryptCursor,
     validator: &ValidatorRef<'_>,
     timeout: Duration,
-) -> Result<H, CodecError>
+) -> Result<Header, CodecError>
 where
-    R: AsyncRead + Unpin,
-    H: for<'de> Deserialize<'de> + std::fmt::Debug + AsHeader,
+    Reader: AsyncRead + Unpin,
+    Header: std::fmt::Debug + AsHeader + bincode::Decode<()>,
 {
     let res = tokio::time::timeout(timeout, read_header_async(reader, cursor, validator)).await;
     match res {
@@ -193,15 +197,15 @@ where
     }
 }
 
-pub async fn timed_write_header_async<W, H>(
-    writer: &mut W,
-    header: &H,
+pub async fn timed_write_header_async<Writer, Header>(
+    writer: &mut Writer,
+    header: &Header,
     cursor: &mut tokio_chacha20::cursor::EncryptCursor,
     timeout: Duration,
 ) -> Result<(), CodecError>
 where
-    W: AsyncWrite + Unpin,
-    H: Serialize + std::fmt::Debug + AsHeader,
+    Writer: AsyncWrite + Unpin,
+    Header: std::fmt::Debug + AsHeader + bincode::Encode,
 {
     let res = tokio::time::timeout(timeout, write_header_async(writer, header, cursor)).await;
     match res {
@@ -217,8 +221,10 @@ where
 pub enum CodecError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] bincode::Error),
+    #[error("Encode error: {0}")]
+    Encode(#[from] bincode::error::EncodeError),
+    #[error("Decode error: {0}")]
+    Decode(#[from] bincode::error::DecodeError),
     #[error("Data tempered")]
     Integrity,
 }

@@ -34,7 +34,9 @@ impl StreamAddrBuilder {
 }
 
 /// A stream address
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, bincode::Encode, bincode::Decode,
+)]
 pub struct StreamAddr<StreamType> {
     pub address: InternetAddr,
     pub stream_type: StreamType,

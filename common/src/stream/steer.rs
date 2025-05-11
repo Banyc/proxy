@@ -1,7 +1,6 @@
 use std::{net::SocketAddr, time::Duration};
 
 use metrics::counter;
-use serde::de::DeserializeOwned;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 
@@ -18,13 +17,14 @@ use super::{HasIoAddr, OwnIoStream, addr::StreamAddr, header::StreamRequestHeade
 
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
-pub async fn steer<Downstream, StreamType: std::fmt::Debug + DeserializeOwned>(
+pub async fn steer<Downstream, StreamType>(
     downstream: &mut Downstream,
     crypto: &tokio_chacha20::config::Config,
     replay_validator: &ReplayValidator,
 ) -> Result<Option<StreamAddr<StreamType>>, SteerError>
 where
     Downstream: OwnIoStream + HasIoAddr + std::fmt::Debug,
+    StreamType: std::fmt::Debug + bincode::Decode<()>,
 {
     let validator = ValidatorRef::Replay(replay_validator);
     // Wait for heartbeat upgrade

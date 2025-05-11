@@ -42,7 +42,9 @@ pub fn any_addr(ip_version: &IpAddr) -> SocketAddr {
     SocketAddr::new(any_ip, 0)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, bincode::Encode, bincode::Decode,
+)]
 pub struct InternetAddr(InternetAddrKind);
 impl Deref for InternetAddr {
     type Target = InternetAddrKind;
@@ -84,7 +86,9 @@ impl FromStr for InternetAddr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, bincode::Encode, bincode::Decode,
+)]
 #[serde(deny_unknown_fields)]
 pub enum InternetAddrKind {
     SocketAddr(SocketAddr),

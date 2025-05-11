@@ -70,7 +70,9 @@ where
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, bincode::Encode, bincode::Decode,
+)]
 pub enum HeartbeatRequest {
     Noop,
     Upgrade,

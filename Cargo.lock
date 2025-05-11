@@ -360,6 +360,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "bincode"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36eaf5d7b090263e8150820482d5d93cd964a81e4019913c972f4edcc6edb740"
+dependencies = [
+ "bincode_derive",
+ "serde",
+ "unty",
+]
+
+[[package]]
+name = "bincode_derive"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf95709a440f45e986983918d0e8a1f30a9b1df04918fc828670606804ac3c09"
+dependencies = [
+ "virtue",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -593,7 +613,7 @@ dependencies = [
  "async-speed-limit",
  "async-trait",
  "base64 0.22.1",
- "bincode",
+ "bincode 2.0.1",
  "bytes",
  "duplicate",
  "file_rotating_log",
@@ -1138,7 +1158,7 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "70992eca10405aab522fdf355549bc8af5ca2efbb08df20fe7e7c4bd8085497d"
 dependencies = [
- "bincode",
+ "bincode 1.3.3",
  "integer-encoding",
  "ron",
  "serde",
@@ -2499,6 +2519,7 @@ name = "protocol"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bincode 2.0.1",
  "common",
  "metrics",
  "mptcp",
@@ -2537,7 +2558,7 @@ name = "proxy_server"
 version = "0.1.0"
 dependencies = [
  "async-speed-limit",
- "bincode",
+ "bincode 2.0.1",
  "common",
  "mptcp",
  "protocol",
@@ -3628,6 +3649,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fc81956842c57dac11422a97c3b8195a1ff727f06e85c84ed2e8aa277c9a0fd"
 
 [[package]]
+name = "unty"
+version = "0.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d49784317cd0d1ee7ec5c716dd598ec5b4483ea832a2dced265471cc0f690ae"
+
+[[package]]
 name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3653,6 +3680,12 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "virtue"
+version = "0.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "051eb1abcf10076295e815102942cc58f9d5e3b4560e46e53c21e8ff6f3af7b1"
 
 [[package]]
 name = "walkdir"

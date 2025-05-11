@@ -17,7 +17,7 @@ async-speed-limit = { version = "0.4", features = ["tokio"] }
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"
-bincode = "1"
+bincode = "2"
 bytes = "1"
 clap = "4"
 dhat = "0.3"

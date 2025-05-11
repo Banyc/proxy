@@ -10,7 +10,18 @@ use common::{
 
 pub type ConcreteStreamAddr = StreamAddr<ConcreteStreamType>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    bincode::Encode,
+    bincode::Decode,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ConcreteStreamType {
     Tcp,
