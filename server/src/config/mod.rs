@@ -5,7 +5,7 @@ use common::error::AnyError;
 pub mod multi_file_config;
 pub mod toml;
 
-pub trait ConfigReader {
+pub trait ReadConfig {
     type Config;
     fn read_config(&self) -> impl Future<Output = Result<Self::Config, AnyError>> + Send;
 }

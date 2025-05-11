@@ -9,7 +9,7 @@ use common::{
         ReplayValidator, TimeValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME,
         VALIDATOR_UDP_HDR_TTL,
     },
-    config::{merge_map, Merge},
+    config::{Merge, merge_map},
     connect::ConnectorConfig,
     context::Context,
     error::{AnyError, AnyResult},
@@ -19,7 +19,7 @@ use common::{
         proxy_table::UdpProxyConfigBuilder,
     },
 };
-use config::ConfigReader;
+use config::ReadConfig;
 use protocol::{
     context::ConcreteContext,
     stream::{
@@ -52,7 +52,7 @@ pub async fn serve<CR>(
     serve_context: ServeContext,
 ) -> Result<(), ServeError>
 where
-    CR: ConfigReader<Config = ServerConfig>,
+    CR: ReadConfig<Config = ServerConfig>,
 {
     let mut server_loader = ServerLoader {
         access_server: AccessServerLoader::new(),
@@ -142,7 +142,7 @@ async fn read_and_exec_config<CR>(
     context: ConcreteContext,
 ) -> Result<(), ServeError>
 where
-    CR: ConfigReader<Config = ServerConfig>,
+    CR: ReadConfig<Config = ServerConfig>,
 {
     let config = config_reader
         .read_config()

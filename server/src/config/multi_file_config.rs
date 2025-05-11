@@ -3,7 +3,7 @@ use std::{marker::PhantomData, sync::Arc};
 use common::{config::Merge, error::AnyError};
 use serde::Deserialize;
 
-use crate::ConfigReader;
+use crate::ReadConfig;
 
 use super::toml::human_toml_error;
 
@@ -19,7 +19,7 @@ impl<Config> MultiConfigReader<Config> {
         }
     }
 }
-impl<Config> ConfigReader for MultiConfigReader<Config>
+impl<Config> ReadConfig for MultiConfigReader<Config>
 where
     for<'de> Config: Deserialize<'de> + Send + Sync + 'static,
     Config: Merge<Error = AnyError>,
