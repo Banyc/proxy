@@ -6,20 +6,18 @@ use common::{
     loading,
     proto::{
         addr::{StreamAddr, StreamAddrStr},
+        client::stream::{StreamEstablishError, establish},
         context::StreamContext,
         io_copy::stream::{ConnContext, CopyBidirectional},
-        proxy_table::{StreamProxyGroup, StreamProxyGroupBuilder},
+        proxy_table::{StreamProxyGroup, StreamProxyGroupBuildContext, StreamProxyGroupBuilder},
     },
     proxy_table::ProxyGroupBuildError,
     stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 use protocol::stream::streams::tcp::TcpServer;
-use proxy_client::stream::{StreamEstablishError, establish};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{error, instrument, warn};
-
-use crate::stream::proxy_table::StreamProxyGroupBuildContext;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

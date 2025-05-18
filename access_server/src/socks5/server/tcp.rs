@@ -7,10 +7,14 @@ use common::{
     loading::{self, HandleConn},
     proto::{
         addr::StreamAddr,
+        client::{self, stream::StreamEstablishError},
         conn::stream::ConnAndAddr,
         context::StreamContext,
         io_copy::stream::{ConnContext, CopyBidirectional},
-        proxy_table::{StreamProxyGroup, StreamProxyTable, StreamProxyTableBuilder},
+        proxy_table::{
+            StreamProxyGroup, StreamProxyTable, StreamProxyTableBuildContext,
+            StreamProxyTableBuilder,
+        },
     },
     proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn},
@@ -19,21 +23,15 @@ use common::{
 use protocol::stream::{
     addr::ConcreteStreamType, connect::TCP_STREAM_TYPE, streams::tcp::TcpServer,
 };
-use proxy_client::stream::StreamEstablishError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
 use tracing::{error, trace, warn};
 
-use crate::{
-    socks5::messages::{
-        Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,
-        RelayResponse, Reply,
-        sub_negotiations::{
-            UsernamePasswordRequest, UsernamePasswordResponse, UsernamePasswordStatus,
-        },
-    },
-    stream::proxy_table::StreamProxyTableBuildContext,
+use crate::socks5::messages::{
+    Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,
+    RelayResponse, Reply,
+    sub_negotiations::{UsernamePasswordRequest, UsernamePasswordResponse, UsernamePasswordStatus},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -520,7 +518,7 @@ impl Socks5ServerTcpAccessConnHandler {
     ) -> Result<(ConnAndAddr, Option<tokio_chacha20::config::Config>), EstablishProxyChainError>
     {
         let proxy_chain = proxy_group.choose_chain();
-        let res = proxy_client::stream::establish(
+        let res = client::stream::establish(
             &proxy_chain.chain,
             StreamAddr {
                 address: destination,

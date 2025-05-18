@@ -6,8 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bytes::BytesMut;
-use common::{
+use crate::{
     addr::InternetAddr,
     anti_replay::{TimeValidator, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL, ValidatorRef},
     error::AnyError,
@@ -24,6 +23,7 @@ use common::{
     ttl_cell::TtlCell,
     udp::PACKET_BUFFER_LENGTH,
 };
+use bytes::BytesMut;
 use metrics::counter;
 use primitive::arena::obj_pool::ArcObjPool;
 use thiserror::Error;

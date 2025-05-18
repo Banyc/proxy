@@ -12,11 +12,18 @@ mod tests {
         connect::ConnectorConfig,
         header::route::RouteErrorKind,
         loading::Serve,
-        proto::{connect::udp::UdpConnector, context::UdpContext, proxy_table::UdpProxyConfig},
+        proto::{
+            client::{
+                self,
+                udp::{UdpProxyClient, UdpProxyClientReadHalf, trace_rtt},
+            },
+            connect::udp::UdpConnector,
+            context::UdpContext,
+            proxy_table::UdpProxyConfig,
+        },
         proxy_table::ProxyConfig,
         udp::PACKET_BUFFER_LENGTH,
     };
-    use proxy_client::udp::{RecvError, UdpProxyClient, UdpProxyClientReadHalf, trace_rtt};
     use proxy_server::udp::UdpProxyConnHandler;
     use serial_test::serial;
     use tokio::net::UdpSocket;
@@ -82,7 +89,7 @@ mod tests {
     async fn read_response(
         client: &mut UdpProxyClientReadHalf,
         resp_msg: &[u8],
-    ) -> Result<(), RecvError> {
+    ) -> Result<(), client::udp::RecvError> {
         let mut buf = [0; 1024];
         let n = client.recv(&mut buf).await?;
         let msg_buf = &buf[..n];
@@ -260,7 +267,7 @@ mod tests {
         let err = read_response(&mut client_read, resp_msg).await.unwrap_err();
 
         match err {
-            RecvError::Response { err, addr } => {
+            client::udp::RecvError::Response { err, addr } => {
                 match err.kind {
                     RouteErrorKind::Loopback => {}
                     _ => panic!("Unexpected error: {err:?}"),

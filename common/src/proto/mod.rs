@@ -1,4 +1,5 @@
 pub mod addr;
+pub mod client;
 pub mod conn;
 pub mod connect;
 pub mod context;

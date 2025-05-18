@@ -7,7 +7,10 @@ mod tests {
         connect::ConnectorConfig,
         loading::Serve,
         proto::{
-            addr::StreamAddr, conn::stream::ConnAndAddr, context::StreamContext,
+            addr::StreamAddr,
+            client::stream::{establish, trace_rtt},
+            conn::stream::ConnAndAddr,
+            context::StreamContext,
             proxy_table::StreamProxyConfig,
         },
         proxy_table::ProxyConfig,
@@ -16,7 +19,6 @@ mod tests {
     use protocol::stream::{
         addr::ConcreteStreamType, connect::build_concrete_stream_connector_table,
     };
-    use proxy_client::stream::{establish, trace_rtt};
     use proxy_server::stream::{
         StreamProxyConnHandler, kcp::build_kcp_proxy_server, mptcp::build_mptcp_proxy_server,
         rtp::build_rtp_proxy_server, rtp_mux::build_rtp_mux_proxy_server,

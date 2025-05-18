@@ -12,7 +12,6 @@ rand = { workspace = true }
 [dev-dependencies]
 bytes = { workspace = true }
 protocol = { path = "../protocol" }
-proxy_client = { path = "../proxy_client" }
 proxy_server = { path = "../proxy_server" }
 serial_test = { workspace = true }
 swap = { workspace = true }

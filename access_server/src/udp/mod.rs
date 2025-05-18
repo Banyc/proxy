@@ -6,10 +6,11 @@ use common::{
     config::SharableConfig,
     loading,
     proto::{
+        client::{self, udp::UdpProxyClient},
         conn::udp::{Flow, UpstreamAddr},
         context::UdpContext,
         io_copy::udp::{CopyBiError, CopyBidirectional, DownstreamParts, UpstreamParts},
-        proxy_table::{UdpProxyGroup, UdpProxyGroupBuilder},
+        proxy_table::{UdpProxyGroup, UdpProxyGroupBuildContext, UdpProxyGroupBuilder},
     },
     proxy_table::ProxyGroupBuildError,
     udp::{
@@ -17,16 +18,11 @@ use common::{
         server::{UdpServer, UdpServerHandleConn},
     },
 };
-use proxy_client::udp::{EstablishError, UdpProxyClient};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tracing::{error, warn};
 use udp_listener::Conn;
-
-use self::proxy_table::UdpProxyGroupBuildContext;
-
-pub mod proxy_table;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -174,7 +170,7 @@ impl UdpAccessConnHandler {
 #[derive(Debug, Error)]
 pub enum AccessProxyError {
     #[error("Failed to establish proxy chain: {0}")]
-    Establish(#[from] EstablishError),
+    Establish(#[from] client::udp::EstablishError),
     #[error("Failed to copy: {0}")]
     Copy(#[from] CopyBiError),
 }

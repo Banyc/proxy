@@ -15,7 +15,6 @@ hyper-util = { workspace = true, features = ["tokio"] }
 monitor_table = { workspace = true }
 pin-project-lite = { workspace = true }
 protocol = { path = "../protocol" }
-proxy_client = { path = "../proxy_client" }
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }

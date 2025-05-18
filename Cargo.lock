@@ -16,7 +16,6 @@ dependencies = [
  "monitor_table",
  "pin-project-lite",
  "protocol",
- "proxy_client",
  "regex",
  "serde",
  "thiserror 2.0.12",
@@ -2864,22 +2863,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "proxy_client"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "common",
- "metrics",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
- "protocol",
- "thiserror 2.0.12",
- "tokio",
- "tokio_chacha20",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "proxy_server"
 version = "0.1.0"
 dependencies = [
@@ -3924,7 +3907,6 @@ dependencies = [
  "bytes",
  "common",
  "protocol",
- "proxy_client",
  "proxy_server",
  "rand 0.9.1",
  "serial_test",

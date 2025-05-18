@@ -6,31 +6,27 @@ use common::{
     filter::{self, MatcherBuilder},
     loading,
     proto::{
+        client::{stream::StreamTracerBuilder, udp::UdpTracerBuilder},
         context::Context,
         proxy_table::{
-            StreamProxyConfig, StreamProxyGroupBuilder, StreamProxyTableBuilder, UdpProxyConfig,
-            UdpProxyGroupBuilder, UdpProxyTableBuilder,
+            StreamProxyConfig, StreamProxyGroupBuildContext, StreamProxyGroupBuilder,
+            StreamProxyTableBuildContext, StreamProxyTableBuilder, UdpProxyConfig,
+            UdpProxyGroupBuildContext, UdpProxyGroupBuilder, UdpProxyTableBuildContext,
+            UdpProxyTableBuilder,
         },
     },
 };
-use proxy_client::{stream::StreamTracerBuilder, udp::UdpTracerBuilder};
 use serde::{Deserialize, Serialize};
 use socks5::server::{
     tcp::{Socks5ServerTcpAccessConnHandler, Socks5ServerTcpAccessServerConfig},
     udp::{Socks5ServerUdpAccessConnHandler, Socks5ServerUdpAccessServerConfig},
 };
-use stream::{
-    proxy_table::{StreamProxyGroupBuildContext, StreamProxyTableBuildContext},
-    streams::{
-        http_tunnel::{HttpAccessConnHandler, HttpAccessServerConfig},
-        tcp::{TcpAccessConnHandler, TcpAccessServerConfig},
-    },
+use stream::streams::{
+    http_tunnel::{HttpAccessConnHandler, HttpAccessServerConfig},
+    tcp::{TcpAccessConnHandler, TcpAccessServerConfig},
 };
 use tokio_util::sync::CancellationToken;
-use udp::{
-    UdpAccessConnHandler, UdpAccessServerConfig,
-    proxy_table::{UdpProxyGroupBuildContext, UdpProxyTableBuildContext},
-};
+use udp::{UdpAccessConnHandler, UdpAccessServerConfig};
 
 pub mod socks5;
 pub mod stream;

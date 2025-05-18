@@ -9,12 +9,16 @@ use common::{
     log::Timing,
     proto::{
         addr::StreamAddr,
+        client::stream::{StreamEstablishError, establish},
         connect::stream::StreamConnectorTable,
         context::StreamContext,
         io_copy::stream::{ConnContext, CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
         log::stream::{LOGGER, SimplifiedStreamLog, SimplifiedStreamProxyLog},
         metrics::stream::{Session, StreamSessionTable},
-        proxy_table::{StreamProxyGroup, StreamProxyTable, StreamProxyTableBuilder},
+        proxy_table::{
+            StreamProxyGroup, StreamProxyTable, StreamProxyTableBuildContext,
+            StreamProxyTableBuilder,
+        },
     },
     proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{OwnIoStream, StreamServerHandleConn},
@@ -29,13 +33,10 @@ use monitor_table::table::RowOwnedGuard;
 use protocol::stream::{
     addr::ConcreteStreamType, connect::TCP_STREAM_TYPE, streams::tcp::TcpServer,
 };
-use proxy_client::stream::{StreamEstablishError, establish};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{error, info, instrument, trace, warn};
-
-use crate::stream::proxy_table::StreamProxyTableBuildContext;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

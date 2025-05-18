@@ -5,10 +5,11 @@ use common::{
     config::SharableConfig,
     loading,
     proto::{
+        client::{self, udp::UdpProxyClient},
         conn::udp::{Flow, UpstreamAddr},
         context::UdpContext,
         io_copy::udp::{CopyBidirectional, DownstreamParts, UpstreamParts},
-        proxy_table::{UdpProxyGroup, UdpProxyGroupBuilder},
+        proxy_table::{UdpProxyGroup, UdpProxyGroupBuildContext, UdpProxyGroupBuilder},
     },
     proxy_table::ProxyGroupBuildError,
     udp::{
@@ -16,14 +17,13 @@ use common::{
         server::{UdpServer, UdpServerHandleConn},
     },
 };
-use proxy_client::udp::{EstablishError, UdpProxyClient};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tracing::{error, warn};
 use udp_listener::Conn;
 
-use crate::{socks5::messages::UdpRequestHeader, udp::proxy_table::UdpProxyGroupBuildContext};
+use crate::socks5::messages::UdpRequestHeader;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -175,7 +175,7 @@ impl Socks5ServerUdpAccessConnHandler {
 #[derive(Debug, Error)]
 pub enum AccessProxyError {
     #[error("Failed to establish proxy chain: {0}")]
-    Establish(#[from] EstablishError),
+    Establish(#[from] client::udp::EstablishError),
 }
 impl UdpServerHandleConn for Socks5ServerUdpAccessConnHandler {
     fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {

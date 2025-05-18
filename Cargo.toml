@@ -4,7 +4,6 @@ members = [
     "access_server",
     "common",
     "protocol",
-    "proxy_client",
     "proxy_server",
     "server",
     "tests",
