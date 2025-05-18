@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use common::loading;
-use protocol::stream::{context::ConcreteStreamContext, streams::tcp_mux::TcpMuxServer};
+use common::{loading, proto::context::StreamContext};
+use protocol::stream::streams::tcp_mux::TcpMuxServer;
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::net::{TcpListener, ToSocketAddrs};
@@ -22,7 +22,7 @@ pub struct TcpMuxProxyServerConfig {
     pub inner: StreamProxyServerConfig,
 }
 impl TcpMuxProxyServerConfig {
-    pub fn into_builder(self, stream_context: ConcreteStreamContext) -> TcpMuxProxyServerBuilder {
+    pub fn into_builder(self, stream_context: StreamContext) -> TcpMuxProxyServerBuilder {
         let listen_addr = Arc::clone(&self.listen_addr);
         let inner = self.inner.into_builder(stream_context, listen_addr);
         TcpMuxProxyServerBuilder {

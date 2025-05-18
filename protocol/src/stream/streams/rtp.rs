@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use async_trait::async_trait;
 use metrics::counter;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -125,9 +126,9 @@ impl RtpConnector {
         Self { config, fec }
     }
 }
+#[async_trait]
 impl StreamConnect for RtpConnector {
-    type Conn = AddressedRtpStream;
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Self::Conn> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>> {
         let bind = self
             .config
             .read()
@@ -144,7 +145,7 @@ impl StreamConnect for RtpConnector {
             peer_addr: connected.peer_addr,
         };
         counter!("stream.rtp.connects").increment(1);
-        Ok(stream)
+        Ok(Box::new(stream))
     }
 }
 

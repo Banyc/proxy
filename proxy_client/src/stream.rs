@@ -8,12 +8,11 @@ use common::{
         heartbeat::{self, HeartbeatError},
         route::{RouteError, RouteResponse},
     },
-    proto::{addr::StreamAddr, conn::stream::ConnAndAddr},
+    proto::{addr::StreamAddr, conn::stream::ConnAndAddr, context::StreamContext},
     proxy_table::{BuildTracer, ProxyChain, TraceRtt, convert_proxies_to_header_crypto_pairs},
     stream::pool::{ConnectError, connect_with_pool},
 };
 use metrics::counter;
-use protocol::stream::context::ConcreteStreamContext;
 use thiserror::Error;
 use tracing::{error, instrument, trace};
 
@@ -23,7 +22,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 pub async fn establish(
     proxies: &ProxyChain<StreamAddr>,
     destination: StreamAddr,
-    stream_context: &ConcreteStreamContext,
+    stream_context: &StreamContext,
 ) -> Result<ConnAndAddr, StreamEstablishError> {
     // If there are no proxy configs, just connect to the destination
     if proxies.is_empty() {
@@ -117,10 +116,10 @@ pub enum StreamEstablishError {
 
 #[derive(Debug, Clone)]
 pub struct StreamTracerBuilder {
-    stream_context: ConcreteStreamContext,
+    stream_context: StreamContext,
 }
 impl StreamTracerBuilder {
-    pub fn new(stream_context: ConcreteStreamContext) -> Self {
+    pub fn new(stream_context: StreamContext) -> Self {
         Self { stream_context }
     }
 }
@@ -134,10 +133,10 @@ impl BuildTracer for StreamTracerBuilder {
 
 #[derive(Debug, Clone)]
 pub struct StreamTracer {
-    stream_context: ConcreteStreamContext,
+    stream_context: StreamContext,
 }
 impl StreamTracer {
-    pub fn new(stream_context: ConcreteStreamContext) -> Self {
+    pub fn new(stream_context: StreamContext) -> Self {
         Self { stream_context }
     }
 }
@@ -152,7 +151,7 @@ impl TraceRtt for StreamTracer {
 }
 pub async fn trace_rtt(
     proxies: &ProxyChain<StreamAddr>,
-    stream_context: &ConcreteStreamContext,
+    stream_context: &StreamContext,
 ) -> Result<Duration, TraceError> {
     if proxies.is_empty() {
         return Ok(Duration::from_secs(0));

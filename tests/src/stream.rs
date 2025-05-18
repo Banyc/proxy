@@ -6,13 +6,15 @@ mod tests {
         anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         connect::ConnectorConfig,
         loading::Serve,
-        proto::{addr::StreamAddr, conn::stream::ConnAndAddr, proxy_table::StreamProxyConfig},
+        proto::{
+            addr::StreamAddr, conn::stream::ConnAndAddr, context::StreamContext,
+            proxy_table::StreamProxyConfig,
+        },
         proxy_table::ProxyConfig,
         stream::pool::StreamConnPool,
     };
     use protocol::stream::{
-        addr::ConcreteStreamType, connect::ConcreteStreamConnectorTable,
-        context::ConcreteStreamContext,
+        addr::ConcreteStreamType, connect::build_concrete_stream_connector_table,
     };
     use proxy_client::stream::{establish, trace_rtt};
     use proxy_server::stream::{
@@ -34,13 +36,13 @@ mod tests {
         tokio_chacha20::config::Config::new(key.into())
     }
 
-    fn stream_context() -> ConcreteStreamContext {
-        ConcreteStreamContext {
+    fn stream_context() -> StreamContext {
+        StreamContext {
             session_table: None,
             pool: Swap::new(StreamConnPool::empty()),
-            connector_table: Arc::new(
-                ConcreteStreamConnectorTable::new(ConnectorConfig::default()),
-            ),
+            connector_table: Arc::new(build_concrete_stream_connector_table(
+                ConnectorConfig::default(),
+            )),
             replay_validator: Arc::new(ReplayValidator::new(
                 VALIDATOR_TIME_FRAME,
                 VALIDATOR_CAPACITY,

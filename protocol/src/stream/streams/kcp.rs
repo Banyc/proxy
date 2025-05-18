@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use async_trait::async_trait;
 use metrics::counter;
 use thiserror::Error;
 use tokio::{
@@ -128,9 +129,9 @@ impl KcpConnector {
         Self { config }
     }
 }
+#[async_trait]
 impl StreamConnect for KcpConnector {
-    type Conn = AddressedKcpStream;
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Self::Conn> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>> {
         let bind = self
             .config
             .read()
@@ -149,7 +150,7 @@ impl StreamConnect for KcpConnector {
             peer_addr: addr,
         };
         counter!("stream.kcp.connects").increment(1);
-        Ok(stream)
+        Ok(Box::new(stream))
     }
 }
 

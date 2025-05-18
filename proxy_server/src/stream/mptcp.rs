@@ -1,8 +1,8 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
-use common::loading;
+use common::{loading, proto::context::StreamContext};
 use mptcp::MptcpListener;
-use protocol::stream::{context::ConcreteStreamContext, streams::mptcp::MptcpServer};
+use protocol::stream::streams::mptcp::MptcpServer;
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::net::ToSocketAddrs;
@@ -25,7 +25,7 @@ pub struct MptcpProxyServerConfig {
     pub inner: StreamProxyServerConfig,
 }
 impl MptcpProxyServerConfig {
-    pub fn into_builder(self, stream_context: ConcreteStreamContext) -> MptcpProxyServerBuilder {
+    pub fn into_builder(self, stream_context: StreamContext) -> MptcpProxyServerBuilder {
         let listen_addr = Arc::clone(&self.listen_addr);
         let inner = self.inner.into_builder(stream_context, listen_addr);
         MptcpProxyServerBuilder {

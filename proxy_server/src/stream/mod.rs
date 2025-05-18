@@ -6,6 +6,7 @@ use common::{
     loading,
     proto::{
         conn::stream::ConnAndAddr,
+        context::StreamContext,
         io_copy::stream::{ConnContext, CopyBidirectional},
         steer::stream::{SteerError, steer},
     },
@@ -14,7 +15,6 @@ use common::{
         pool::{ConnectError, connect_with_pool},
     },
 };
-use protocol::stream::context::ConcreteStreamContext;
 use serde::Deserialize;
 use thiserror::Error;
 use tracing::{error, info, instrument, warn};
@@ -38,7 +38,7 @@ pub struct StreamProxyServerConfig {
 impl StreamProxyServerConfig {
     pub fn into_builder(
         self,
-        stream_context: ConcreteStreamContext,
+        stream_context: StreamContext,
         listen_addr: Arc<str>,
     ) -> StreamProxyConnHandlerBuilder {
         StreamProxyConnHandlerBuilder {
@@ -54,7 +54,7 @@ impl StreamProxyServerConfig {
 pub struct StreamProxyConnHandlerBuilder {
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
-    pub stream_context: ConcreteStreamContext,
+    pub stream_context: StreamContext,
     pub listen_addr: Arc<str>,
 }
 impl StreamProxyConnHandlerBuilder {
@@ -92,14 +92,14 @@ pub enum StreamProxyServerBuildError {
 pub struct StreamProxyConnHandler {
     acceptor: StreamProxyAcceptor,
     payload_crypto: Option<tokio_chacha20::config::Config>,
-    stream_context: ConcreteStreamContext,
+    stream_context: StreamContext,
     listen_addr: Arc<str>,
 }
 impl StreamProxyConnHandler {
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
         payload_crypto: Option<tokio_chacha20::config::Config>,
-        stream_context: ConcreteStreamContext,
+        stream_context: StreamContext,
         listen_addr: Arc<str>,
     ) -> Self {
         Self {
@@ -196,13 +196,10 @@ pub enum ProxyResult {
 #[derive(Debug)]
 pub struct StreamProxyAcceptor {
     crypto: tokio_chacha20::config::Config,
-    stream_context: ConcreteStreamContext,
+    stream_context: StreamContext,
 }
 impl StreamProxyAcceptor {
-    pub fn new(
-        crypto: tokio_chacha20::config::Config,
-        stream_context: ConcreteStreamContext,
-    ) -> Self {
+    pub fn new(crypto: tokio_chacha20::config::Config, stream_context: StreamContext) -> Self {
         Self {
             crypto,
             stream_context,

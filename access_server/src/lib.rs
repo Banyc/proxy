@@ -5,12 +5,14 @@ use common::{
     error::{AnyError, AnyResult},
     filter::{self, MatcherBuilder},
     loading,
-    proto::proxy_table::{
-        StreamProxyConfig, StreamProxyGroupBuilder, StreamProxyTableBuilder, UdpProxyConfig,
-        UdpProxyGroupBuilder, UdpProxyTableBuilder,
+    proto::{
+        context::Context,
+        proxy_table::{
+            StreamProxyConfig, StreamProxyGroupBuilder, StreamProxyTableBuilder, UdpProxyConfig,
+            UdpProxyGroupBuilder, UdpProxyTableBuilder,
+        },
     },
 };
-use protocol::context::ConcreteContext;
 use proxy_client::{stream::StreamTracerBuilder, udp::UdpTracerBuilder};
 use serde::{Deserialize, Serialize};
 use socks5::server::{
@@ -121,7 +123,7 @@ impl AccessServerConfig {
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut AccessServerLoader,
         cancellation: CancellationToken,
-        context: ConcreteContext,
+        context: Context,
         stream_proxy_server: &HashMap<Arc<str>, StreamProxyConfig>,
         udp_proxy_server: &HashMap<Arc<str>, UdpProxyConfig>,
     ) -> AnyResult {

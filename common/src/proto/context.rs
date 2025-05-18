@@ -10,46 +10,22 @@ use crate::{
 
 use super::{
     addr::StreamAddr,
-    connect::{stream::StreamTimedConnect, udp::UdpConnector},
+    connect::{stream::StreamConnectorTable, udp::UdpConnector},
     metrics::{stream::StreamSessionTable, udp::UdpSessionTable},
 };
 
-#[derive(Debug)]
-pub struct Context<ConnectorTable> {
-    pub stream: StreamContext<ConnectorTable>,
+#[derive(Debug, Clone)]
+pub struct Context {
+    pub stream: StreamContext,
     pub udp: UdpContext,
 }
-impl<ConnectorTable> Clone for Context<ConnectorTable>
-where
-    ConnectorTable: StreamTimedConnect<Conn = Box<dyn AsConn>>,
-{
-    fn clone(&self) -> Self {
-        Self {
-            stream: self.stream.clone(),
-            udp: self.udp.clone(),
-        }
-    }
-}
 
-#[derive(Debug)]
-pub struct StreamContext<ConnectorTable> {
+#[derive(Debug, Clone)]
+pub struct StreamContext {
     pub session_table: Option<StreamSessionTable>,
     pub pool: Swap<ConnPool<StreamAddr, Box<dyn AsConn>>>,
-    pub connector_table: Arc<ConnectorTable>,
+    pub connector_table: Arc<StreamConnectorTable>,
     pub replay_validator: Arc<ReplayValidator>,
-}
-impl<ConnectorTable> Clone for StreamContext<ConnectorTable>
-where
-    ConnectorTable: StreamTimedConnect<Conn = Box<dyn AsConn>>,
-{
-    fn clone(&self) -> Self {
-        Self {
-            session_table: self.session_table.clone(),
-            pool: self.pool.clone(),
-            connector_table: self.connector_table.clone(),
-            replay_validator: self.replay_validator.clone(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

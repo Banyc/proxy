@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use common::loading;
-use protocol::stream::{context::ConcreteStreamContext, streams::tcp::TcpServer};
+use common::{loading, proto::context::StreamContext};
+use protocol::stream::streams::tcp::TcpServer;
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::net::{TcpListener, ToSocketAddrs};
@@ -22,7 +22,7 @@ pub struct TcpProxyServerConfig {
     pub inner: StreamProxyServerConfig,
 }
 impl TcpProxyServerConfig {
-    pub fn into_builder(self, stream_context: ConcreteStreamContext) -> TcpProxyServerBuilder {
+    pub fn into_builder(self, stream_context: StreamContext) -> TcpProxyServerBuilder {
         let listen_addr = Arc::clone(&self.listen_addr);
         let inner = self.inner.into_builder(stream_context, listen_addr);
         TcpProxyServerBuilder {
@@ -90,7 +90,9 @@ mod tests {
         proto::{addr::StreamAddr, header::StreamRequestHeader},
         stream::pool::StreamConnPool,
     };
-    use protocol::stream::{addr::ConcreteStreamType, connect::ConcreteStreamConnectorTable};
+    use protocol::stream::{
+        addr::ConcreteStreamType, connect::build_concrete_stream_connector_table,
+    };
     use swap::Swap;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -110,10 +112,12 @@ mod tests {
             let proxy = StreamProxyConnHandler::new(
                 crypto.clone(),
                 None,
-                ConcreteStreamContext {
+                StreamContext {
                     session_table: None,
                     pool: Swap::new(StreamConnPool::empty()),
-                    connector_table: Arc::new(ConcreteStreamConnectorTable::new(connector_config)),
+                    connector_table: Arc::new(build_concrete_stream_connector_table(
+                        connector_config,
+                    )),
                     replay_validator: Arc::new(ReplayValidator::new(
                         VALIDATOR_TIME_FRAME,
                         VALIDATOR_CAPACITY,

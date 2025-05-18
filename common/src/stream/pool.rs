@@ -12,7 +12,7 @@ use crate::{
     header::heartbeat::send_noop,
     proto::{
         addr::{StreamAddr, StreamAddrStr},
-        connect::stream::StreamTimedConnect,
+        connect::stream::StreamConnectorTable,
         context::StreamContext,
     },
     proxy_table::{IntoAddr, ProxyConfig, ProxyConfigBuildError, ProxyConfigBuilder},
@@ -40,14 +40,11 @@ impl<AddrStr> PoolBuilder<AddrStr>
 where
     AddrStr: IntoAddr<Addr = StreamAddr>,
 {
-    pub fn build<ConnectorTable>(
+    pub fn build(
         self,
-        connector_table: Arc<ConnectorTable>,
+        connector_table: Arc<StreamConnectorTable>,
         proxy_server: &HashMap<Arc<str>, ProxyConfig<StreamAddr>>,
-    ) -> Result<ConnPool<StreamAddr, Box<dyn AsConn>>, PoolBuildError>
-    where
-        ConnectorTable: StreamTimedConnect<Conn = Box<dyn AsConn>>,
-    {
+    ) -> Result<ConnPool<StreamAddr, Box<dyn AsConn>>, PoolBuildError> {
         let c = self
             .0
             .into_iter()
@@ -88,13 +85,10 @@ impl<AddrStr> Merge for PoolBuilder<AddrStr> {
     }
 }
 
-fn pool_entries_from_proxy_configs<ConnectorTable>(
+fn pool_entries_from_proxy_configs(
     proxy_configs: impl Iterator<Item = ProxyConfig<StreamAddr>>,
-    connector_table: Arc<ConnectorTable>,
-) -> impl Iterator<Item = ConnPoolEntry<StreamAddr, Box<dyn AsConn>>>
-where
-    ConnectorTable: StreamTimedConnect<Conn = Box<dyn AsConn>> + Sync + Send + 'static,
-{
+    connector_table: Arc<StreamConnectorTable>,
+) -> impl Iterator<Item = ConnPoolEntry<StreamAddr, Box<dyn AsConn>>> {
     proxy_configs.map(move |c| ConnPoolEntry {
         key: c.address.clone(),
         connect: Arc::new(PoolConnector {
@@ -108,15 +102,12 @@ where
 }
 
 #[derive(Debug)]
-struct PoolConnector<ConnectorTable> {
+struct PoolConnector {
     proxy_server: ProxyConfig<StreamAddr>,
-    connector_table: Arc<ConnectorTable>,
+    connector_table: Arc<StreamConnectorTable>,
 }
 #[async_trait]
-impl<ConnectorTable> tokio_conn_pool::Connect for PoolConnector<ConnectorTable>
-where
-    ConnectorTable: StreamTimedConnect<Conn = Box<dyn AsConn>> + Sync + Send + 'static,
-{
+impl tokio_conn_pool::Connect for PoolConnector {
     type Connection = Box<dyn AsConn>;
     async fn connect(&self) -> Option<Self::Connection> {
         let addr = self.proxy_server.address.clone();
@@ -151,15 +142,12 @@ impl tokio_conn_pool::Heartbeat for PoolHeartbeat {
     }
 }
 
-pub async fn connect_with_pool<ConnectorTable>(
+pub async fn connect_with_pool(
     addr: &StreamAddr,
-    stream_context: &StreamContext<ConnectorTable>,
+    stream_context: &StreamContext,
     allow_loopback: bool,
     timeout: Duration,
-) -> Result<(Box<dyn AsConn>, SocketAddr), ConnectError>
-where
-    ConnectorTable: StreamTimedConnect<Conn = Box<dyn AsConn>>,
-{
+) -> Result<(Box<dyn AsConn>, SocketAddr), ConnectError> {
     let stream = stream_context.pool.inner().pull(addr);
     let sock_addr = stream.as_ref().and_then(|s| s.peer_addr().ok());
     if let (Some(stream), Some(sock_addr)) = (stream, sock_addr) {

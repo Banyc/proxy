@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use common::loading;
-use protocol::stream::{context::ConcreteStreamContext, streams::rtp::RtpServer};
+use common::{loading, proto::context::StreamContext};
+use protocol::stream::streams::rtp::RtpServer;
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::net::ToSocketAddrs;
@@ -21,7 +21,7 @@ pub struct RtpProxyServerConfig {
     pub inner: StreamProxyServerConfig,
 }
 impl RtpProxyServerConfig {
-    pub fn into_builder(self, stream_context: ConcreteStreamContext) -> RtpProxyServerBuilder {
+    pub fn into_builder(self, stream_context: StreamContext) -> RtpProxyServerBuilder {
         let listen_addr = Arc::clone(&self.listen_addr);
         let inner = self.inner.into_builder(stream_context, listen_addr);
         RtpProxyServerBuilder {

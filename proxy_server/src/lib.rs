@@ -1,12 +1,11 @@
 use std::{convert::Infallible, io};
 
-use common::{config::Merge, error::AnyResult, loading};
-use protocol::context::ConcreteContext;
+use common::{config::Merge, error::AnyResult, loading, proto::context::Context};
 use serde::Deserialize;
 use stream::{
-    kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, rtp::RtpProxyServerConfig,
-    rtp_mux::RtpMuxProxyServerConfig, tcp::TcpProxyServerConfig, tcp_mux::TcpMuxProxyServerConfig,
-    StreamProxyConnHandler,
+    StreamProxyConnHandler, kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig,
+    rtp::RtpProxyServerConfig, rtp_mux::RtpMuxProxyServerConfig, tcp::TcpProxyServerConfig,
+    tcp_mux::TcpMuxProxyServerConfig,
 };
 use thiserror::Error;
 use udp::{UdpProxyConnHandler, UdpProxyServerBuilder, UdpProxyServerConfig};
@@ -49,7 +48,7 @@ impl ProxyServerConfig {
         self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         loader: &mut ProxyServerLoader,
-        context: ConcreteContext,
+        context: Context,
     ) -> AnyResult {
         loader
             .tcp_server

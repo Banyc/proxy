@@ -1,5 +1,6 @@
 use std::{io, net::SocketAddr, sync::Arc};
 
+use async_trait::async_trait;
 use metrics::counter;
 use mptcp::{listen::MptcpListener, stream::MptcpStream};
 use thiserror::Error;
@@ -112,13 +113,13 @@ pub enum ServeError {
 
 #[derive(Debug, Clone, Copy)]
 pub struct MptcpConnector;
+#[async_trait]
 impl StreamConnect for MptcpConnector {
-    type Conn = IoMptcpStream;
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Self::Conn> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>> {
         let addrs = std::iter::repeat_n((), STREAMS).map(|()| addr);
         let stream = MptcpStream::connect(addrs).await?;
         counter!("stream.mptcp.connects").increment(1);
-        Ok(IoMptcpStream(stream))
+        Ok(Box::new(IoMptcpStream(stream)))
     }
 }
 

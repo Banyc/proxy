@@ -8,16 +8,16 @@ use common::{
     proto::{
         addr::StreamAddr,
         conn::stream::ConnAndAddr,
-        connect::stream::StreamConnectExt,
+        context::StreamContext,
         io_copy::stream::{ConnContext, CopyBidirectional},
         proxy_table::{StreamProxyGroup, StreamProxyTable, StreamProxyTableBuilder},
     },
     proxy_table::{ProxyAction, ProxyTableBuildError},
-    stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn},
     udp::TIMEOUT,
 };
 use protocol::stream::{
-    addr::ConcreteStreamType, context::ConcreteStreamContext, streams::tcp::TcpServer,
+    addr::ConcreteStreamType, connect::TCP_STREAM_TYPE, streams::tcp::TcpServer,
 };
 use proxy_client::stream::StreamEstablishError;
 use serde::{Deserialize, Serialize};
@@ -51,7 +51,7 @@ impl Socks5ServerTcpAccessServerConfig {
         self,
         proxy_table: &HashMap<Arc<str>, StreamProxyTable>,
         proxy_table_cx: StreamProxyTableBuildContext<'_>,
-        stream_context: ConcreteStreamContext,
+        stream_context: StreamContext,
     ) -> Result<Socks5ServerTcpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_table
@@ -100,7 +100,7 @@ pub struct Socks5ServerTcpAccessServerBuilder {
     speed_limit: f64,
     udp_server_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-    stream_context: ConcreteStreamContext,
+    stream_context: StreamContext,
 }
 impl loading::Build for Socks5ServerTcpAccessServerBuilder {
     type ConnHandler = Socks5ServerTcpAccessConnHandler;
@@ -137,7 +137,7 @@ pub struct Socks5ServerTcpAccessConnHandler {
     speed_limiter: Limiter,
     udp_listen_addr: Option<InternetAddr>,
     users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-    stream_context: ConcreteStreamContext,
+    stream_context: StreamContext,
     listen_addr: Arc<str>,
 }
 impl HandleConn for Socks5ServerTcpAccessConnHandler {}
@@ -161,7 +161,7 @@ impl Socks5ServerTcpAccessConnHandler {
         speed_limit: f64,
         udp_listen_addr: Option<InternetAddr>,
         users: HashMap<Arc<[u8]>, Arc<[u8]>>,
-        stream_context: ConcreteStreamContext,
+        stream_context: StreamContext,
         listen_addr: Arc<str>,
     ) -> Self {
         Self {
@@ -366,8 +366,7 @@ impl Socks5ServerTcpAccessConnHandler {
                 let upstream = match self
                     .stream_context
                     .connector_table
-                    .tcp()
-                    .timed_connect(sock_addr, TIMEOUT)
+                    .timed_connect(TCP_STREAM_TYPE, sock_addr, TIMEOUT)
                     .await
                 {
                     Ok(upstream) => upstream,
@@ -545,7 +544,7 @@ pub enum EstablishResult<S> {
     },
     Direct {
         downstream: S,
-        upstream: tokio::net::TcpStream,
+        upstream: Box<dyn AsConn>,
         upstream_addr: InternetAddr,
         upstream_sock_addr: SocketAddr,
     },
@@ -565,7 +564,7 @@ enum RequestResult {
         destination: InternetAddr,
     },
     Direct {
-        upstream: tokio::net::TcpStream,
+        upstream: Box<dyn AsConn>,
         upstream_addr: InternetAddr,
         upstream_sock_addr: SocketAddr,
     },

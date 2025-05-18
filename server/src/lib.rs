@@ -14,17 +14,14 @@ use common::{
     error::{AnyError, AnyResult},
     proto::{
         connect::udp::UdpConnector,
-        context::{Context, UdpContext},
+        context::{Context, StreamContext, UdpContext},
         metrics::{stream::StreamSessionTable, udp::UdpSessionTable},
         proxy_table::{StreamProxyConfigBuilder, UdpProxyConfigBuilder},
     },
     stream::pool::{StreamConnPool, StreamPoolBuilder},
 };
 use config::ReadConfig;
-use protocol::{
-    context::ConcreteContext,
-    stream::{connect::ConcreteStreamConnectorTable, context::ConcreteStreamContext},
-};
+use protocol::stream::connect::build_concrete_stream_connector_table;
 use proxy_server::{ProxyServerConfig, ProxyServerLoader};
 use serde::Deserialize;
 use swap::Swap;
@@ -64,12 +61,12 @@ where
         VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
     ));
     let context = Context {
-        stream: ConcreteStreamContext {
+        stream: StreamContext {
             session_table: serve_context.stream_session_table,
             pool: stream_pool,
-            connector_table: Arc::new(
-                ConcreteStreamConnectorTable::new(ConnectorConfig::default()),
-            ),
+            connector_table: Arc::new(build_concrete_stream_connector_table(
+                ConnectorConfig::default(),
+            )),
             replay_validator: Arc::clone(&stream_validator),
         },
         udp: UdpContext {
@@ -134,7 +131,7 @@ async fn read_and_exec_config<CR>(
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
     cancellation: CancellationToken,
-    context: ConcreteContext,
+    context: Context,
 ) -> Result<(), ServeError>
 where
     CR: ReadConfig<Config = ServerConfig>,
@@ -164,7 +161,7 @@ pub async fn spawn_and_clean(
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
     cancellation: CancellationToken,
-    context: ConcreteContext,
+    context: Context,
 ) -> AnyResult {
     let mut stream_proxy_server = HashMap::new();
     for (k, v) in config.stream.proxy_server {

@@ -4,6 +4,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use async_trait::async_trait;
 use metrics::counter;
 use mux::{
     MuxError,
@@ -15,8 +16,12 @@ use tokio::task::JoinSet;
 use tracing::{info, instrument, trace, warn};
 
 use common::{
-    addr::any_addr, connect::ConnectorConfig, error::AnyResult, loading,
-    proto::connect::stream::StreamConnect, stream::StreamServerHandleConn,
+    addr::any_addr,
+    connect::ConnectorConfig,
+    error::AnyResult,
+    loading,
+    proto::connect::stream::StreamConnect,
+    stream::{AsConn, StreamServerHandleConn},
 };
 
 use crate::stream::streams::mux::{run_mux_accepter, server_mux_config};
@@ -171,12 +176,12 @@ impl RtpMuxConnector {
         }
     }
 }
+#[async_trait]
 impl StreamConnect for RtpMuxConnector {
-    type Conn = IoMuxStream;
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Self::Conn> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>> {
         let ((r, w), addr) = self.connect_request_tx.send(addr).await?;
         counter!("stream.rtp_mux.mux.connects").increment(1);
         let stream = PollIo::new(PollRead::new(r), PollWrite::new(w));
-        Ok(IoMuxStream::new(stream, addr))
+        Ok(Box::new(IoMuxStream::new(stream, addr)))
     }
 }

@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use async_trait::async_trait;
 use metrics::counter;
 use thiserror::Error;
 use tokio::{
@@ -122,9 +123,9 @@ impl TcpConnector {
         Self { config }
     }
 }
+#[async_trait]
 impl StreamConnect for TcpConnector {
-    type Conn = TcpStream;
-    async fn connect(&self, addr: SocketAddr) -> io::Result<TcpStream> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>> {
         let bind = self
             .config
             .read()
@@ -140,7 +141,7 @@ impl StreamConnect for TcpConnector {
         socket.bind(bind)?;
         let stream = socket.connect(addr).await?;
         counter!("stream.tcp.connects").increment(1);
-        Ok(stream)
+        Ok(Box::new(IoTcpStream(stream)))
     }
 }
 

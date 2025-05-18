@@ -1,11 +1,19 @@
-use std::{io, net::SocketAddr, time::Duration};
+use std::{
+    collections::HashMap,
+    io,
+    net::SocketAddr,
+    ops::Deref,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
-pub trait StreamConnect: std::fmt::Debug {
-    type Conn;
-    fn connect(
-        &self,
-        addr: SocketAddr,
-    ) -> impl std::future::Future<Output = io::Result<Self::Conn>> + Send;
+use async_trait::async_trait;
+
+use crate::{connect::ConnectorConfig, stream::AsConn};
+
+#[async_trait]
+pub trait StreamConnect: std::fmt::Debug + Sync + Send + 'static {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>>;
 }
 
 pub trait StreamConnectExt: StreamConnect {
@@ -13,7 +21,7 @@ pub trait StreamConnectExt: StreamConnect {
         &self,
         addr: SocketAddr,
         timeout: Duration,
-    ) -> impl std::future::Future<Output = io::Result<Self::Conn>> + Send
+    ) -> impl std::future::Future<Output = io::Result<Box<dyn AsConn>>> + Send
     where
         Self: Sync,
     {
@@ -26,14 +34,37 @@ pub trait StreamConnectExt: StreamConnect {
         }
     }
 }
-impl<T: StreamConnect> StreamConnectExt for T {}
+impl<T: StreamConnect + ?Sized> StreamConnectExt for T {}
 
-pub trait StreamTimedConnect: std::fmt::Debug + Sync + Send + 'static {
-    type Conn;
-    fn timed_connect(
+#[derive(Debug)]
+pub struct StreamConnectorTable {
+    config: Arc<RwLock<ConnectorConfig>>,
+    connectors: HashMap<Arc<str>, Arc<dyn StreamConnect>>,
+}
+impl StreamConnectorTable {
+    pub fn new(
+        config: Arc<RwLock<ConnectorConfig>>,
+        connectors: HashMap<Arc<str>, Arc<dyn StreamConnect>>,
+    ) -> Self {
+        Self { config, connectors }
+    }
+    pub fn replaced_by(&self, config: ConnectorConfig) {
+        *self.config.write().unwrap() = config;
+    }
+}
+impl StreamConnectorTable {
+    pub async fn timed_connect(
         &self,
         stream_type: &str,
         addr: SocketAddr,
         timeout: Duration,
-    ) -> impl std::future::Future<Output = io::Result<Self::Conn>> + Send;
+    ) -> io::Result<Box<dyn AsConn>> {
+        let Some(connector) = self.connectors.get(stream_type) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid stream type: `{stream_type}`"),
+            ));
+        };
+        StreamConnectExt::timed_connect(connector.deref(), addr, timeout).await
+    }
 }

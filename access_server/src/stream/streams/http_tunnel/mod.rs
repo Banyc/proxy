@@ -9,7 +9,8 @@ use common::{
     log::Timing,
     proto::{
         addr::StreamAddr,
-        connect::stream::StreamConnectExt,
+        connect::stream::StreamConnectorTable,
+        context::StreamContext,
         io_copy::stream::{ConnContext, CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
         log::stream::{LOGGER, SimplifiedStreamLog, SimplifiedStreamProxyLog},
         metrics::stream::{Session, StreamSessionTable},
@@ -26,8 +27,7 @@ use hyper::{
 use hyper_util::rt::TokioIo;
 use monitor_table::table::RowOwnedGuard;
 use protocol::stream::{
-    addr::ConcreteStreamType, connect::ConcreteStreamConnectorTable,
-    context::ConcreteStreamContext, streams::tcp::TcpServer,
+    addr::ConcreteStreamType, connect::TCP_STREAM_TYPE, streams::tcp::TcpServer,
 };
 use proxy_client::stream::{StreamEstablishError, establish};
 use serde::{Deserialize, Serialize};
@@ -49,7 +49,7 @@ impl HttpAccessServerConfig {
         self,
         proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
         proxy_tables_cx: StreamProxyTableBuildContext<'_>,
-        stream_context: ConcreteStreamContext,
+        stream_context: StreamContext,
     ) -> Result<HttpAccessServerBuilder, BuildError> {
         let proxy_table = match self.proxy_table {
             SharableConfig::SharingKey(key) => proxy_tables
@@ -80,7 +80,7 @@ pub struct HttpAccessServerBuilder {
     listen_addr: Arc<str>,
     proxy_table: StreamProxyTable,
     speed_limit: f64,
-    stream_context: ConcreteStreamContext,
+    stream_context: StreamContext,
 }
 impl loading::Build for HttpAccessServerBuilder {
     type ConnHandler = HttpAccessConnHandler;
@@ -114,14 +114,14 @@ impl loading::Build for HttpAccessServerBuilder {
 pub struct HttpAccessConnHandler {
     proxy_table: Arc<StreamProxyTable>,
     speed_limiter: Limiter,
-    stream_context: ConcreteStreamContext,
+    stream_context: StreamContext,
     listen_addr: Arc<str>,
 }
 impl HttpAccessConnHandler {
     pub fn new(
         proxy_table: StreamProxyTable,
         speed_limit: f64,
-        stream_context: ConcreteStreamContext,
+        stream_context: StreamContext,
         listen_addr: Arc<str>,
     ) -> Self {
         Self {
@@ -187,8 +187,7 @@ impl HttpAccessConnHandler {
                 let upstream = self
                     .stream_context
                     .connector_table
-                    .tcp()
-                    .timed_connect(sock_addr, TIMEOUT)
+                    .timed_connect(TCP_STREAM_TYPE, sock_addr, TIMEOUT)
                     .await
                     .map_err(TunnelError::Direct)?;
                 let session_guard = self.stream_context.session_table.as_ref().map(|s| {
@@ -372,7 +371,7 @@ async fn upgrade(
     speed_limiter: Limiter,
     session_table: Option<StreamSessionTable>,
     listen_addr: Arc<str>,
-    connector_table: Arc<ConcreteStreamConnectorTable>,
+    connector_table: Arc<StreamConnectorTable>,
 ) {
     let upgraded = match hyper::upgrade::on(req).await {
         Ok(upgraded) => upgraded,
@@ -400,8 +399,7 @@ async fn upgrade(
         }
     };
     let upstream = match connector_table
-        .tcp()
-        .timed_connect(sock_addr, TIMEOUT)
+        .timed_connect(TCP_STREAM_TYPE, sock_addr, TIMEOUT)
         .await
     {
         Ok(upstream) => upstream,
@@ -469,14 +467,14 @@ impl StreamServerHandleConn for HttpAccessConnHandler {
 struct HttpConnect {
     proxy_group: Arc<StreamProxyGroup>,
     speed_limiter: Limiter,
-    stream_context: ConcreteStreamContext,
+    stream_context: StreamContext,
     listen_addr: Arc<str>,
 }
 impl HttpConnect {
     pub fn new(
         proxy_group: Arc<StreamProxyGroup>,
         speed_limiter: Limiter,
-        stream_context: ConcreteStreamContext,
+        stream_context: StreamContext,
         listen_addr: Arc<str>,
     ) -> Self {
         Self {

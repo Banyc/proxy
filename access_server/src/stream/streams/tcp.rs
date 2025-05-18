@@ -6,13 +6,14 @@ use common::{
     loading,
     proto::{
         addr::{StreamAddr, StreamAddrStr},
+        context::StreamContext,
         io_copy::stream::{ConnContext, CopyBidirectional},
         proxy_table::{StreamProxyGroup, StreamProxyGroupBuilder},
     },
     proxy_table::ProxyGroupBuildError,
     stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
-use protocol::stream::{context::ConcreteStreamContext, streams::tcp::TcpServer};
+use protocol::stream::streams::tcp::TcpServer;
 use proxy_client::stream::{StreamEstablishError, establish};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -33,7 +34,7 @@ impl TcpAccessServerConfig {
         self,
         proxy_group: &HashMap<Arc<str>, StreamProxyGroup>,
         proxy_group_cx: StreamProxyGroupBuildContext<'_>,
-        stream_context: ConcreteStreamContext,
+        stream_context: StreamContext,
     ) -> Result<TcpAccessServerBuilder, BuildError> {
         let proxy_group = match self.proxy_group {
             SharableConfig::SharingKey(key) => proxy_group
@@ -66,7 +67,7 @@ pub struct TcpAccessServerBuilder {
     destination: StreamAddrStr,
     proxy_group: StreamProxyGroup,
     speed_limit: f64,
-    stream_context: ConcreteStreamContext,
+    stream_context: StreamContext,
 }
 impl loading::Build for TcpAccessServerBuilder {
     type ConnHandler = TcpAccessConnHandler;
@@ -101,7 +102,7 @@ pub struct TcpAccessConnHandler {
     proxy_group: StreamProxyGroup,
     destination: StreamAddr,
     speed_limiter: Limiter,
-    stream_context: ConcreteStreamContext,
+    stream_context: StreamContext,
     listen_addr: Arc<str>,
 }
 impl TcpAccessConnHandler {
@@ -109,7 +110,7 @@ impl TcpAccessConnHandler {
         proxy_group: StreamProxyGroup,
         destination: StreamAddr,
         speed_limit: f64,
-        stream_context: ConcreteStreamContext,
+        stream_context: StreamContext,
         listen_addr: Arc<str>,
     ) -> Self {
         Self {

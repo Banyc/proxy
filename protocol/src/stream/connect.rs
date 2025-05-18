@@ -1,90 +1,37 @@
 use std::{
-    io,
-    net::SocketAddr,
+    collections::HashMap,
     sync::{Arc, RwLock},
-    time::Duration,
 };
 
 use common::{
     connect::ConnectorConfig,
-    proto::connect::stream::{StreamConnectExt, StreamTimedConnect},
-    stream::AsConn,
+    proto::connect::stream::{StreamConnect, StreamConnectorTable},
 };
 
-use super::{
-    addr::ConcreteStreamType,
-    streams::{
-        kcp::KcpConnector,
-        mptcp::MptcpConnector,
-        rtp::RtpConnector,
-        rtp_mux::RtpMuxConnector,
-        tcp::{IoTcpStream, TcpConnector},
-        tcp_mux::TcpMuxConnector,
-    },
+use super::streams::{
+    kcp::KcpConnector, mptcp::MptcpConnector, rtp::RtpConnector, rtp_mux::RtpMuxConnector,
+    tcp::TcpConnector, tcp_mux::TcpMuxConnector,
 };
 
-#[derive(Debug)]
-pub struct ConcreteStreamConnectorTable {
-    config: Arc<RwLock<ConnectorConfig>>,
-    tcp: TcpConnector,
-    tcp_mux: TcpMuxConnector,
-    kcp: KcpConnector,
-    mptcp: MptcpConnector,
-    rtp: RtpConnector,
-    rtp_mux: RtpMuxConnector,
-    rtp_mux_fec: RtpMuxConnector,
-}
-impl ConcreteStreamConnectorTable {
-    pub fn new(config: ConnectorConfig) -> Self {
-        let config = Arc::new(RwLock::new(config));
-        Self {
-            tcp: TcpConnector::new(config.clone()),
-            tcp_mux: TcpMuxConnector::new(config.clone()),
-            kcp: KcpConnector::new(config.clone()),
-            mptcp: MptcpConnector,
-            rtp: RtpConnector::new(config.clone(), false),
-            rtp_mux: RtpMuxConnector::new(config.clone(), false),
-            rtp_mux_fec: RtpMuxConnector::new(config.clone(), true),
-            config,
-        }
-    }
-    pub fn tcp(&self) -> &TcpConnector {
-        &self.tcp
-    }
-    pub fn replaced_by(&self, config: ConnectorConfig) {
-        *self.config.write().unwrap() = config;
-    }
-}
-impl StreamTimedConnect for ConcreteStreamConnectorTable {
-    type Conn = Box<dyn AsConn>;
-    async fn timed_connect(
-        &self,
-        stream_type: &str,
-        addr: SocketAddr,
-        timeout: Duration,
-    ) -> io::Result<Self::Conn> {
-        let stream_type: ConcreteStreamType = stream_type.parse().map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid stream type: `{stream_type}`"),
-            )
-        })?;
-        Ok(match stream_type {
-            ConcreteStreamType::Tcp => {
-                Box::new(IoTcpStream(self.tcp.timed_connect(addr, timeout).await?))
-            }
-            ConcreteStreamType::TcpMux => {
-                Box::new(self.tcp_mux.timed_connect(addr, timeout).await?)
-            }
-            ConcreteStreamType::Kcp => Box::new(self.kcp.timed_connect(addr, timeout).await?),
-            ConcreteStreamType::Mptcp => Box::new(self.mptcp.timed_connect(addr, timeout).await?),
-            ConcreteStreamType::Rtp => Box::new(self.rtp.timed_connect(addr, timeout).await?),
-            ConcreteStreamType::RtpMux => {
-                Box::new(self.rtp_mux.timed_connect(addr, timeout).await?)
-            }
-            ConcreteStreamType::RtpMuxFec => {
-                Box::new(self.rtp_mux_fec.timed_connect(addr, timeout).await?)
-            }
-        })
-    }
+pub const TCP_STREAM_TYPE: &str = "tcp";
+
+pub fn build_concrete_stream_connector_table(config: ConnectorConfig) -> StreamConnectorTable {
+    let config = Arc::new(RwLock::new(config));
+    let init: Vec<(&'static str, Arc<dyn StreamConnect>)> = vec![
+        (TCP_STREAM_TYPE, Arc::new(TcpConnector::new(config.clone()))),
+        ("tcpmux", Arc::new(TcpMuxConnector::new(config.clone()))),
+        ("kcp", Arc::new(KcpConnector::new(config.clone()))),
+        ("mptcp", Arc::new(MptcpConnector)),
+        ("rtp", Arc::new(RtpConnector::new(config.clone(), false))),
+        (
+            "rtpmux",
+            Arc::new(RtpMuxConnector::new(config.clone(), false)),
+        ),
+        (
+            "rtpmuxfec",
+            Arc::new(RtpMuxConnector::new(config.clone(), true)),
+        ),
+    ];
+    let connectors = HashMap::from_iter(init.into_iter().map(|(k, v)| (k.into(), v)));
+    StreamConnectorTable::new(config, connectors)
 }

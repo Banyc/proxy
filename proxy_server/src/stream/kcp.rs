@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
-use common::loading;
-use protocol::stream::{
-    context::ConcreteStreamContext,
-    streams::kcp::{fast_kcp_config, KcpServer},
-};
+use common::{loading, proto::context::StreamContext};
+use protocol::stream::streams::kcp::{KcpServer, fast_kcp_config};
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::net::ToSocketAddrs;
@@ -25,7 +22,7 @@ pub struct KcpProxyServerConfig {
     pub inner: StreamProxyServerConfig,
 }
 impl KcpProxyServerConfig {
-    pub fn into_builder(self, stream_context: ConcreteStreamContext) -> KcpProxyServerBuilder {
+    pub fn into_builder(self, stream_context: StreamContext) -> KcpProxyServerBuilder {
         let listen_addr = Arc::clone(&self.listen_addr);
         let inner = self.inner.into_builder(stream_context, listen_addr);
         KcpProxyServerBuilder {
