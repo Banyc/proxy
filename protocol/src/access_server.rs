@@ -1,5 +1,16 @@
 use std::{collections::HashMap, sync::Arc};
 
+use crate::{
+    socks5::server::{
+        tcp::{Socks5ServerTcpAccessConnHandler, Socks5ServerTcpAccessServerConfig},
+        udp::{Socks5ServerUdpAccessConnHandler, Socks5ServerUdpAccessServerConfig},
+    },
+    stream::streams::{
+        http_tunnel::{HttpAccessConnHandler, HttpAccessServerConfig},
+        tcp::access_server::{TcpAccessConnHandler, TcpAccessServerConfig},
+    },
+    udp::access_server::{UdpAccessConnHandler, UdpAccessServerConfig},
+};
 use common::{
     config::{Merge, merge_map},
     error::{AnyError, AnyResult},
@@ -16,20 +27,8 @@ use common::{
         },
     },
 };
-use protocol::{
-    stream::streams::tcp::access_server::{TcpAccessConnHandler, TcpAccessServerConfig},
-    udp::access_server::{UdpAccessConnHandler, UdpAccessServerConfig},
-};
 use serde::{Deserialize, Serialize};
-use socks5::server::{
-    tcp::{Socks5ServerTcpAccessConnHandler, Socks5ServerTcpAccessServerConfig},
-    udp::{Socks5ServerUdpAccessConnHandler, Socks5ServerUdpAccessServerConfig},
-};
-use stream::streams::http_tunnel::{HttpAccessConnHandler, HttpAccessServerConfig};
 use tokio_util::sync::CancellationToken;
-
-pub mod socks5;
-pub mod stream;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]

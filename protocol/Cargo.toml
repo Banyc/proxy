@@ -25,5 +25,16 @@ tokio_kcp = { workspace = true }
 tracing = { workspace = true }
 udp_listener = { workspace = true }
 
+bytes = { workspace = true }
+futures = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["full"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+monitor_table = { workspace = true }
+pin-project-lite = { workspace = true }
+regex = { workspace = true }
+tokio-util = { workspace = true }
+tracing-subscriber = { workspace = true }
+
 [dev-dependencies]
 serde_json = { workspace = true }

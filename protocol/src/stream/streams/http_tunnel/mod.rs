@@ -1,5 +1,9 @@
 use std::{collections::HashMap, io, sync::Arc, time::SystemTime};
 
+use crate::stream::{
+    addr::ConcreteStreamType,
+    streams::tcp::proxy_server::{TCP_STREAM_TYPE, TcpServer},
+};
 use async_speed_limit::Limiter;
 use bytes::Bytes;
 use common::{
@@ -30,10 +34,6 @@ use hyper::{
 };
 use hyper_util::rt::TokioIo;
 use monitor_table::table::RowOwnedGuard;
-use protocol::stream::{
-    addr::ConcreteStreamType,
-    streams::tcp::proxy_server::{TCP_STREAM_TYPE, TcpServer},
-};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};

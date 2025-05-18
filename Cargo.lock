@@ -3,31 +3,6 @@
 version = 4
 
 [[package]]
-name = "access_server"
-version = "0.1.0"
-dependencies = [
- "async-speed-limit",
- "bytes",
- "common",
- "futures",
- "http-body-util",
- "hyper",
- "hyper-util",
- "monitor_table",
- "pin-project-lite",
- "protocol",
- "regex",
- "serde",
- "thiserror 2.0.12",
- "tokio",
- "tokio-util",
- "tokio_chacha20",
- "tracing",
- "tracing-subscriber",
- "udp_listener",
-]
-
-[[package]]
 name = "addr2line"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2837,21 +2812,31 @@ dependencies = [
  "async-speed-limit",
  "async-trait",
  "bincode 2.0.1",
+ "bytes",
  "common",
+ "futures",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "metrics",
+ "monitor_table",
  "mptcp",
  "mux",
+ "pin-project-lite",
  "rand 0.9.1",
+ "regex",
  "rtp",
  "serde",
  "serde_json",
  "swap",
  "thiserror 2.0.12",
  "tokio",
+ "tokio-util",
  "tokio_chacha20",
  "tokio_conn_pool",
  "tokio_kcp",
  "tracing",
+ "tracing-subscriber",
  "udp_listener",
 ]
 
@@ -3563,7 +3548,6 @@ dependencies = [
 name = "server"
 version = "0.1.0"
 dependencies = [
- "access_server",
  "anyhow",
  "axum",
  "clap",

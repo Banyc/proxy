@@ -10,7 +10,6 @@ name = "proxy"
 path = "src/main.rs"
 
 [dependencies]
-access_server = { path = "../access_server" }
 anyhow = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true, features = ["derive"] }

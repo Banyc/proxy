@@ -22,6 +22,7 @@ use common::{
 };
 use config::ReadConfig;
 use protocol::{
+    access_server,
     proxy_server::{self, ProxyServerConfig, ProxyServerLoader},
     stream::connect::build_concrete_stream_connector_table,
 };

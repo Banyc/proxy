@@ -1,5 +1,9 @@
 use std::{collections::HashMap, io, net::SocketAddr, num::NonZeroU8, sync::Arc};
 
+use crate::stream::{
+    addr::ConcreteStreamType,
+    streams::tcp::proxy_server::{TCP_STREAM_TYPE, TcpServer},
+};
 use async_speed_limit::Limiter;
 use common::{
     addr::{InternetAddr, InternetAddrStr},
@@ -19,10 +23,6 @@ use common::{
     proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn},
     udp::TIMEOUT,
-};
-use protocol::stream::{
-    addr::ConcreteStreamType,
-    streams::tcp::proxy_server::{TCP_STREAM_TYPE, TcpServer},
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
