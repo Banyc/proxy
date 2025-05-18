@@ -7,11 +7,11 @@ use common::{
     proxy_table::ProxyGroupBuildError,
     stream::{
         HasIoAddr, OwnIoStream, StreamServerHandleConn,
+        addr::{StreamAddr, StreamAddrStr},
         io_copy::{ConnContext, CopyBidirectional},
     },
 };
 use protocol::stream::{
-    addr::{ConcreteStreamAddr, ConcreteStreamAddrStr},
     context::ConcreteStreamContext,
     proxy_table::{StreamProxyGroup, StreamProxyGroupBuilder},
     streams::tcp::TcpServer,
@@ -27,7 +27,7 @@ use crate::stream::proxy_table::StreamProxyGroupBuildContext;
 #[serde(deny_unknown_fields)]
 pub struct TcpAccessServerConfig {
     pub listen_addr: Arc<str>,
-    pub destination: ConcreteStreamAddrStr,
+    pub destination: StreamAddrStr,
     pub proxy_group: SharableConfig<StreamProxyGroupBuilder>,
     pub speed_limit: Option<f64>,
 }
@@ -66,7 +66,7 @@ pub enum BuildError {
 #[derive(Debug, Clone)]
 pub struct TcpAccessServerBuilder {
     listen_addr: Arc<str>,
-    destination: ConcreteStreamAddrStr,
+    destination: StreamAddrStr,
     proxy_group: StreamProxyGroup,
     speed_limit: f64,
     stream_context: ConcreteStreamContext,
@@ -102,7 +102,7 @@ impl loading::Build for TcpAccessServerBuilder {
 #[derive(Debug)]
 pub struct TcpAccessConnHandler {
     proxy_group: StreamProxyGroup,
-    destination: ConcreteStreamAddr,
+    destination: StreamAddr,
     speed_limiter: Limiter,
     stream_context: ConcreteStreamContext,
     listen_addr: Arc<str>,
@@ -110,7 +110,7 @@ pub struct TcpAccessConnHandler {
 impl TcpAccessConnHandler {
     pub fn new(
         proxy_group: StreamProxyGroup,
-        destination: ConcreteStreamAddr,
+        destination: StreamAddr,
         speed_limit: f64,
         stream_context: ConcreteStreamContext,
         listen_addr: Arc<str>,

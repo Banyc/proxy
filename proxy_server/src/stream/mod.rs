@@ -6,14 +6,13 @@ use common::{
     loading,
     stream::{
         HasIoAddr, OwnIoStream, StreamServerHandleConn,
+        conn::ConnAndAddr,
         io_copy::{ConnContext, CopyBidirectional},
         pool::connect_with_pool,
         steer::{SteerError, steer},
     },
 };
-use protocol::stream::{
-    conn::ConnAndAddr, context::ConcreteStreamContext, pool::ConcreteConnectError,
-};
+use protocol::stream::{context::ConcreteStreamContext, pool::ConcreteConnectError};
 use serde::Deserialize;
 use thiserror::Error;
 use tracing::{error, info, instrument, warn};

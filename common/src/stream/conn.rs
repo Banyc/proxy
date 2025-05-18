@@ -1,12 +1,10 @@
 use std::net::SocketAddr;
 
-use common::stream::AsConn;
-
-use super::addr::ConcreteStreamAddr;
+use super::{AsConn, addr::StreamAddr};
 
 #[derive(Debug)]
 pub struct ConnAndAddr {
     pub stream: Box<dyn AsConn>,
-    pub addr: ConcreteStreamAddr,
+    pub addr: StreamAddr,
     pub sock_addr: SocketAddr,
 }

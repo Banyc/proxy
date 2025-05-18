@@ -187,7 +187,6 @@ impl From<SocketAddr> for InternetAddrHdv {
 pub struct InternetAddrStr(pub InternetAddr);
 impl IntoAddr for InternetAddrStr {
     type Addr = InternetAddr;
-
     fn into_address(self) -> Self::Addr {
         self.0
     }

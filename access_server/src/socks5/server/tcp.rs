@@ -9,6 +9,7 @@ use common::{
     stream::{
         HasIoAddr, OwnIoStream, StreamServerHandleConn,
         addr::StreamAddr,
+        conn::ConnAndAddr,
         connect::StreamConnectExt,
         io_copy::{ConnContext, CopyBidirectional},
     },
@@ -16,7 +17,6 @@ use common::{
 };
 use protocol::stream::{
     addr::ConcreteStreamType,
-    conn::ConnAndAddr,
     context::ConcreteStreamContext,
     proxy_table::{StreamProxyGroup, StreamProxyTable, StreamProxyTableBuilder},
     streams::tcp::TcpServer,

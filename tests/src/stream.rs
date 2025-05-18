@@ -7,15 +7,11 @@ mod tests {
         connect::ConnectorConfig,
         loading::Serve,
         proxy_table::ProxyConfig,
-        stream::addr::StreamAddr,
+        stream::{addr::StreamAddr, conn::ConnAndAddr},
     };
     use protocol::stream::{
-        addr::{ConcreteStreamAddr, ConcreteStreamType},
-        conn::ConnAndAddr,
-        connect::ConcreteStreamConnectorTable,
-        context::ConcreteStreamContext,
-        pool::ConcreteConnPool,
-        proxy_table::StreamProxyConfig,
+        addr::ConcreteStreamType, connect::ConcreteStreamConnectorTable,
+        context::ConcreteStreamContext, pool::ConcreteConnPool, proxy_table::StreamProxyConfig,
     };
     use proxy_client::stream::{establish, trace_rtt};
     use proxy_server::stream::{
@@ -151,7 +147,7 @@ mod tests {
         req: &[u8],
         resp: &[u8],
         accepts: usize,
-    ) -> ConcreteStreamAddr {
+    ) -> StreamAddr {
         let listener = TcpListener::bind(addr).await.unwrap();
         let greet_addr = listener.local_addr().unwrap();
         let req = req.to_vec();

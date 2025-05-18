@@ -14,9 +14,9 @@ use crate::{anti_replay::ValidatorRef, header::timestamp::TimestampMsg};
 pub const MAX_HEADER_LEN: usize = 1024;
 const BINCODE_CONFIG: bincode::config::Configuration<
     bincode::config::LittleEndian,
-    bincode::config::Fixint,
+    bincode::config::Varint,
     bincode::config::NoLimit,
-> = bincode::config::legacy();
+> = bincode::config::standard();
 
 pub trait AsHeader {}
 

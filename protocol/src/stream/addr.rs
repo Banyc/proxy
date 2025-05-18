@@ -1,10 +1,6 @@
 use std::{fmt, str::FromStr};
 
-use serde::{Deserialize, Serialize, de::Visitor};
-
-use common::{addr::ParseInternetAddrError, proxy_table::IntoAddr, stream::addr::StreamAddr};
-
-pub type ConcreteStreamAddr = StreamAddr;
+use common::addr::ParseInternetAddrError;
 
 // const TYPE_STR_TABLE: &[(ConcreteStreamType, &str)] = &[
 //     (ConcreteStreamType::Tcp, "tcp"),
@@ -20,19 +16,7 @@ pub type ConcreteStreamAddr = StreamAddr;
 // static STR_TO_TYPE_MAP: LazyLock<HashMap<&str, ConcreteStreamType>> =
 //     LazyLock::new(|| HashMap::from_iter(TYPE_STR_TABLE.iter().map(|(v, k)| (*k, *v))));
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    bincode::Encode,
-    bincode::Decode,
-)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConcreteStreamType {
     Tcp,
     TcpMux,
@@ -68,82 +52,5 @@ impl FromStr for ConcreteStreamType {
             "rtpmuxfec" => Ok(Self::RtpMuxFec),
             _ => Err(ParseInternetAddrError),
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ConcreteStreamAddrStr(pub ConcreteStreamAddr);
-impl IntoAddr for ConcreteStreamAddrStr {
-    type Addr = ConcreteStreamAddr;
-
-    fn into_address(self) -> Self::Addr {
-        self.0
-    }
-}
-impl Serialize for ConcreteStreamAddrStr {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.0.to_string())
-    }
-}
-impl<'de> Deserialize<'de> for ConcreteStreamAddrStr {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_str(ConcreteStreamAddrStrVisitor)
-    }
-}
-
-struct ConcreteStreamAddrStrVisitor;
-impl Visitor<'_> for ConcreteStreamAddrStrVisitor {
-    type Value = ConcreteStreamAddrStr;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("Stream address")
-    }
-
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        let v: ConcreteStreamAddr = v.parse().map_err(|e| serde::de::Error::custom(e))?;
-        Ok(ConcreteStreamAddrStr(v))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{net::SocketAddr, ops::Deref};
-
-    use common::addr::InternetAddrKind;
-
-    use super::*;
-
-    #[test]
-    fn from_str_to_stream_addr() {
-        let addr: StreamAddr = "tcp://0.0.0.0:0".parse().unwrap();
-        assert_eq!(
-            addr,
-            StreamAddr {
-                address: "0.0.0.0:0".parse::<SocketAddr>().unwrap().into(),
-                stream_type: ConcreteStreamType::Tcp.to_string().into(),
-            }
-        );
-    }
-
-    #[test]
-    fn serde() {
-        let s = "\"tcp://127.0.0.1:1\"";
-        let v: ConcreteStreamAddrStr = serde_json::from_str(s).unwrap();
-        assert_eq!(
-            v.0.address.deref(),
-            &InternetAddrKind::SocketAddr("127.0.0.1:1".parse().unwrap())
-        );
-        assert_eq!(v.0.stream_type, ConcreteStreamType::Tcp.to_string().into());
-        let new_s = serde_json::to_string(&v).unwrap();
-        assert_eq!(s, new_s);
     }
 }

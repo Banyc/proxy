@@ -1,17 +1,18 @@
-use common::proxy_table::{
-    ProxyAction, ProxyConfig, ProxyConfigBuilder, ProxyGroup, ProxyGroupBuilder, ProxyTable,
-    ProxyTableBuilder, ProxyTableEntry, WeightedProxyChain,
+use common::{
+    proxy_table::{
+        ProxyAction, ProxyConfig, ProxyConfigBuilder, ProxyGroup, ProxyGroupBuilder, ProxyTable,
+        ProxyTableBuilder, ProxyTableEntry, WeightedProxyChain,
+    },
+    stream::addr::{StreamAddr, StreamAddrStr},
 };
 
-use super::addr::{ConcreteStreamAddr, ConcreteStreamAddrStr};
-
-pub type StreamProxyConfigBuilder = ProxyConfigBuilder<ConcreteStreamAddrStr>;
-pub type StreamProxyConfig = ProxyConfig<ConcreteStreamAddr>;
+pub type StreamProxyConfigBuilder = ProxyConfigBuilder<StreamAddrStr>;
+pub type StreamProxyConfig = ProxyConfig<StreamAddr>;
 pub type StreamProxyChain = [StreamProxyConfig];
-pub type StreamWeightedProxyChain = WeightedProxyChain<ConcreteStreamAddr>;
-pub type StreamProxyTable = ProxyTable<ConcreteStreamAddr>;
-pub type StreamProxyTableEntry = ProxyTableEntry<ConcreteStreamAddr>;
-pub type StreamProxyTableEntryAction = ProxyAction<ConcreteStreamAddr>;
-pub type StreamProxyGroup = ProxyGroup<ConcreteStreamAddr>;
-pub type StreamProxyTableBuilder = ProxyTableBuilder<ConcreteStreamAddrStr>;
-pub type StreamProxyGroupBuilder = ProxyGroupBuilder<ConcreteStreamAddrStr>;
+pub type StreamWeightedProxyChain = WeightedProxyChain<StreamAddr>;
+pub type StreamProxyTable = ProxyTable<StreamAddr>;
+pub type StreamProxyTableEntry = ProxyTableEntry<StreamAddr>;
+pub type StreamProxyTableEntryAction = ProxyAction<StreamAddr>;
+pub type StreamProxyGroup = ProxyGroup<StreamAddr>;
+pub type StreamProxyTableBuilder = ProxyTableBuilder<StreamAddrStr>;
+pub type StreamProxyGroupBuilder = ProxyGroupBuilder<StreamAddrStr>;
