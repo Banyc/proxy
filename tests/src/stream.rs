@@ -23,7 +23,7 @@ mod tests {
         streams::{
             kcp::build_kcp_proxy_server, mptcp::build_mptcp_proxy_server,
             rtp::build_rtp_proxy_server, rtp_mux::build_rtp_mux_proxy_server,
-            tcp::build_tcp_proxy_server, tcp_mux::build_tcp_mux_proxy_server,
+            tcp::proxy_server::build_tcp_proxy_server, tcp_mux::build_tcp_mux_proxy_server,
         },
     };
     use serial_test::serial;

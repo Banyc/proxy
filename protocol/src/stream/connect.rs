@@ -12,7 +12,7 @@ use super::{
     registry::CONCRETE_STREAM_PROTO,
     streams::{
         kcp::KcpConnector, mptcp::MptcpConnector, rtp::RtpConnector, rtp_mux::RtpMuxConnector,
-        tcp::TcpConnector, tcp_mux::TcpMuxConnector,
+        tcp::proxy_server::TcpConnector, tcp_mux::TcpMuxConnector,
     },
 };
 

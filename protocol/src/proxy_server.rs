@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use crate::{
     stream::streams::{
         kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, rtp::RtpProxyServerConfig,
-        rtp_mux::RtpMuxProxyServerConfig, tcp::TcpProxyServerConfig,
+        rtp_mux::RtpMuxProxyServerConfig, tcp::proxy_server::TcpProxyServerConfig,
         tcp_mux::TcpMuxProxyServerConfig,
     },
     udp::proxy_server::{UdpProxyServerBuilder, UdpProxyServerConfig},

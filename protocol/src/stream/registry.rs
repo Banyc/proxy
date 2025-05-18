@@ -8,7 +8,7 @@ use super::{
         build_kcp_connector, build_mptcp_connector, build_rtp_connector, build_rtp_mux_connector,
         build_rtp_mux_fec_connector, build_tcp_connector, build_tcp_mux_connector,
     },
-    streams::tcp::TCP_STREAM_TYPE,
+    streams::tcp::proxy_server::TCP_STREAM_TYPE,
 };
 
 type StreamProtoTable = [(

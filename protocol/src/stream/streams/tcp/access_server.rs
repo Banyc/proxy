@@ -14,10 +14,11 @@ use common::{
     proxy_table::ProxyGroupBuildError,
     stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
-use protocol::stream::streams::tcp::TcpServer;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{error, instrument, warn};
+
+use super::proxy_server::TcpServer;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -32,7 +32,7 @@ use hyper_util::rt::TokioIo;
 use monitor_table::table::RowOwnedGuard;
 use protocol::stream::{
     addr::ConcreteStreamType,
-    streams::tcp::{TCP_STREAM_TYPE, TcpServer},
+    streams::tcp::proxy_server::{TCP_STREAM_TYPE, TcpServer},
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

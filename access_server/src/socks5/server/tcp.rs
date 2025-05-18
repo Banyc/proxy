@@ -22,7 +22,7 @@ use common::{
 };
 use protocol::stream::{
     addr::ConcreteStreamType,
-    streams::tcp::{TCP_STREAM_TYPE, TcpServer},
+    streams::tcp::proxy_server::{TCP_STREAM_TYPE, TcpServer},
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
