@@ -9,10 +9,10 @@ use common::{
         client::{stream::StreamTracerBuilder, udp::UdpTracerBuilder},
         context::Context,
         proxy_table::{
-            StreamProxyConfig, StreamProxyGroupBuildContext, StreamProxyGroupBuilder,
-            StreamProxyTableBuildContext, StreamProxyTableBuilder, UdpProxyConfig,
-            UdpProxyGroupBuildContext, UdpProxyGroupBuilder, UdpProxyTableBuildContext,
-            UdpProxyTableBuilder,
+            StreamProxyConfig, StreamProxyGroup, StreamProxyGroupBuildContext,
+            StreamProxyGroupBuilder, StreamProxyTable, StreamProxyTableBuildContext,
+            StreamProxyTableBuilder, UdpProxyConfig, UdpProxyGroup, UdpProxyGroupBuildContext,
+            UdpProxyGroupBuilder, UdpProxyTable, UdpProxyTableBuildContext, UdpProxyTableBuilder,
         },
     },
 };
@@ -113,175 +113,6 @@ impl AccessServerConfig {
             matcher: Default::default(),
         }
     }
-
-    pub async fn spawn_and_clean(
-        self,
-        join_set: &mut tokio::task::JoinSet<AnyResult>,
-        loader: &mut AccessServerLoader,
-        cancellation: CancellationToken,
-        context: Context,
-        stream_proxy_server: &HashMap<Arc<str>, StreamProxyConfig>,
-        udp_proxy_server: &HashMap<Arc<str>, UdpProxyConfig>,
-    ) -> AnyResult {
-        // Shared
-        let matcher: HashMap<Arc<str>, filter::Matcher> = self
-            .matcher
-            .into_iter()
-            .map(|(k, v)| match v.build() {
-                Ok(v) => Ok((k, v)),
-                Err(e) => Err(e),
-            })
-            .collect::<Result<HashMap<_, _>, _>>()?;
-
-        // Stream
-        let stream_trace_builder = StreamTracerBuilder::new(context.stream.clone());
-        let stream_proxy_group_cx = StreamProxyGroupBuildContext {
-            proxy_server: stream_proxy_server,
-            tracer_builder: &stream_trace_builder,
-            cancellation: cancellation.clone(),
-        };
-        let stream_proxy_group = self
-            .stream
-            .proxy_group
-            .into_iter()
-            .map(|(k, v)| match v.build(stream_proxy_group_cx.clone()) {
-                Ok(v) => Ok((k, v)),
-                Err(e) => Err(e),
-            })
-            .collect::<Result<HashMap<_, _>, _>>()?;
-        let stream_proxy_table_cx = StreamProxyTableBuildContext {
-            matcher: &matcher,
-            proxy_group: &stream_proxy_group,
-            proxy_group_cx: stream_proxy_group_cx.clone(),
-        };
-        let stream_proxy_tables = self
-            .stream
-            .proxy_table
-            .into_iter()
-            .map(|(k, v)| match v.build(stream_proxy_table_cx.clone()) {
-                Ok(v) => Ok((k, v)),
-                Err(e) => Err(e),
-            })
-            .collect::<Result<HashMap<_, _>, _>>()?;
-
-        // UDP
-        let udp_trace_builder = UdpTracerBuilder::new(context.udp.clone());
-        let udp_proxy_group_cx = UdpProxyGroupBuildContext {
-            proxy_server: udp_proxy_server,
-            tracer_builder: &udp_trace_builder,
-            cancellation: cancellation.clone(),
-        };
-        let udp_proxy_group = self
-            .udp
-            .proxy_group
-            .into_iter()
-            .map(|(k, v)| match v.build(udp_proxy_group_cx.clone()) {
-                Ok(v) => Ok((k, v)),
-                Err(e) => Err(e),
-            })
-            .collect::<Result<HashMap<_, _>, _>>()?;
-        let udp_proxy_table_cx = UdpProxyTableBuildContext {
-            matcher: &matcher,
-            proxy_group: &udp_proxy_group,
-            proxy_group_cx: udp_proxy_group_cx.clone(),
-        };
-        let _udp_proxy_tables = self
-            .udp
-            .proxy_table
-            .into_iter()
-            .map(|(k, v)| match v.build(udp_proxy_table_cx.clone()) {
-                Ok(v) => Ok((k, v)),
-                Err(e) => Err(e),
-            })
-            .collect::<Result<HashMap<_, _>, _>>()?;
-
-        // TCP servers
-        let tcp_server = self
-            .tcp_server
-            .into_iter()
-            .map(|c| {
-                c.into_builder(
-                    &stream_proxy_group,
-                    stream_proxy_group_cx.clone(),
-                    context.stream.clone(),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        loader
-            .tcp_server
-            .spawn_and_clean(join_set, tcp_server)
-            .await?;
-
-        // UDP servers
-        let udp_server = self
-            .udp_server
-            .into_iter()
-            .map(|c| {
-                c.into_builder(
-                    &udp_proxy_group,
-                    udp_proxy_group_cx.clone(),
-                    context.udp.clone(),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        loader
-            .udp_server
-            .spawn_and_clean(join_set, udp_server)
-            .await?;
-
-        // HTTP servers
-        let http_server = self
-            .http_server
-            .into_iter()
-            .map(|c| {
-                c.into_builder(
-                    &stream_proxy_tables,
-                    stream_proxy_table_cx.clone(),
-                    context.stream.clone(),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        loader
-            .http_server
-            .spawn_and_clean(join_set, http_server)
-            .await?;
-
-        // SOCKS5 TCP servers
-        let socks5_tcp_server = self
-            .socks5_tcp_server
-            .into_iter()
-            .map(|c| {
-                c.into_builder(
-                    &stream_proxy_tables,
-                    stream_proxy_table_cx.clone(),
-                    context.stream.clone(),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        loader
-            .socks5_tcp_server
-            .spawn_and_clean(join_set, socks5_tcp_server)
-            .await?;
-
-        // SOCKS5 UDP servers
-        let socks5_udp_server = self
-            .socks5_udp_server
-            .into_iter()
-            .map(|c| {
-                c.into_builder(
-                    &udp_proxy_group,
-                    udp_proxy_group_cx.clone(),
-                    context.udp.clone(),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        loader
-            .socks5_udp_server
-            .spawn_and_clean(join_set, socks5_udp_server)
-            .await?;
-
-        Ok(())
-    }
 }
 impl Merge for AccessServerConfig {
     type Error = AnyError;
@@ -329,4 +160,238 @@ impl AccessServerLoader {
             socks5_udp_server: loading::Loader::new(),
         }
     }
+}
+
+pub async fn spawn_and_clean(
+    config: AccessServerConfig,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+    loader: &mut AccessServerLoader,
+    cancellation: CancellationToken,
+    context: Context,
+    stream_proxy_server: &HashMap<Arc<str>, StreamProxyConfig>,
+    udp_proxy_server: &HashMap<Arc<str>, UdpProxyConfig>,
+) -> AnyResult {
+    let matcher = matcher(config.matcher)?;
+
+    // Stream
+    let stream_trace_builder = StreamTracerBuilder::new(context.stream.clone());
+    let stream_proxy_group_cx = StreamProxyGroupBuildContext {
+        proxy_server: stream_proxy_server,
+        tracer_builder: &stream_trace_builder,
+        cancellation: cancellation.clone(),
+    };
+    let stream_proxy_group = stream_proxy_group(&stream_proxy_group_cx, config.stream.proxy_group)?;
+    let stream_proxy_table_cx = StreamProxyTableBuildContext {
+        matcher: &matcher,
+        proxy_group: &stream_proxy_group,
+        proxy_group_cx: stream_proxy_group_cx.clone(),
+    };
+    let stream_proxy_tables =
+        stream_proxy_tables(&stream_proxy_table_cx, config.stream.proxy_table)?;
+
+    // UDP
+    let udp_trace_builder = UdpTracerBuilder::new(context.udp.clone());
+    let udp_proxy_group_cx = UdpProxyGroupBuildContext {
+        proxy_server: udp_proxy_server,
+        tracer_builder: &udp_trace_builder,
+        cancellation: cancellation.clone(),
+    };
+    let udp_proxy_group = udp_proxy_group(&udp_proxy_group_cx, config.udp.proxy_group)?;
+    let udp_proxy_table_cx = UdpProxyTableBuildContext {
+        matcher: &matcher,
+        proxy_group: &udp_proxy_group,
+        proxy_group_cx: udp_proxy_group_cx.clone(),
+    };
+    let _udp_proxy_tables = udp_proxy_tables(&udp_proxy_table_cx, config.udp.proxy_table)?;
+
+    #[rustfmt::skip] tcp_spawn_and_clean(config.tcp_server, &stream_proxy_group, &stream_proxy_group_cx, &context, loader, join_set).await?;
+    #[rustfmt::skip] udp_spawn_and_clean(config.udp_server, &udp_proxy_group, &udp_proxy_group_cx, &context, loader, join_set).await?;
+    #[rustfmt::skip] http_spawn_and_clean(config.http_server, &stream_proxy_tables, &stream_proxy_table_cx, &context, loader, join_set).await?;
+    #[rustfmt::skip] socks5_tcp_spawn_and_clean(config.socks5_tcp_server, &stream_proxy_tables, &stream_proxy_table_cx, &context, loader, join_set) .await?;
+    #[rustfmt::skip] socks5_udp_spawn_and_clean(config.socks5_udp_server, &udp_proxy_group, &udp_proxy_group_cx, &context, loader, join_set) .await?;
+    Ok(())
+}
+fn matcher(
+    config: HashMap<Arc<str>, MatcherBuilder>,
+) -> Result<HashMap<Arc<str>, filter::Matcher>, AnyError> {
+    let matcher = config
+        .into_iter()
+        .map(|(k, v)| match v.build() {
+            Ok(v) => Ok((k, v)),
+            Err(e) => Err(e),
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    Ok(matcher)
+}
+fn stream_proxy_group(
+    stream_proxy_group_cx: &StreamProxyGroupBuildContext<'_>,
+    config: HashMap<Arc<str>, StreamProxyGroupBuilder>,
+) -> Result<HashMap<Arc<str>, StreamProxyGroup>, AnyError> {
+    let stream_proxy_group = config
+        .into_iter()
+        .map(|(k, v)| match v.build(stream_proxy_group_cx.clone()) {
+            Ok(v) => Ok((k, v)),
+            Err(e) => Err(e),
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    Ok(stream_proxy_group)
+}
+fn udp_proxy_group(
+    udp_proxy_group_cx: &UdpProxyGroupBuildContext<'_>,
+    config: HashMap<Arc<str>, UdpProxyGroupBuilder>,
+) -> Result<HashMap<Arc<str>, UdpProxyGroup>, AnyError> {
+    let udp_proxy_group = config
+        .into_iter()
+        .map(|(k, v)| match v.build(udp_proxy_group_cx.clone()) {
+            Ok(v) => Ok((k, v)),
+            Err(e) => Err(e),
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    Ok(udp_proxy_group)
+}
+fn stream_proxy_tables(
+    stream_proxy_table_cx: &StreamProxyTableBuildContext<'_>,
+    config: HashMap<Arc<str>, StreamProxyTableBuilder>,
+) -> Result<HashMap<Arc<str>, StreamProxyTable>, AnyError> {
+    let stream_proxy_tables = config
+        .into_iter()
+        .map(|(k, v)| match v.build(stream_proxy_table_cx.clone()) {
+            Ok(v) => Ok((k, v)),
+            Err(e) => Err(e),
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    Ok(stream_proxy_tables)
+}
+fn udp_proxy_tables(
+    udp_proxy_table_cx: &UdpProxyTableBuildContext<'_>,
+    config: HashMap<Arc<str>, UdpProxyTableBuilder>,
+) -> Result<HashMap<Arc<str>, UdpProxyTable>, AnyError> {
+    let udp_proxy_tables = config
+        .into_iter()
+        .map(|(k, v)| match v.build(udp_proxy_table_cx.clone()) {
+            Ok(v) => Ok((k, v)),
+            Err(e) => Err(e),
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    Ok(udp_proxy_tables)
+}
+async fn tcp_spawn_and_clean(
+    config: Vec<TcpAccessServerConfig>,
+    stream_proxy_group: &HashMap<Arc<str>, StreamProxyGroup>,
+    stream_proxy_group_cx: &StreamProxyGroupBuildContext<'_>,
+    context: &Context,
+    loader: &mut AccessServerLoader,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+) -> Result<(), AnyError> {
+    let tcp_server = config
+        .into_iter()
+        .map(|c| {
+            c.into_builder(
+                stream_proxy_group,
+                stream_proxy_group_cx.clone(),
+                context.stream.clone(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    loader
+        .tcp_server
+        .spawn_and_clean(join_set, tcp_server)
+        .await?;
+    Ok(())
+}
+async fn udp_spawn_and_clean(
+    config: Vec<UdpAccessServerConfig>,
+    udp_proxy_group: &HashMap<Arc<str>, UdpProxyGroup>,
+    udp_proxy_group_cx: &UdpProxyGroupBuildContext<'_>,
+    context: &Context,
+    loader: &mut AccessServerLoader,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+) -> Result<(), AnyError> {
+    let udp_server = config
+        .into_iter()
+        .map(|c| {
+            c.into_builder(
+                udp_proxy_group,
+                udp_proxy_group_cx.clone(),
+                context.udp.clone(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    loader
+        .udp_server
+        .spawn_and_clean(join_set, udp_server)
+        .await?;
+    Ok(())
+}
+async fn http_spawn_and_clean(
+    config: Vec<HttpAccessServerConfig>,
+    stream_proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
+    stream_proxy_table_cx: &StreamProxyTableBuildContext<'_>,
+    context: &Context,
+    loader: &mut AccessServerLoader,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+) -> Result<(), AnyError> {
+    let http_server = config
+        .into_iter()
+        .map(|c| {
+            c.into_builder(
+                stream_proxy_tables,
+                stream_proxy_table_cx.clone(),
+                context.stream.clone(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    loader
+        .http_server
+        .spawn_and_clean(join_set, http_server)
+        .await?;
+    Ok(())
+}
+async fn socks5_tcp_spawn_and_clean(
+    config: Vec<Socks5ServerTcpAccessServerConfig>,
+    stream_proxy_tables: &HashMap<Arc<str>, StreamProxyTable>,
+    stream_proxy_table_cx: &StreamProxyTableBuildContext<'_>,
+    context: &Context,
+    loader: &mut AccessServerLoader,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+) -> Result<(), AnyError> {
+    let socks5_tcp_server = config
+        .into_iter()
+        .map(|c| {
+            c.into_builder(
+                stream_proxy_tables,
+                stream_proxy_table_cx.clone(),
+                context.stream.clone(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    loader
+        .socks5_tcp_server
+        .spawn_and_clean(join_set, socks5_tcp_server)
+        .await?;
+    Ok(())
+}
+async fn socks5_udp_spawn_and_clean(
+    config: Vec<Socks5ServerUdpAccessServerConfig>,
+    udp_proxy_group: &HashMap<Arc<str>, UdpProxyGroup>,
+    udp_proxy_group_cx: &UdpProxyGroupBuildContext<'_>,
+    context: &Context,
+    loader: &mut AccessServerLoader,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+) -> Result<(), AnyError> {
+    let socks5_udp_server = config
+        .into_iter()
+        .map(|c| {
+            c.into_builder(
+                udp_proxy_group,
+                udp_proxy_group_cx.clone(),
+                context.udp.clone(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    loader
+        .socks5_udp_server
+        .spawn_and_clean(join_set, socks5_udp_server)
+        .await?;
+    Ok(())
 }

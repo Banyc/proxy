@@ -189,17 +189,16 @@ pub async fn spawn_and_clean(
         .replaced_by(config.connector.clone());
     *context.udp.connector.config().write().unwrap() = config.connector.clone();
 
-    config
-        .access_server
-        .spawn_and_clean(
-            server_tasks,
-            &mut server_loader.access_server,
-            cancellation,
-            context.clone(),
-            &stream_proxy_server,
-            &udp_proxy,
-        )
-        .await?;
+    access_server::spawn_and_clean(
+        config.access_server,
+        server_tasks,
+        &mut server_loader.access_server,
+        cancellation,
+        context.clone(),
+        &stream_proxy_server,
+        &udp_proxy,
+    )
+    .await?;
     proxy_server::spawn_and_clean(
         config.proxy_server,
         server_tasks,
