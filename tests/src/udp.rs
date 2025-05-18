@@ -20,11 +20,11 @@ mod tests {
             connect::udp::UdpConnector,
             context::UdpContext,
             proxy_table::UdpProxyConfig,
+            server::udp::UdpProxyConnHandler,
         },
         proxy_table::ProxyConfig,
         udp::PACKET_BUFFER_LENGTH,
     };
-    use proxy_server::udp::UdpProxyConnHandler;
     use serial_test::serial;
     use tokio::net::UdpSocket;
 

@@ -1,7 +1,6 @@
 use std::{io, net::SocketAddr, sync::Arc};
 
-use async_speed_limit::Limiter;
-use common::{
+use crate::{
     addr::InternetAddr,
     header::{
         codec::write_header,
@@ -20,13 +19,14 @@ use common::{
         server::{UdpServer, UdpServerHandleConn},
     },
 };
+use async_speed_limit::Limiter;
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tracing::{error, instrument, trace, warn};
 use udp_listener::{Conn, ConnWrite};
 
-use crate::ListenerBindError;
+use super::ListenerBindError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 #[serde(deny_unknown_fields)]

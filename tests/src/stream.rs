@@ -12,17 +12,19 @@ mod tests {
             conn::stream::ConnAndAddr,
             context::StreamContext,
             proxy_table::StreamProxyConfig,
+            server::stream::StreamProxyConnHandler,
         },
         proxy_table::ProxyConfig,
         stream::pool::StreamConnPool,
     };
     use protocol::stream::{
-        addr::ConcreteStreamType, connect::build_concrete_stream_connector_table,
-    };
-    use proxy_server::stream::{
-        StreamProxyConnHandler, kcp::build_kcp_proxy_server, mptcp::build_mptcp_proxy_server,
-        rtp::build_rtp_proxy_server, rtp_mux::build_rtp_mux_proxy_server,
-        tcp::build_tcp_proxy_server, tcp_mux::build_tcp_mux_proxy_server,
+        addr::ConcreteStreamType,
+        connect::build_concrete_stream_connector_table,
+        streams::{
+            kcp::build_kcp_proxy_server, mptcp::build_mptcp_proxy_server,
+            rtp::build_rtp_proxy_server, rtp_mux::build_rtp_mux_proxy_server,
+            tcp::build_tcp_proxy_server, tcp_mux::build_tcp_mux_proxy_server,
+        },
     };
     use serial_test::serial;
     use swap::Swap;

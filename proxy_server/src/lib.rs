@@ -1,17 +1,22 @@
-use std::{convert::Infallible, io};
+use std::convert::Infallible;
 
-use common::{config::Merge, error::AnyResult, loading, proto::context::Context};
-use serde::Deserialize;
-use stream::{
-    StreamProxyConnHandler, kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig,
-    rtp::RtpProxyServerConfig, rtp_mux::RtpMuxProxyServerConfig, tcp::TcpProxyServerConfig,
-    tcp_mux::TcpMuxProxyServerConfig,
+use common::{
+    config::Merge,
+    error::AnyResult,
+    loading,
+    proto::{
+        context::Context,
+        server::{
+            stream::StreamProxyConnHandler,
+            udp::{UdpProxyConnHandler, UdpProxyServerBuilder, UdpProxyServerConfig},
+        },
+    },
 };
-use thiserror::Error;
-use udp::{UdpProxyConnHandler, UdpProxyServerBuilder, UdpProxyServerConfig};
-
-pub mod stream;
-pub mod udp;
+use protocol::stream::streams::{
+    kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, rtp::RtpProxyServerConfig,
+    rtp_mux::RtpMuxProxyServerConfig, tcp::TcpProxyServerConfig, tcp_mux::TcpMuxProxyServerConfig,
+};
+use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -186,7 +191,3 @@ impl Default for ProxyServerLoader {
         Self::new()
     }
 }
-
-#[derive(Debug, Error)]
-#[error("Failed to bind to listen address: {0}")]
-pub struct ListenerBindError(#[source] io::Error);
