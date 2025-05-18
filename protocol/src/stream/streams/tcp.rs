@@ -122,7 +122,7 @@ impl TcpConnector {
     }
 }
 impl StreamConnect for TcpConnector {
-    type Connection = TcpStream;
+    type Conn = TcpStream;
     async fn connect(&self, addr: SocketAddr) -> io::Result<TcpStream> {
         let bind = self
             .config

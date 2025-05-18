@@ -114,7 +114,7 @@ pub enum ServeError {
 #[derive(Debug, Clone, Copy)]
 pub struct MptcpConnector;
 impl StreamConnect for MptcpConnector {
-    type Connection = Conn;
+    type Conn = Conn;
     async fn connect(&self, addr: SocketAddr) -> io::Result<Conn> {
         let addrs = std::iter::repeat_n((), STREAMS).map(|()| addr);
         let stream = MptcpStream::connect(addrs).await?;

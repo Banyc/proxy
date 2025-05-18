@@ -127,7 +127,7 @@ impl RtpConnector {
     }
 }
 impl StreamConnect for RtpConnector {
-    type Connection = Conn;
+    type Conn = Conn;
     async fn connect(&self, addr: SocketAddr) -> io::Result<Conn> {
         let bind = self
             .config

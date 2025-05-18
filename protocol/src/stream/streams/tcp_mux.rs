@@ -191,7 +191,7 @@ impl TcpMuxConnector {
     }
 }
 impl StreamConnect for TcpMuxConnector {
-    type Connection = Conn;
+    type Conn = Conn;
 
     async fn connect(&self, addr: SocketAddr) -> io::Result<Conn> {
         let ((r, w), addr) = self.connect_request_tx.send(addr).await?;

@@ -7,7 +7,7 @@ use std::{
 
 use common::{
     connect::ConnectorConfig,
-    stream::connect::{StreamConnectExt, StreamTypedConnect},
+    stream::connect::{StreamConnectExt, StreamTimedConnect},
 };
 
 use super::{
@@ -55,7 +55,7 @@ impl ConcreteStreamConnectorTable {
         *self.config.write().unwrap() = config;
     }
 }
-impl StreamTypedConnect for ConcreteStreamConnectorTable {
+impl StreamTimedConnect for ConcreteStreamConnectorTable {
     type Conn = Conn;
     async fn timed_connect(
         &self,

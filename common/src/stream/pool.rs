@@ -15,7 +15,7 @@ use crate::{
     stream::HasIoAddr,
 };
 
-use super::{OwnIoStream, addr::StreamAddr, connect::StreamTypedConnect, context::StreamContext};
+use super::{OwnIoStream, addr::StreamAddr, connect::StreamTimedConnect, context::StreamContext};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -41,7 +41,7 @@ where
     ) -> Result<ConnPool<StreamAddr, Conn>, PoolBuildError>
     where
         Conn: std::fmt::Debug + OwnIoStream,
-        ConnectorTable: StreamTypedConnect<Conn = Conn>,
+        ConnectorTable: StreamTimedConnect<Conn = Conn>,
     {
         let c = self
             .0
@@ -89,7 +89,7 @@ fn pool_entries_from_proxy_configs<Conn, ConnectorTable>(
 ) -> impl Iterator<Item = ConnPoolEntry<StreamAddr, Conn>>
 where
     Conn: std::fmt::Debug + OwnIoStream,
-    ConnectorTable: StreamTypedConnect<Conn = Conn> + Sync + Send + 'static,
+    ConnectorTable: StreamTimedConnect<Conn = Conn> + Sync + Send + 'static,
 {
     proxy_configs.map(move |c| ConnPoolEntry {
         key: c.address.clone(),
@@ -113,7 +113,7 @@ struct PoolConnector<ConnectorTable> {
 impl<Conn, ConnectorTable> tokio_conn_pool::Connect for PoolConnector<ConnectorTable>
 where
     Conn: OwnIoStream,
-    ConnectorTable: StreamTypedConnect<Conn = Conn> + Sync + Send + 'static,
+    ConnectorTable: StreamTimedConnect<Conn = Conn> + Sync + Send + 'static,
 {
     type Connection = Conn;
     async fn connect(&self) -> Option<Self::Connection> {
@@ -161,7 +161,7 @@ pub async fn connect_with_pool<Conn, ConnectorTable>(
 ) -> Result<(Conn, SocketAddr), ConnectError>
 where
     Conn: HasIoAddr + Sync + Send + 'static,
-    ConnectorTable: StreamTypedConnect<Conn = Conn>,
+    ConnectorTable: StreamTimedConnect<Conn = Conn>,
 {
     let stream = stream_context.pool.inner().pull(addr);
     let sock_addr = stream.as_ref().and_then(|s| s.peer_addr().ok());

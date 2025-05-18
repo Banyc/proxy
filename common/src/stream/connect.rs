@@ -1,12 +1,11 @@
 use std::{io, net::SocketAddr, time::Duration};
 
 pub trait StreamConnect: std::fmt::Debug {
-    type Connection;
-
+    type Conn;
     fn connect(
         &self,
         addr: SocketAddr,
-    ) -> impl std::future::Future<Output = io::Result<Self::Connection>> + Send;
+    ) -> impl std::future::Future<Output = io::Result<Self::Conn>> + Send;
 }
 
 pub trait StreamConnectExt: StreamConnect {
@@ -14,7 +13,7 @@ pub trait StreamConnectExt: StreamConnect {
         &self,
         addr: SocketAddr,
         timeout: Duration,
-    ) -> impl std::future::Future<Output = io::Result<Self::Connection>> + Send
+    ) -> impl std::future::Future<Output = io::Result<Self::Conn>> + Send
     where
         Self: Sync,
     {
@@ -29,7 +28,7 @@ pub trait StreamConnectExt: StreamConnect {
 }
 impl<T: StreamConnect> StreamConnectExt for T {}
 
-pub trait StreamTypedConnect: std::fmt::Debug + Sync + Send + 'static {
+pub trait StreamTimedConnect: std::fmt::Debug + Sync + Send + 'static {
     type Conn;
     fn timed_connect(
         &self,
