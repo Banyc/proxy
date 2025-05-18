@@ -145,26 +145,6 @@ impl StreamProxyConnHandler {
         });
         Ok(ProxyResult::IoCopy)
     }
-
-    // #[instrument(skip(self, e))]
-    // async fn handle_proxy_error<S>(&self, stream: &mut S, e: ProxyProtocolError)
-    // where
-    //     S: IoStream + IoAddr + std::fmt::Debug,
-    // {
-    //     error!(?e, "Connection closed with error");
-    //     let _ = self
-    //         .acceptor
-    //         .respond_with_error(stream, e)
-    //         .await
-    //         .inspect_err(|e| {
-    //             let peer_addr = stream.peer_addr().ok();
-    //             error!(
-    //                 ?e,
-    //                 ?peer_addr,
-    //                 "Failed to respond with error to downstream after error"
-    //             )
-    //         });
-    // }
 }
 impl loading::HandleConn for StreamProxyConnHandler {}
 impl StreamServerHandleConn for StreamProxyConnHandler {
@@ -230,15 +210,6 @@ impl StreamProxyAcceptor {
                     }
                 })?;
 
-        // // Write Ok response
-        // let resp = ResponseHeader { result: Ok(()) };
-        // let mut write_crypto_cursor = XorCryptoCursor::new(&self.crypto);
-        // write_header_async(downstream, &resp, &mut write_crypto_cursor)
-        //     .await
-        //     .inspect_err(
-        //         |e| error!(?e, ?header.upstream, "Failed to write response to downstream"),
-        //     )?;
-
         // Return upstream
         Ok(Some(ConnAndAddr {
             stream: upstream,
@@ -246,36 +217,6 @@ impl StreamProxyAcceptor {
             sock_addr,
         }))
     }
-
-    // #[instrument(skip(self))]
-    // async fn respond_with_error<S>(
-    //     &self,
-    //     stream: &mut S,
-    //     error: ProxyProtocolError,
-    // ) -> Result<(), ProxyProtocolError>
-    // where
-    //     S: IoStream + IoAddr + std::fmt::Debug,
-    // {
-    //     let local_addr = stream
-    //         .local_addr()
-    //         .inspect_err(|e| error!(?e, "Failed to get local address"))?;
-
-    //     // Respond with error
-    //     let resp = error.into_response_header(local_addr.into());
-    //     let mut crypto_cursor = XorCryptoCursor::new(&self.crypto);
-    //     write_header_async(stream, &resp, &mut crypto_cursor)
-    //         .await
-    //         .inspect_err(|e| {
-    //             let peer_addr = stream.peer_addr().ok();
-    //             error!(
-    //                 ?e,
-    //                 ?peer_addr,
-    //                 "Failed to write response to downstream after error"
-    //             )
-    //         })?;
-
-    //     Ok(())
-    // }
 }
 
 #[derive(Debug, Error)]

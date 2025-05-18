@@ -66,26 +66,6 @@ pub async fn establish(
             })?;
     }
 
-    // // Read response
-    // for node in proxies {
-    //     trace!(?node.address.address, "Reading response from upstream address");
-    //     let mut crypto_cursor = XorCryptoCursor::new(&node.crypto);
-    //     let resp: ResponseHeader = read_header_async(&mut stream, &mut crypto_cursor)
-    //         .await
-    //         .inspect_err(|e| {
-    //             error!(
-    //                 ?e,
-    //                 ?proxy_addr,
-    //                 "Failed to read response from upstream address"
-    //             )
-    //         })?;
-    //     if let Err(mut err) = resp.result {
-    //         err.source = node.address.address.clone();
-    //         error!(?err, ?proxy_addr, "Response was not successful");
-    //         return Err(ProxyProtocolError::Response(err));
-    //     }
-    // }
-
     // Return stream
     Ok(ConnAndAddr {
         stream,
