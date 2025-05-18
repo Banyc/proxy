@@ -6,6 +6,7 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-speed-limit = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 common = { path = "../common" }
@@ -22,6 +23,7 @@ tokio_chacha20 = { workspace = true }
 tokio_conn_pool = { workspace = true }
 tokio_kcp = { workspace = true }
 tracing = { workspace = true }
+udp_listener = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

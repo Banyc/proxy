@@ -16,6 +16,7 @@ use common::{
         },
     },
 };
+use protocol::udp::access_server::{UdpAccessConnHandler, UdpAccessServerConfig};
 use serde::{Deserialize, Serialize};
 use socks5::server::{
     tcp::{Socks5ServerTcpAccessConnHandler, Socks5ServerTcpAccessServerConfig},
@@ -26,11 +27,9 @@ use stream::streams::{
     tcp::{TcpAccessConnHandler, TcpAccessServerConfig},
 };
 use tokio_util::sync::CancellationToken;
-use udp::{UdpAccessConnHandler, UdpAccessServerConfig};
 
 pub mod socks5;
 pub mod stream;
-pub mod udp;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]

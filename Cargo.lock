@@ -2834,6 +2834,7 @@ dependencies = [
 name = "protocol"
 version = "0.1.0"
 dependencies = [
+ "async-speed-limit",
  "async-trait",
  "bincode 2.0.1",
  "common",
@@ -2851,6 +2852,7 @@ dependencies = [
  "tokio_conn_pool",
  "tokio_kcp",
  "tracing",
+ "udp_listener",
 ]
 
 [[package]]

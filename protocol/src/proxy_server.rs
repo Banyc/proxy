@@ -1,18 +1,19 @@
 use std::convert::Infallible;
 
-use crate::stream::streams::{
-    kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, rtp::RtpProxyServerConfig,
-    rtp_mux::RtpMuxProxyServerConfig, tcp::TcpProxyServerConfig, tcp_mux::TcpMuxProxyServerConfig,
+use crate::{
+    stream::streams::{
+        kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, rtp::RtpProxyServerConfig,
+        rtp_mux::RtpMuxProxyServerConfig, tcp::TcpProxyServerConfig,
+        tcp_mux::TcpMuxProxyServerConfig,
+    },
+    udp::proxy_server::{UdpProxyServerBuilder, UdpProxyServerConfig},
 };
 use common::{
     config::Merge,
     error::AnyResult,
     loading,
     proto::{
-        conn_handler::{
-            stream::StreamProxyConnHandler,
-            udp::{UdpProxyConnHandler, UdpProxyServerBuilder, UdpProxyServerConfig},
-        },
+        conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
         context::Context,
     },
 };
