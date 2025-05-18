@@ -165,7 +165,7 @@ mod tests {
             let header = StreamRequestHeader {
                 upstream: Some(StreamAddr {
                     address: origin_addr.into(),
-                    stream_type: ConcreteStreamType::Tcp,
+                    stream_type: ConcreteStreamType::Tcp.to_string().into(),
                 }),
             };
             let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());

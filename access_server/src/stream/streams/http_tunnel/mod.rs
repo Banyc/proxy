@@ -169,7 +169,7 @@ impl HttpAccessConnHandler {
         let addr = InternetAddr::from_host_and_port(host, port)?;
         let addr = StreamAddr {
             address: addr,
-            stream_type: ConcreteStreamType::Tcp,
+            stream_type: ConcreteStreamType::Tcp.to_string().into(),
         };
 
         let action = self.proxy_table.action(&addr.address);
@@ -330,7 +330,7 @@ impl HttpAccessConnHandler {
 async fn tls_http<Upstream>(
     upstream: Upstream,
     req: Request<Incoming>,
-    session_guard: Option<RowOwnedGuard<Session<ConcreteStreamType>>>,
+    session_guard: Option<RowOwnedGuard<Session>>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>
 where
     Upstream: AsyncWrite + AsyncRead + Send + Unpin + 'static,
@@ -372,7 +372,7 @@ async fn upgrade(
     addr: InternetAddr,
     http_connect: Option<HttpConnect>,
     speed_limiter: Limiter,
-    session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+    session_table: Option<StreamSessionTable>,
     listen_addr: Arc<str>,
     connector_table: Arc<ConcreteStreamConnectorTable>,
 ) {
@@ -418,7 +418,7 @@ async fn upgrade(
         }
     };
     let upstream_addr = StreamAddr {
-        stream_type: ConcreteStreamType::Tcp,
+        stream_type: ConcreteStreamType::Tcp.to_string().into(),
         address: addr.clone(),
     };
     let conn_context = ConnContext {
@@ -500,7 +500,7 @@ impl HttpConnect {
         // Establish proxy chain
         let destination = StreamAddr {
             address: address.clone(),
-            stream_type: ConcreteStreamType::Tcp,
+            stream_type: ConcreteStreamType::Tcp.to_string().into(),
         };
         let proxy_chain = self.proxy_group.choose_chain();
         let upstream = establish(

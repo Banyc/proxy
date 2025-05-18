@@ -23,7 +23,6 @@ use config::ReadConfig;
 use protocol::{
     context::ConcreteContext,
     stream::{
-        addr::ConcreteStreamType,
         connect::ConcreteStreamConnectorTable,
         context::ConcreteStreamContext,
         pool::{ConcreteConnPool, ConcretePoolBuilder},
@@ -42,7 +41,7 @@ pub mod monitor;
 pub mod profiling;
 
 pub struct ServeContext {
-    pub stream_session_table: Option<StreamSessionTable<ConcreteStreamType>>,
+    pub stream_session_table: Option<StreamSessionTable>,
     pub udp_session_table: Option<UdpSessionTable>,
 }
 

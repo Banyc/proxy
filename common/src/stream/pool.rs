@@ -15,12 +15,7 @@ use crate::{
     stream::HasIoAddr,
 };
 
-use super::{
-    OwnIoStream,
-    addr::{AsStreamType, StreamAddr},
-    connect::StreamTypedConnect,
-    context::StreamContext,
-};
+use super::{OwnIoStream, addr::StreamAddr, connect::StreamTypedConnect, context::StreamContext};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -35,19 +30,18 @@ impl<AddrStr> PoolBuilder<AddrStr> {
         Self(vec![])
     }
 }
-impl<AddrStr, StreamType> PoolBuilder<AddrStr>
+impl<AddrStr> PoolBuilder<AddrStr>
 where
-    AddrStr: IntoAddr<Addr = StreamAddr<StreamType>>,
+    AddrStr: IntoAddr<Addr = StreamAddr>,
 {
     pub fn build<Conn, ConnectorTable>(
         self,
         connector_table: Arc<ConnectorTable>,
-        proxy_server: &HashMap<Arc<str>, ProxyConfig<StreamAddr<StreamType>>>,
-    ) -> Result<ConnPool<StreamAddr<StreamType>, Conn>, PoolBuildError>
+        proxy_server: &HashMap<Arc<str>, ProxyConfig<StreamAddr>>,
+    ) -> Result<ConnPool<StreamAddr, Conn>, PoolBuildError>
     where
-        StreamType: AsStreamType + Clone,
         Conn: std::fmt::Debug + OwnIoStream,
-        ConnectorTable: StreamTypedConnect<Conn = Conn, StreamType = StreamType>,
+        ConnectorTable: StreamTypedConnect<Conn = Conn>,
     {
         let c = self
             .0
@@ -89,15 +83,13 @@ impl<AddrStr> Merge for PoolBuilder<AddrStr> {
     }
 }
 
-fn pool_entries_from_proxy_configs<Conn, ConnectorTable, StreamType>(
-    proxy_configs: impl Iterator<Item = ProxyConfig<StreamAddr<StreamType>>>,
+fn pool_entries_from_proxy_configs<Conn, ConnectorTable>(
+    proxy_configs: impl Iterator<Item = ProxyConfig<StreamAddr>>,
     connector_table: Arc<ConnectorTable>,
-) -> impl Iterator<Item = ConnPoolEntry<StreamAddr<StreamType>, Conn>>
+) -> impl Iterator<Item = ConnPoolEntry<StreamAddr, Conn>>
 where
     Conn: std::fmt::Debug + OwnIoStream,
-    ConnectorTable:
-        StreamTypedConnect<Conn = Conn, StreamType = StreamType> + Sync + Send + 'static,
-    StreamType: AsStreamType,
+    ConnectorTable: StreamTypedConnect<Conn = Conn> + Sync + Send + 'static,
 {
     proxy_configs.map(move |c| ConnPoolEntry {
         key: c.address.clone(),
@@ -113,18 +105,15 @@ where
 }
 
 #[derive(Debug)]
-struct PoolConnector<StreamType, ConnectorTable> {
-    proxy_server: ProxyConfig<StreamAddr<StreamType>>,
+struct PoolConnector<ConnectorTable> {
+    proxy_server: ProxyConfig<StreamAddr>,
     connector_table: Arc<ConnectorTable>,
 }
 #[async_trait]
-impl<Conn, ConnectorTable, StreamType> tokio_conn_pool::Connect
-    for PoolConnector<StreamType, ConnectorTable>
+impl<Conn, ConnectorTable> tokio_conn_pool::Connect for PoolConnector<ConnectorTable>
 where
     Conn: OwnIoStream,
-    ConnectorTable:
-        StreamTypedConnect<Conn = Conn, StreamType = StreamType> + Sync + Send + 'static,
-    StreamType: AsStreamType,
+    ConnectorTable: StreamTypedConnect<Conn = Conn> + Sync + Send + 'static,
 {
     type Connection = Conn;
     async fn connect(&self) -> Option<Self::Connection> {
@@ -142,15 +131,14 @@ where
 }
 
 #[derive(Debug)]
-struct PoolHeartbeat<Conn, StreamType> {
-    proxy_server: ProxyConfig<StreamAddr<StreamType>>,
+struct PoolHeartbeat<Conn> {
+    proxy_server: ProxyConfig<StreamAddr>,
     connection: PhantomData<Conn>,
 }
 #[async_trait]
-impl<Conn, StreamType> tokio_conn_pool::Heartbeat for PoolHeartbeat<Conn, StreamType>
+impl<Conn> tokio_conn_pool::Heartbeat for PoolHeartbeat<Conn>
 where
     Conn: OwnIoStream,
-    StreamType: AsStreamType,
 {
     type Connection = Conn;
     async fn heartbeat(&self, mut conn: Self::Connection) -> Option<Self::Connection> {
@@ -165,16 +153,15 @@ where
     }
 }
 
-pub async fn connect_with_pool<Conn, ConnectorTable, StreamType>(
-    addr: &StreamAddr<StreamType>,
-    stream_context: &StreamContext<Conn, ConnectorTable, StreamType>,
+pub async fn connect_with_pool<Conn, ConnectorTable>(
+    addr: &StreamAddr,
+    stream_context: &StreamContext<Conn, ConnectorTable>,
     allow_loopback: bool,
     timeout: Duration,
-) -> Result<(Conn, SocketAddr), ConnectError<StreamType>>
+) -> Result<(Conn, SocketAddr), ConnectError>
 where
     Conn: HasIoAddr + Sync + Send + 'static,
-    ConnectorTable: StreamTypedConnect<Conn = Conn, StreamType = StreamType>,
-    StreamType: AsStreamType,
+    ConnectorTable: StreamTypedConnect<Conn = Conn>,
 {
     let stream = stream_context.pool.inner().pull(addr);
     let sock_addr = stream.as_ref().and_then(|s| s.peer_addr().ok());
@@ -209,23 +196,23 @@ where
     Ok((stream, sock_addr))
 }
 #[derive(Debug, Error)]
-pub enum ConnectError<StreamType: std::fmt::Display> {
+pub enum ConnectError {
     #[error("Failed to resolve address: {source}, {addr}")]
     ResolveAddr {
         #[source]
         source: io::Error,
-        addr: StreamAddr<StreamType>,
+        addr: StreamAddr,
     },
     #[error("Refused to connect to loopback address: {addr}, {sock_addr}")]
     Loopback {
-        addr: StreamAddr<StreamType>,
+        addr: StreamAddr,
         sock_addr: SocketAddr,
     },
     #[error("Failed to connect to address: {source}, {addr}, {sock_addr}")]
     ConnectAddr {
         #[source]
         source: io::Error,
-        addr: StreamAddr<StreamType>,
+        addr: StreamAddr,
         sock_addr: SocketAddr,
     },
 }

@@ -193,7 +193,7 @@ impl Socks5ServerTcpAccessConnHandler {
                 upstream_sock_addr,
             } => {
                 let upstream_addr = StreamAddr {
-                    stream_type: ConcreteStreamType::Tcp,
+                    stream_type: ConcreteStreamType::Tcp.to_string().into(),
                     address: upstream_addr.clone(),
                 };
                 let conn_context = ConnContext {
@@ -244,7 +244,7 @@ impl Socks5ServerTcpAccessConnHandler {
             downstream_local: Arc::clone(&self.listen_addr),
             session_table: self.stream_context.session_table.clone(),
             destination: Some(StreamAddr {
-                stream_type: ConcreteStreamType::Tcp,
+                stream_type: ConcreteStreamType::Tcp.to_string().into(),
                 address: destination.clone(),
             }),
         };
@@ -527,7 +527,7 @@ impl Socks5ServerTcpAccessConnHandler {
             &proxy_chain.chain,
             StreamAddr {
                 address: destination,
-                stream_type: ConcreteStreamType::Tcp,
+                stream_type: ConcreteStreamType::Tcp.to_string().into(),
             },
             &self.stream_context,
         )

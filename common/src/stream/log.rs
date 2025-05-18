@@ -1,5 +1,5 @@
 use std::{
-    fmt::{self, Display},
+    fmt::Display,
     net::SocketAddr,
     ops::Deref,
     path::PathBuf,
@@ -25,32 +25,32 @@ pub fn init_logger(output_dir: PathBuf) {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StreamLog<StreamType> {
+pub struct StreamLog {
     pub timing: Timing,
     pub bytes_uplink: u64,
     pub bytes_downlink: u64,
-    pub upstream_addr: StreamAddr<StreamType>,
+    pub upstream_addr: StreamAddr,
     pub upstream_sock_addr: SocketAddr,
     pub downstream_addr: Option<SocketAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SimplifiedStreamLog<StreamType> {
+pub struct SimplifiedStreamLog {
     pub timing: Timing,
-    pub upstream_addr: StreamAddr<StreamType>,
+    pub upstream_addr: StreamAddr,
     pub upstream_sock_addr: SocketAddr,
     pub downstream_addr: Option<SocketAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StreamProxyLog<StreamType> {
-    pub stream: StreamLog<StreamType>,
+pub struct StreamProxyLog {
+    pub stream: StreamLog,
     pub destination: InternetAddr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SimplifiedStreamProxyLog<StreamType> {
-    pub stream: SimplifiedStreamLog<StreamType>,
+pub struct SimplifiedStreamProxyLog {
+    pub stream: SimplifiedStreamLog,
     pub destination: InternetAddr,
 }
 
@@ -64,8 +64,8 @@ pub struct StreamLogHdv {
     pub downstream_addr: Option<InternetAddrHdv>,
     pub destination: Option<InternetAddrHdv>,
 }
-impl<StreamType: fmt::Display> From<&StreamLog<StreamType>> for StreamLogHdv {
-    fn from(value: &StreamLog<StreamType>) -> Self {
+impl From<&StreamLog> for StreamLogHdv {
+    fn from(value: &StreamLog) -> Self {
         let timing = (&value.timing).into();
         let up_bytes = Some(value.bytes_uplink);
         let dn_bytes = Some(value.bytes_downlink);
@@ -84,8 +84,8 @@ impl<StreamType: fmt::Display> From<&StreamLog<StreamType>> for StreamLogHdv {
         }
     }
 }
-impl<StreamType: fmt::Display> From<&SimplifiedStreamLog<StreamType>> for StreamLogHdv {
-    fn from(value: &SimplifiedStreamLog<StreamType>) -> Self {
+impl From<&SimplifiedStreamLog> for StreamLogHdv {
+    fn from(value: &SimplifiedStreamLog) -> Self {
         let timing = (&value.timing).into();
         let up_bytes = None;
         let dn_bytes = None;
@@ -104,22 +104,22 @@ impl<StreamType: fmt::Display> From<&SimplifiedStreamLog<StreamType>> for Stream
         }
     }
 }
-impl<StreamType: fmt::Display> From<&StreamProxyLog<StreamType>> for StreamLogHdv {
-    fn from(value: &StreamProxyLog<StreamType>) -> Self {
+impl From<&StreamProxyLog> for StreamLogHdv {
+    fn from(value: &StreamProxyLog) -> Self {
         let mut this: StreamLogHdv = (&value.stream).into();
         this.destination = Some((&value.destination).into());
         this
     }
 }
-impl<StreamType: fmt::Display> From<&SimplifiedStreamProxyLog<StreamType>> for StreamLogHdv {
-    fn from(value: &SimplifiedStreamProxyLog<StreamType>) -> Self {
+impl From<&SimplifiedStreamProxyLog> for StreamLogHdv {
+    fn from(value: &SimplifiedStreamProxyLog) -> Self {
         let mut this: StreamLogHdv = (&value.stream).into();
         this.destination = Some((&value.destination).into());
         this
     }
 }
 
-impl<StreamType: Display> Display for StreamLog<StreamType> {
+impl Display for StreamLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let duration = self.timing.duration().as_secs_f64();
         let uplink_speed = self.bytes_uplink as f64 / duration;
@@ -147,7 +147,7 @@ impl<StreamType: Display> Display for StreamLog<StreamType> {
     }
 }
 
-impl<StreamType: Display> Display for SimplifiedStreamLog<StreamType> {
+impl Display for SimplifiedStreamLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let duration = self.timing.duration().as_secs_f64();
         let upstream_addrs = match self.upstream_addr.address.deref() {
@@ -164,7 +164,7 @@ impl<StreamType: Display> Display for SimplifiedStreamLog<StreamType> {
     }
 }
 
-impl<StreamType: Display> Display for StreamProxyLog<StreamType> {
+impl Display for StreamProxyLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.stream.to_string())?;
         write!(f, ",dt:{}", self.destination)?;
@@ -172,7 +172,7 @@ impl<StreamType: Display> Display for StreamProxyLog<StreamType> {
     }
 }
 
-impl<StreamType: Display> Display for SimplifiedStreamProxyLog<StreamType> {
+impl Display for SimplifiedStreamProxyLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.stream.to_string())?;
         write!(f, ",dt:{}", self.destination)?;

@@ -3,7 +3,7 @@ use swap::Swap;
 use tokio_conn_pool::ConnPool;
 
 use super::{
-    addr::{ConcreteStreamAddr, ConcreteStreamAddrStr, ConcreteStreamType},
+    addr::{ConcreteStreamAddr, ConcreteStreamAddrStr},
     connection::Conn,
 };
 
@@ -12,4 +12,4 @@ pub type ConcretePoolBuilder = PoolBuilder<ConcreteStreamAddrStr>;
 pub type ConcreteConnPool = ConnPool<ConcreteStreamAddr, Conn>;
 pub type SharedConcreteConnPool = Swap<ConcreteConnPool>;
 
-pub type ConcreteConnectError = ConnectError<ConcreteStreamType>;
+pub type ConcreteConnectError = ConnectError;

@@ -57,14 +57,18 @@ impl ConcreteStreamConnectorTable {
 }
 impl StreamTypedConnect for ConcreteStreamConnectorTable {
     type Conn = Conn;
-    type StreamType = ConcreteStreamType;
-
     async fn timed_connect(
         &self,
-        stream_type: &ConcreteStreamType,
+        stream_type: &str,
         addr: SocketAddr,
         timeout: Duration,
     ) -> io::Result<Conn> {
+        let stream_type: ConcreteStreamType = stream_type.parse().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid stream type: `{stream_type}`"),
+            )
+        })?;
         match stream_type {
             ConcreteStreamType::Tcp => Ok(Conn::Tcp(IoTcpStream(
                 self.tcp.timed_connect(addr, timeout).await?,

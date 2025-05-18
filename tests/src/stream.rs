@@ -138,7 +138,7 @@ mod tests {
         ProxyConfig {
             address: StreamAddr {
                 address: proxy_addr.into(),
-                stream_type: ty,
+                stream_type: ty.to_string().into(),
             },
             header_crypto: crypto,
             payload_crypto: None,
@@ -176,7 +176,7 @@ mod tests {
         });
         StreamAddr {
             address: greet_addr.into(),
-            stream_type: ConcreteStreamType::Tcp,
+            stream_type: ConcreteStreamType::Tcp.to_string().into(),
         }
     }
 

@@ -1,16 +1,15 @@
 use axum::{
+    Router,
     extract::{Query, State},
     routing::get,
-    Router,
 };
 use common::{stream::metrics::StreamSessionTable, udp::metrics::UdpSessionTable};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
-use protocol::stream::addr::ConcreteStreamType;
 use serde::Deserialize;
 
 #[derive(Debug, Clone)]
 pub struct SessionTables {
-    pub stream: StreamSessionTable<ConcreteStreamType>,
+    pub stream: StreamSessionTable,
     pub udp: UdpSessionTable,
 }
 

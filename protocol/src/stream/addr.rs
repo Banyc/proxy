@@ -2,13 +2,23 @@ use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize, de::Visitor};
 
-use common::{
-    addr::ParseInternetAddrError,
-    proxy_table::IntoAddr,
-    stream::addr::{AsStreamType, StreamAddr},
-};
+use common::{addr::ParseInternetAddrError, proxy_table::IntoAddr, stream::addr::StreamAddr};
 
-pub type ConcreteStreamAddr = StreamAddr<ConcreteStreamType>;
+pub type ConcreteStreamAddr = StreamAddr;
+
+// const TYPE_STR_TABLE: &[(ConcreteStreamType, &str)] = &[
+//     (ConcreteStreamType::Tcp, "tcp"),
+//     (ConcreteStreamType::TcpMux, "tcpmux"),
+//     (ConcreteStreamType::Kcp, "kcp"),
+//     (ConcreteStreamType::Mptcp, "mptcp"),
+//     (ConcreteStreamType::Rtp, "rtp"),
+//     (ConcreteStreamType::RtpMux, "rtpmux"),
+//     (ConcreteStreamType::RtpMuxFec, "rtpmuxfec"),
+// ];
+// static TYPE_TO_STR_MAP: LazyLock<HashMap<ConcreteStreamType, &str>> =
+//     LazyLock::new(|| HashMap::from_iter(TYPE_STR_TABLE.iter().map(|(k, v)| (*k, *v))));
+// static STR_TO_TYPE_MAP: LazyLock<HashMap<&str, ConcreteStreamType>> =
+//     LazyLock::new(|| HashMap::from_iter(TYPE_STR_TABLE.iter().map(|(v, k)| (*k, *v))));
 
 #[derive(
     Debug,
@@ -32,7 +42,6 @@ pub enum ConcreteStreamType {
     RtpMux,
     RtpMuxFec,
 }
-impl AsStreamType for ConcreteStreamType {}
 impl fmt::Display for ConcreteStreamType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -48,7 +57,6 @@ impl fmt::Display for ConcreteStreamType {
 }
 impl FromStr for ConcreteStreamType {
     type Err = ParseInternetAddrError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "tcp" => Ok(Self::Tcp),
@@ -116,12 +124,12 @@ mod tests {
 
     #[test]
     fn from_str_to_stream_addr() {
-        let addr: StreamAddr<ConcreteStreamType> = "tcp://0.0.0.0:0".parse().unwrap();
+        let addr: StreamAddr = "tcp://0.0.0.0:0".parse().unwrap();
         assert_eq!(
             addr,
             StreamAddr {
                 address: "0.0.0.0:0".parse::<SocketAddr>().unwrap().into(),
-                stream_type: ConcreteStreamType::Tcp,
+                stream_type: ConcreteStreamType::Tcp.to_string().into(),
             }
         );
     }
@@ -134,7 +142,7 @@ mod tests {
             v.0.address.deref(),
             &InternetAddrKind::SocketAddr("127.0.0.1:1".parse().unwrap())
         );
-        assert_eq!(v.0.stream_type, ConcreteStreamType::Tcp);
+        assert_eq!(v.0.stream_type, ConcreteStreamType::Tcp.to_string().into());
         let new_s = serde_json::to_string(&v).unwrap();
         assert_eq!(s, new_s);
     }

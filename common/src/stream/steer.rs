@@ -17,14 +17,13 @@ use super::{HasIoAddr, OwnIoStream, addr::StreamAddr, header::StreamRequestHeade
 
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
-pub async fn steer<Downstream, StreamType>(
+pub async fn steer<Downstream>(
     downstream: &mut Downstream,
     crypto: &tokio_chacha20::config::Config,
     replay_validator: &ReplayValidator,
-) -> Result<Option<StreamAddr<StreamType>>, SteerError>
+) -> Result<Option<StreamAddr>, SteerError>
 where
     Downstream: OwnIoStream + HasIoAddr + std::fmt::Debug,
-    StreamType: std::fmt::Debug + bincode::Decode<()>,
 {
     let validator = ValidatorRef::Replay(replay_validator);
     // Wait for heartbeat upgrade
@@ -40,7 +39,7 @@ where
 
     // Decode header
     let mut read_crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*crypto.key());
-    let header: StreamRequestHeader<StreamType> =
+    let header: StreamRequestHeader =
         timed_read_header_async(downstream, &mut read_crypto_cursor, &validator, IO_TIMEOUT)
             .await
             .map_err(|e| {
