@@ -7,11 +7,14 @@ mod tests {
         connect::ConnectorConfig,
         loading::Serve,
         proxy_table::ProxyConfig,
-        stream::{addr::StreamAddr, conn::ConnAndAddr},
+        stream::{
+            addr::StreamAddr, conn::ConnAndAddr, pool::StreamConnPool,
+            proxy_table::StreamProxyConfig,
+        },
     };
     use protocol::stream::{
         addr::ConcreteStreamType, connect::ConcreteStreamConnectorTable,
-        context::ConcreteStreamContext, pool::ConcreteConnPool, proxy_table::StreamProxyConfig,
+        context::ConcreteStreamContext,
     };
     use proxy_client::stream::{establish, trace_rtt};
     use proxy_server::stream::{
@@ -36,7 +39,7 @@ mod tests {
     fn stream_context() -> ConcreteStreamContext {
         ConcreteStreamContext {
             session_table: None,
-            pool: Swap::new(ConcreteConnPool::empty()),
+            pool: Swap::new(StreamConnPool::empty()),
             connector_table: Arc::new(
                 ConcreteStreamConnectorTable::new(ConnectorConfig::default()),
             ),

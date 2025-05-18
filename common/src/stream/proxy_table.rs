@@ -1,4 +1,4 @@
-use common::{
+use crate::{
     proxy_table::{
         ProxyAction, ProxyConfig, ProxyConfigBuilder, ProxyGroup, ProxyGroupBuilder, ProxyTable,
         ProxyTableBuilder, ProxyTableEntry, WeightedProxyChain,

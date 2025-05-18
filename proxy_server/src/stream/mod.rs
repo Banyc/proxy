@@ -5,14 +5,14 @@ use common::{
     addr::ParseInternetAddrError,
     loading,
     stream::{
-        HasIoAddr, OwnIoStream, StreamServerHandleConn,
+        AsConn, StreamServerHandleConn,
         conn::ConnAndAddr,
         io_copy::{ConnContext, CopyBidirectional},
-        pool::connect_with_pool,
+        pool::{ConnectError, connect_with_pool},
         steer::{SteerError, steer},
     },
 };
-use protocol::stream::{context::ConcreteStreamContext, pool::ConcreteConnectError};
+use protocol::stream::context::ConcreteStreamContext;
 use serde::Deserialize;
 use thiserror::Error;
 use tracing::{error, info, instrument, warn};
@@ -114,7 +114,7 @@ impl StreamProxyConnHandler {
         mut downstream: Downstream,
     ) -> Result<ProxyResult, StreamProxyServerError>
     where
-        Downstream: OwnIoStream + HasIoAddr + std::fmt::Debug,
+        Downstream: AsConn + std::fmt::Debug,
     {
         // Establish proxy chain
         let upstream = match self.acceptor.establish(&mut downstream).await {
@@ -176,7 +176,7 @@ impl StreamServerHandleConn for StreamProxyConnHandler {
     #[instrument(skip(self))]
     async fn handle_stream<Stream>(&self, stream: Stream)
     where
-        Stream: OwnIoStream + HasIoAddr + std::fmt::Debug,
+        Stream: AsConn + std::fmt::Debug,
     {
         match self.proxy(stream).await {
             Ok(ProxyResult::IoCopy) => (),
@@ -213,7 +213,7 @@ impl StreamProxyAcceptor {
         downstream: &mut Downstream,
     ) -> Result<Option<ConnAndAddr>, StreamProxyAcceptorError>
     where
-        Downstream: OwnIoStream + HasIoAddr + std::fmt::Debug,
+        Downstream: AsConn + std::fmt::Debug,
     {
         let addr = match steer(
             downstream,
@@ -301,7 +301,7 @@ pub enum StreamProxyAcceptorError {
     #[error("Failed to connect to upstream: {source}, {downstream_addr:?}")]
     ConnectUpstream {
         #[source]
-        source: ConcreteConnectError,
+        source: ConnectError,
         downstream_addr: Option<SocketAddr>,
     },
 }

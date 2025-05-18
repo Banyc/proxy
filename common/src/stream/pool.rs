@@ -13,9 +13,17 @@ use crate::{
     proxy_table::{IntoAddr, ProxyConfig, ProxyConfigBuildError, ProxyConfigBuilder},
 };
 
-use super::{AsConn, addr::StreamAddr, connect::StreamTimedConnect, context::StreamContext};
+use super::{
+    AsConn,
+    addr::{StreamAddr, StreamAddrStr},
+    connect::StreamTimedConnect,
+    context::StreamContext,
+};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
+pub type StreamPoolBuilder = PoolBuilder<StreamAddrStr>;
+pub type StreamConnPool = ConnPool<StreamAddr, Box<dyn AsConn>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

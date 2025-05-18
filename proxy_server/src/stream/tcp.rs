@@ -87,11 +87,9 @@ mod tests {
         connect::ConnectorConfig,
         header::{codec::write_header_async, heartbeat},
         loading::Serve,
-        stream::{addr::StreamAddr, header::StreamRequestHeader},
+        stream::{addr::StreamAddr, header::StreamRequestHeader, pool::StreamConnPool},
     };
-    use protocol::stream::{
-        addr::ConcreteStreamType, connect::ConcreteStreamConnectorTable, pool::ConcreteConnPool,
-    };
+    use protocol::stream::{addr::ConcreteStreamType, connect::ConcreteStreamConnectorTable};
     use swap::Swap;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -113,7 +111,7 @@ mod tests {
                 None,
                 ConcreteStreamContext {
                     session_table: None,
-                    pool: Swap::new(ConcreteConnPool::empty()),
+                    pool: Swap::new(StreamConnPool::empty()),
                     connector_table: Arc::new(ConcreteStreamConnectorTable::new(connector_config)),
                     replay_validator: Arc::new(ReplayValidator::new(
                         VALIDATOR_TIME_FRAME,

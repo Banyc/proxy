@@ -1,16 +1,14 @@
 use std::{collections::HashMap, sync::Arc};
 
 use common::{
-    config::{merge_map, Merge},
+    config::{Merge, merge_map},
     error::{AnyError, AnyResult},
     filter::{self, MatcherBuilder},
     loading,
+    stream::proxy_table::{StreamProxyConfig, StreamProxyGroupBuilder, StreamProxyTableBuilder},
     udp::proxy_table::{UdpProxyConfig, UdpProxyGroupBuilder, UdpProxyTableBuilder},
 };
-use protocol::{
-    context::ConcreteContext,
-    stream::proxy_table::{StreamProxyConfig, StreamProxyGroupBuilder, StreamProxyTableBuilder},
-};
+use protocol::context::ConcreteContext;
 use proxy_client::{stream::StreamTracerBuilder, udp::UdpTracerBuilder};
 use serde::{Deserialize, Serialize};
 use socks5::server::{
@@ -26,8 +24,8 @@ use stream::{
 };
 use tokio_util::sync::CancellationToken;
 use udp::{
-    proxy_table::{UdpProxyGroupBuildContext, UdpProxyTableBuildContext},
     UdpAccessConnHandler, UdpAccessServerConfig,
+    proxy_table::{UdpProxyGroupBuildContext, UdpProxyTableBuildContext},
 };
 
 pub mod socks5;

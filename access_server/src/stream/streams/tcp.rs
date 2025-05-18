@@ -9,13 +9,10 @@ use common::{
         HasIoAddr, OwnIoStream, StreamServerHandleConn,
         addr::{StreamAddr, StreamAddrStr},
         io_copy::{ConnContext, CopyBidirectional},
+        proxy_table::{StreamProxyGroup, StreamProxyGroupBuilder},
     },
 };
-use protocol::stream::{
-    context::ConcreteStreamContext,
-    proxy_table::{StreamProxyGroup, StreamProxyGroupBuilder},
-    streams::tcp::TcpServer,
-};
+use protocol::stream::{context::ConcreteStreamContext, streams::tcp::TcpServer};
 use proxy_client::stream::{StreamEstablishError, establish};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

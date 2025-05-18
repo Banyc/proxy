@@ -15,6 +15,7 @@ use common::{
         io_copy::{ConnContext, CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
         log::{LOGGER, SimplifiedStreamLog, SimplifiedStreamProxyLog},
         metrics::{Session, StreamSessionTable},
+        proxy_table::{StreamProxyGroup, StreamProxyTable, StreamProxyTableBuilder},
     },
     udp::TIMEOUT,
 };
@@ -25,11 +26,8 @@ use hyper::{
 use hyper_util::rt::TokioIo;
 use monitor_table::table::RowOwnedGuard;
 use protocol::stream::{
-    addr::ConcreteStreamType,
-    connect::ConcreteStreamConnectorTable,
-    context::ConcreteStreamContext,
-    proxy_table::{StreamProxyGroup, StreamProxyTable, StreamProxyTableBuilder},
-    streams::tcp::TcpServer,
+    addr::ConcreteStreamType, connect::ConcreteStreamConnectorTable,
+    context::ConcreteStreamContext, streams::tcp::TcpServer,
 };
 use proxy_client::stream::{StreamEstablishError, establish};
 use serde::{Deserialize, Serialize};

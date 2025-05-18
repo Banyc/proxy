@@ -9,10 +9,14 @@ use common::{
         route::{RouteError, RouteResponse},
     },
     proxy_table::{BuildTracer, ProxyChain, TraceRtt, convert_proxies_to_header_crypto_pairs},
-    stream::{addr::StreamAddr, conn::ConnAndAddr, pool::connect_with_pool},
+    stream::{
+        addr::StreamAddr,
+        conn::ConnAndAddr,
+        pool::{ConnectError, connect_with_pool},
+    },
 };
 use metrics::counter;
-use protocol::stream::{context::ConcreteStreamContext, pool::ConcreteConnectError};
+use protocol::stream::context::ConcreteStreamContext;
 use thiserror::Error;
 use tracing::{error, instrument, trace};
 
@@ -97,9 +101,9 @@ pub async fn establish(
 #[derive(Debug, Error)]
 pub enum StreamEstablishError {
     #[error("Failed to connect to destination: {0}")]
-    ConnectDestination(#[source] ConcreteConnectError),
+    ConnectDestination(#[source] ConnectError),
     #[error("Failed to connect to first proxy server: {0}")]
-    ConnectFirstProxyServer(#[source] ConcreteConnectError),
+    ConnectFirstProxyServer(#[source] ConnectError),
     #[error("Failed to write heartbeat upgrade to upstream: {source}, {upstream_addr}")]
     WriteHeartbeatUpgrade {
         #[source]
@@ -195,7 +199,7 @@ pub async fn trace_rtt(
 #[derive(Debug, Error)]
 pub enum TraceError {
     #[error("Connect error: {0}")]
-    ConnectError(#[from] ConcreteConnectError),
+    ConnectError(#[from] ConnectError),
     #[error("Heartbeat error: {0}")]
     HeartbeatError(#[from] HeartbeatError),
     #[error("Codec error: {0}")]

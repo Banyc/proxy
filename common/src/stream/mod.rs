@@ -15,6 +15,7 @@ pub mod io_copy;
 pub mod log;
 pub mod metrics;
 pub mod pool;
+pub mod proxy_table;
 pub mod steer;
 pub mod xor;
 

@@ -12,14 +12,12 @@ use common::{
         conn::ConnAndAddr,
         connect::StreamConnectExt,
         io_copy::{ConnContext, CopyBidirectional},
+        proxy_table::{StreamProxyGroup, StreamProxyTable, StreamProxyTableBuilder},
     },
     udp::TIMEOUT,
 };
 use protocol::stream::{
-    addr::ConcreteStreamType,
-    context::ConcreteStreamContext,
-    proxy_table::{StreamProxyGroup, StreamProxyTable, StreamProxyTableBuilder},
-    streams::tcp::TcpServer,
+    addr::ConcreteStreamType, context::ConcreteStreamContext, streams::tcp::TcpServer,
 };
 use proxy_client::stream::StreamEstablishError;
 use serde::{Deserialize, Serialize};

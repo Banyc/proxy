@@ -13,7 +13,11 @@ use common::{
     connect::ConnectorConfig,
     context::Context,
     error::{AnyError, AnyResult},
-    stream::metrics::StreamSessionTable,
+    stream::{
+        metrics::StreamSessionTable,
+        pool::{StreamConnPool, StreamPoolBuilder},
+        proxy_table::StreamProxyConfigBuilder,
+    },
     udp::{
         connect::UdpConnector, context::UdpContext, metrics::UdpSessionTable,
         proxy_table::UdpProxyConfigBuilder,
@@ -22,12 +26,7 @@ use common::{
 use config::ReadConfig;
 use protocol::{
     context::ConcreteContext,
-    stream::{
-        connect::ConcreteStreamConnectorTable,
-        context::ConcreteStreamContext,
-        pool::{ConcreteConnPool, ConcretePoolBuilder},
-        proxy_table::StreamProxyConfigBuilder,
-    },
+    stream::{connect::ConcreteStreamConnectorTable, context::ConcreteStreamContext},
 };
 use proxy_server::{ProxyServerConfig, ProxyServerLoader};
 use serde::Deserialize;
@@ -59,7 +58,7 @@ where
     };
     let mut server_tasks = tokio::task::JoinSet::new();
 
-    let stream_pool = Swap::new(ConcreteConnPool::empty());
+    let stream_pool = Swap::new(StreamConnPool::empty());
     let stream_validator = Arc::new(ReplayValidator::new(
         VALIDATOR_TIME_FRAME,
         VALIDATOR_CAPACITY,
@@ -220,7 +219,7 @@ pub async fn spawn_and_clean(
 #[serde(deny_unknown_fields)]
 pub struct StreamConfig {
     #[serde(default)]
-    pool: ConcretePoolBuilder,
+    pool: StreamPoolBuilder,
     #[serde(default)]
     proxy_server: HashMap<Arc<str>, StreamProxyConfigBuilder>,
 }
