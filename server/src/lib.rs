@@ -22,7 +22,7 @@ use common::{
 };
 use config::ReadConfig;
 use protocol::{
-    proxy_server::{ProxyServerConfig, ProxyServerLoader},
+    proxy_server::{self, ProxyServerConfig, ProxyServerLoader},
     stream::connect::build_concrete_stream_connector_table,
 };
 use serde::Deserialize;
@@ -200,14 +200,13 @@ pub async fn spawn_and_clean(
             &udp_proxy,
         )
         .await?;
-    config
-        .proxy_server
-        .spawn_and_clean(
-            server_tasks,
-            &mut server_loader.proxy_server,
-            context.clone(),
-        )
-        .await?;
+    proxy_server::spawn_and_clean(
+        config.proxy_server,
+        server_tasks,
+        &mut server_loader.proxy_server,
+        context.clone(),
+    )
+    .await?;
     Ok(())
 }
 

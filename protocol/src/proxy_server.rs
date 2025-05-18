@@ -48,95 +48,6 @@ impl ProxyServerConfig {
             rtp_mux_server: Default::default(),
         }
     }
-
-    pub async fn spawn_and_clean(
-        self,
-        join_set: &mut tokio::task::JoinSet<AnyResult>,
-        loader: &mut ProxyServerLoader,
-        context: Context,
-    ) -> AnyResult {
-        loader
-            .tcp_server
-            .spawn_and_clean(
-                join_set,
-                self.tcp_server
-                    .into_iter()
-                    .map(|s| s.into_builder(context.stream.clone()))
-                    .collect(),
-            )
-            .await?;
-
-        loader
-            .tcp_mux_server
-            .spawn_and_clean(
-                join_set,
-                self.tcp_mux_server
-                    .into_iter()
-                    .map(|s| s.into_builder(context.stream.clone()))
-                    .collect(),
-            )
-            .await?;
-
-        loader
-            .udp_server
-            .spawn_and_clean(
-                join_set,
-                self.udp_server
-                    .into_iter()
-                    .map(|config| UdpProxyServerBuilder {
-                        config,
-                        udp_context: context.udp.clone(),
-                    })
-                    .collect(),
-            )
-            .await?;
-
-        loader
-            .kcp_server
-            .spawn_and_clean(
-                join_set,
-                self.kcp_server
-                    .into_iter()
-                    .map(|s| s.into_builder(context.stream.clone()))
-                    .collect(),
-            )
-            .await?;
-
-        loader
-            .mptcp_server
-            .spawn_and_clean(
-                join_set,
-                self.mptcp_server
-                    .into_iter()
-                    .map(|s| s.into_builder(context.stream.clone()))
-                    .collect(),
-            )
-            .await?;
-
-        loader
-            .rtp_server
-            .spawn_and_clean(
-                join_set,
-                self.rtp_server
-                    .into_iter()
-                    .map(|s| s.into_builder(context.stream.clone()))
-                    .collect(),
-            )
-            .await?;
-
-        loader
-            .rtp_mux_server
-            .spawn_and_clean(
-                join_set,
-                self.rtp_mux_server
-                    .into_iter()
-                    .map(|s| s.into_builder(context.stream.clone()))
-                    .collect(),
-            )
-            .await?;
-
-        Ok(())
-    }
 }
 impl Merge for ProxyServerConfig {
     type Error = Infallible;
@@ -164,14 +75,15 @@ impl Merge for ProxyServerConfig {
     }
 }
 
+#[derive(Debug)]
 pub struct ProxyServerLoader {
-    tcp_server: loading::Loader<StreamProxyConnHandler>,
-    tcp_mux_server: loading::Loader<StreamProxyConnHandler>,
-    udp_server: loading::Loader<UdpProxyConnHandler>,
-    kcp_server: loading::Loader<StreamProxyConnHandler>,
-    mptcp_server: loading::Loader<StreamProxyConnHandler>,
-    rtp_server: loading::Loader<StreamProxyConnHandler>,
-    rtp_mux_server: loading::Loader<StreamProxyConnHandler>,
+    pub tcp_server: loading::Loader<StreamProxyConnHandler>,
+    pub tcp_mux_server: loading::Loader<StreamProxyConnHandler>,
+    pub udp_server: loading::Loader<UdpProxyConnHandler>,
+    pub kcp_server: loading::Loader<StreamProxyConnHandler>,
+    pub mptcp_server: loading::Loader<StreamProxyConnHandler>,
+    pub rtp_server: loading::Loader<StreamProxyConnHandler>,
+    pub rtp_mux_server: loading::Loader<StreamProxyConnHandler>,
 }
 impl ProxyServerLoader {
     pub fn new() -> Self {
@@ -190,4 +102,149 @@ impl Default for ProxyServerLoader {
     fn default() -> Self {
         Self::new()
     }
+}
+
+pub async fn spawn_and_clean(
+    config: ProxyServerConfig,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+    loader: &mut ProxyServerLoader,
+    context: Context,
+) -> AnyResult {
+    tcp_spawn_and_clean(config.tcp_server, join_set, loader, &context).await?;
+    tcp_mux_spawn_and_clean(config.tcp_mux_server, join_set, loader, &context).await?;
+    udp_spawn_and_clean(config.udp_server, join_set, loader, &context).await?;
+    kcp_spawn_and_clean(config.kcp_server, join_set, loader, &context).await?;
+    mptcp_spawn_and_clean(config.mptcp_server, join_set, loader, &context).await?;
+    rtp_spawn_and_clean(config.rtp_server, join_set, loader, &context).await?;
+    rtp_mux_spawn_and_clean(config.rtp_mux_server, join_set, loader, &context).await?;
+    Ok(())
+}
+async fn tcp_spawn_and_clean(
+    config: Vec<TcpProxyServerConfig>,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+    loader: &mut ProxyServerLoader,
+    context: &Context,
+) -> AnyResult {
+    loader
+        .tcp_server
+        .spawn_and_clean(
+            join_set,
+            config
+                .into_iter()
+                .map(|s| s.into_builder(context.stream.clone()))
+                .collect(),
+        )
+        .await?;
+    Ok(())
+}
+async fn tcp_mux_spawn_and_clean(
+    config: Vec<TcpMuxProxyServerConfig>,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+    loader: &mut ProxyServerLoader,
+    context: &Context,
+) -> AnyResult {
+    loader
+        .tcp_mux_server
+        .spawn_and_clean(
+            join_set,
+            config
+                .into_iter()
+                .map(|s| s.into_builder(context.stream.clone()))
+                .collect(),
+        )
+        .await?;
+    Ok(())
+}
+async fn udp_spawn_and_clean(
+    config: Vec<UdpProxyServerConfig>,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+    loader: &mut ProxyServerLoader,
+    context: &Context,
+) -> AnyResult {
+    loader
+        .udp_server
+        .spawn_and_clean(
+            join_set,
+            config
+                .into_iter()
+                .map(|config| UdpProxyServerBuilder {
+                    config,
+                    udp_context: context.udp.clone(),
+                })
+                .collect(),
+        )
+        .await?;
+    Ok(())
+}
+async fn kcp_spawn_and_clean(
+    config: Vec<KcpProxyServerConfig>,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+    loader: &mut ProxyServerLoader,
+    context: &Context,
+) -> AnyResult {
+    loader
+        .kcp_server
+        .spawn_and_clean(
+            join_set,
+            config
+                .into_iter()
+                .map(|s| s.into_builder(context.stream.clone()))
+                .collect(),
+        )
+        .await?;
+    Ok(())
+}
+async fn mptcp_spawn_and_clean(
+    config: Vec<MptcpProxyServerConfig>,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+    loader: &mut ProxyServerLoader,
+    context: &Context,
+) -> AnyResult {
+    loader
+        .mptcp_server
+        .spawn_and_clean(
+            join_set,
+            config
+                .into_iter()
+                .map(|s| s.into_builder(context.stream.clone()))
+                .collect(),
+        )
+        .await?;
+    Ok(())
+}
+async fn rtp_spawn_and_clean(
+    config: Vec<RtpProxyServerConfig>,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+    loader: &mut ProxyServerLoader,
+    context: &Context,
+) -> AnyResult {
+    loader
+        .rtp_server
+        .spawn_and_clean(
+            join_set,
+            config
+                .into_iter()
+                .map(|s| s.into_builder(context.stream.clone()))
+                .collect(),
+        )
+        .await?;
+    Ok(())
+}
+async fn rtp_mux_spawn_and_clean(
+    config: Vec<RtpMuxProxyServerConfig>,
+    join_set: &mut tokio::task::JoinSet<AnyResult>,
+    loader: &mut ProxyServerLoader,
+    context: &Context,
+) -> AnyResult {
+    loader
+        .rtp_mux_server
+        .spawn_and_clean(
+            join_set,
+            config
+                .into_iter()
+                .map(|s| s.into_builder(context.stream.clone()))
+                .collect(),
+        )
+        .await?;
+    Ok(())
 }
