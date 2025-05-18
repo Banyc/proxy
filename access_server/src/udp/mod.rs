@@ -12,7 +12,10 @@ use common::{
         proxy_table::{UdpProxyGroup, UdpProxyGroupBuilder},
     },
     proxy_table::ProxyGroupBuildError,
-    udp::{Packet, UdpServer, UdpServerHandleConn},
+    udp::{
+        Packet,
+        server::{UdpServer, UdpServerHandleConn},
+    },
 };
 use proxy_client::udp::{EstablishError, UdpProxyClient};
 use serde::{Deserialize, Serialize};

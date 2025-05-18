@@ -14,7 +14,11 @@ use common::{
         io_copy::udp::{CopyBidirectional, DownstreamParts, UpstreamParts},
         steer::udp::{decode_route_header, echo},
     },
-    udp::{Packet, UdpServer, UdpServerHandleConn, respond::respond_with_error},
+    udp::{
+        Packet,
+        respond::respond_with_error,
+        server::{UdpServer, UdpServerHandleConn},
+    },
 };
 use serde::Deserialize;
 use thiserror::Error;
