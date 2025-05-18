@@ -31,7 +31,8 @@ use hyper::{
 use hyper_util::rt::TokioIo;
 use monitor_table::table::RowOwnedGuard;
 use protocol::stream::{
-    addr::ConcreteStreamType, connect::TCP_STREAM_TYPE, streams::tcp::TcpServer,
+    addr::ConcreteStreamType,
+    streams::tcp::{TCP_STREAM_TYPE, TcpServer},
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

@@ -21,7 +21,8 @@ use common::{
     udp::TIMEOUT,
 };
 use protocol::stream::{
-    addr::ConcreteStreamType, connect::TCP_STREAM_TYPE, streams::tcp::TcpServer,
+    addr::ConcreteStreamType,
+    streams::tcp::{TCP_STREAM_TYPE, TcpServer},
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

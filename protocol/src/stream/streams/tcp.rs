@@ -34,6 +34,8 @@ use common::{
     stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 
+pub const TCP_STREAM_TYPE: &str = "tcp";
+
 #[derive(Debug)]
 pub struct TcpServer<ConnHandler> {
     listener: TcpListener,
@@ -267,7 +269,7 @@ pub async fn build_tcp_proxy_server(
 mod tests {
     use std::time::Duration;
 
-    use crate::stream::connect::{TCP_STREAM_TYPE, build_concrete_stream_connector_table};
+    use crate::stream::connect::build_concrete_stream_connector_table;
 
     use super::*;
     use common::{
