@@ -25,15 +25,15 @@ use common::{
     error::AnyResult,
     loading,
     proto::{
-        connect::stream::StreamConnect,
-        context::StreamContext,
-        server::{
+        conn_handler::{
             ListenerBindError,
             stream::{
-                StreamProxyConnHandler, StreamProxyConnHandlerBuilder, StreamProxyServerBuildError,
-                StreamProxyServerConfig,
+                StreamProxyConnHandler, StreamProxyConnHandlerBuilder,
+                StreamProxyConnHandlerConfig, StreamProxyServerBuildError,
             },
         },
+        connect::stream::StreamConnect,
+        context::StreamContext,
     },
     stream::{AsConn, StreamServerHandleConn},
 };
@@ -215,7 +215,7 @@ impl StreamConnect for TcpMuxConnector {
 pub struct TcpMuxProxyServerConfig {
     pub listen_addr: Arc<str>,
     #[serde(flatten)]
-    pub inner: StreamProxyServerConfig,
+    pub inner: StreamProxyConnHandlerConfig,
 }
 impl TcpMuxProxyServerConfig {
     pub fn into_builder(self, stream_context: StreamContext) -> TcpMuxProxyServerBuilder {

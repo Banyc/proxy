@@ -9,11 +9,11 @@ use common::{
     error::AnyResult,
     loading,
     proto::{
-        context::Context,
-        server::{
+        conn_handler::{
             stream::StreamProxyConnHandler,
             udp::{UdpProxyConnHandler, UdpProxyServerBuilder, UdpProxyServerConfig},
         },
+        context::Context,
     },
 };
 use serde::Deserialize;

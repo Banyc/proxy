@@ -23,12 +23,12 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StreamProxyServerConfig {
+pub struct StreamProxyConnHandlerConfig {
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
 }
 
-impl StreamProxyServerConfig {
+impl StreamProxyConnHandlerConfig {
     pub fn into_builder(
         self,
         stream_context: StreamContext,

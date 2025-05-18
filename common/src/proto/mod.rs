@@ -1,6 +1,7 @@
 pub mod addr;
 pub mod client;
 pub mod conn;
+pub mod conn_handler;
 pub mod connect;
 pub mod context;
 pub mod header;
@@ -8,5 +9,4 @@ pub mod io_copy;
 pub mod log;
 pub mod metrics;
 pub mod proxy_table;
-pub mod server;
 pub mod steer;

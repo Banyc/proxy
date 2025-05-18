@@ -21,15 +21,15 @@ use common::{
     error::AnyResult,
     loading,
     proto::{
-        connect::stream::StreamConnect,
-        context::StreamContext,
-        server::{
+        conn_handler::{
             ListenerBindError,
             stream::{
                 StreamProxyConnHandler, StreamProxyConnHandlerBuilder, StreamProxyServerBuildError,
-                StreamProxyServerConfig,
+                StreamProxyConnHandlerConfig,
             },
         },
+        connect::stream::StreamConnect,
+        context::StreamContext,
     },
     stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
@@ -218,7 +218,7 @@ impl AsyncWrite for AddressedRtpStream {
 pub struct RtpProxyServerConfig {
     pub listen_addr: Arc<str>,
     #[serde(flatten)]
-    pub inner: StreamProxyServerConfig,
+    pub inner: StreamProxyConnHandlerConfig,
 }
 impl RtpProxyServerConfig {
     pub fn into_builder(self, stream_context: StreamContext) -> RtpProxyServerBuilder {

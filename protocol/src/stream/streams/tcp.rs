@@ -21,15 +21,15 @@ use common::{
     error::AnyResult,
     loading,
     proto::{
-        connect::stream::StreamConnect,
-        context::StreamContext,
-        server::{
+        conn_handler::{
             ListenerBindError,
             stream::{
                 StreamProxyConnHandler, StreamProxyConnHandlerBuilder, StreamProxyServerBuildError,
-                StreamProxyServerConfig,
+                StreamProxyConnHandlerConfig,
             },
         },
+        connect::stream::StreamConnect,
+        context::StreamContext,
     },
     stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
@@ -208,7 +208,7 @@ impl HasIoAddr for IoTcpStream {
 pub struct TcpProxyServerConfig {
     pub listen_addr: Arc<str>,
     #[serde(flatten)]
-    pub inner: StreamProxyServerConfig,
+    pub inner: StreamProxyConnHandlerConfig,
 }
 impl TcpProxyServerConfig {
     pub fn into_builder(self, stream_context: StreamContext) -> TcpProxyServerBuilder {
