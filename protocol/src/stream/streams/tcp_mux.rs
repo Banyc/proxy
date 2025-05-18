@@ -25,10 +25,7 @@ use common::{
     stream::{StreamServerHandleConn, connect::StreamConnect},
 };
 
-use crate::stream::{
-    connection::Conn,
-    streams::mux::{run_mux_accepter, server_mux_config},
-};
+use crate::stream::streams::mux::{run_mux_accepter, server_mux_config};
 
 use super::mux::{
     ConnectRequestTx, IoMuxStream, SocketAddrPair, connect_request_channel, run_mux_connector,
@@ -191,12 +188,11 @@ impl TcpMuxConnector {
     }
 }
 impl StreamConnect for TcpMuxConnector {
-    type Conn = Conn;
-
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Conn> {
+    type Conn = IoMuxStream;
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Self::Conn> {
         let ((r, w), addr) = self.connect_request_tx.send(addr).await?;
         counter!("stream.tcp_mux.mux.connects").increment(1);
         let stream = PollIo::new(PollRead::new(r), PollWrite::new(w));
-        Ok(Conn::Mux(IoMuxStream::new(stream, addr)))
+        Ok(IoMuxStream::new(stream, addr))
     }
 }

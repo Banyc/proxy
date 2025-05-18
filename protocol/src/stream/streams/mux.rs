@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use common::stream::{HasIoAddr, OwnIoStream};
+use common::stream::{AsConn, HasIoAddr, OwnIoStream};
 use mux::{
     DeadControl, Initiation, MuxConfig, MuxError, StreamAccepter, StreamOpener, StreamReader,
     StreamWriter, TooManyOpenStreams,
@@ -210,6 +210,7 @@ impl AsyncRead for IoMuxStream {
         std::pin::Pin::new(&mut self.stream).poll_read(cx, buf)
     }
 }
+impl AsConn for IoMuxStream {}
 impl OwnIoStream for IoMuxStream {}
 impl HasIoAddr for IoMuxStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {

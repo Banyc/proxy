@@ -1,5 +1,5 @@
 use common::stream::context::StreamContext;
 
-use super::{connect::ConcreteStreamConnectorTable, connection::Conn};
+use super::connect::ConcreteStreamConnectorTable;
 
-pub type ConcreteStreamContext = StreamContext<Conn, ConcreteStreamConnectorTable>;
+pub type ConcreteStreamContext = StreamContext<ConcreteStreamConnectorTable>;

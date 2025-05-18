@@ -9,7 +9,7 @@ use common::{
     log::Timing,
     proxy_table::{ProxyAction, ProxyTableBuildError},
     stream::{
-        HasIoAddr, OwnIoStream, StreamServerHandleConn,
+        OwnIoStream, StreamServerHandleConn,
         addr::StreamAddr,
         connect::StreamConnectExt,
         io_copy::{ConnContext, CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},

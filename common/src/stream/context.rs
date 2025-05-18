@@ -5,18 +5,18 @@ use tokio_conn_pool::ConnPool;
 
 use crate::{anti_replay::ReplayValidator, stream::metrics::StreamSessionTable};
 
-use super::{addr::StreamAddr, connect::StreamTimedConnect};
+use super::{AsConn, addr::StreamAddr, connect::StreamTimedConnect};
 
 #[derive(Debug)]
-pub struct StreamContext<Conn, ConnectorTable> {
+pub struct StreamContext<ConnectorTable> {
     pub session_table: Option<StreamSessionTable>,
-    pub pool: Swap<ConnPool<StreamAddr, Conn>>,
+    pub pool: Swap<ConnPool<StreamAddr, Box<dyn AsConn>>>,
     pub connector_table: Arc<ConnectorTable>,
     pub replay_validator: Arc<ReplayValidator>,
 }
-impl<Conn, ConnectorTable> Clone for StreamContext<Conn, ConnectorTable>
+impl<ConnectorTable> Clone for StreamContext<ConnectorTable>
 where
-    ConnectorTable: StreamTimedConnect<Conn = Conn>,
+    ConnectorTable: StreamTimedConnect<Conn = Box<dyn AsConn>>,
 {
     fn clone(&self) -> Self {
         Self {

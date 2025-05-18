@@ -12,7 +12,7 @@ use common::{
     },
 };
 use protocol::stream::{
-    connection::ConnAndAddr, context::ConcreteStreamContext, pool::ConcreteConnectError,
+    conn::ConnAndAddr, context::ConcreteStreamContext, pool::ConcreteConnectError,
 };
 use serde::Deserialize;
 use thiserror::Error;

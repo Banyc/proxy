@@ -11,8 +11,8 @@ mod tests {
     };
     use protocol::stream::{
         addr::{ConcreteStreamAddr, ConcreteStreamType},
+        conn::ConnAndAddr,
         connect::ConcreteStreamConnectorTable,
-        connection::ConnAndAddr,
         context::ConcreteStreamContext,
         pool::ConcreteConnPool,
         proxy_table::StreamProxyConfig,

@@ -1,16 +1,16 @@
 use crate::{
-    stream::{connect::StreamTimedConnect, context::StreamContext},
+    stream::{AsConn, connect::StreamTimedConnect, context::StreamContext},
     udp::context::UdpContext,
 };
 
 #[derive(Debug)]
-pub struct Context<Conn, ConnectorTable> {
-    pub stream: StreamContext<Conn, ConnectorTable>,
+pub struct Context<ConnectorTable> {
+    pub stream: StreamContext<ConnectorTable>,
     pub udp: UdpContext,
 }
-impl<Conn, ConnectorTable> Clone for Context<Conn, ConnectorTable>
+impl<ConnectorTable> Clone for Context<ConnectorTable>
 where
-    ConnectorTable: StreamTimedConnect<Conn = Conn>,
+    ConnectorTable: StreamTimedConnect<Conn = Box<dyn AsConn>>,
 {
     fn clone(&self) -> Self {
         Self {

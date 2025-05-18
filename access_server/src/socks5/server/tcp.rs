@@ -16,7 +16,7 @@ use common::{
 };
 use protocol::stream::{
     addr::ConcreteStreamType,
-    connection::ConnAndAddr,
+    conn::ConnAndAddr,
     context::ConcreteStreamContext,
     proxy_table::{StreamProxyGroup, StreamProxyTable, StreamProxyTableBuilder},
     streams::tcp::TcpServer,

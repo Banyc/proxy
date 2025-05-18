@@ -18,7 +18,7 @@ use common::{
     connect::ConnectorConfig,
     error::AnyResult,
     loading,
-    stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn, connect::StreamConnect},
+    stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn, connect::StreamConnect},
 };
 
 #[derive(Debug)]
@@ -177,6 +177,7 @@ impl AsyncRead for IoTcpStream {
         std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
     }
 }
+impl AsConn for IoTcpStream {}
 impl OwnIoStream for IoTcpStream {}
 impl HasIoAddr for IoTcpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {

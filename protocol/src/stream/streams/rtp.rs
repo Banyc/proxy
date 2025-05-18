@@ -15,10 +15,8 @@ use common::{
     connect::ConnectorConfig,
     error::AnyResult,
     loading,
-    stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn, connect::StreamConnect},
+    stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn, connect::StreamConnect},
 };
-
-use crate::stream::connection::Conn;
 
 #[derive(Debug)]
 pub struct RtpServer<ConnHandler> {
@@ -127,8 +125,8 @@ impl RtpConnector {
     }
 }
 impl StreamConnect for RtpConnector {
-    type Conn = Conn;
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Conn> {
+    type Conn = AddressedRtpStream;
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Self::Conn> {
         let bind = self
             .config
             .read()
@@ -145,7 +143,7 @@ impl StreamConnect for RtpConnector {
             peer_addr: connected.peer_addr,
         };
         counter!("stream.rtp.connects").increment(1);
-        Ok(Conn::Rtp(stream))
+        Ok(stream)
     }
 }
 
@@ -156,6 +154,7 @@ pub struct AddressedRtpStream {
     local_addr: SocketAddr,
     peer_addr: SocketAddr,
 }
+impl AsConn for AddressedRtpStream {}
 impl OwnIoStream for AddressedRtpStream {}
 impl HasIoAddr for AddressedRtpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {

@@ -7,12 +7,14 @@ use std::{
 
 use common::{
     connect::ConnectorConfig,
-    stream::connect::{StreamConnectExt, StreamTimedConnect},
+    stream::{
+        AsConn,
+        connect::{StreamConnectExt, StreamTimedConnect},
+    },
 };
 
 use super::{
     addr::ConcreteStreamType,
-    connection::Conn,
     streams::{
         kcp::KcpConnector,
         mptcp::MptcpConnector,
@@ -56,29 +58,35 @@ impl ConcreteStreamConnectorTable {
     }
 }
 impl StreamTimedConnect for ConcreteStreamConnectorTable {
-    type Conn = Conn;
+    type Conn = Box<dyn AsConn>;
     async fn timed_connect(
         &self,
         stream_type: &str,
         addr: SocketAddr,
         timeout: Duration,
-    ) -> io::Result<Conn> {
+    ) -> io::Result<Self::Conn> {
         let stream_type: ConcreteStreamType = stream_type.parse().map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("invalid stream type: `{stream_type}`"),
             )
         })?;
-        match stream_type {
-            ConcreteStreamType::Tcp => Ok(Conn::Tcp(IoTcpStream(
-                self.tcp.timed_connect(addr, timeout).await?,
-            ))),
-            ConcreteStreamType::TcpMux => self.tcp_mux.timed_connect(addr, timeout).await,
-            ConcreteStreamType::Kcp => self.kcp.timed_connect(addr, timeout).await,
-            ConcreteStreamType::Mptcp => self.mptcp.timed_connect(addr, timeout).await,
-            ConcreteStreamType::Rtp => self.rtp.timed_connect(addr, timeout).await,
-            ConcreteStreamType::RtpMux => self.rtp_mux.timed_connect(addr, timeout).await,
-            ConcreteStreamType::RtpMuxFec => self.rtp_mux_fec.timed_connect(addr, timeout).await,
-        }
+        Ok(match stream_type {
+            ConcreteStreamType::Tcp => {
+                Box::new(IoTcpStream(self.tcp.timed_connect(addr, timeout).await?))
+            }
+            ConcreteStreamType::TcpMux => {
+                Box::new(self.tcp_mux.timed_connect(addr, timeout).await?)
+            }
+            ConcreteStreamType::Kcp => Box::new(self.kcp.timed_connect(addr, timeout).await?),
+            ConcreteStreamType::Mptcp => Box::new(self.mptcp.timed_connect(addr, timeout).await?),
+            ConcreteStreamType::Rtp => Box::new(self.rtp.timed_connect(addr, timeout).await?),
+            ConcreteStreamType::RtpMux => {
+                Box::new(self.rtp_mux.timed_connect(addr, timeout).await?)
+            }
+            ConcreteStreamType::RtpMuxFec => {
+                Box::new(self.rtp_mux_fec.timed_connect(addr, timeout).await?)
+            }
+        })
     }
 }

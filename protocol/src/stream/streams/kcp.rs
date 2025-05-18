@@ -19,10 +19,8 @@ use common::{
     connect::ConnectorConfig,
     error::AnyResult,
     loading,
-    stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn, connect::StreamConnect},
+    stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn, connect::StreamConnect},
 };
-
-use crate::stream::connection::Conn;
 
 #[derive(Debug)]
 pub struct KcpServer<ConnHandler> {
@@ -130,8 +128,8 @@ impl KcpConnector {
     }
 }
 impl StreamConnect for KcpConnector {
-    type Conn = Conn;
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Conn> {
+    type Conn = AddressedKcpStream;
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Self::Conn> {
         let bind = self
             .config
             .read()
@@ -150,7 +148,7 @@ impl StreamConnect for KcpConnector {
             peer_addr: addr,
         };
         counter!("stream.kcp.connects").increment(1);
-        Ok(Conn::Kcp(stream))
+        Ok(stream)
     }
 }
 
@@ -168,6 +166,7 @@ pub struct AddressedKcpStream {
     local_addr: SocketAddr,
     peer_addr: SocketAddr,
 }
+impl AsConn for AddressedKcpStream {}
 impl OwnIoStream for AddressedKcpStream {}
 impl HasIoAddr for AddressedKcpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {

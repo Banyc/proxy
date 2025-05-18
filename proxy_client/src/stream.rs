@@ -8,12 +8,12 @@ use common::{
         heartbeat::{self, HeartbeatError},
         route::{RouteError, RouteResponse},
     },
-    proxy_table::{ProxyChain, TraceRtt, BuildTracer, convert_proxies_to_header_crypto_pairs},
+    proxy_table::{BuildTracer, ProxyChain, TraceRtt, convert_proxies_to_header_crypto_pairs},
     stream::pool::connect_with_pool,
 };
 use metrics::counter;
 use protocol::stream::{
-    addr::ConcreteStreamAddr, connection::ConnAndAddr, context::ConcreteStreamContext,
+    addr::ConcreteStreamAddr, conn::ConnAndAddr, context::ConcreteStreamContext,
     pool::ConcreteConnectError,
 };
 use thiserror::Error;
