@@ -8,12 +8,9 @@ use common::{
         heartbeat::{self, HeartbeatError},
         route::{RouteError, RouteResponse},
     },
+    proto::{addr::StreamAddr, conn::stream::ConnAndAddr},
     proxy_table::{BuildTracer, ProxyChain, TraceRtt, convert_proxies_to_header_crypto_pairs},
-    stream::{
-        addr::StreamAddr,
-        conn::ConnAndAddr,
-        pool::{ConnectError, connect_with_pool},
-    },
+    stream::pool::{ConnectError, connect_with_pool},
 };
 use metrics::counter;
 use protocol::stream::context::ConcreteStreamContext;

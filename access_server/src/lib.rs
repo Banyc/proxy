@@ -5,8 +5,10 @@ use common::{
     error::{AnyError, AnyResult},
     filter::{self, MatcherBuilder},
     loading,
-    stream::proxy_table::{StreamProxyConfig, StreamProxyGroupBuilder, StreamProxyTableBuilder},
-    udp::proxy_table::{UdpProxyConfig, UdpProxyGroupBuilder, UdpProxyTableBuilder},
+    proto::proxy_table::{
+        StreamProxyConfig, StreamProxyGroupBuilder, StreamProxyTableBuilder, UdpProxyConfig,
+        UdpProxyGroupBuilder, UdpProxyTableBuilder,
+    },
 };
 use protocol::context::ConcreteContext;
 use proxy_client::{stream::StreamTracerBuilder, udp::UdpTracerBuilder};

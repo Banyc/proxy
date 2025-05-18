@@ -19,7 +19,8 @@ use common::{
     connect::ConnectorConfig,
     error::AnyResult,
     loading,
-    stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn, connect::StreamConnect},
+    proto::connect::stream::StreamConnect,
+    stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 
 #[derive(Debug)]

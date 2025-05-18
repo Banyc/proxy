@@ -8,12 +8,11 @@ use udp_listener::ConnWrite;
 use crate::{
     anti_replay::{TimeValidator, ValidatorRef},
     header::{
-        codec::{read_header, write_header, CodecError},
+        codec::{CodecError, read_header, write_header},
         route::RouteResponse,
     },
+    proto::{conn::udp::UpstreamAddr, header::UdpRequestHeader},
 };
-
-use super::{header::UdpRequestHeader, UpstreamAddr};
 
 pub async fn echo(
     buf: &[u8],

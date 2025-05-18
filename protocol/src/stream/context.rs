@@ -1,4 +1,4 @@
-use common::stream::context::StreamContext;
+use common::proto::context::StreamContext;
 
 use super::connect::ConcreteStreamConnectorTable;
 

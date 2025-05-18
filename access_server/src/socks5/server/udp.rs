@@ -4,13 +4,14 @@ use async_speed_limit::Limiter;
 use common::{
     config::SharableConfig,
     loading,
-    proxy_table::ProxyGroupBuildError,
-    udp::{
+    proto::{
+        conn::udp::{Flow, UpstreamAddr},
         context::UdpContext,
-        io_copy::{CopyBidirectional, DownstreamParts, UpstreamParts},
+        io_copy::udp::{CopyBidirectional, DownstreamParts, UpstreamParts},
         proxy_table::{UdpProxyGroup, UdpProxyGroupBuilder},
-        Flow, Packet, UdpServer, UdpServerHandleConn, UpstreamAddr,
     },
+    proxy_table::ProxyGroupBuildError,
+    udp::{Packet, UdpServer, UdpServerHandleConn},
 };
 use proxy_client::udp::{EstablishError, UdpProxyClient};
 use serde::{Deserialize, Serialize};

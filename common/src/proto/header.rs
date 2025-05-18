@@ -1,5 +1,8 @@
 use crate::{addr::InternetAddr, header::route::RouteRequest};
 
+use super::addr::StreamAddr;
+
+pub type StreamRequestHeader = RouteRequest<StreamAddr>;
 pub type UdpRequestHeader = RouteRequest<InternetAddr>;
 
 #[cfg(test)]
@@ -9,8 +12,8 @@ mod tests {
     use tracing::trace;
 
     use crate::{
-        anti_replay::{TimeValidator, ValidatorRef, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
-        header::codec::{read_header_async, write_header_async, MAX_HEADER_LEN},
+        anti_replay::{TimeValidator, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL, ValidatorRef},
+        header::codec::{MAX_HEADER_LEN, read_header_async, write_header_async},
     };
 
     use super::*;

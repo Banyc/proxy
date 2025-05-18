@@ -12,9 +12,8 @@ use primitive::ops::unit::HumanBytes;
 use crate::{
     addr::{InternetAddr, InternetAddrHdv, InternetAddrKind},
     log::{HdvLogger, Timing, TimingHdv},
+    proto::addr::{StreamAddr, StreamAddrHdv},
 };
-
-use super::addr::{StreamAddr, StreamAddrHdv};
 
 pub static LOGGER: LazyLock<Arc<Mutex<Option<HdvLogger<StreamLogHdv>>>>> =
     LazyLock::new(|| Arc::new(Mutex::new(None)));

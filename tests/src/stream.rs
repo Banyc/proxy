@@ -6,11 +6,9 @@ mod tests {
         anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         connect::ConnectorConfig,
         loading::Serve,
+        proto::{addr::StreamAddr, conn::stream::ConnAndAddr, proxy_table::StreamProxyConfig},
         proxy_table::ProxyConfig,
-        stream::{
-            addr::StreamAddr, conn::ConnAndAddr, pool::StreamConnPool,
-            proxy_table::StreamProxyConfig,
-        },
+        stream::pool::StreamConnPool,
     };
     use protocol::stream::{
         addr::ConcreteStreamType, connect::ConcreteStreamConnectorTable,

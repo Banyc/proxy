@@ -4,12 +4,14 @@ use async_speed_limit::Limiter;
 use common::{
     addr::ParseInternetAddrError,
     loading,
+    proto::{
+        conn::stream::ConnAndAddr,
+        io_copy::stream::{ConnContext, CopyBidirectional},
+        steer::stream::{SteerError, steer},
+    },
     stream::{
         AsConn, StreamServerHandleConn,
-        conn::ConnAndAddr,
-        io_copy::{ConnContext, CopyBidirectional},
         pool::{ConnectError, connect_with_pool},
-        steer::{SteerError, steer},
     },
 };
 use protocol::stream::context::ConcreteStreamContext;

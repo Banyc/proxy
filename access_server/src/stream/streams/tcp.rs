@@ -4,13 +4,13 @@ use async_speed_limit::Limiter;
 use common::{
     config::SharableConfig,
     loading,
-    proxy_table::ProxyGroupBuildError,
-    stream::{
-        HasIoAddr, OwnIoStream, StreamServerHandleConn,
+    proto::{
         addr::{StreamAddr, StreamAddrStr},
-        io_copy::{ConnContext, CopyBidirectional},
+        io_copy::stream::{ConnContext, CopyBidirectional},
         proxy_table::{StreamProxyGroup, StreamProxyGroupBuilder},
     },
+    proxy_table::ProxyGroupBuildError,
+    stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 use protocol::stream::{context::ConcreteStreamContext, streams::tcp::TcpServer};
 use proxy_client::stream::{StreamEstablishError, establish};

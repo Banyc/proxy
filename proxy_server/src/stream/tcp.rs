@@ -87,7 +87,8 @@ mod tests {
         connect::ConnectorConfig,
         header::{codec::write_header_async, heartbeat},
         loading::Serve,
-        stream::{addr::StreamAddr, header::StreamRequestHeader, pool::StreamConnPool},
+        proto::{addr::StreamAddr, header::StreamRequestHeader},
+        stream::pool::StreamConnPool,
     };
     use protocol::stream::{addr::ConcreteStreamType, connect::ConcreteStreamConnectorTable};
     use swap::Swap;

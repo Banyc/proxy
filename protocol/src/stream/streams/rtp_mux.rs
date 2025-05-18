@@ -15,11 +15,8 @@ use tokio::task::JoinSet;
 use tracing::{info, instrument, trace, warn};
 
 use common::{
-    addr::any_addr,
-    connect::ConnectorConfig,
-    error::AnyResult,
-    loading,
-    stream::{StreamServerHandleConn, connect::StreamConnect},
+    addr::any_addr, connect::ConnectorConfig, error::AnyResult, loading,
+    proto::connect::stream::StreamConnect, stream::StreamServerHandleConn,
 };
 
 use crate::stream::streams::mux::{run_mux_accepter, server_mux_config};

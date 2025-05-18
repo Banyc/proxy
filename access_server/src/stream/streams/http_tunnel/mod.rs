@@ -7,16 +7,16 @@ use common::{
     config::SharableConfig,
     loading,
     log::Timing,
-    proxy_table::{ProxyAction, ProxyTableBuildError},
-    stream::{
-        OwnIoStream, StreamServerHandleConn,
+    proto::{
         addr::StreamAddr,
-        connect::StreamConnectExt,
-        io_copy::{ConnContext, CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
-        log::{LOGGER, SimplifiedStreamLog, SimplifiedStreamProxyLog},
-        metrics::{Session, StreamSessionTable},
+        connect::stream::StreamConnectExt,
+        io_copy::stream::{ConnContext, CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
+        log::stream::{LOGGER, SimplifiedStreamLog, SimplifiedStreamProxyLog},
+        metrics::stream::{Session, StreamSessionTable},
         proxy_table::{StreamProxyGroup, StreamProxyTable, StreamProxyTableBuilder},
     },
+    proxy_table::{ProxyAction, ProxyTableBuildError},
+    stream::{OwnIoStream, StreamServerHandleConn},
     udp::TIMEOUT,
 };
 use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};

@@ -9,7 +9,8 @@ use tracing::{info, instrument, trace, warn};
 use common::{
     error::AnyResult,
     loading,
-    stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn, connect::StreamConnect},
+    proto::connect::stream::StreamConnect,
+    stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 
 const STREAMS: usize = 4;

@@ -5,15 +5,15 @@ use common::{
     addr::{InternetAddr, InternetAddrStr},
     config::SharableConfig,
     loading::{self, HandleConn},
-    proxy_table::{ProxyAction, ProxyTableBuildError},
-    stream::{
-        HasIoAddr, OwnIoStream, StreamServerHandleConn,
+    proto::{
         addr::StreamAddr,
-        conn::ConnAndAddr,
-        connect::StreamConnectExt,
-        io_copy::{ConnContext, CopyBidirectional},
+        conn::stream::ConnAndAddr,
+        connect::stream::StreamConnectExt,
+        io_copy::stream::{ConnContext, CopyBidirectional},
         proxy_table::{StreamProxyGroup, StreamProxyTable, StreamProxyTableBuilder},
     },
+    proxy_table::{ProxyAction, ProxyTableBuildError},
+    stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn},
     udp::TIMEOUT,
 };
 use protocol::stream::{

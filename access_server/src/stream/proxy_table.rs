@@ -1,6 +1,6 @@
 use common::{
+    proto::addr::StreamAddr,
     proxy_table::{ProxyGroupBuildContext, ProxyTableBuildContext},
-    stream::addr::StreamAddr,
 };
 use proxy_client::stream::StreamTracerBuilder;
 

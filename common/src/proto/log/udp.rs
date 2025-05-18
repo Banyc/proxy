@@ -7,9 +7,10 @@ use std::{
 use hdv_derive::HdvSerde;
 use primitive::ops::unit::HumanBytes;
 
-use crate::log::{HdvLogger, Timing, TimingHdv};
-
-use super::{Flow, FlowHdv};
+use crate::{
+    log::{HdvLogger, Timing, TimingHdv},
+    proto::conn::udp::{Flow, FlowHdv},
+};
 
 pub static LOGGER: LazyLock<Arc<Mutex<Option<HdvLogger<FlowLogHdv>>>>> =
     LazyLock::new(|| Arc::new(Mutex::new(None)));

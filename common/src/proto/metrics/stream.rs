@@ -11,9 +11,11 @@ use monitor_table::{
 };
 use tokio_throughput::GaugeHandle;
 
-use crate::{addr::InternetAddrHdv, metrics::display_value};
-
-use super::addr::{StreamAddr, StreamAddrHdv};
+use crate::{
+    addr::InternetAddrHdv,
+    metrics::display_value,
+    proto::addr::{StreamAddr, StreamAddrHdv},
+};
 
 pub type StreamSessionTable = Table<Session>;
 

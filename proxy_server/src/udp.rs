@@ -8,13 +8,13 @@ use common::{
         route::{RouteErrorKind, RouteResponse},
     },
     loading,
-    udp::{
+    proto::{
+        conn::udp::{Flow, UpstreamAddr},
         context::UdpContext,
-        io_copy::{CopyBidirectional, DownstreamParts, UpstreamParts},
-        respond::respond_with_error,
-        steer::{decode_route_header, echo},
-        Flow, Packet, UdpServer, UdpServerHandleConn, UpstreamAddr,
+        io_copy::udp::{CopyBidirectional, DownstreamParts, UpstreamParts},
+        steer::udp::{decode_route_header, echo},
     },
+    udp::{Packet, UdpServer, UdpServerHandleConn, respond::respond_with_error},
 };
 use serde::Deserialize;
 use thiserror::Error;

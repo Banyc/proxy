@@ -4,9 +4,10 @@ use axum::Router;
 use clap::Parser;
 use common::error::AnyResult;
 use server::{
+    ServeContext,
     config::{multi_file_config::MultiConfigReader, spawn_watch_tasks},
     monitor::monitor_router,
-    serve, ServeContext,
+    serve,
 };
 use tracing::info;
 
@@ -37,8 +38,8 @@ async fn main() -> AnyResult {
         std::process::abort();
     }
     if let Some(path) = args.csv_log_path {
-        common::stream::log::init_logger(path.clone());
-        common::udp::log::init_logger(path.clone());
+        common::proto::log::stream::init_logger(path.clone());
+        common::proto::log::udp::init_logger(path.clone());
     };
 
     #[cfg(feature = "dhat-heap")]

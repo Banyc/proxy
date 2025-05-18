@@ -11,17 +11,14 @@ use common::{
     },
     config::{Merge, merge_map},
     connect::ConnectorConfig,
-    context::Context,
     error::{AnyError, AnyResult},
-    stream::{
-        metrics::StreamSessionTable,
-        pool::{StreamConnPool, StreamPoolBuilder},
-        proxy_table::StreamProxyConfigBuilder,
+    proto::{
+        connect::udp::UdpConnector,
+        context::{Context, UdpContext},
+        metrics::{stream::StreamSessionTable, udp::UdpSessionTable},
+        proxy_table::{StreamProxyConfigBuilder, UdpProxyConfigBuilder},
     },
-    udp::{
-        connect::UdpConnector, context::UdpContext, metrics::UdpSessionTable,
-        proxy_table::UdpProxyConfigBuilder,
-    },
+    stream::pool::{StreamConnPool, StreamPoolBuilder},
 };
 use config::ReadConfig;
 use protocol::{

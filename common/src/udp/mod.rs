@@ -1,30 +1,20 @@
 use std::{io, net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Duration};
 
-use hdv_derive::HdvSerde;
 use thiserror::Error;
 use tokio::net::UdpSocket;
 use tracing::{error, info, instrument, trace, warn};
 use udp_listener::{Conn, UtpListener};
 
 use crate::{
-    addr::{InternetAddr, InternetAddrHdv},
     error::AnyResult,
     loading,
+    proto::conn::udp::{DownstreamAddr, Flow, UpstreamAddr},
 };
 
-pub mod connect;
-pub mod context;
-pub mod header;
-pub mod io_copy;
-pub mod log;
-pub mod metrics;
-pub mod proxy_table;
 pub mod respond;
-pub mod steer;
 
 pub const PACKET_BUFFER_LENGTH: usize = 2_usize.pow(16);
 pub const TIMEOUT: Duration = Duration::from_secs(10);
-pub const ACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
 pub struct UdpServer<ConnHandler> {
@@ -152,33 +142,6 @@ pub trait UdpServerHandleConn: loading::HandleConn {
         &self,
         conn: Conn<UdpSocket, Flow, Packet>,
     ) -> impl std::future::Future<Output = ()> + Send;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DownstreamAddr(pub SocketAddr);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct UpstreamAddr(pub InternetAddr);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Flow {
-    pub upstream: Option<UpstreamAddr>,
-    pub downstream: DownstreamAddr,
-}
-#[derive(Debug, Clone, HdvSerde)]
-pub struct FlowHdv {
-    pub upstream: Option<InternetAddrHdv>,
-    pub downstream: InternetAddrHdv,
-}
-impl From<&Flow> for FlowHdv {
-    fn from(value: &Flow) -> Self {
-        let upstream = value.upstream.as_ref().map(|x| (&x.0).into());
-        let downstream = value.downstream.0.into();
-        Self {
-            upstream,
-            downstream,
-        }
-    }
 }
 
 pub struct Packet {

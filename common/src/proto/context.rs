@@ -1,0 +1,60 @@
+use std::sync::Arc;
+
+use swap::Swap;
+use tokio_conn_pool::ConnPool;
+
+use crate::{
+    anti_replay::{ReplayValidator, TimeValidator},
+    stream::AsConn,
+};
+
+use super::{
+    addr::StreamAddr,
+    connect::{stream::StreamTimedConnect, udp::UdpConnector},
+    metrics::{stream::StreamSessionTable, udp::UdpSessionTable},
+};
+
+#[derive(Debug)]
+pub struct Context<ConnectorTable> {
+    pub stream: StreamContext<ConnectorTable>,
+    pub udp: UdpContext,
+}
+impl<ConnectorTable> Clone for Context<ConnectorTable>
+where
+    ConnectorTable: StreamTimedConnect<Conn = Box<dyn AsConn>>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            stream: self.stream.clone(),
+            udp: self.udp.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct StreamContext<ConnectorTable> {
+    pub session_table: Option<StreamSessionTable>,
+    pub pool: Swap<ConnPool<StreamAddr, Box<dyn AsConn>>>,
+    pub connector_table: Arc<ConnectorTable>,
+    pub replay_validator: Arc<ReplayValidator>,
+}
+impl<ConnectorTable> Clone for StreamContext<ConnectorTable>
+where
+    ConnectorTable: StreamTimedConnect<Conn = Box<dyn AsConn>>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            session_table: self.session_table.clone(),
+            pool: self.pool.clone(),
+            connector_table: self.connector_table.clone(),
+            replay_validator: self.replay_validator.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UdpContext {
+    pub session_table: Option<UdpSessionTable>,
+    pub time_validator: Arc<TimeValidator>,
+    pub connector: Arc<UdpConnector>,
+}

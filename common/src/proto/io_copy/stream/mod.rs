@@ -12,12 +12,13 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_throughput::{ReadGauge, WriteGauge};
 use tracing::info;
 
-use crate::log::Timing;
-
-use super::{
-    addr::StreamAddr,
-    log::{LOGGER, StreamLog, StreamProxyLog},
-    metrics::{Session, StreamSessionTable},
+use crate::{
+    log::Timing,
+    proto::{
+        addr::StreamAddr,
+        log::stream::{LOGGER, StreamLog, StreamProxyLog},
+        metrics::stream::{Session, StreamSessionTable},
+    },
 };
 
 pub mod tokio_io;

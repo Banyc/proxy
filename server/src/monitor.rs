@@ -3,7 +3,7 @@ use axum::{
     extract::{Query, State},
     routing::get,
 };
-use common::{stream::metrics::StreamSessionTable, udp::metrics::UdpSessionTable};
+use common::proto::metrics::{stream::StreamSessionTable, udp::UdpSessionTable};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use serde::Deserialize;
 

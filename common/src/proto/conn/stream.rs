@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use super::{AsConn, addr::StreamAddr};
+use crate::{proto::addr::StreamAddr, stream::AsConn};
 
 #[derive(Debug)]
 pub struct ConnAndAddr {

@@ -1,4 +1,4 @@
-use common::context::Context;
+use common::proto::context::Context;
 
 use crate::stream::connect::ConcreteStreamConnectorTable;
 

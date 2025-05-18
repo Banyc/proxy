@@ -23,19 +23,16 @@ use crate::{
     anti_replay::VALIDATOR_UDP_HDR_TTL,
     error::AnyError,
     log::Timing,
-    ttl_cell::TtlCell,
-    udp::{
-        PACKET_BUFFER_LENGTH, TIMEOUT,
-        log::{LOGGER, TrafficLog},
+    proto::{
+        conn::udp::Flow,
+        log::udp::{FlowLog, LOGGER, TrafficLog},
+        metrics::udp::{Session, UdpSessionTable},
     },
+    ttl_cell::TtlCell,
+    udp::{PACKET_BUFFER_LENGTH, Packet, TIMEOUT},
 };
 
-use super::{
-    ACTIVITY_CHECK_INTERVAL, Flow, Packet,
-    log::FlowLog,
-    metrics::{Session, UdpSessionTable},
-};
-
+const ACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
 
 pub trait UdpRecv {

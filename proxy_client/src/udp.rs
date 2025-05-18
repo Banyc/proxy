@@ -15,14 +15,14 @@ use common::{
         codec::{CodecError, MAX_HEADER_LEN, read_header, write_header},
         route::{RouteError, RouteResponse},
     },
-    proxy_table::{TraceRtt, BuildTracer, convert_proxies_to_header_crypto_pairs},
-    ttl_cell::TtlCell,
-    udp::{
-        PACKET_BUFFER_LENGTH,
+    proto::{
         context::UdpContext,
-        io_copy::{UdpRecv, UdpSend},
+        io_copy::udp::{UdpRecv, UdpSend},
         proxy_table::UdpProxyChain,
     },
+    proxy_table::{BuildTracer, TraceRtt, convert_proxies_to_header_crypto_pairs},
+    ttl_cell::TtlCell,
+    udp::PACKET_BUFFER_LENGTH,
 };
 use metrics::counter;
 use primitive::arena::obj_pool::ArcObjPool;

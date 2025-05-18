@@ -12,13 +12,11 @@ mod tests {
         connect::ConnectorConfig,
         header::route::RouteErrorKind,
         loading::Serve,
+        proto::{connect::udp::UdpConnector, context::UdpContext, proxy_table::UdpProxyConfig},
         proxy_table::ProxyConfig,
-        udp::{
-            connect::UdpConnector, context::UdpContext, proxy_table::UdpProxyConfig,
-            PACKET_BUFFER_LENGTH,
-        },
+        udp::PACKET_BUFFER_LENGTH,
     };
-    use proxy_client::udp::{trace_rtt, RecvError, UdpProxyClient, UdpProxyClientReadHalf};
+    use proxy_client::udp::{RecvError, UdpProxyClient, UdpProxyClientReadHalf, trace_rtt};
     use proxy_server::udp::UdpProxyConnHandler;
     use serial_test::serial;
     use tokio::net::UdpSocket;

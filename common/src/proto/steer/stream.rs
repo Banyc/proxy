@@ -11,9 +11,9 @@ use crate::{
         heartbeat::{self, HeartbeatError},
         route::RouteResponse,
     },
+    proto::{addr::StreamAddr, header::StreamRequestHeader},
+    stream::AsConn,
 };
-
-use super::{HasIoAddr, OwnIoStream, addr::StreamAddr, header::StreamRequestHeader};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -23,7 +23,7 @@ pub async fn steer<Downstream>(
     replay_validator: &ReplayValidator,
 ) -> Result<Option<StreamAddr>, SteerError>
 where
-    Downstream: OwnIoStream + HasIoAddr + std::fmt::Debug,
+    Downstream: AsConn + std::fmt::Debug,
 {
     let validator = ValidatorRef::Replay(replay_validator);
     // Wait for heartbeat upgrade

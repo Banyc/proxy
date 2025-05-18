@@ -7,10 +7,8 @@ use std::{
 
 use common::{
     connect::ConnectorConfig,
-    stream::{
-        AsConn,
-        connect::{StreamConnectExt, StreamTimedConnect},
-    },
+    proto::connect::stream::{StreamConnectExt, StreamTimedConnect},
+    stream::AsConn,
 };
 
 use super::{

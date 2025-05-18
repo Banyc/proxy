@@ -10,15 +10,15 @@ use tokio_conn_pool::{ConnPool, ConnPoolEntry};
 use crate::{
     config::{Merge, SharableConfig},
     header::heartbeat::send_noop,
+    proto::{
+        addr::{StreamAddr, StreamAddrStr},
+        connect::stream::StreamTimedConnect,
+        context::StreamContext,
+    },
     proxy_table::{IntoAddr, ProxyConfig, ProxyConfigBuildError, ProxyConfigBuilder},
 };
 
-use super::{
-    AsConn,
-    addr::{StreamAddr, StreamAddrStr},
-    connect::StreamTimedConnect,
-    context::StreamContext,
-};
+use super::AsConn;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
