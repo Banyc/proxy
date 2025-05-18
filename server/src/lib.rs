@@ -21,8 +21,10 @@ use common::{
     stream::pool::{StreamConnPool, StreamPoolBuilder},
 };
 use config::ReadConfig;
-use protocol::stream::connect::build_concrete_stream_connector_table;
-use proxy_server::{ProxyServerConfig, ProxyServerLoader};
+use protocol::{
+    proxy_server::{ProxyServerConfig, ProxyServerLoader},
+    stream::connect::build_concrete_stream_connector_table,
+};
 use serde::Deserialize;
 use swap::Swap;
 use thiserror::Error;

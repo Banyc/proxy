@@ -1,5 +1,9 @@
 use std::convert::Infallible;
 
+use crate::stream::streams::{
+    kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, rtp::RtpProxyServerConfig,
+    rtp_mux::RtpMuxProxyServerConfig, tcp::TcpProxyServerConfig, tcp_mux::TcpMuxProxyServerConfig,
+};
 use common::{
     config::Merge,
     error::AnyResult,
@@ -11,10 +15,6 @@ use common::{
             udp::{UdpProxyConnHandler, UdpProxyServerBuilder, UdpProxyServerConfig},
         },
     },
-};
-use protocol::stream::streams::{
-    kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, rtp::RtpProxyServerConfig,
-    rtp_mux::RtpMuxProxyServerConfig, tcp::TcpProxyServerConfig, tcp_mux::TcpMuxProxyServerConfig,
 };
 use serde::Deserialize;
 

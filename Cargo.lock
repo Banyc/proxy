@@ -1795,15 +1795,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "matchers"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8263075bb86c5a1b1427b5ae862e8889656f126e9f77c484496e8b47cf5c5558"
-dependencies = [
- "regex-automata 0.1.10",
-]
-
-[[package]]
 name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2863,27 +2854,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "proxy_server"
-version = "0.1.0"
-dependencies = [
- "async-speed-limit",
- "bincode 2.0.1",
- "common",
- "mptcp",
- "protocol",
- "rtp",
- "serde",
- "swap",
- "thiserror 2.0.12",
- "tokio",
- "tokio_chacha20",
- "tokio_kcp",
- "tracing",
- "tracing-subscriber",
- "udp_listener",
-]
-
-[[package]]
 name = "psm"
 version = "0.1.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3159,15 +3129,6 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c230d73fb8d8c1b9c0b3135c5142a8acee3a0558fb8db5cf1cb65f8d7862132"
-dependencies = [
- "regex-syntax 0.6.29",
-]
-
-[[package]]
-name = "regex-automata"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59b23e92ee4318893fa3fe3e6fb365258efbfe6ac6ab30f090cdcbb7aa37efa9"
@@ -3187,12 +3148,6 @@ dependencies = [
  "memchr",
  "regex-syntax 0.8.5",
 ]
-
-[[package]]
-name = "regex-syntax"
-version = "0.6.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f162c6dd7b008981e4d40210aca20b4bd0f9b60ca9271061b07f78537722f2e1"
 
 [[package]]
 name = "regex-syntax"
@@ -3616,7 +3571,6 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "protocol",
- "proxy_server",
  "serde",
  "swap",
  "thiserror 2.0.12",
@@ -3907,7 +3861,6 @@ dependencies = [
  "bytes",
  "common",
  "protocol",
- "proxy_server",
  "rand 0.9.1",
  "serial_test",
  "swap",
@@ -4232,14 +4185,10 @@ version = "0.3.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8189decb5ac0fa7bc8b96b7cb9b2701d60d48805aca84a238004d665fcc4008"
 dependencies = [
- "matchers",
  "nu-ansi-term",
- "once_cell",
- "regex",
  "sharded-slab",
  "smallvec",
  "thread_local",
- "tracing",
  "tracing-core",
  "tracing-log",
 ]
