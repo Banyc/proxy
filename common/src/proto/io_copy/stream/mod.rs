@@ -9,6 +9,7 @@ use metrics::{counter, gauge};
 use monitor_table::table::RowOwnedGuard;
 use scopeguard::defer;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_io::BytesCopied;
 use tokio_throughput::{ReadGauge, WriteGauge};
 use tracing::info;
 
@@ -41,7 +42,7 @@ where
     pub async fn serve_as_proxy_server(
         self,
         log_prefix: &str,
-    ) -> Result<(), tokio_io::CopyBiErrorKind> {
+    ) -> Result<(), tokio_io::CopyBiError> {
         let session = self.session();
         let destination = self.conn_context.destination.clone();
 
@@ -56,7 +57,7 @@ where
     pub async fn serve_as_access_server(
         self,
         log_prefix: &str,
-    ) -> Result<(), tokio_io::CopyBiErrorKind> {
+    ) -> Result<(), tokio_io::CopyBiError> {
         let session = self.session();
         let destination = self.conn_context.destination.clone();
 
@@ -100,7 +101,7 @@ where
         )>,
         en_dir: EncryptionDirection,
         log_prefix: &str,
-    ) -> (StreamLog, Result<(), tokio_io::CopyBiErrorKind>) {
+    ) -> (StreamLog, Result<(), tokio_io::CopyBiError>) {
         let res = match session {
             Some((session, r, w)) => {
                 let downstream = tokio_throughput::WholeStream::new(self.downstream, r, w);
@@ -227,8 +228,11 @@ where
 fn get_log_from_copy_result(
     conn_context: ConnContext,
     result: tokio_io::TimedCopyBidirectionalResult,
-) -> (StreamLog, Result<(), tokio_io::CopyBiErrorKind>) {
-    let (bytes_uplink, bytes_downlink) = result.amounts;
+) -> (StreamLog, Result<(), tokio_io::CopyBiError>) {
+    let BytesCopied {
+        a_to_b: bytes_uplink,
+        b_to_a: bytes_downlink,
+    } = result.amounts;
 
     counter!("stream.up.bytes").increment(bytes_uplink);
     counter!("stream.dn.bytes").increment(bytes_downlink);

@@ -74,7 +74,7 @@ where
     A: AsyncRead + AsyncWrite + Unpin + ?Sized,
     B: AsyncRead + AsyncWrite + Unpin + ?Sized,
 {
-    type Output = Result<(u64, u64), CopyBiError>;
+    type Output = (Result<(), CopyBiError>, BytesCopied);
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // Unpack self into mut refs to each field to avoid borrow check issues.
@@ -85,7 +85,7 @@ where
             b_to_a,
         } = &mut *self;
 
-        let get_amounts = |a_to_b: &TransferState, b_to_a: &TransferState| -> (u64, u64) {
+        let get_amounts = |a_to_b: &TransferState, b_to_a: &TransferState| -> BytesCopied {
             let a_to_b = match a_to_b {
                 TransferState::Running(state) => state.amt(),
                 TransferState::ShuttingDown(amt) => *amt,
@@ -96,30 +96,31 @@ where
                 TransferState::ShuttingDown(amt) => *amt,
                 TransferState::Done(amt) => *amt,
             };
-            (a_to_b, b_to_a)
+            BytesCopied { a_to_b, b_to_a }
         };
 
-        let a_to_b_poll = transfer_one_direction(cx, a_to_b, &mut *a, &mut *b).map_err(|e| {
-            let amounts = get_amounts(a_to_b, b_to_a);
-            CopyBiError {
-                kind: CopyBiErrorKind::FromAToB(e),
-                amounts,
+        let a_to_b_poll = match transfer_one_direction(cx, a_to_b, &mut *a, &mut *b) {
+            Poll::Ready(Err(e)) => {
+                let amounts = get_amounts(a_to_b, b_to_a);
+                return Poll::Ready((Err(CopyBiError::FromAToB(e)), amounts));
             }
-        })?;
-        let b_to_a_poll = transfer_one_direction(cx, b_to_a, &mut *b, &mut *a).map_err(|e| {
-            let amounts = get_amounts(a_to_b, b_to_a);
-            CopyBiError {
-                kind: CopyBiErrorKind::FromBToA(e),
-                amounts,
+            Poll::Ready(Ok(x)) => Poll::Ready(x),
+            Poll::Pending => Poll::Pending,
+        };
+        let b_to_a_poll = match transfer_one_direction(cx, b_to_a, &mut *b, &mut *a) {
+            Poll::Ready(Err(e)) => {
+                let amounts = get_amounts(a_to_b, b_to_a);
+                return Poll::Ready((Err(CopyBiError::FromBToA(e)), amounts));
             }
-        })?;
+            Poll::Ready(Ok(x)) => Poll::Ready(x),
+            Poll::Pending => Poll::Pending,
+        };
 
         // It is not a problem if ready! returns early because transfer_one_direction for the
         // other direction will keep returning TransferState::Done(count) in future calls to poll
         let a_to_b = ready!(a_to_b_poll);
         let b_to_a = ready!(b_to_a_poll);
-
-        Poll::Ready(Ok((a_to_b, b_to_a)))
+        Poll::Ready((Ok(()), BytesCopied { a_to_b, b_to_a }))
     }
 }
 
@@ -150,7 +151,10 @@ where
 /// # Return value
 ///
 /// Returns a tuple of bytes copied `a` to `b` and bytes copied `b` to `a`.
-pub async fn copy_bidirectional<A, B>(a: &mut A, b: &mut B) -> Result<(u64, u64), CopyBiError>
+pub async fn copy_bidirectional<A, B>(
+    a: &mut A,
+    b: &mut B,
+) -> (Result<(), CopyBiError>, BytesCopied)
 where
     A: AsyncRead + AsyncWrite + Unpin + ?Sized,
     B: AsyncRead + AsyncWrite + Unpin + ?Sized,
@@ -164,15 +168,14 @@ where
     .await
 }
 
-#[derive(Debug, Error)]
-#[error("{}", kind)]
-pub struct CopyBiError {
-    pub kind: CopyBiErrorKind,
-    pub amounts: (u64, u64),
+#[derive(Debug, Clone, Copy)]
+pub struct BytesCopied {
+    pub a_to_b: u64,
+    pub b_to_a: u64,
 }
 
 #[derive(Debug, Error)]
-pub enum CopyBiErrorKind {
+pub enum CopyBiError {
     #[error("error copying from A to B: {0}")]
     FromAToB(std::io::Error),
     #[error("error copying from B to A: {0}")]

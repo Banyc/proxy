@@ -6,7 +6,7 @@ use std::{
 use async_speed_limit::Limiter;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::{CopyBiErrorKind, TimeoutStreamShared, copy_bidirectional};
+use super::{BytesCopied, CopyBiError, TimeoutStreamShared, copy_bidirectional};
 
 const TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -30,36 +30,32 @@ where
     let mut a = Box::pin(a);
     let mut b = Box::pin(b);
 
-    let res = copy_bidirectional(&mut a, &mut b).await;
+    let (res, amounts) = copy_bidirectional(&mut a, &mut b).await;
 
-    let end = Instant::now();
-    match res {
-        Ok(amounts) => TimedCopyBidirectionalResult {
-            amounts,
-            io_result: Ok(()),
-            end,
-        },
+    let now = Instant::now();
+    let end = match &res {
+        Ok(_) => now,
         Err(e) => {
-            let io_error = match &e.kind {
-                CopyBiErrorKind::FromAToB(e) => e,
-                CopyBiErrorKind::FromBToA(e) => e,
+            let io_error = match &e {
+                CopyBiError::FromAToB(e) => e,
+                CopyBiError::FromBToA(e) => e,
             };
-            let end = match io_error.kind() {
-                io::ErrorKind::TimedOut => end - TIMEOUT,
-                _ => end,
-            };
-            TimedCopyBidirectionalResult {
-                amounts: e.amounts,
-                io_result: Err(e.kind),
-                end,
+            match io_error.kind() {
+                io::ErrorKind::TimedOut => now - TIMEOUT,
+                _ => now,
             }
         }
+    };
+    TimedCopyBidirectionalResult {
+        amounts,
+        io_result: res,
+        end,
     }
 }
 
 pub struct TimedCopyBidirectionalResult {
-    pub amounts: (u64, u64),
-    pub io_result: Result<(), CopyBiErrorKind>,
+    pub amounts: BytesCopied,
+    pub io_result: Result<(), CopyBiError>,
     pub end: Instant,
 }
 
