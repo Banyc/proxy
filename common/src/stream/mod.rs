@@ -5,7 +5,6 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::loading;
 
 pub mod pool;
-pub mod xor;
 
 pub trait OwnIoStream:
     std::fmt::Debug + AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static
