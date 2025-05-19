@@ -137,5 +137,5 @@ pub trait UdpServerHandleConn: loading::HandleConn {
     fn handle_flow(
         &self,
         conn: Conn<UdpSocket, Flow, Packet>,
-    ) -> impl std::future::Future<Output = ()> + Send;
+    ) -> impl Future<Output = ()> + Send;
 }

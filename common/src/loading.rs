@@ -78,9 +78,7 @@ pub trait Build {
     type ConnHandler: HandleConn;
     type Server: Serve<ConnHandler = Self::ConnHandler>;
     type Err: std::error::Error + Send + Sync + 'static;
-    fn build_server(
-        self,
-    ) -> impl std::future::Future<Output = Result<Self::Server, Self::Err>> + Send;
+    fn build_server(self) -> impl Future<Output = Result<Self::Server, Self::Err>> + Send;
     fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err>;
     fn key(&self) -> &Arc<str>;
 }
@@ -92,5 +90,5 @@ pub trait Serve {
     fn serve(
         self,
         set_conn_handler_rx: tokio::sync::mpsc::Receiver<Self::ConnHandler>,
-    ) -> impl std::future::Future<Output = AnyResult> + Send;
+    ) -> impl Future<Output = AnyResult> + Send;
 }

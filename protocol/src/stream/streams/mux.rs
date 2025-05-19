@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, hash_map},
-    future::Future,
     io,
     net::SocketAddr,
     pin::Pin,

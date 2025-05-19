@@ -20,7 +20,7 @@ pub trait HasIoAddr {
 pub trait AsConn: OwnIoStream + HasIoAddr {}
 
 pub trait StreamServerHandleConn: loading::HandleConn {
-    fn handle_stream<Stream>(&self, stream: Stream) -> impl std::future::Future<Output = ()> + Send
+    fn handle_stream<Stream>(&self, stream: Stream) -> impl Future<Output = ()> + Send
     where
         Stream: AsConn + std::fmt::Debug;
 }

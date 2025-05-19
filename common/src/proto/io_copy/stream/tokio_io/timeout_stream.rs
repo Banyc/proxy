@@ -6,7 +6,6 @@
 #![warn(missing_docs)]
 
 use pin_project_lite::pin_project;
-use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};

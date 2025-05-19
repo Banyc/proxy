@@ -264,5 +264,5 @@ pub trait TraceRtt {
     fn trace_rtt(
         &self,
         chain: &ProxyChain<Self::Addr>,
-    ) -> impl std::future::Future<Output = Result<Duration, AnyError>> + Send;
+    ) -> impl Future<Output = Result<Duration, AnyError>> + Send;
 }

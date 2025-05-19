@@ -39,14 +39,14 @@ pub trait UdpRecv {
     fn trait_recv(
         &mut self,
         buf: &mut [u8],
-    ) -> impl std::future::Future<Output = Result<usize, AnyError>> + Send;
+    ) -> impl Future<Output = Result<usize, AnyError>> + Send;
 }
 
 pub trait UdpSend {
     fn trait_send(
         &mut self,
         buf: &[u8],
-    ) -> impl std::future::Future<Output = Result<usize, AnyError>> + Send;
+    ) -> impl Future<Output = Result<usize, AnyError>> + Send;
 }
 
 pub struct UpstreamParts<R, W> {

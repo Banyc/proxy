@@ -15,13 +15,12 @@ use crate::{connect::ConnectorConfig, stream::AsConn};
 pub trait StreamConnect: std::fmt::Debug + Sync + Send + 'static {
     async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>>;
 }
-
 pub trait StreamConnectExt: StreamConnect {
     fn timed_connect(
         &self,
         addr: SocketAddr,
         timeout: Duration,
-    ) -> impl std::future::Future<Output = io::Result<Box<dyn AsConn>>> + Send
+    ) -> impl Future<Output = io::Result<Box<dyn AsConn>>> + Send
     where
         Self: Sync,
     {

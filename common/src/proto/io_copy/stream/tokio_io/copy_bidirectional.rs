@@ -9,7 +9,6 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::debug;
 
-use std::future::Future;
 use std::io::{self, ErrorKind};
 use std::pin::Pin;
 use std::task::{Context, Poll};
