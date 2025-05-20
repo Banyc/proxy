@@ -1,4 +1,4 @@
-[stream.proxy_server]
+[stream.conn]
 "tcp1" = { address = "tcp://proxy.example.org:80", header_key = "base64", payload_key = "base64" }
 "mptcp1" = { address = "mptcp://proxy.example.org:81", header_key = "base64", payload_key = "base64" }
 "tcpmux1" = { address = "tcpmux://proxy.example.org:82", header_key = "base64", payload_key = "base64" }
@@ -9,7 +9,7 @@
 [stream]
 pool = ["tcp1", "mptcp1"]
 
-[udp.proxy_server]
+[udp.conn]
 "udp1" = { address = "proxy.example.org:80", header_key = "base64", payload_key = "base64" }
 
 [access_server.matcher]
@@ -19,7 +19,7 @@ pool = ["tcp1", "mptcp1"]
     { addr = "localhost" }, # domain name regex
 ]
 
-[access_server.stream.proxy_group]
+[access_server.stream.conn_selector]
 "default" = { chains = [
     { weight = 1, chain = ["tcp1"] },
     { weight = 1, chain = ["mptcp1"] },
@@ -29,7 +29,7 @@ pool = ["tcp1", "mptcp1"]
     { weight = 1, chain = ["rtpmux1"] },
 ], trace_rtt = false, active_chains = 6 }
 
-[access_server.stream.proxy_table]
+[access_server.stream.route_table]
 "default" = [
     { matcher = "localhost", action = "direct" }, # Forward local traffic directly
                                                   # <- At this point, no more local traffic
@@ -37,7 +37,7 @@ pool = ["tcp1", "mptcp1"]
     { matcher = { }, action = "default" }, # Forward remaining traffic to the "default" proxy group above
 ]
 
-[access_server.udp.proxy_group]
+[access_server.udp.conn_selector]
 "default" = { chains = [
     { weight = 1, chain = ["udp1"] },
 ], trace_rtt = false, active_chains = 1 }
@@ -45,24 +45,24 @@ pool = ["tcp1", "mptcp1"]
 [[access_server.tcp_server]]
 listen_addr = "0.0.0.0:80"
 destination = "tcp://www.example.org:80"
-proxy_group = "default"                  # Or, `proxy_group = { chains = ..., trace_rtt = ..., ... }`
+conn_selector = "default"                  # Or, `conn_selector = { chains = ..., trace_rtt = ..., ... }`
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[access_server.udp_server]]
 listen_addr = "0.0.0.0:80"
 destination = "www.example.org:80"
-proxy_group = "default"            # Or, `proxy_group = { chains = ..., trace_rtt = ..., ... }`
+conn_selector = "default"            # Or, `conn_selector = { chains = ..., trace_rtt = ..., ... }`
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[access_server.http_server]]
 listen_addr = "0.0.0.0:80"
-proxy_table = "default"    # Or, `proxy_table = [...]`
+route_table = "default"    # Or, `route_table = [...]`
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[access_server.socks5_tcp_server]]
 listen_addr = "0.0.0.0:80"
 udp_server_addr = "0.0.0.0:80"
-proxy_table = "default"        # Or, `proxy_table = [...]`
+route_table = "default"        # Or, `route_table = [...]`
 # speed_limit = 1024.0 # 1.0 KiB/s
 # users = [
 #     { username = "", password = "" },
@@ -70,7 +70,7 @@ proxy_table = "default"        # Or, `proxy_table = [...]`
 
 [[access_server.socks5_udp_server]]
 listen_addr = "0.0.0.0:80"
-proxy_group = "default"    # Or, `proxy_group = { chains = ..., trace_rtt = ..., ... }`
+conn_selector = "default"    # Or, `conn_selector = { chains = ..., trace_rtt = ..., ... }`
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[proxy_server.tcp_server]]

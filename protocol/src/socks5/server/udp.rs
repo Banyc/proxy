@@ -9,9 +9,9 @@ use common::{
         conn::udp::{Flow, UpstreamAddr},
         context::UdpContext,
         io_copy::udp::{CopyBidirectional, DownstreamParts, UpstreamParts},
-        proxy_table::{UdpProxyGroup, UdpProxyGroupBuildContext, UdpProxyGroupBuilder},
+        route::{UdpConnSelector, UdpConnSelectorBuildContext, UdpConnSelectorBuilder},
     },
-    proxy_table::ProxyGroupBuildError,
+    route::ConnSelectorBuildError,
     udp::{
         Packet,
         server::{UdpServer, UdpServerHandleConn},
@@ -29,18 +29,18 @@ use crate::socks5::messages::UdpRequestHeader;
 #[serde(deny_unknown_fields)]
 pub struct Socks5ServerUdpAccessServerConfig {
     pub listen_addr: Arc<str>,
-    pub proxy_group: SharableConfig<UdpProxyGroupBuilder>,
+    pub conn_selector: SharableConfig<UdpConnSelectorBuilder>,
     pub speed_limit: Option<f64>,
 }
 impl Socks5ServerUdpAccessServerConfig {
     pub fn into_builder(
         self,
-        proxy_group: &HashMap<Arc<str>, UdpProxyGroup>,
-        cx: UdpProxyGroupBuildContext<'_>,
+        conn_selector: &HashMap<Arc<str>, UdpConnSelector>,
+        cx: UdpConnSelectorBuildContext<'_>,
         udp_context: UdpContext,
     ) -> Result<Socks5ServerUdpAccessServerBuilder, BuildError> {
-        let proxy_group = match self.proxy_group {
-            SharableConfig::SharingKey(key) => proxy_group
+        let conn_selector = match self.conn_selector {
+            SharableConfig::SharingKey(key) => conn_selector
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyGroupKeyNotFound(key.clone()))?
                 .clone(),
@@ -49,7 +49,7 @@ impl Socks5ServerUdpAccessServerConfig {
 
         Ok(Socks5ServerUdpAccessServerBuilder {
             listen_addr: self.listen_addr,
-            proxy_group,
+            conn_selector,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
             udp_context,
         })
@@ -60,13 +60,13 @@ pub enum BuildError {
     #[error("Proxy group key not found: {0}")]
     ProxyGroupKeyNotFound(Arc<str>),
     #[error("{0}")]
-    ProxyGroup(#[from] ProxyGroupBuildError),
+    ProxyGroup(#[from] ConnSelectorBuildError),
 }
 
 #[derive(Debug, Clone)]
 pub struct Socks5ServerUdpAccessServerBuilder {
     listen_addr: Arc<str>,
-    proxy_group: UdpProxyGroup,
+    conn_selector: UdpConnSelector,
     speed_limit: f64,
     udp_context: UdpContext,
 }
@@ -88,7 +88,7 @@ impl loading::Build for Socks5ServerUdpAccessServerBuilder {
 
     fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
         Ok(Socks5ServerUdpAccessConnHandler::new(
-            self.proxy_group,
+            self.conn_selector,
             self.speed_limit,
             self.udp_context,
         ))
@@ -97,15 +97,15 @@ impl loading::Build for Socks5ServerUdpAccessServerBuilder {
 
 #[derive(Debug)]
 pub struct Socks5ServerUdpAccessConnHandler {
-    proxy_group: UdpProxyGroup,
+    conn_selector: UdpConnSelector,
     speed_limiter: Limiter,
     udp_context: UdpContext,
 }
 impl loading::HandleConn for Socks5ServerUdpAccessConnHandler {}
 impl Socks5ServerUdpAccessConnHandler {
-    pub fn new(proxy_group: UdpProxyGroup, speed_limit: f64, udp_context: UdpContext) -> Self {
+    pub fn new(conn_selector: UdpConnSelector, speed_limit: f64, udp_context: UdpContext) -> Self {
         Self {
-            proxy_group,
+            conn_selector,
             speed_limiter: Limiter::new(speed_limit),
             udp_context,
         }
@@ -118,7 +118,7 @@ impl Socks5ServerUdpAccessConnHandler {
 
     async fn proxy(&self, conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), AccessProxyError> {
         // Connect to upstream
-        let proxy_chain = self.proxy_group.choose_chain();
+        let proxy_chain = self.conn_selector.choose_chain();
         let flow = conn.conn_key().clone();
         let upstream = UdpProxyClient::establish(
             proxy_chain.chain.clone(),

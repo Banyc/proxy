@@ -16,7 +16,7 @@ use common::{
         connect::udp::UdpConnector,
         context::{Context, StreamContext, UdpContext},
         metrics::{stream::StreamSessionTable, udp::UdpSessionTable},
-        proxy_table::{StreamProxyConfigBuilder, UdpProxyConfigBuilder},
+        route::{StreamConnConfigBuilder, UdpConnConfigBuilder},
     },
     stream::pool::{StreamConnPool, StreamPoolBuilder},
 };
@@ -166,23 +166,23 @@ pub async fn spawn_and_clean(
     cancellation: CancellationToken,
     context: Context,
 ) -> AnyResult {
-    let mut stream_proxy_server = HashMap::new();
-    for (k, v) in config.stream.proxy_server {
+    let mut stream_conn = HashMap::new();
+    for (k, v) in config.stream.conn {
         let v = v.build()?;
-        stream_proxy_server.insert(k, v);
+        stream_conn.insert(k, v);
     }
 
-    let mut udp_proxy = HashMap::new();
-    for (k, v) in config.udp.proxy_server {
+    let mut udp_conn = HashMap::new();
+    for (k, v) in config.udp.conn {
         let v = v.build()?;
-        udp_proxy.insert(k, v);
+        udp_conn.insert(k, v);
     }
 
     context.stream.pool.replaced_by(
         config
             .stream
             .pool
-            .build(context.stream.connector_table.clone(), &stream_proxy_server)?,
+            .build(context.stream.connector_table.clone(), &stream_conn)?,
     );
     context
         .stream
@@ -196,8 +196,8 @@ pub async fn spawn_and_clean(
         &mut server_loader.access_server,
         cancellation,
         context.clone(),
-        &stream_proxy_server,
-        &udp_proxy,
+        &stream_conn,
+        &udp_conn,
     )
     .await?;
     proxy_server::spawn_and_clean(
@@ -216,7 +216,8 @@ pub struct StreamConfig {
     #[serde(default)]
     pool: StreamPoolBuilder,
     #[serde(default)]
-    proxy_server: HashMap<Arc<str>, StreamProxyConfigBuilder>,
+    #[serde(alias = "proxy_server")]
+    conn: HashMap<Arc<str>, StreamConnConfigBuilder>,
 }
 impl Merge for StreamConfig {
     type Error = AnyError;
@@ -226,8 +227,8 @@ impl Merge for StreamConfig {
         Self: Sized,
     {
         let pool = self.pool.merge(other.pool)?;
-        let proxy_server = merge_map(self.proxy_server, other.proxy_server)?;
-        Ok(Self { pool, proxy_server })
+        let conn = merge_map(self.conn, other.conn)?;
+        Ok(Self { pool, conn })
     }
 }
 
@@ -235,7 +236,8 @@ impl Merge for StreamConfig {
 #[serde(deny_unknown_fields)]
 pub struct UdpConfig {
     #[serde(default)]
-    proxy_server: HashMap<Arc<str>, UdpProxyConfigBuilder>,
+    #[serde(alias = "proxy_server")]
+    conn: HashMap<Arc<str>, UdpConnConfigBuilder>,
 }
 impl Merge for UdpConfig {
     type Error = AnyError;
@@ -244,8 +246,8 @@ impl Merge for UdpConfig {
     where
         Self: Sized,
     {
-        let proxy_server = merge_map(self.proxy_server, other.proxy_server)?;
-        Ok(Self { proxy_server })
+        let conn = merge_map(self.conn, other.conn)?;
+        Ok(Self { conn })
     }
 }
 

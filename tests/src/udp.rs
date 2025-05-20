@@ -20,9 +20,9 @@ mod tests {
             conn_handler::udp::UdpProxyConnHandler,
             connect::udp::UdpConnector,
             context::UdpContext,
-            proxy_table::UdpProxyConfig,
+            route::UdpConnConfig,
         },
-        proxy_table::ProxyConfig,
+        route::ConnConfig,
         udp::PACKET_BUFFER_LENGTH,
     };
     use serial_test::serial;
@@ -47,7 +47,7 @@ mod tests {
         }
     }
 
-    async fn spawn_proxy(join_set: &mut tokio::task::JoinSet<()>, addr: &str) -> UdpProxyConfig {
+    async fn spawn_proxy(join_set: &mut tokio::task::JoinSet<()>, addr: &str) -> UdpConnConfig {
         let crypto = create_random_crypto();
         let proxy = UdpProxyConnHandler::new(crypto.clone(), None, udp_context());
         let server = proxy.build(addr).await.unwrap();
@@ -56,7 +56,7 @@ mod tests {
             let (_set_conn_handler_tx, set_conn_handler_rx) = tokio::sync::mpsc::channel(64);
             server.serve(set_conn_handler_rx).await.unwrap();
         });
-        ProxyConfig {
+        ConnConfig {
             address: proxy_addr.into(),
             header_crypto: crypto,
             payload_crypto: None,

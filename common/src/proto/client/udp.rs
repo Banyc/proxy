@@ -17,9 +17,9 @@ use crate::{
     proto::{
         context::UdpContext,
         io_copy::udp::{UdpRecv, UdpSend},
-        proxy_table::UdpProxyChain,
+        route::UdpConnChain,
     },
-    proxy_table::{BuildTracer, TraceRtt, convert_proxies_to_header_crypto_pairs},
+    route::{BuildTracer, TraceRtt, convert_proxies_to_header_crypto_pairs},
     ttl_cell::TtlCell,
     udp::PACKET_BUFFER_LENGTH,
 };
@@ -39,7 +39,7 @@ pub struct UdpProxyClient {
 impl UdpProxyClient {
     #[instrument(skip_all)]
     pub async fn establish(
-        proxies: Arc<UdpProxyChain>,
+        proxies: Arc<UdpConnChain>,
         destination: InternetAddr,
         context: &UdpContext,
     ) -> Result<UdpProxyClient, EstablishError> {
@@ -238,7 +238,7 @@ fn time_validator() -> TimeValidator {
 pub struct UdpProxyClientReadHalf {
     upstream: Arc<UdpSocket>,
     max_response_header_size: usize,
-    proxies: Arc<UdpProxyChain>,
+    proxies: Arc<UdpConnChain>,
     read_buf: Vec<u8>,
     time_validator: TimeValidator,
 }
@@ -251,7 +251,7 @@ impl UdpProxyClientReadHalf {
     pub fn new(
         upstream: Arc<UdpSocket>,
         max_response_header_size: usize,
-        proxies: Arc<UdpProxyChain>,
+        proxies: Arc<UdpConnChain>,
     ) -> Self {
         Self {
             upstream,
@@ -353,7 +353,7 @@ impl UdpTracer {
 impl TraceRtt for UdpTracer {
     type Addr = InternetAddr;
 
-    async fn trace_rtt(&self, chain: &UdpProxyChain) -> Result<Duration, AnyError> {
+    async fn trace_rtt(&self, chain: &UdpConnChain) -> Result<Duration, AnyError> {
         let mut pkt_buf = self.pool.take();
         let res = trace_rtt(&mut pkt_buf, chain, &self.context)
             .await
@@ -364,7 +364,7 @@ impl TraceRtt for UdpTracer {
 }
 pub async fn trace_rtt(
     pkt_buf: &mut BytesMut,
-    proxies: &UdpProxyChain,
+    proxies: &UdpConnChain,
     context: &UdpContext,
 ) -> Result<Duration, TraceError> {
     if proxies.is_empty() {

@@ -15,7 +15,7 @@ use crate::{
         connect::stream::StreamConnectorTable,
         context::StreamContext,
     },
-    proxy_table::{IntoAddr, ProxyConfig, ProxyConfigBuildError, ProxyConfigBuilder},
+    route::{ConnConfig, ConnConfigBuildError, ConnConfigBuilder, IntoAddr},
 };
 
 use super::AsConn;
@@ -29,7 +29,7 @@ pub type StreamConnPool = ConnPool<StreamAddr, Box<dyn AsConn>>;
 #[serde(deny_unknown_fields)]
 #[serde(bound(deserialize = "AddrStr: Deserialize<'de>"))]
 pub struct PoolBuilder<AddrStr>(
-    #[serde(default)] pub Vec<SharableConfig<ProxyConfigBuilder<AddrStr>>>,
+    #[serde(default)] pub Vec<SharableConfig<ConnConfigBuilder<AddrStr>>>,
 );
 impl<AddrStr> PoolBuilder<AddrStr> {
     pub fn new() -> Self {
@@ -43,13 +43,13 @@ where
     pub fn build(
         self,
         connector_table: Arc<StreamConnectorTable>,
-        proxy_server: &HashMap<Arc<str>, ProxyConfig<StreamAddr>>,
+        conn: &HashMap<Arc<str>, ConnConfig<StreamAddr>>,
     ) -> Result<ConnPool<StreamAddr, Box<dyn AsConn>>, PoolBuildError> {
         let c = self
             .0
             .into_iter()
             .map(|c| match c {
-                SharableConfig::SharingKey(k) => proxy_server
+                SharableConfig::SharingKey(k) => conn
                     .get(&k)
                     .cloned()
                     .ok_or(PoolBuildError::ProxyServerKeyNotFound(k)),
@@ -64,7 +64,7 @@ where
 #[derive(Debug, Error)]
 pub enum PoolBuildError {
     #[error("{0}")]
-    ProxyConfigBuild(#[from] ProxyConfigBuildError),
+    ProxyConfigBuild(#[from] ConnConfigBuildError),
     #[error("Proxy server key not found: {0}")]
     ProxyServerKeyNotFound(Arc<str>),
 }
@@ -86,35 +86,33 @@ impl<AddrStr> Merge for PoolBuilder<AddrStr> {
 }
 
 fn pool_entries_from_proxy_configs(
-    proxy_configs: impl Iterator<Item = ProxyConfig<StreamAddr>>,
+    proxy_configs: impl Iterator<Item = ConnConfig<StreamAddr>>,
     connector_table: Arc<StreamConnectorTable>,
 ) -> impl Iterator<Item = ConnPoolEntry<StreamAddr, Box<dyn AsConn>>> {
     proxy_configs.map(move |c| ConnPoolEntry {
         key: c.address.clone(),
         connect: Arc::new(PoolConnector {
-            proxy_server: c.clone(),
+            conn: c.clone(),
             connector_table: connector_table.clone(),
         }),
-        heartbeat: Arc::new(PoolHeartbeat {
-            proxy_server: c.clone(),
-        }),
+        heartbeat: Arc::new(PoolHeartbeat { conn: c.clone() }),
     })
 }
 
 #[derive(Debug)]
 struct PoolConnector {
-    proxy_server: ProxyConfig<StreamAddr>,
+    conn: ConnConfig<StreamAddr>,
     connector_table: Arc<StreamConnectorTable>,
 }
 #[async_trait]
 impl tokio_conn_pool::Connect for PoolConnector {
     type Connection = Box<dyn AsConn>;
     async fn connect(&self) -> Option<Self::Connection> {
-        let addr = self.proxy_server.address.clone();
+        let addr = self.conn.address.clone();
         let sock_addr = addr.address.to_socket_addr().await.ok()?;
         self.connector_table
             .timed_connect(
-                &self.proxy_server.address.stream_type,
+                &self.conn.address.stream_type,
                 sock_addr,
                 HEARTBEAT_INTERVAL,
             )
@@ -125,7 +123,7 @@ impl tokio_conn_pool::Connect for PoolConnector {
 
 #[derive(Debug)]
 struct PoolHeartbeat {
-    proxy_server: ProxyConfig<StreamAddr>,
+    conn: ConnConfig<StreamAddr>,
 }
 #[async_trait]
 impl tokio_conn_pool::Heartbeat for PoolHeartbeat {
@@ -134,7 +132,7 @@ impl tokio_conn_pool::Heartbeat for PoolHeartbeat {
         send_noop(
             &mut conn,
             HEARTBEAT_INTERVAL,
-            &self.proxy_server.header_crypto.clone(),
+            &self.conn.header_crypto.clone(),
         )
         .await
         .ok()?;

@@ -8,5 +8,5 @@ pub mod header;
 pub mod io_copy;
 pub mod log;
 pub mod metrics;
-pub mod proxy_table;
+pub mod route;
 pub mod steer;

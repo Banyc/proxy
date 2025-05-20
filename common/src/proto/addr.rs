@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     addr::{InternetAddr, InternetAddrHdv, ParseInternetAddrError},
-    proxy_table::IntoAddr,
+    route::IntoAddr,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]

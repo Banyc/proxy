@@ -10,9 +10,9 @@ use common::{
         conn::udp::{Flow, UpstreamAddr},
         context::UdpContext,
         io_copy::udp::{CopyBiError, CopyBidirectional, DownstreamParts, UpstreamParts},
-        proxy_table::{UdpProxyGroup, UdpProxyGroupBuildContext, UdpProxyGroupBuilder},
+        route::{UdpConnSelector, UdpConnSelectorBuildContext, UdpConnSelectorBuilder},
     },
-    proxy_table::ProxyGroupBuildError,
+    route::ConnSelectorBuildError,
     udp::{
         Packet,
         server::{UdpServer, UdpServerHandleConn},
@@ -29,18 +29,18 @@ use udp_listener::Conn;
 pub struct UdpAccessServerConfig {
     pub listen_addr: Arc<str>,
     pub destination: InternetAddrStr,
-    pub proxy_group: SharableConfig<UdpProxyGroupBuilder>,
+    pub conn_selector: SharableConfig<UdpConnSelectorBuilder>,
     pub speed_limit: Option<f64>,
 }
 impl UdpAccessServerConfig {
     pub fn into_builder(
         self,
-        proxy_group: &HashMap<Arc<str>, UdpProxyGroup>,
-        cx: UdpProxyGroupBuildContext<'_>,
+        conn_selector: &HashMap<Arc<str>, UdpConnSelector>,
+        cx: UdpConnSelectorBuildContext<'_>,
         udp_context: UdpContext,
     ) -> Result<UdpAccessServerBuilder, BuildError> {
-        let proxy_group = match self.proxy_group {
-            SharableConfig::SharingKey(key) => proxy_group
+        let conn_selector = match self.conn_selector {
+            SharableConfig::SharingKey(key) => conn_selector
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyGroupKeyNotFound(key.clone()))?
                 .clone(),
@@ -50,7 +50,7 @@ impl UdpAccessServerConfig {
         Ok(UdpAccessServerBuilder {
             listen_addr: self.listen_addr,
             destination: self.destination,
-            proxy_group,
+            conn_selector,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
             udp_context,
         })
@@ -61,14 +61,14 @@ pub enum BuildError {
     #[error("Proxy group key not found: {0}")]
     ProxyGroupKeyNotFound(Arc<str>),
     #[error("{0}")]
-    ProxyGroup(#[from] ProxyGroupBuildError),
+    ProxyGroup(#[from] ConnSelectorBuildError),
 }
 
 #[derive(Debug, Clone)]
 pub struct UdpAccessServerBuilder {
     listen_addr: Arc<str>,
     destination: InternetAddrStr,
-    proxy_group: UdpProxyGroup,
+    conn_selector: UdpConnSelector,
     speed_limit: f64,
     udp_context: UdpContext,
 }
@@ -90,7 +90,7 @@ impl loading::Build for UdpAccessServerBuilder {
 
     fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
         Ok(UdpAccessConnHandler::new(
-            self.proxy_group,
+            self.conn_selector,
             self.destination.0,
             self.speed_limit,
             self.udp_context,
@@ -100,7 +100,7 @@ impl loading::Build for UdpAccessServerBuilder {
 
 #[derive(Debug)]
 pub struct UdpAccessConnHandler {
-    proxy_group: UdpProxyGroup,
+    conn_selector: UdpConnSelector,
     destination: InternetAddr,
     speed_limiter: Limiter,
     udp_context: UdpContext,
@@ -108,13 +108,13 @@ pub struct UdpAccessConnHandler {
 impl loading::HandleConn for UdpAccessConnHandler {}
 impl UdpAccessConnHandler {
     pub fn new(
-        proxy_table: UdpProxyGroup,
+        route_table: UdpConnSelector,
         destination: InternetAddr,
         speed_limit: f64,
         udp_context: UdpContext,
     ) -> Self {
         Self {
-            proxy_group: proxy_table,
+            conn_selector: route_table,
             destination,
             speed_limiter: Limiter::new(speed_limit),
             udp_context,
@@ -128,7 +128,7 @@ impl UdpAccessConnHandler {
 
     async fn proxy(&self, conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), AccessProxyError> {
         // Connect to upstream
-        let proxy_chain = self.proxy_group.choose_chain();
+        let proxy_chain = self.conn_selector.choose_chain();
         let upstream = UdpProxyClient::establish(
             proxy_chain.chain.clone(),
             self.destination.clone(),

@@ -12,9 +12,9 @@ mod tests {
             conn::stream::ConnAndAddr,
             conn_handler::stream::StreamProxyConnHandler,
             context::StreamContext,
-            proxy_table::StreamProxyConfig,
+            route::StreamConnConfig,
         },
-        proxy_table::ProxyConfig,
+        route::ConnConfig,
         stream::pool::StreamConnPool,
     };
     use protocol::stream::{
@@ -58,7 +58,7 @@ mod tests {
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &Arc<str>,
         ty: ConcreteStreamType,
-    ) -> StreamProxyConfig {
+    ) -> StreamConnConfig {
         let crypto = create_random_crypto();
         let proxy =
             StreamProxyConnHandler::new(crypto.clone(), None, stream_context(), Arc::clone(addr));
@@ -138,7 +138,7 @@ mod tests {
                 proxy_addr
             }
         };
-        ProxyConfig {
+        ConnConfig {
             address: StreamAddr {
                 address: proxy_addr.into(),
                 stream_type: ty.to_string().into(),

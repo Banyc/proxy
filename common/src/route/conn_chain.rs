@@ -12,7 +12,7 @@ use tracing::{info, trace};
 
 use crate::{config::SharableConfig, error::AnyError, header::route::RouteRequest};
 
-use super::{IntoAddr, ProxyConfig, ProxyConfigBuildError, ProxyConfigBuilder};
+use super::{ConnConfig, ConnConfigBuildError, ConnConfigBuilder, IntoAddr};
 
 pub const TRACE_INTERVAL: Duration = Duration::from_secs(30);
 const TRACE_DEAD_INTERVAL: Duration = Duration::from_secs(60 * 2);
@@ -20,13 +20,13 @@ const TRACES_PER_WAVE: usize = 60;
 const TRACE_BURST_GAP: Duration = Duration::from_millis(10);
 const RTT_TIMEOUT: Duration = Duration::from_secs(60);
 
-pub type ProxyChain<Addr> = [ProxyConfig<Addr>];
+pub type ConnChain<Addr> = [ConnConfig<Addr>];
 
 /// # Panic
 ///
 /// `nodes` must not be empty.
 pub fn convert_proxies_to_header_crypto_pairs<Addr>(
-    nodes: &ProxyChain<Addr>,
+    nodes: &ConnChain<Addr>,
     destination: Option<Addr>,
 ) -> Vec<(RouteRequest<Addr>, &tokio_chacha20::config::Config)>
 where
@@ -52,15 +52,15 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WeightedProxyChainBuilder<AddrStr> {
+pub struct WeightedConnChainBuilder<AddrStr> {
     pub weight: usize,
-    pub chain: Vec<SharableConfig<ProxyConfigBuilder<AddrStr>>>,
+    pub chain: Vec<SharableConfig<ConnConfigBuilder<AddrStr>>>,
 }
-impl<AddrStr> WeightedProxyChainBuilder<AddrStr> {
+impl<AddrStr> WeightedConnChainBuilder<AddrStr> {
     pub fn build<Addr: Clone>(
         self,
-        proxy_server: &HashMap<Arc<str>, ProxyConfig<Addr>>,
-    ) -> Result<WeightedProxyChain<Addr>, WeightedProxyChainBuildError>
+        conn: &HashMap<Arc<str>, ConnConfig<Addr>>,
+    ) -> Result<WeightedConnChain<Addr>, WeightedConnChainBuildError>
     where
         AddrStr: IntoAddr<Addr = Addr>,
     {
@@ -68,10 +68,10 @@ impl<AddrStr> WeightedProxyChainBuilder<AddrStr> {
             .chain
             .into_iter()
             .map(|c| match c {
-                SharableConfig::SharingKey(k) => proxy_server
+                SharableConfig::SharingKey(k) => conn
                     .get(&k)
                     .cloned()
-                    .ok_or(WeightedProxyChainBuildError::ProxyServerKeyNotFound(k)),
+                    .ok_or(WeightedConnChainBuildError::ProxyServerKeyNotFound(k)),
                 SharableConfig::Private(c) => c.build().map_err(Into::into),
             })
             .collect::<Result<Arc<_>, _>>()?;
@@ -81,11 +81,11 @@ impl<AddrStr> WeightedProxyChainBuilder<AddrStr> {
                 continue;
             };
             if payload_crypto.is_some() {
-                return Err(WeightedProxyChainBuildError::MultiplePayloadKeys);
+                return Err(WeightedConnChainBuildError::MultiplePayloadKeys);
             }
             payload_crypto = Some(p.clone());
         }
-        Ok(WeightedProxyChain {
+        Ok(WeightedConnChain {
             weight: self.weight,
             chain,
             payload_crypto,
@@ -93,9 +93,9 @@ impl<AddrStr> WeightedProxyChainBuilder<AddrStr> {
     }
 }
 #[derive(Debug, Error)]
-pub enum WeightedProxyChainBuildError {
+pub enum WeightedConnChainBuildError {
     #[error("{0}")]
-    ProxyServer(#[from] ProxyConfigBuildError),
+    ProxyServer(#[from] ConnConfigBuildError),
     #[error("Proxy server key not found: {0}")]
     ProxyServerKeyNotFound(Arc<str>),
     #[error("Multiple payload keys")]
@@ -103,25 +103,25 @@ pub enum WeightedProxyChainBuildError {
 }
 
 #[derive(Debug)]
-pub struct WeightedProxyChain<Addr> {
+pub struct WeightedConnChain<Addr> {
     pub weight: usize,
-    pub chain: Arc<ProxyChain<Addr>>,
+    pub chain: Arc<ConnChain<Addr>>,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
 }
 
 #[derive(Debug)]
-pub struct GaugedProxyChain<Addr> {
-    weighted: WeightedProxyChain<Addr>,
+pub struct GaugedConnChain<Addr> {
+    weighted: WeightedConnChain<Addr>,
     rtt: Arc<RwLock<Option<Duration>>>,
     loss: Arc<RwLock<Option<f64>>>,
     task_handle: Option<tokio::task::JoinHandle<()>>,
 }
-impl<Addr> GaugedProxyChain<Addr>
+impl<Addr> GaugedConnChain<Addr>
 where
     Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
 {
     pub fn new<T>(
-        weighted: WeightedProxyChain<Addr>,
+        weighted: WeightedConnChain<Addr>,
         tracer: Option<Arc<T>>,
         cancellation: CancellationToken,
     ) -> Self
@@ -147,7 +147,7 @@ where
         }
     }
 
-    pub fn weighted(&self) -> &WeightedProxyChain<Addr> {
+    pub fn weighted(&self) -> &WeightedConnChain<Addr> {
         &self.weighted
     }
 
@@ -159,7 +159,7 @@ where
         *self.loss.read().unwrap()
     }
 }
-impl<Addr> Drop for GaugedProxyChain<Addr> {
+impl<Addr> Drop for GaugedConnChain<Addr> {
     fn drop(&mut self) {
         if let Some(h) = self.task_handle.as_ref() {
             h.abort()
@@ -169,7 +169,7 @@ impl<Addr> Drop for GaugedProxyChain<Addr> {
 
 fn spawn_tracer<Tracer, Addr>(
     tracer: Arc<Tracer>,
-    chain: Arc<ProxyChain<Addr>>,
+    chain: Arc<ConnChain<Addr>>,
     rtt_store: Arc<RwLock<Option<Duration>>>,
     loss_store: Arc<RwLock<Option<f64>>>,
     cancellation: CancellationToken,
@@ -241,7 +241,7 @@ where
     })
 }
 
-pub struct DisplayChain<'chain, Addr>(&'chain ProxyChain<Addr>);
+pub struct DisplayChain<'chain, Addr>(&'chain ConnChain<Addr>);
 impl<Addr> fmt::Display for DisplayChain<'_, Addr>
 where
     Addr: fmt::Display,
@@ -263,6 +263,6 @@ pub trait TraceRtt {
     type Addr;
     fn trace_rtt(
         &self,
-        chain: &ProxyChain<Self::Addr>,
+        chain: &ConnChain<Self::Addr>,
     ) -> impl Future<Output = Result<Duration, AnyError>> + Send;
 }

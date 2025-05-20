@@ -14,22 +14,22 @@ use tracing::info;
 use crate::ttl_cell::TtlCell;
 
 use super::{
-    GaugedProxyChain, IntoAddr, ProxyConfig, TRACE_INTERVAL, TraceRtt, WeightedProxyChain,
-    WeightedProxyChainBuildError, WeightedProxyChainBuilder,
+    ConnConfig, GaugedConnChain, IntoAddr, TRACE_INTERVAL, TraceRtt, WeightedConnChain,
+    WeightedConnChainBuildError, WeightedConnChainBuilder,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProxyGroupBuilder<AddrStr> {
-    pub chains: Vec<WeightedProxyChainBuilder<AddrStr>>,
+pub struct ConnSelectorBuilder<AddrStr> {
+    pub chains: Vec<WeightedConnChainBuilder<AddrStr>>,
     pub trace_rtt: bool,
     pub active_chains: Option<NonZeroUsize>,
 }
-impl<AddrStr> ProxyGroupBuilder<AddrStr> {
+impl<AddrStr> ConnSelectorBuilder<AddrStr> {
     pub fn build<Addr, TracerBuilder, Tracer>(
         self,
-        cx: ProxyGroupBuildContext<'_, Addr, TracerBuilder>,
-    ) -> Result<ProxyGroup<Addr>, ProxyGroupBuildError>
+        cx: ConnSelectorBuildContext<'_, Addr, TracerBuilder>,
+    ) -> Result<ConnSelector<Addr>, ConnSelectorBuildError>
     where
         Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
         AddrStr: IntoAddr<Addr = Addr>,
@@ -39,14 +39,14 @@ impl<AddrStr> ProxyGroupBuilder<AddrStr> {
         let chains = self
             .chains
             .into_iter()
-            .map(|c| c.build(cx.proxy_server))
+            .map(|c| c.build(cx.conn))
             .collect::<Result<_, _>>()
-            .map_err(ProxyGroupBuildError::ChainConfig)?;
+            .map_err(ConnSelectorBuildError::ChainConfig)?;
         let tracer = match self.trace_rtt {
             true => Some(cx.tracer_builder.build()),
             false => None,
         };
-        Ok(ProxyGroup::new(
+        Ok(ConnSelector::new(
             chains,
             tracer,
             self.active_chains,
@@ -55,22 +55,22 @@ impl<AddrStr> ProxyGroupBuilder<AddrStr> {
     }
 }
 #[derive(Debug, Error)]
-pub enum ProxyGroupBuildError {
+pub enum ConnSelectorBuildError {
     #[error("Chain config is invalid: {0}")]
-    ChainConfig(#[source] WeightedProxyChainBuildError),
+    ChainConfig(#[source] WeightedConnChainBuildError),
     #[error("{0}")]
-    ProxyGroup(#[from] ProxyGroupError),
+    ConnSelector(#[from] ConnSelectorError),
 }
 #[derive(Debug)]
-pub struct ProxyGroupBuildContext<'caller, Addr, TracerBuilder> {
-    pub proxy_server: &'caller HashMap<Arc<str>, ProxyConfig<Addr>>,
+pub struct ConnSelectorBuildContext<'caller, Addr, TracerBuilder> {
+    pub conn: &'caller HashMap<Arc<str>, ConnConfig<Addr>>,
     pub tracer_builder: &'caller TracerBuilder,
     pub cancellation: CancellationToken,
 }
-impl<Addr, TracerBuilder> Clone for ProxyGroupBuildContext<'_, Addr, TracerBuilder> {
+impl<Addr, TracerBuilder> Clone for ConnSelectorBuildContext<'_, Addr, TracerBuilder> {
     fn clone(&self) -> Self {
         Self {
-            proxy_server: self.proxy_server,
+            conn: self.conn,
             tracer_builder: self.tracer_builder,
             cancellation: self.cancellation.clone(),
         }
@@ -83,35 +83,35 @@ pub trait BuildTracer {
 }
 
 #[derive(Debug, Clone)]
-pub struct ProxyGroup<Addr> {
-    chains: Arc<[GaugedProxyChain<Addr>]>,
+pub struct ConnSelector<Addr> {
+    chains: Arc<[GaugedConnChain<Addr>]>,
     cum_weight: NonZeroUsize,
     score_store: Arc<RwLock<ScoreStore>>,
     active_chains: NonZeroUsize,
 }
-impl<Addr> ProxyGroup<Addr>
+impl<Addr> ConnSelector<Addr>
 where
     Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
 {
     pub fn new<T>(
-        chains: Vec<WeightedProxyChain<Addr>>,
+        chains: Vec<WeightedConnChain<Addr>>,
         tracer: Option<T>,
         active_chains: Option<NonZeroUsize>,
         cancellation: CancellationToken,
-    ) -> Result<Self, ProxyGroupError>
+    ) -> Result<Self, ConnSelectorError>
     where
         T: TraceRtt<Addr = Addr> + Send + Sync + 'static,
     {
         let cum_weight = chains.iter().map(|c| c.weight).sum();
         if cum_weight == 0 {
-            return Err(ProxyGroupError::ZeroAccumulatedWeight);
+            return Err(ConnSelectorError::ZeroAccumulatedWeight);
         }
         let cum_weight = NonZeroUsize::new(cum_weight).unwrap();
 
         let active_chains = match active_chains {
             Some(active_chains) => {
                 if active_chains.get() > chains.len() {
-                    return Err(ProxyGroupError::TooManyActiveChains);
+                    return Err(ConnSelectorError::TooManyActiveChains);
                 }
                 active_chains
             }
@@ -121,7 +121,7 @@ where
         let tracer = tracer.map(Arc::new);
         let chains = chains
             .into_iter()
-            .map(|c| GaugedProxyChain::new(c, tracer.clone(), cancellation.clone()))
+            .map(|c| GaugedConnChain::new(c, tracer.clone(), cancellation.clone()))
             .collect::<Arc<[_]>>();
         let score_store = Arc::new(RwLock::new(ScoreStore::new(None, TRACE_INTERVAL)));
         Ok(Self {
@@ -132,7 +132,7 @@ where
         })
     }
 
-    pub fn choose_chain(&self) -> &WeightedProxyChain<Addr> {
+    pub fn choose_chain(&self) -> &WeightedConnChain<Addr> {
         if self.chains.len() == 1 {
             return self.chains[0].weighted();
         }
@@ -192,7 +192,7 @@ where
     }
 }
 #[derive(Debug, Error, Clone)]
-pub enum ProxyGroupError {
+pub enum ConnSelectorError {
     #[error("Zero accumulated weight with chains")]
     ZeroAccumulatedWeight,
     #[error("The number of active chains is more than the number of chains")]

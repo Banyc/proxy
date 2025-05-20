@@ -3,20 +3,20 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProxyConfigBuilder<AddrStr> {
+pub struct ConnConfigBuilder<AddrStr> {
     pub address: AddrStr,
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
 }
-impl<AddrStr> ProxyConfigBuilder<AddrStr> {
-    pub fn build<Addr>(self) -> Result<ProxyConfig<Addr>, ProxyConfigBuildError>
+impl<AddrStr> ConnConfigBuilder<AddrStr> {
+    pub fn build<Addr>(self) -> Result<ConnConfig<Addr>, ConnConfigBuildError>
     where
         AddrStr: IntoAddr<Addr = Addr>,
     {
         let header_crypto = self.header_key.build()?;
         let payload_crypto = self.payload_key.map(|p| p.build()).transpose()?;
         let address = self.address.into_address();
-        Ok(ProxyConfig {
+        Ok(ConnConfig {
             address,
             header_crypto,
             payload_crypto,
@@ -24,7 +24,7 @@ impl<AddrStr> ProxyConfigBuilder<AddrStr> {
     }
 }
 #[derive(Debug, Error)]
-pub enum ProxyConfigBuildError {
+pub enum ConnConfigBuildError {
     #[error("{0}")]
     Crypto(#[from] tokio_chacha20::config::ConfigBuildError),
 }
@@ -35,7 +35,7 @@ pub trait IntoAddr: Serialize + DeserializeOwned {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct ProxyConfig<Addr> {
+pub struct ConnConfig<Addr> {
     pub address: Addr,
     pub header_crypto: tokio_chacha20::config::Config,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,

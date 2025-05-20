@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize, de::Visitor};
 use thiserror::Error;
 use tokio::net::lookup_host;
 
-use crate::proxy_table::IntoAddr;
+use crate::route::IntoAddr;
 
 const RESOLVED_SOCKET_ADDR_SIZE: usize = 128;
 static RESOLVED_SOCKET_ADDR: LazyLock<Mutex<WeakLru<Arc<str>, IpAddr, RESOLVED_SOCKET_ADDR_SIZE>>> =

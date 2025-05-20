@@ -9,7 +9,7 @@ use crate::{
         route::{RouteError, RouteResponse},
     },
     proto::{addr::StreamAddr, conn::stream::ConnAndAddr, context::StreamContext},
-    proxy_table::{BuildTracer, ProxyChain, TraceRtt, convert_proxies_to_header_crypto_pairs},
+    route::{BuildTracer, ConnChain, TraceRtt, convert_proxies_to_header_crypto_pairs},
     stream::pool::{ConnectError, connect_with_pool},
 };
 use metrics::counter;
@@ -20,7 +20,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[instrument(skip(proxies, stream_context))]
 pub async fn establish(
-    proxies: &ProxyChain<StreamAddr>,
+    proxies: &ConnChain<StreamAddr>,
     destination: StreamAddr,
     stream_context: &StreamContext,
 ) -> Result<ConnAndAddr, StreamEstablishError> {
@@ -123,14 +123,14 @@ impl StreamTracer {
 impl TraceRtt for StreamTracer {
     type Addr = StreamAddr;
 
-    async fn trace_rtt(&self, chain: &ProxyChain<StreamAddr>) -> Result<Duration, AnyError> {
+    async fn trace_rtt(&self, chain: &ConnChain<StreamAddr>) -> Result<Duration, AnyError> {
         trace_rtt(chain, &self.stream_context)
             .await
             .map_err(|e| e.into())
     }
 }
 pub async fn trace_rtt(
-    proxies: &ProxyChain<StreamAddr>,
+    proxies: &ConnChain<StreamAddr>,
     stream_context: &StreamContext,
 ) -> Result<Duration, TraceError> {
     if proxies.is_empty() {

@@ -12,7 +12,7 @@ pub mod loading;
 pub mod log;
 pub mod metrics;
 pub mod proto;
-pub mod proxy_table;
+pub mod route;
 pub mod sampling;
 pub mod stream;
 pub mod ttl_cell;

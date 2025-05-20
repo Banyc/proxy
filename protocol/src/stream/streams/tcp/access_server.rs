@@ -9,9 +9,9 @@ use common::{
         client::stream::{StreamEstablishError, establish},
         context::StreamContext,
         io_copy::stream::{ConnContext, CopyBidirectional},
-        proxy_table::{StreamProxyGroup, StreamProxyGroupBuildContext, StreamProxyGroupBuilder},
+        route::{StreamConnSelectorBuildContext, StreamConnSelectorBuilder, StreamRouteGroup},
     },
-    proxy_table::ProxyGroupBuildError,
+    route::ConnSelectorBuildError,
     stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 use serde::{Deserialize, Serialize};
@@ -25,28 +25,28 @@ use super::proxy_server::TcpServer;
 pub struct TcpAccessServerConfig {
     pub listen_addr: Arc<str>,
     pub destination: StreamAddrStr,
-    pub proxy_group: SharableConfig<StreamProxyGroupBuilder>,
+    pub conn_selector: SharableConfig<StreamConnSelectorBuilder>,
     pub speed_limit: Option<f64>,
 }
 impl TcpAccessServerConfig {
     pub fn into_builder(
         self,
-        proxy_group: &HashMap<Arc<str>, StreamProxyGroup>,
-        proxy_group_cx: StreamProxyGroupBuildContext<'_>,
+        conn_selector: &HashMap<Arc<str>, StreamRouteGroup>,
+        conn_selector_cx: StreamConnSelectorBuildContext<'_>,
         stream_context: StreamContext,
     ) -> Result<TcpAccessServerBuilder, BuildError> {
-        let proxy_group = match self.proxy_group {
-            SharableConfig::SharingKey(key) => proxy_group
+        let conn_selector = match self.conn_selector {
+            SharableConfig::SharingKey(key) => conn_selector
                 .get(&key)
                 .ok_or_else(|| BuildError::ProxyGroupKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(proxy_group_cx.clone())?,
+            SharableConfig::Private(x) => x.build(conn_selector_cx.clone())?,
         };
 
         Ok(TcpAccessServerBuilder {
             listen_addr: self.listen_addr,
             destination: self.destination,
-            proxy_group,
+            conn_selector,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
             stream_context,
         })
@@ -57,14 +57,14 @@ pub enum BuildError {
     #[error("Proxy group key not found: {0}")]
     ProxyGroupKeyNotFound(Arc<str>),
     #[error("{0}")]
-    ProxyGroup(#[from] ProxyGroupBuildError),
+    ProxyGroup(#[from] ConnSelectorBuildError),
 }
 
 #[derive(Debug, Clone)]
 pub struct TcpAccessServerBuilder {
     listen_addr: Arc<str>,
     destination: StreamAddrStr,
-    proxy_group: StreamProxyGroup,
+    conn_selector: StreamRouteGroup,
     speed_limit: f64,
     stream_context: StreamContext,
 }
@@ -87,7 +87,7 @@ impl loading::Build for TcpAccessServerBuilder {
 
     fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
         Ok(TcpAccessConnHandler::new(
-            self.proxy_group,
+            self.conn_selector,
             self.destination.0,
             self.speed_limit,
             self.stream_context,
@@ -98,7 +98,7 @@ impl loading::Build for TcpAccessServerBuilder {
 
 #[derive(Debug)]
 pub struct TcpAccessConnHandler {
-    proxy_group: StreamProxyGroup,
+    conn_selector: StreamRouteGroup,
     destination: StreamAddr,
     speed_limiter: Limiter,
     stream_context: StreamContext,
@@ -106,14 +106,14 @@ pub struct TcpAccessConnHandler {
 }
 impl TcpAccessConnHandler {
     pub fn new(
-        proxy_group: StreamProxyGroup,
+        conn_selector: StreamRouteGroup,
         destination: StreamAddr,
         speed_limit: f64,
         stream_context: StreamContext,
         listen_addr: Arc<str>,
     ) -> Self {
         Self {
-            proxy_group,
+            conn_selector,
             destination,
             speed_limiter: Limiter::new(speed_limit),
             stream_context,
@@ -125,7 +125,7 @@ impl TcpAccessConnHandler {
     where
         Downstream: OwnIoStream + HasIoAddr,
     {
-        let proxy_chain = self.proxy_group.choose_chain();
+        let proxy_chain = self.conn_selector.choose_chain();
         let upstream = establish(
             &proxy_chain.chain,
             self.destination.clone(),
