@@ -6,6 +6,7 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+ae = { workspace = true }
 ahash = { workspace = true }
 async-speed-limit = { workspace = true }
 async-trait = { workspace = true }

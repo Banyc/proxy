@@ -18,6 +18,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "512761e0bb2578dd7380c6baaa0f4ce03e84f95e960231d1dec8bf4d7d6e2627"
 
 [[package]]
+name = "ae"
+version = "0.1.0"
+source = "git+https://github.com/Banyc/ae.git?tag=v0.0.1#b272834ec36b84dff4faa4e6b6d80dc579802134"
+dependencies = [
+ "duplicate",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio_chacha20",
+]
+
+[[package]]
 name = "ahash"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -603,6 +615,7 @@ dependencies = [
 name = "common"
 version = "0.1.0"
 dependencies = [
+ "ae",
  "ahash 0.8.12",
  "async-speed-limit",
  "async-trait",
@@ -2837,6 +2850,7 @@ dependencies = [
 name = "protocol"
 version = "0.1.0"
 dependencies = [
+ "ae",
  "async-speed-limit",
  "async-trait",
  "bincode 2.0.1",
@@ -3566,6 +3580,7 @@ dependencies = [
 name = "server"
 version = "0.1.0"
 dependencies = [
+ "ae",
  "anyhow",
  "axum",
  "clap",
@@ -3862,6 +3877,7 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 name = "tests"
 version = "0.1.0"
 dependencies = [
+ "ae",
  "bytes",
  "common",
  "protocol",

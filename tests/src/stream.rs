@@ -2,8 +2,9 @@
 mod tests {
     use std::{io, sync::Arc, time::Duration};
 
+    use ae::anti_replay::ReplayValidator;
     use common::{
-        anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
+        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         connect::ConnectorConfig,
         loading::Serve,
         proto::{

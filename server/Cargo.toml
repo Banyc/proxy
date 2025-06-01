@@ -10,6 +10,7 @@ name = "proxy"
 path = "src/main.rs"
 
 [dependencies]
+ae = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true, features = ["derive"] }

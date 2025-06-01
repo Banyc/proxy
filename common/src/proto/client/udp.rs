@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     addr::InternetAddr,
-    anti_replay::{TimeValidator, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL, ValidatorRef},
+    anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     error::AnyError,
     header::{
         codec::{CodecError, MAX_HEADER_LEN, read_header, write_header},
@@ -23,6 +23,7 @@ use crate::{
     ttl_cell::TtlCell,
     udp::PACKET_BUFFER_LENGTH,
 };
+use ae::anti_replay::{TimeValidator, ValidatorRef};
 use bytes::BytesMut;
 use metrics::counter;
 use primitive::arena::obj_pool::ArcObjPool;
@@ -101,9 +102,7 @@ impl UdpProxyClient {
                 let mut writer = io::Cursor::new(&mut buf);
                 for (header, crypto) in &pairs {
                     trace!(?header, "Writing header to buffer");
-                    let mut crypto_cursor =
-                        tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
-                    write_header(&mut writer, header, &mut crypto_cursor).unwrap();
+                    write_header(&mut writer, header, *crypto.key()).unwrap();
                 }
                 buf.into()
             }
@@ -280,10 +279,9 @@ impl UdpProxyClientReadHalf {
         // Decode and check headers
         for node in self.proxies.iter() {
             trace!(?node.address, "Reading response");
-            let mut crypto_cursor =
-                tokio_chacha20::cursor::DecryptCursor::new_x(*node.header_crypto.key());
             let validator = ValidatorRef::Time(&self.time_validator);
-            let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor, &validator)?;
+            let resp: RouteResponse =
+                read_header(&mut reader, *node.header_crypto.key(), &validator)?;
             if let Err(err) = resp.result {
                 warn!(?err, %node.address, "Upstream responded with an error");
                 return Err(RecvError::Response {
@@ -383,8 +381,7 @@ pub async fn trace_rtt(
     let mut buf = Vec::new();
     let mut writer = io::Cursor::new(&mut buf);
     for (header, crypto) in &pairs {
-        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
-        write_header(&mut writer, header, &mut crypto_cursor).unwrap();
+        write_header(&mut writer, header, *crypto.key()).unwrap();
     }
 
     let start = Instant::now();
@@ -401,10 +398,8 @@ pub async fn trace_rtt(
     let mut reader = io::Cursor::new(&pkt_buf[..n]);
     for node in proxies.iter() {
         trace!(?node.address, "Reading response");
-        let mut crypto_cursor =
-            tokio_chacha20::cursor::DecryptCursor::new_x(*node.header_crypto.key());
         let validator = ValidatorRef::Time(&context.time_validator);
-        let resp: RouteResponse = read_header(&mut reader, &mut crypto_cursor, &validator)?;
+        let resp: RouteResponse = read_header(&mut reader, *node.header_crypto.key(), &validator)?;
         if let Err(err) = resp.result {
             warn!(?err, %node.address, "Upstream responded with an error");
             return Err(TraceError::Response {

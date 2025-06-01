@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
+use ae::anti_replay::{ReplayValidator, TimeValidator};
 use swap::Swap;
 use tokio_conn_pool::ConnPool;
 
-use crate::{
-    anti_replay::{ReplayValidator, TimeValidator},
-    stream::AsConn,
-};
+use crate::stream::AsConn;
 
 use super::{
     addr::StreamAddr,

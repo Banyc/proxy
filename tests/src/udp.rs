@@ -5,10 +5,11 @@ mod tests {
         time::Duration,
     };
 
+    use ae::anti_replay::TimeValidator;
     use bytes::BytesMut;
     use common::{
         addr::InternetAddr,
-        anti_replay::{TimeValidator, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
+        anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         connect::ConnectorConfig,
         header::route::RouteErrorKind,
         loading::Serve,

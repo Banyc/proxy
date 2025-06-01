@@ -9,10 +9,11 @@ pub type UdpRequestHeader = RouteRequest<InternetAddr>;
 mod tests {
     use std::{io, net::SocketAddr};
 
+    use ae::anti_replay::{TimeValidator, ValidatorRef};
     use tracing::trace;
 
     use crate::{
-        anti_replay::{TimeValidator, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL, ValidatorRef},
+        anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         header::codec::{MAX_HEADER_LEN, read_header_async, write_header_async},
     };
 
@@ -34,8 +35,7 @@ mod tests {
         let original_header: UdpRequestHeader = RouteRequest {
             upstream: Some("1.1.1.1:8080".parse::<SocketAddr>().unwrap().into()),
         };
-        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
-        write_header_async(&mut stream, &original_header, &mut crypto_cursor)
+        write_header_async(&mut stream, &original_header, *crypto.key())
             .await
             .unwrap();
         let len = stream.position();
@@ -44,9 +44,8 @@ mod tests {
 
         // Decode header
         let mut stream = io::Cursor::new(buf);
-        let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*crypto.key());
         let validator = ValidatorRef::Time(&time_validator);
-        let decoded_header = read_header_async(&mut stream, &mut crypto_cursor, &validator)
+        let decoded_header = read_header_async(&mut stream, *crypto.key(), &validator)
             .await
             .unwrap();
         assert_eq!(original_header, decoded_header);

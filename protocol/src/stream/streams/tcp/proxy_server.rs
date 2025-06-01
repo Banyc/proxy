@@ -24,8 +24,8 @@ use common::{
         conn_handler::{
             ListenerBindError,
             stream::{
-                StreamProxyConnHandler, StreamProxyConnHandlerBuilder, StreamProxyServerBuildError,
-                StreamProxyConnHandlerConfig,
+                StreamProxyConnHandler, StreamProxyConnHandlerBuilder,
+                StreamProxyConnHandlerConfig, StreamProxyServerBuildError,
             },
         },
         connect::stream::StreamConnect,
@@ -272,9 +272,10 @@ mod tests {
     use crate::stream::connect::build_concrete_stream_connector_table;
 
     use super::*;
+    use ae::anti_replay::ReplayValidator;
     use common::{
         addr::BothVerIp,
-        anti_replay::{ReplayValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
+        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         connect::ConnectorConfig,
         header::{codec::write_header_async, heartbeat},
         loading::Serve,
@@ -359,17 +360,9 @@ mod tests {
                     stream_type: TCP_STREAM_TYPE.into(),
                 }),
             };
-            let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
-            write_header_async(&mut stream, &header, &mut crypto_cursor)
+            write_header_async(&mut stream, &header, *crypto.key())
                 .await
                 .unwrap();
-
-            // // Read response
-            // let mut crypto_cursor = XorCryptoCursor::new(&crypto);
-            // let resp: ResponseHeader = read_header_async(&mut stream, &mut crypto_cursor)
-            //     .await
-            //     .unwrap();
-            // assert!(resp.result.is_ok());
         }
 
         // Write message

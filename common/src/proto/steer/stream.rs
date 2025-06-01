@@ -1,11 +1,11 @@
 use std::{net::SocketAddr, time::Duration};
 
+use ae::anti_replay::{ReplayValidator, ValidatorRef};
 use metrics::counter;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 
 use crate::{
-    anti_replay::{ReplayValidator, ValidatorRef},
     header::{
         codec::{CodecError, timed_read_header_async, timed_write_header_async},
         heartbeat::{self, HeartbeatError},
@@ -38,9 +38,8 @@ where
         })?;
 
     // Decode header
-    let mut read_crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*crypto.key());
     let header: StreamRequestHeader =
-        timed_read_header_async(downstream, &mut read_crypto_cursor, &validator, IO_TIMEOUT)
+        timed_read_header_async(downstream, *crypto.key(), &validator, IO_TIMEOUT)
             .await
             .map_err(|e| {
                 let downstream_addr = downstream.peer_addr().ok();
@@ -55,9 +54,7 @@ where
         Some(upstream) => upstream,
         None => {
             let resp = RouteResponse { result: Ok(()) };
-            let mut write_crypto_cursor =
-                tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
-            timed_write_header_async(downstream, &resp, &mut write_crypto_cursor, IO_TIMEOUT)
+            timed_write_header_async(downstream, &resp, *crypto.key(), IO_TIMEOUT)
                 .await
                 .map_err(|e| {
                     let downstream_addr = downstream.peer_addr().ok();

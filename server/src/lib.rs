@@ -4,11 +4,9 @@ use std::{
 };
 
 use access_server::{AccessServerConfig, AccessServerLoader};
+use ae::anti_replay::{ReplayValidator, TimeValidator};
 use common::{
-    anti_replay::{
-        ReplayValidator, TimeValidator, VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME,
-        VALIDATOR_UDP_HDR_TTL,
-    },
+    anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     config::{Merge, merge_map},
     connect::ConnectorConfig,
     error::{AnyError, AnyResult},

@@ -10,6 +10,7 @@ common = { path = "../common" }
 rand = { workspace = true }
 
 [dev-dependencies]
+ae = { workspace = true }
 bytes = { workspace = true }
 protocol = { path = "../protocol" }
 serial_test = { workspace = true }

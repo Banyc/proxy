@@ -19,8 +19,7 @@ pub async fn respond_with_error(
         result: Err(RouteError { kind }),
     };
     let mut buf = Vec::new();
-    let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*header_crypto.key());
-    write_header(&mut buf, &resp, &mut crypto_cursor).unwrap();
+    write_header(&mut buf, &resp, *header_crypto.key()).unwrap();
     dn_writer.send(&buf).await.map_err(|e| {
         let peer_addr = dn_writer.peer_addr();
         trace!(?e, ?peer_addr, "Failed to send response to downstream");

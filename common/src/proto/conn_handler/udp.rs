@@ -103,9 +103,7 @@ impl UdpProxyConnHandler {
             // Write header
             let mut wtr = Vec::new();
             let header = RouteResponse { result: Ok(()) };
-            let mut crypto_cursor =
-                tokio_chacha20::cursor::EncryptCursor::new_x(*header_crypto.key());
-            write_header(&mut wtr, &header, &mut crypto_cursor).unwrap();
+            write_header(&mut wtr, &header, *header_crypto.key()).unwrap();
             wtr.into()
         };
 

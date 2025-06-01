@@ -1,12 +1,12 @@
 use std::io::{self, Write};
 
+use ae::anti_replay::{TimeValidator, ValidatorRef};
 use metrics::counter;
 use tokio::net::UdpSocket;
 use tracing::warn;
 use udp_listener::ConnWrite;
 
 use crate::{
-    anti_replay::{TimeValidator, ValidatorRef},
     header::{
         codec::{CodecError, read_header, write_header},
         route::RouteResponse,
@@ -21,8 +21,7 @@ pub async fn echo(
 ) {
     let resp = RouteResponse { result: Ok(()) };
     let mut wtr = Vec::new();
-    let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*header_crypto.key());
-    write_header(&mut wtr, &resp, &mut crypto_cursor).unwrap();
+    write_header(&mut wtr, &resp, *header_crypto.key()).unwrap();
     wtr.write_all(buf).unwrap();
     let dn_writer = dn_writer.clone();
     tokio::spawn(async move {
@@ -39,9 +38,8 @@ pub fn decode_route_header(
     time_validator: &TimeValidator,
 ) -> Result<Option<UpstreamAddr>, CodecError> {
     // Decode header
-    let mut crypto_cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*header_crypto.key());
     let validator = ValidatorRef::Time(time_validator);
-    let header: UdpRequestHeader = read_header(buf, &mut crypto_cursor, &validator)?;
+    let header: UdpRequestHeader = read_header(buf, *header_crypto.key(), &validator)?;
 
     Ok(header.upstream.map(UpstreamAddr))
 }

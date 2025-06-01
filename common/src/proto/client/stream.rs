@@ -1,7 +1,6 @@
 use std::time::{Duration, Instant};
 
 use crate::{
-    anti_replay::ValidatorRef,
     error::AnyError,
     header::{
         codec::{CodecError, timed_read_header_async, timed_write_header_async},
@@ -12,6 +11,7 @@ use crate::{
     route::{BuildTracer, ConnChain, TraceRtt, convert_proxies_to_header_crypto_pairs},
     stream::pool::{ConnectError, connect_with_pool},
 };
+use ae::anti_replay::ValidatorRef;
 use metrics::counter;
 use thiserror::Error;
 use tracing::{error, instrument, trace};
@@ -57,8 +57,7 @@ pub async fn establish(
                 source: e,
                 upstream_addr: addr.clone(),
             })?;
-        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
-        timed_write_header_async(&mut stream, header, &mut crypto_cursor, IO_TIMEOUT)
+        timed_write_header_async(&mut stream, header, *crypto.key(), IO_TIMEOUT)
             .await
             .map_err(|e| StreamEstablishError::WriteStreamRequestHeader {
                 source: e,
@@ -153,16 +152,18 @@ pub async fn trace_rtt(
     // Write headers to stream
     for (header, crypto) in &pairs {
         heartbeat::send_upgrade(&mut stream, IO_TIMEOUT, crypto).await?;
-        let mut crypto_cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*crypto.key());
-        timed_write_header_async(&mut stream, header, &mut crypto_cursor, IO_TIMEOUT).await?;
+        timed_write_header_async(&mut stream, header, *crypto.key(), IO_TIMEOUT).await?;
     }
 
     // Read response
-    let mut crypto_cursor =
-        tokio_chacha20::cursor::DecryptCursor::new_x(*pairs.last().unwrap().1.key());
     let validator = ValidatorRef::Replay(&stream_context.replay_validator);
-    let resp: RouteResponse =
-        timed_read_header_async(&mut stream, &mut crypto_cursor, &validator, IO_TIMEOUT).await?;
+    let resp: RouteResponse = timed_read_header_async(
+        &mut stream,
+        *pairs.last().unwrap().1.key(),
+        &validator,
+        IO_TIMEOUT,
+    )
+    .await?;
     if let Err(err) = resp.result {
         return Err(TraceError::Response { err });
     }
