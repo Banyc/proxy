@@ -31,7 +31,9 @@ impl Default for ConfigWatcher {
 }
 impl file_watcher_tokio::HandleEvent for ConfigWatcher {
     async fn handle_event(&mut self, event: file_watcher_tokio::Event) {
-        if !event.kind.is_modify() {
+        let may_changed =
+            event.kind.is_create() || event.kind.is_modify() || event.kind.is_remove();
+        if !may_changed {
             return;
         }
         self.tx.notify_one();
