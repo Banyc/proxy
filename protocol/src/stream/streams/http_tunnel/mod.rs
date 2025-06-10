@@ -233,7 +233,7 @@ impl HttpAccessConnHandler {
                 // Establish encrypted stream
                 let (r, w) = tokio::io::split(upstream.stream);
                 let upstream =
-                    tokio_chacha20::stream::WholeStream::from_key_halves(*crypto.key(), r, w);
+                    tokio_chacha20::stream::WholeStream::from_key_halves_x(*crypto.key(), r, w);
 
                 tls_http(upstream, req, session_guard).await
             }

@@ -207,7 +207,7 @@ where
                     // Establish encrypted stream
                     let (r, w) = tokio::io::split(upstream);
                     let upstream =
-                        tokio_chacha20::stream::WholeStream::from_key_halves(*crypto.key(), r, w);
+                        tokio_chacha20::stream::WholeStream::from_key_halves_x(*crypto.key(), r, w);
 
                     tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await
                 }
@@ -215,7 +215,7 @@ where
                     // Establish encrypted stream
                     let (r, w) = tokio::io::split(downstream);
                     let downstream =
-                        tokio_chacha20::stream::WholeStream::from_key_halves(*crypto.key(), r, w);
+                        tokio_chacha20::stream::WholeStream::from_key_halves_x(*crypto.key(), r, w);
 
                     tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await
                 }
