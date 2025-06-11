@@ -90,8 +90,7 @@ where
     let hdr_buf = &hdr_buf[..len as usize];
 
     let timestamped = true;
-    let mut msg_buf = [0; ae::timestamp::TIMESTAMP_SIZE + MAX_HEADER_LEN];
-    let mut ciphertext_buf = [0; MAX_HEADER_LEN * 2];
+    let mut buf = [0; MAX_HEADER_LEN * 2];
     let write_message = |wtr: &mut io::Cursor<&mut [u8]>| {
         Write::write_all(wtr, hdr_buf).unwrap();
         Ok(())
@@ -100,8 +99,7 @@ where
         writer,
         key,
         timestamped,
-        &mut msg_buf,
-        &mut ciphertext_buf,
+        &mut buf,
         write_message,
     )]) {
         Ok(()) => (),
