@@ -27,7 +27,7 @@ dependencies = [
  "rand 0.9.1",
  "thiserror 2.0.12",
  "tokio",
- "tokio_chacha20",
+ "tokio_chacha20 0.1.0 (git+https://github.com/Banyc/tokio_chacha20.git?tag=v0.0.5)",
 ]
 
 [[package]]
@@ -643,7 +643,7 @@ dependencies = [
  "tokio",
  "tokio-io-timeout",
  "tokio-util",
- "tokio_chacha20",
+ "tokio_chacha20 0.1.0 (git+https://github.com/Banyc/tokio_chacha20.git?tag=v0.0.6)",
  "tokio_conn_pool",
  "tokio_throughput",
  "tracing",
@@ -1734,7 +1734,7 @@ checksum = "c0ff37bd590ca25063e35af745c343cb7a0271906fb7b37e4813e8f79f00268d"
 dependencies = [
  "bitflags 2.9.1",
  "libc",
- "redox_syscall 0.5.12",
+ "redox_syscall 0.5.13",
 ]
 
 [[package]]
@@ -2152,7 +2152,7 @@ checksum = "bc838d2a56b5b1a6c25f55575dfc605fabb63bb2365f6c2353ef9159aa69e4a5"
 dependencies = [
  "cfg-if",
  "libc",
- "redox_syscall 0.5.12",
+ "redox_syscall 0.5.13",
  "smallvec",
  "windows-targets",
 ]
@@ -2875,7 +2875,7 @@ dependencies = [
  "thiserror 2.0.12",
  "tokio",
  "tokio-util",
- "tokio_chacha20",
+ "tokio_chacha20 0.1.0 (git+https://github.com/Banyc/tokio_chacha20.git?tag=v0.0.6)",
  "tokio_conn_pool",
  "tokio_kcp",
  "tracing",
@@ -3125,9 +3125,9 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.5.12"
+version = "0.5.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "928fca9cf2aa042393a8325b9ead81d2f0df4cb12e1e24cef072922ccd99c5af"
+checksum = "0d04b7d0ee6b4a0207a0a7adb104d23ecb0b47d6beae7152d0fa34b692b29fd6"
 dependencies = [
  "bitflags 2.9.1",
 ]
@@ -3883,7 +3883,7 @@ dependencies = [
  "serial_test",
  "swap",
  "tokio",
- "tokio_chacha20",
+ "tokio_chacha20 0.1.0 (git+https://github.com/Banyc/tokio_chacha20.git?tag=v0.0.6)",
  "tracing",
  "tracing-subscriber",
 ]
@@ -4035,6 +4035,22 @@ dependencies = [
 name = "tokio_chacha20"
 version = "0.1.0"
 source = "git+https://github.com/Banyc/tokio_chacha20.git?tag=v0.0.5#33a658c5ae15454e2b386b01b17574ab82e92fdf"
+dependencies = [
+ "arrayvec",
+ "base64",
+ "blake3",
+ "num-bigint",
+ "rand 0.9.1",
+ "rayon",
+ "serde",
+ "thiserror 2.0.12",
+ "tokio",
+]
+
+[[package]]
+name = "tokio_chacha20"
+version = "0.1.0"
+source = "git+https://github.com/Banyc/tokio_chacha20.git?tag=v0.0.6#e48dc447ba5dd0c280f29a5146d5f35df197bad1"
 dependencies = [
  "arrayvec",
  "base64",

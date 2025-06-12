@@ -16,7 +16,10 @@ use common::{
         client::stream::{StreamEstablishError, establish},
         connect::stream::StreamConnectorTable,
         context::StreamContext,
-        io_copy::stream::{ConnContext, CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
+        io_copy::{
+            same_key_nonce_ciphertext,
+            stream::{ConnContext, CopyBidirectional, DEAD_SESSION_RETENTION_DURATION},
+        },
         log::stream::{LOGGER, SimplifiedStreamLog, SimplifiedStreamProxyLog},
         metrics::stream::{Session, StreamSessionTable},
         route::{
@@ -232,9 +235,8 @@ impl HttpAccessConnHandler {
             Some(crypto) => {
                 // Establish encrypted stream
                 let (r, w) = tokio::io::split(upstream.stream);
-                let upstream =
-                    tokio_chacha20::stream::WholeStream::from_key_halves_x(*crypto.key(), r, w);
-
+                let (r, w) = same_key_nonce_ciphertext(crypto.key(), r, w);
+                let upstream = tokio_chacha20::stream::DuplexStream::new(r, w);
                 tls_http(upstream, req, session_guard).await
             }
             None => tls_http(upstream.stream, req, session_guard).await,

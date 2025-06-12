@@ -1,6 +1,7 @@
 use std::{
     io::{self, Write},
     net::SocketAddr,
+    pin::Pin,
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicU64, Ordering},
@@ -12,8 +13,10 @@ use async_speed_limit::Limiter;
 use metrics::{counter, gauge};
 use scopeguard::defer;
 use thiserror::Error;
-use tokio::net::UdpSocket;
-use tokio_chacha20::cursor::{DecryptResult, EncryptResult};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    net::UdpSocket,
+};
 use tokio_throughput::{ReadGauge, WriteGauge};
 use tracing::{info, trace, warn};
 use udp_listener::{ConnRead, ConnWrite};
@@ -25,6 +28,7 @@ use crate::{
     log::Timing,
     proto::{
         conn::udp::Flow,
+        io_copy::{nonce_ciphertext_reader, nonce_ciphertext_writer, noop_context, unwrap_ready},
         log::udp::{FlowLog, LOGGER, TrafficLog},
         metrics::udp::{Session, UdpSessionTable},
     },
@@ -43,10 +47,7 @@ pub trait UdpRecv {
 }
 
 pub trait UdpSend {
-    fn trait_send(
-        &mut self,
-        buf: &[u8],
-    ) -> impl Future<Output = Result<usize, AnyError>> + Send;
+    fn trait_send(&mut self, buf: &[u8]) -> impl Future<Output = Result<usize, AnyError>> + Send;
 }
 
 pub struct UpstreamParts<R, W> {
@@ -473,21 +474,18 @@ fn en_dec<'buf>(
 ) -> Option<&'buf [u8]> {
     Some(match en_dir {
         EncryptionDirection::Encrypt => {
-            let mut cursor = tokio_chacha20::cursor::EncryptCursor::new_x(*config.key());
-            let EncryptResult { read, written } = cursor.encrypt(&pkt[..], buf);
-            if pkt.len() != read {
-                // Not fully copied.
-                return None;
-            }
-            &buf[..written]
+            let mut buf_wtr = io::Cursor::new(&mut *buf);
+            let mut w = nonce_ciphertext_writer(config.key(), &mut buf_wtr);
+            unwrap_ready(Pin::new(&mut w).poll_write(&mut noop_context(), pkt)).ok()?;
+            let pos = usize::try_from(buf_wtr.position()).unwrap();
+            &buf[..pos]
         }
         EncryptionDirection::Decrypt => {
-            let mut cursor = tokio_chacha20::cursor::DecryptCursor::new_x(*config.key());
-            let i = match cursor.decrypt(pkt) {
-                DecryptResult::StillAtNonce => return None,
-                DecryptResult::WithUserData { user_data_start } => user_data_start,
-            };
-            &pkt[i..]
+            let mut r = nonce_ciphertext_reader(config.key(), &*pkt);
+            let mut read_buf = ReadBuf::new(buf);
+            unwrap_ready(Pin::new(&mut r).poll_read(&mut noop_context(), &mut read_buf)).ok()?;
+            let pos = read_buf.filled().len();
+            &buf[..pos]
         }
     })
 }

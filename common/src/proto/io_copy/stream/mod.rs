@@ -17,6 +17,7 @@ use crate::{
     log::Timing,
     proto::{
         addr::StreamAddr,
+        io_copy::same_key_nonce_ciphertext,
         log::stream::{LOGGER, StreamLog, StreamProxyLog},
         metrics::stream::{Session, StreamSessionTable},
     },
@@ -206,17 +207,15 @@ where
                 EncryptionDirection::Encrypt => {
                     // Establish encrypted stream
                     let (r, w) = tokio::io::split(upstream);
-                    let upstream =
-                        tokio_chacha20::stream::WholeStream::from_key_halves_x(*crypto.key(), r, w);
-
+                    let (r, w) = same_key_nonce_ciphertext(crypto.key(), r, w);
+                    let upstream = tokio_chacha20::stream::DuplexStream::new(r, w);
                     tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await
                 }
                 EncryptionDirection::Decrypt => {
                     // Establish encrypted stream
                     let (r, w) = tokio::io::split(downstream);
-                    let downstream =
-                        tokio_chacha20::stream::WholeStream::from_key_halves_x(*crypto.key(), r, w);
-
+                    let (r, w) = same_key_nonce_ciphertext(crypto.key(), r, w);
+                    let downstream = tokio_chacha20::stream::DuplexStream::new(r, w);
                     tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await
                 }
             }
