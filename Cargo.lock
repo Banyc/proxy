@@ -1940,10 +1940,11 @@ dependencies = [
 [[package]]
 name = "mux"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/mux.git?tag=v0.0.5#d1e20e65c265c9662050a51efb88f03ef616eb84"
+source = "git+https://github.com/Banyc/mux.git?tag=v0.0.6#b18c659ccf70c1046e40c758de5dad495d90d96e"
 dependencies = [
  "async_async_io",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.56)",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
+ "scopeguard",
  "tokio",
 ]
 
