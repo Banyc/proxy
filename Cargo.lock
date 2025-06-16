@@ -1940,7 +1940,7 @@ dependencies = [
 [[package]]
 name = "mux"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/mux.git?tag=v0.0.7#a7a223bb9483294dcc0086fac6f36706ee8a3816"
+source = "git+https://github.com/Banyc/mux.git?tag=v0.0.8#d17664fdc039bb11f9edc66e6a29189426219925"
 dependencies = [
  "async_async_io",
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
