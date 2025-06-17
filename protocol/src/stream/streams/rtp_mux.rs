@@ -6,11 +6,7 @@ use std::{
 
 use async_trait::async_trait;
 use metrics::counter;
-use mux::{
-    MuxError,
-    async_async_io::{PollIo, read::PollRead, write::PollWrite},
-    spawn_mux_no_reconnection,
-};
+use mux::{MuxError, spawn_mux_no_reconnection};
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::{net::ToSocketAddrs, task::JoinSet};
@@ -192,7 +188,7 @@ impl StreamConnect for RtpMuxConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>> {
         let ((r, w), addr) = self.connect_request_tx.send(addr).await?;
         counter!("stream.rtp_mux.mux.connects").increment(1);
-        let stream = PollIo::new(PollRead::new(r), PollWrite::new(w));
+        let stream = tokio_chacha20::stream::DuplexStream::new(r, w);
         Ok(Box::new(IoMuxStream::new(stream, addr)))
     }
 }

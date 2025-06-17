@@ -9,9 +9,7 @@ use std::{
 use common::stream::{AsConn, HasIoAddr, OwnIoStream};
 use mux::{
     DeadControl, Initiation, MuxConfig, MuxError, StreamAccepter, StreamOpener, StreamReader,
-    StreamWriter, TooManyOpenStreams,
-    async_async_io::{PollIo, read::PollRead, write::PollWrite},
-    spawn_mux_no_reconnection,
+    StreamWriter, spawn_mux_no_reconnection,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -42,7 +40,7 @@ pub async fn run_mux_accepter(
             Ok(x) => x,
             Err(DeadControl {}) => break,
         };
-        let stream = PollIo::new(PollRead::new(r), PollWrite::new(w));
+        let stream = tokio_chacha20::stream::DuplexStream::new(r, w);
         let stream = IoMuxStream::new(stream, addr);
         handle_conn(stream);
     }
@@ -84,14 +82,7 @@ pub async fn run_mux_connector<R, W, Fut>(
                 let stream = match opener.open().await {
                     Ok(x) => x,
                     Err(e) => {
-                        let e = match e {
-                            mux::StreamOpenError::DeadControl(DeadControl {}) => {
-                                io::Error::new(io::ErrorKind::ConnectionReset, format!("dead control; {addr:?}"))
-                            },
-                            mux::StreamOpenError::TooManyOpenStreams(TooManyOpenStreams {}) => {
-                                io::Error::new(io::ErrorKind::InvalidInput, format!("too many open streams; {addr:?}"))
-                            },
-                        };
+                        let e = convert_open_err(e, addr);
                         let _ = msg.stream.send(Err(e));
                         openers.remove(&msg.listen_addr).unwrap();
                         continue;
@@ -100,6 +91,26 @@ pub async fn run_mux_connector<R, W, Fut>(
                 let _ = msg.stream.send(Ok((stream, *addr)));
             }
         }
+    }
+}
+fn convert_open_err(err: mux::StreamOpenError, addr: &SocketAddrPair) -> io::Error {
+    match err {
+        mux::StreamOpenError::DeadControl(DeadControl {}) => io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            format!("dead control; {addr:?}"),
+        ),
+        mux::StreamOpenError::ControlOpen(open_error) => match open_error {
+            mux::ControlOpenError::TooManyOpenStreams(mux::TooManyOpenStreams {}) => {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("too many open streams; {addr:?}"),
+                )
+            }
+            mux::ControlOpenError::DeadCentralIo(mux::DeadCentralIo { side }) => io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("dead central I/O; side: {side:?}; {addr:?}"),
+            ),
+        },
     }
 }
 async fn build_opener<R, W>(
@@ -169,11 +180,14 @@ pub struct SocketAddrPair {
 
 #[derive(Debug)]
 pub struct IoMuxStream {
-    stream: PollIo<StreamReader, StreamWriter>,
+    stream: tokio_chacha20::stream::DuplexStream<StreamReader, StreamWriter>,
     addr: SocketAddrPair,
 }
 impl IoMuxStream {
-    pub fn new(stream: PollIo<StreamReader, StreamWriter>, addr: SocketAddrPair) -> Self {
+    pub fn new(
+        stream: tokio_chacha20::stream::DuplexStream<StreamReader, StreamWriter>,
+        addr: SocketAddrPair,
+    ) -> Self {
         Self { stream, addr }
     }
 }
@@ -185,14 +199,12 @@ impl AsyncWrite for IoMuxStream {
     ) -> std::task::Poll<Result<usize, io::Error>> {
         std::pin::Pin::new(&mut self.stream).poll_write(cx, buf)
     }
-
     fn poll_flush(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), io::Error>> {
         std::pin::Pin::new(&mut self.stream).poll_flush(cx)
     }
-
     fn poll_shutdown(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
