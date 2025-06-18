@@ -16,7 +16,7 @@ use super::{
 
 #[derive(Debug)]
 pub struct RouteTableBuildContext<'caller, Addr, TracerBuilder> {
-    pub matcher: &'caller HashMap<Arc<str>, Matcher>,
+    pub matcher: &'caller Arc<HashMap<Arc<str>, Matcher>>,
     pub conn_selector: &'caller HashMap<Arc<str>, ConnSelector<Addr>>,
     pub conn_selector_cx: ConnSelectorBuildContext<'caller, Addr, TracerBuilder>,
 }
@@ -53,13 +53,14 @@ impl<AddrStr> RouteTableBuilder<AddrStr> {
             let e = entry.build(cx.clone())?;
             built.push(e);
         }
-        Ok(RouteTable::new(built))
+        Ok(RouteTable::new(built, cx.matcher.clone()))
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct RouteTable<Addr> {
     entries: Vec<RouteTableEntry<Addr>>,
+    matchers: Arc<HashMap<Arc<str>, Matcher>>,
 }
 impl<Addr> RouteTable<Addr>
 where
@@ -67,14 +68,17 @@ where
 {
     const BLOCK_ACTION: RouteAction<Addr> = RouteAction::Block;
 
-    pub fn new(entries: Vec<RouteTableEntry<Addr>>) -> Self {
-        Self { entries }
+    pub fn new(
+        entries: Vec<RouteTableEntry<Addr>>,
+        matchers: Arc<HashMap<Arc<str>, Matcher>>,
+    ) -> Self {
+        Self { entries, matchers }
     }
 
     pub fn action(&self, addr: &InternetAddr) -> &RouteAction<Addr> {
         self.entries
             .iter()
-            .find(|&entry| entry.matcher().matches(addr))
+            .find(|&entry| entry.matcher().matches(addr, &self.matchers))
             .map(|entry| entry.action())
             .unwrap_or(&Self::BLOCK_ACTION)
     }

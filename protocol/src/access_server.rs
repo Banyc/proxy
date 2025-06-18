@@ -173,7 +173,7 @@ pub async fn spawn_and_clean(
     stream_conn: &HashMap<Arc<str>, StreamConnConfig>,
     udp_conn: &HashMap<Arc<str>, UdpConnConfig>,
 ) -> AnyResult {
-    let matcher = matcher(config.matcher)?;
+    let matcher = Arc::new(matcher(config.matcher)?);
 
     // Stream
     let stream_trace_builder = StreamTracerBuilder::new(context.stream.clone());

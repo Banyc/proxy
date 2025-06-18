@@ -102,25 +102,9 @@ pub struct Filter {
     rules: Arc<[Rule]>,
 }
 impl Filter {
-    pub fn filter(&self, addr: &InternetAddr) -> Action {
-        match addr.deref() {
-            InternetAddrKind::SocketAddr(addr) => self.filter_ip(*addr),
-            InternetAddrKind::DomainName { addr, port } => self.filter_domain_name(addr, *port),
-        }
-    }
-
-    pub fn filter_domain_name(&self, domain_name: &str, port: u16) -> Action {
+    pub fn filter(&self, addr: &InternetAddr, matchers: &HashMap<Arc<str>, Matcher>) -> Action {
         for match_act in self.rules.as_ref() {
-            if match_act.matcher.0.is_match_domain_name(domain_name, port) {
-                return match_act.action;
-            }
-        }
-        Action::Proxy
-    }
-
-    pub fn filter_ip(&self, addr: SocketAddr) -> Action {
-        for match_act in self.rules.as_ref() {
-            if match_act.matcher.0.is_match_ip(addr) {
+            if match_act.matcher.0.matches(addr, matchers) {
                 return match_act.action;
             }
         }
@@ -177,6 +161,7 @@ enum MatcherBuilderKind {
         #[serde(default)]
         port_matcher: PortListMatcherBuilder,
     },
+    OtherMatcher(String),
     Many(Vec<MatcherBuilderKind>),
 }
 impl MatcherBuilderKind {
@@ -185,10 +170,11 @@ impl MatcherBuilderKind {
             Self::Single {
                 addr_matcher,
                 port_matcher,
-            } => Matcher(MatcherKind::Single {
+            } => Matcher(MatcherKind::Single(LeafMatcher {
                 addr_matcher: addr_matcher.build()?,
                 port_matcher: port_matcher.build(),
-            }),
+            })),
+            Self::OtherMatcher(matcher) => Matcher(MatcherKind::OtherMatcher(matcher.into())),
             Self::Many(matchers) => Matcher(MatcherKind::Many(
                 matchers
                     .into_iter()
@@ -202,53 +188,57 @@ impl MatcherBuilderKind {
 #[derive(Debug, Clone)]
 pub struct Matcher(MatcherKind);
 impl Matcher {
-    pub fn matches(&self, addr: &InternetAddr) -> bool {
-        match addr.deref() {
-            InternetAddrKind::SocketAddr(addr) => self.0.is_match_ip(*addr),
-            InternetAddrKind::DomainName { addr, port } => self.0.is_match_domain_name(addr, *port),
-        }
+    pub fn matches(&self, addr: &InternetAddr, others: &HashMap<Arc<str>, Matcher>) -> bool {
+        self.0.matches(addr, others)
     }
 }
 
 #[derive(Debug, Clone)]
 enum MatcherKind {
-    Single {
-        addr_matcher: AddrListMatcher,
-        port_matcher: PortListMatcher,
-    },
+    Single(LeafMatcher),
+    OtherMatcher(Arc<str>),
     Many(Arc<[MatcherKind]>),
 }
 impl MatcherKind {
-    pub fn is_match_domain_name(&self, addr: &str, port: u16) -> bool {
+    pub fn matches(&self, addr: &InternetAddr, others: &HashMap<Arc<str>, Matcher>) -> bool {
         match self {
-            MatcherKind::Single {
-                addr_matcher,
-                port_matcher,
-            } => {
-                if !port_matcher.is_match(port) {
+            MatcherKind::Single(leaf_matcher) => leaf_matcher.matches(addr),
+            MatcherKind::OtherMatcher(name) => {
+                let Some(other) = others.get(name) else {
                     return false;
-                }
-                addr_matcher.is_match_domain_name(addr)
+                };
+                other.matches(addr, others)
             }
-            MatcherKind::Many(matchers) => matchers
-                .iter()
-                .any(|matcher| matcher.is_match_domain_name(addr, port)),
+            MatcherKind::Many(matcher_kinds) => {
+                matcher_kinds.iter().any(|x| x.matches(addr, others))
+            }
         }
     }
+}
 
-    pub fn is_match_ip(&self, addr: SocketAddr) -> bool {
-        match self {
-            MatcherKind::Single {
-                addr_matcher,
-                port_matcher,
-            } => {
-                if !port_matcher.is_match(addr.port()) {
-                    return false;
-                }
-                addr_matcher.is_match_ip(addr.ip())
-            }
-            MatcherKind::Many(matchers) => matchers.iter().any(|matcher| matcher.is_match_ip(addr)),
+#[derive(Debug, Clone)]
+pub struct LeafMatcher {
+    addr_matcher: AddrListMatcher,
+    port_matcher: PortListMatcher,
+}
+impl LeafMatcher {
+    pub fn matches(&self, addr: &InternetAddr) -> bool {
+        match addr.deref() {
+            InternetAddrKind::SocketAddr(addr) => self.is_match_ip(*addr),
+            InternetAddrKind::DomainName { addr, port } => self.is_match_domain_name(addr, *port),
         }
+    }
+    fn is_match_domain_name(&self, addr: &str, port: u16) -> bool {
+        if !self.port_matcher.is_match(port) {
+            return false;
+        }
+        self.addr_matcher.is_match_domain_name(addr)
+    }
+    fn is_match_ip(&self, addr: SocketAddr) -> bool {
+        if !self.port_matcher.is_match(addr.port()) {
+            return false;
+        }
+        self.addr_matcher.is_match_ip(addr.ip())
     }
 }
 
