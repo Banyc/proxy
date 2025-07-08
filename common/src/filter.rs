@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::{Deref, RangeInclusive},
     sync::Arc,
@@ -9,85 +9,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{
-    addr::{InternetAddr, InternetAddrKind},
-    config::SharableConfig,
-};
-
-pub fn build_from_map(
-    matchers: HashMap<Arc<str>, MatcherBuilder>,
-    builders: HashMap<Arc<str>, FilterBuilder>,
-) -> Result<HashMap<Arc<str>, Filter>, FilterBuildError> {
-    let matchers = {
-        let mut built = HashMap::new();
-        for (k, v) in matchers {
-            let v = v.build()?;
-            built.insert(k, v);
-        }
-        built
-    };
-
-    let mut rounds = 0;
-    let mut filters = HashMap::new();
-    let mut last_key_not_found = None;
-    while filters.len() < builders.len() {
-        if rounds >= builders.len() {
-            return Err(FilterBuildError::KeyNotFound(last_key_not_found.unwrap()));
-        }
-        rounds += 1;
-
-        for (k, v) in &builders {
-            let v = match v.clone().build(&filters, &matchers) {
-                Ok(v) => v,
-                Err(FilterBuildError::KeyNotFound(key)) => {
-                    last_key_not_found = Some(key.clone());
-                    continue;
-                }
-                Err(e) => return Err(e),
-            };
-            filters.insert(k.clone(), v);
-        }
-    }
-    Ok(filters)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[serde(transparent)]
-pub struct FilterBuilder {
-    pub rules: Option<Vec<SharableConfig<RuleBuilder>>>,
-}
-impl FilterBuilder {
-    pub fn build(
-        self,
-        filters: &HashMap<Arc<str>, Filter>,
-        matchers: &HashMap<Arc<str>, Matcher>,
-    ) -> Result<Filter, FilterBuildError> {
-        let mut rules = Vec::new();
-        if let Some(self_match_acts) = self.rules {
-            for rule in self_match_acts {
-                match rule {
-                    SharableConfig::SharingKey(key) => {
-                        rules.extend(
-                            filters
-                                .get(&key)
-                                .ok_or_else(|| FilterBuildError::KeyNotFound(key.clone()))?
-                                .rules
-                                .iter()
-                                .cloned(),
-                        );
-                    }
-                    SharableConfig::Private(rule) => {
-                        rules.push(rule.build(matchers)?);
-                    }
-                }
-            }
-        }
-        Ok(Filter {
-            rules: rules.into(),
-        })
-    }
-}
+use crate::addr::{InternetAddr, InternetAddrKind};
 
 #[derive(Debug, Error)]
 pub enum FilterBuildError {
@@ -95,49 +17,6 @@ pub enum FilterBuildError {
     Regex(#[from] regex::Error),
     #[error("Key not found: {0}")]
     KeyNotFound(Arc<str>),
-}
-
-#[derive(Debug, Clone)]
-pub struct Filter {
-    rules: Arc<[Rule]>,
-}
-impl Filter {
-    pub fn filter(&self, addr: &InternetAddr, matchers: &HashMap<Arc<str>, Matcher>) -> Action {
-        for match_act in self.rules.as_ref() {
-            if match_act.matcher.0.matches(addr, matchers) {
-                return match_act.action;
-            }
-        }
-        Action::Proxy
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RuleBuilder {
-    matcher: SharableConfig<MatcherBuilder>,
-    action: Action,
-}
-impl RuleBuilder {
-    pub fn build(self, matchers: &HashMap<Arc<str>, Matcher>) -> Result<Rule, FilterBuildError> {
-        let matcher = match self.matcher {
-            SharableConfig::SharingKey(k) => matchers
-                .get(&k)
-                .ok_or_else(|| FilterBuildError::KeyNotFound(Arc::clone(&k)))?
-                .clone(),
-            SharableConfig::Private(matcher) => matcher.build()?,
-        };
-        Ok(Rule {
-            matcher,
-            action: self.action,
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Rule {
-    matcher: Matcher,
-    action: Action,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,8 +67,13 @@ impl MatcherBuilderKind {
 #[derive(Debug, Clone)]
 pub struct Matcher(MatcherKind);
 impl Matcher {
-    pub fn matches(&self, addr: &InternetAddr, others: &HashMap<Arc<str>, Matcher>) -> bool {
-        self.0.matches(addr, others)
+    pub fn matches(
+        &self,
+        addr: &InternetAddr,
+        others: &HashMap<Arc<str>, Matcher>,
+        visited: &mut HashSet<Arc<str>>,
+    ) -> bool {
+        self.0.matches(addr, others, visited)
     }
 }
 
@@ -200,18 +84,27 @@ enum MatcherKind {
     Many(Arc<[MatcherKind]>),
 }
 impl MatcherKind {
-    pub fn matches(&self, addr: &InternetAddr, others: &HashMap<Arc<str>, Matcher>) -> bool {
+    pub fn matches(
+        &self,
+        addr: &InternetAddr,
+        others: &HashMap<Arc<str>, Matcher>,
+        visited: &mut HashSet<Arc<str>>,
+    ) -> bool {
         match self {
             MatcherKind::Single(leaf_matcher) => leaf_matcher.matches(addr),
             MatcherKind::OtherMatcher(name) => {
                 let Some(other) = others.get(name) else {
                     return false;
                 };
-                other.matches(addr, others)
+                if visited.contains(name) {
+                    return false;
+                }
+                visited.insert(name.clone());
+                other.matches(addr, others, visited)
             }
-            MatcherKind::Many(matcher_kinds) => {
-                matcher_kinds.iter().any(|x| x.matches(addr, others))
-            }
+            MatcherKind::Many(matcher_kinds) => matcher_kinds
+                .iter()
+                .any(|x| x.matches(addr, others, visited)),
         }
     }
 }

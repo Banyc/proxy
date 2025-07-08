@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    sync::Arc,
+};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -76,9 +80,18 @@ where
     }
 
     pub fn action(&self, addr: &InternetAddr) -> &RouteAction<Addr> {
+        let mut visited = HashSet::new();
         self.entries
             .iter()
-            .find(|&entry| entry.matcher().matches(addr, &self.matchers))
+            .find(|&entry| {
+                if let Some(name) = entry.matcher_name() {
+                    if visited.contains(name) {
+                        return false;
+                    }
+                    visited.insert(name.clone());
+                }
+                entry.matcher().matches(addr, &self.matchers, &mut visited)
+            })
             .map(|entry| entry.action())
             .unwrap_or(&Self::BLOCK_ACTION)
     }
@@ -101,21 +114,24 @@ impl<AddrStr> RouteTableEntryBuilder<AddrStr> {
         TracerBuilder: BuildTracer<Tracer = Tracer>,
         Tracer: TraceRtt<Addr = Addr> + Sync + Send + 'static,
     {
-        let matcher = match self.matcher {
-            SharableConfig::SharingKey(k) => cx
-                .matcher
-                .get(&k)
-                .cloned()
-                .ok_or(RouteTableBuildError::ConnSelectorKeyNotFound(k))?,
-            SharableConfig::Private(v) => v.build().map_err(RouteTableBuildError::Matcher)?,
+        let (name, matcher) = match self.matcher {
+            SharableConfig::SharingKey(k) => (
+                Some(k.clone()),
+                cx.matcher
+                    .get(&k)
+                    .cloned()
+                    .ok_or(RouteTableBuildError::ConnSelectorKeyNotFound(k))?,
+            ),
+            SharableConfig::Private(v) => (None, v.build().map_err(RouteTableBuildError::Matcher)?),
         };
         let action = self.action.build(cx.conn_selector, cx.conn_selector_cx)?;
-        Ok(RouteTableEntry::new(matcher, action))
+        Ok(RouteTableEntry::new(name, matcher, action))
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct RouteTableEntry<Addr> {
+    matcher_name: Option<Arc<str>>,
     matcher: Matcher,
     action: RouteAction<Addr>,
 }
@@ -123,14 +139,24 @@ impl<Addr> RouteTableEntry<Addr>
 where
     Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
 {
-    pub fn new(matcher: Matcher, action: RouteAction<Addr>) -> Self {
-        Self { matcher, action }
+    pub fn new(
+        matcher_name: Option<Arc<str>>,
+        matcher: Matcher,
+        action: RouteAction<Addr>,
+    ) -> Self {
+        Self {
+            matcher_name,
+            matcher,
+            action,
+        }
     }
 
+    pub fn matcher_name(&self) -> Option<&Arc<str>> {
+        self.matcher_name.as_ref()
+    }
     pub fn matcher(&self) -> &Matcher {
         &self.matcher
     }
-
     pub fn action(&self) -> &RouteAction<Addr> {
         &self.action
     }
