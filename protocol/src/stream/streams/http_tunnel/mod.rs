@@ -215,8 +215,17 @@ impl HttpAccessConnHandler {
         };
 
         // Establish proxy chain
-        let proxy_chain = conn_selector.choose_chain();
-        let upstream = establish(&proxy_chain.chain, addr.clone(), &self.stream_context).await?;
+        let (chain, payload_crypto) = match conn_selector.as_ref() {
+            common::route::ConnSelector::Empty => ([].into(), None),
+            common::route::ConnSelector::Some(conn_selector1) => {
+                let proxy_chain = conn_selector1.choose_chain();
+                (
+                    proxy_chain.chain.clone(),
+                    proxy_chain.payload_crypto.clone(),
+                )
+            }
+        };
+        let upstream = establish(&chain, addr.clone(), &self.stream_context).await?;
 
         let session_guard = self.stream_context.session_table.as_ref().map(|s| {
             s.set_scope_owned(Session {
@@ -231,7 +240,7 @@ impl HttpAccessConnHandler {
                 dn_gauge: None,
             })
         });
-        let res = match &proxy_chain.payload_crypto {
+        let res = match &payload_crypto {
             Some(crypto) => {
                 // Establish encrypted stream
                 let (r, w) = tokio::io::split(upstream.stream);
@@ -502,13 +511,17 @@ impl HttpConnect {
             address: address.clone(),
             stream_type: ConcreteStreamType::Tcp.to_string().into(),
         };
-        let proxy_chain = self.conn_selector.choose_chain();
-        let upstream = establish(
-            &proxy_chain.chain,
-            destination.clone(),
-            &self.stream_context,
-        )
-        .await?;
+        let (chain, payload_crypto) = match &self.conn_selector.as_ref() {
+            common::route::ConnSelector::Empty => ([].into(), None),
+            common::route::ConnSelector::Some(conn_selector1) => {
+                let proxy_chain = conn_selector1.choose_chain();
+                (
+                    proxy_chain.chain.clone(),
+                    proxy_chain.payload_crypto.clone(),
+                )
+            }
+        };
+        let upstream = establish(&chain, destination.clone(), &self.stream_context).await?;
 
         let conn_context = ConnContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
@@ -523,7 +536,7 @@ impl HttpConnect {
         let io_copy = CopyBidirectional {
             downstream: TokioIo::new(upgraded),
             upstream: upstream.stream,
-            payload_crypto: proxy_chain.payload_crypto.clone(),
+            payload_crypto,
             speed_limiter: self.speed_limiter.clone(),
             conn_context,
         }

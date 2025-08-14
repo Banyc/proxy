@@ -83,13 +83,43 @@ pub trait BuildTracer {
 }
 
 #[derive(Debug, Clone)]
-pub struct ConnSelector<Addr> {
+pub enum ConnSelector<Addr> {
+    Empty,
+    Some(ConnSelector1<Addr>),
+}
+impl<Addr> ConnSelector<Addr>
+where
+    Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
+{
+    pub fn new<T>(
+        chains: Vec<WeightedConnChain<Addr>>,
+        tracer: Option<T>,
+        active_chains: Option<NonZeroUsize>,
+        cancellation: CancellationToken,
+    ) -> Result<Self, ConnSelectorError>
+    where
+        T: TraceRtt<Addr = Addr> + Send + Sync + 'static,
+    {
+        if chains.is_empty() {
+            return Ok(Self::Empty);
+        }
+        Ok(Self::Some(ConnSelector1::new(
+            chains,
+            tracer,
+            active_chains,
+            cancellation,
+        )?))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ConnSelector1<Addr> {
     chains: Arc<[GaugedConnChain<Addr>]>,
     cum_weight: NonZeroUsize,
     score_store: Arc<RwLock<ScoreStore>>,
     active_chains: NonZeroUsize,
 }
-impl<Addr> ConnSelector<Addr>
+impl<Addr> ConnSelector1<Addr>
 where
     Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
 {

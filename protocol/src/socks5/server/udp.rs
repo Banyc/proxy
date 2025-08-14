@@ -118,10 +118,19 @@ impl Socks5ServerUdpAccessConnHandler {
 
     async fn proxy(&self, conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), AccessProxyError> {
         // Connect to upstream
-        let proxy_chain = self.conn_selector.choose_chain();
+        let (chain, payload_crypto) = match &self.conn_selector {
+            common::route::ConnSelector::Empty => ([].into(), None),
+            common::route::ConnSelector::Some(conn_selector1) => {
+                let proxy_chain = conn_selector1.choose_chain();
+                (
+                    proxy_chain.chain.clone(),
+                    proxy_chain.payload_crypto.clone(),
+                )
+            }
+        };
         let flow = conn.conn_key().clone();
         let upstream = UdpProxyClient::establish(
-            proxy_chain.chain.clone(),
+            chain,
             flow.upstream.as_ref().unwrap().0.clone(),
             &self.udp_context,
         )
@@ -146,7 +155,6 @@ impl Socks5ServerUdpAccessConnHandler {
         };
 
         let speed_limiter = self.speed_limiter.clone();
-        let payload_crypto = proxy_chain.payload_crypto.clone();
         let session_table = self.udp_context.session_table.clone();
         let upstream_local = upstream_read.inner().local_addr().ok();
         let (dn_read, dn_write) = conn.split();

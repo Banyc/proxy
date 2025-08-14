@@ -34,7 +34,7 @@ pool = ["tcp1", "mptcp1"]
     { matcher = "localhost", action = "direct" }, # Forward local traffic directly
                                                   # <- At this point, no more local traffic
     # { matcher = { }, action = "block" }, # Block all
-    { matcher = { }, action = "default" }, # Forward remaining traffic to the "default" proxy group above
+    { matcher = { }, action = "default" }, # Forward remaining traffic to the "default" conn_selector above
 ]
 
 [access_server.udp.conn_selector]

@@ -125,13 +125,17 @@ impl TcpAccessConnHandler {
     where
         Downstream: OwnIoStream + HasIoAddr,
     {
-        let proxy_chain = self.conn_selector.choose_chain();
-        let upstream = establish(
-            &proxy_chain.chain,
-            self.destination.clone(),
-            &self.stream_context,
-        )
-        .await?;
+        let (chain, payload_crypto) = match &self.conn_selector {
+            common::route::ConnSelector::Empty => ([].into(), None),
+            common::route::ConnSelector::Some(conn_selector1) => {
+                let proxy_chain = conn_selector1.choose_chain();
+                (
+                    proxy_chain.chain.clone(),
+                    proxy_chain.payload_crypto.clone(),
+                )
+            }
+        };
+        let upstream = establish(&chain, self.destination.clone(), &self.stream_context).await?;
 
         let conn_context = ConnContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
@@ -146,7 +150,7 @@ impl TcpAccessConnHandler {
         let io_copy = CopyBidirectional {
             downstream,
             upstream: upstream.stream,
-            payload_crypto: proxy_chain.payload_crypto.clone(),
+            payload_crypto,
             speed_limiter: self.speed_limiter.clone(),
             conn_context,
         }

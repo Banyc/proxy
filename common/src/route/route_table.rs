@@ -11,11 +11,12 @@ use crate::{
     addr::InternetAddr,
     config::SharableConfig,
     filter::{Matcher, MatcherBuilder},
+    route::ConnSelector,
 };
 
 use super::{
-    BuildTracer, ConnConfigBuildError, ConnSelector, ConnSelectorBuildContext,
-    ConnSelectorBuildError, ConnSelectorBuilder, IntoAddr, TraceRtt,
+    BuildTracer, ConnConfigBuildError, ConnSelectorBuildContext, ConnSelectorBuildError,
+    ConnSelectorBuilder, IntoAddr, TraceRtt,
 };
 
 #[derive(Debug)]
