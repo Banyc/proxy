@@ -276,9 +276,10 @@ mod tests {
     use common::{
         addr::BothVerIp,
         anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
-        connect::ConnectorConfig,
+        connect::{ConnectorConfig, ConnectorReset},
         header::{codec::write_header_async, heartbeat},
         loading::Serve,
+        notify::Notify,
         proto::{addr::StreamAddr, context::StreamContext, header::StreamRequestHeader},
         stream::pool::StreamConnPool,
     };
@@ -291,6 +292,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_proxy() {
         let crypto = tokio_chacha20::config::Config::new(vec![].into());
+        let connector_reset = ConnectorReset(Notify::new());
 
         // Start proxy server
         let proxy_addr = {
@@ -306,6 +308,7 @@ mod tests {
                     pool: Swap::new(StreamConnPool::empty()),
                     connector_table: Arc::new(build_concrete_stream_connector_table(
                         connector_config,
+                        connector_reset,
                     )),
                     replay_validator: Arc::new(ReplayValidator::new(
                         VALIDATOR_TIME_FRAME,

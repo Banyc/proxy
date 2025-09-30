@@ -5,8 +5,9 @@ mod tests {
     use ae::anti_replay::ReplayValidator;
     use common::{
         anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
-        connect::ConnectorConfig,
+        connect::{ConnectorConfig, ConnectorReset},
         loading::{self, Serve},
+        notify::Notify,
         proto::{
             addr::StreamAddr,
             client::stream::{establish, trace_rtt},
@@ -42,11 +43,13 @@ mod tests {
     }
 
     fn stream_context() -> StreamContext {
+        let connector_reset = ConnectorReset(Notify::new());
         StreamContext {
             session_table: None,
             pool: Swap::new(StreamConnPool::empty()),
             connector_table: Arc::new(build_concrete_stream_connector_table(
                 ConnectorConfig::default(),
+                connector_reset,
             )),
             replay_validator: Arc::new(ReplayValidator::new(
                 VALIDATOR_TIME_FRAME,

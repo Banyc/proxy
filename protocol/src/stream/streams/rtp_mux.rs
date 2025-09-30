@@ -14,7 +14,7 @@ use tracing::{info, instrument, trace, warn};
 
 use common::{
     addr::any_addr,
-    connect::ConnectorConfig,
+    connect::{ConnectorConfig, ConnectorReset},
     error::AnyResult,
     loading,
     proto::{
@@ -149,11 +149,11 @@ pub struct RtpMuxConnector {
     _connector: JoinSet<()>,
 }
 impl RtpMuxConnector {
-    pub fn new(config: Arc<RwLock<ConnectorConfig>>, fec: bool) -> Self {
+    pub fn new(config: Arc<RwLock<ConnectorConfig>>, reset: ConnectorReset, fec: bool) -> Self {
         let (connect_request_tx, connect_request_rx) = connect_request_channel();
         let mut connector = JoinSet::new();
         connector.spawn(async move {
-            run_mux_connector(connect_request_rx, move |addr| {
+            run_mux_connector(reset, connect_request_rx, move |addr| {
                 let config = config.clone();
                 async move {
                     let bind = config

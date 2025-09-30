@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use common::error::AnyError;
+use common::{error::AnyError, notify::Notify};
 
 pub mod multi_file_config;
 pub mod toml;
@@ -12,15 +12,15 @@ pub trait ReadConfig {
 
 #[derive(Debug, Clone)]
 pub struct ConfigWatcher {
-    tx: Arc<tokio::sync::Notify>,
+    tx: ConfigChanged,
 }
 impl ConfigWatcher {
     pub fn new() -> Self {
-        let tx = Arc::new(tokio::sync::Notify::new());
+        let tx = ConfigChanged(Notify::new());
         Self { tx }
     }
 
-    pub fn notify_rx(&self) -> &Arc<tokio::sync::Notify> {
+    pub fn notify(&self) -> &ConfigChanged {
         &self.tx
     }
 }
@@ -36,16 +36,19 @@ impl file_watcher_tokio::HandleEvent for ConfigWatcher {
         if !may_changed {
             return;
         }
-        self.tx.notify_one();
+        self.tx.0.notify_waiters();
     }
 }
 
-pub fn spawn_watch_tasks(config_file_paths: &[Arc<str>]) -> Arc<tokio::sync::Notify> {
+pub fn spawn_watch_tasks(config_file_paths: &[Arc<str>]) -> ConfigChanged {
     let watcher = ConfigWatcher::new();
-    let notify_rx = Arc::clone(watcher.notify_rx());
+    let notify = watcher.notify().clone();
     config_file_paths.iter().cloned().for_each(|path| {
         let watcher = watcher.clone();
         tokio::spawn(async move { file_watcher_tokio::watch_file(path.as_ref(), watcher).await });
     });
-    notify_rx
+    notify
 }
+
+#[derive(Debug, Clone)]
+pub struct ConfigChanged(pub Notify);

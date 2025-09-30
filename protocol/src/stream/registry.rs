@@ -1,6 +1,9 @@
 use std::sync::{Arc, RwLock};
 
-use common::{connect::ConnectorConfig, proto::connect::stream::StreamConnect};
+use common::{
+    connect::{ConnectorConfig, ConnectorReset},
+    proto::connect::stream::StreamConnect,
+};
 
 use super::{
     addr::ConcreteStreamType,
@@ -14,7 +17,7 @@ use super::{
 type StreamProtoTable = [(
     ConcreteStreamType,
     &'static str,
-    fn(Arc<RwLock<ConnectorConfig>>) -> Arc<dyn StreamConnect>,
+    fn(Arc<RwLock<ConnectorConfig>>, ConnectorReset) -> Arc<dyn StreamConnect>,
 )];
 pub const CONCRETE_STREAM_PROTO: &StreamProtoTable = &[
     (

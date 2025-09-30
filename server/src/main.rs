@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use axum::Router;
 use clap::Parser;
-use common::error::AnyResult;
+use common::{error::AnyResult, suspend::spawn_check_system_suspend};
 use server::{
     ServeContext,
     config::{multi_file_config::MultiConfigReader, spawn_watch_tasks},
@@ -42,6 +42,9 @@ async fn main() -> AnyResult {
         common::proto::log::udp::init_logger(path.clone());
     };
 
+    let config_changed = spawn_watch_tasks(&args.config_file_paths);
+    let system_suspended = spawn_check_system_suspend();
+
     #[cfg(feature = "dhat-heap")]
     let profiler = dhat::Profiler::new_heap();
 
@@ -67,17 +70,20 @@ async fn main() -> AnyResult {
         serve_context = ServeContext {
             stream_session_table: Some(session_tables.stream),
             udp_session_table: Some(session_tables.udp),
+            config_changed,
+            system_suspended,
         };
     } else {
         serve_context = ServeContext {
             stream_session_table: None,
             udp_session_table: None,
+            config_changed,
+            system_suspended,
         };
     }
 
-    let notify_rx = spawn_watch_tasks(&args.config_file_paths);
     let config_reader = MultiConfigReader::new(args.config_file_paths.into());
-    serve(notify_rx, config_reader, serve_context)
+    serve(config_reader, serve_context)
         .await
         .map_err(Into::into)
 }

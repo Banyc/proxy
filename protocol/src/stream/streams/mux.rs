@@ -6,7 +6,10 @@ use std::{
     time::Duration,
 };
 
-use common::stream::{AsConn, HasIoAddr, OwnIoStream};
+use common::{
+    connect::ConnectorReset,
+    stream::{AsConn, HasIoAddr, OwnIoStream},
+};
 use mux::{
     DeadControl, Initiation, MuxConfig, MuxError, StreamAccepter, StreamOpener, StreamReader,
     StreamWriter, spawn_mux_no_reconnection,
@@ -47,6 +50,7 @@ pub async fn run_mux_accepter(
 }
 
 pub async fn run_mux_connector<R, W, Fut>(
+    reset: ConnectorReset,
     mut connect_request_rx: ConnectRequestRx,
     mut connect: impl FnMut(SocketAddr) -> Fut,
 ) where
@@ -56,8 +60,13 @@ pub async fn run_mux_connector<R, W, Fut>(
 {
     let mut openers: HashMap<SocketAddr, (StreamOpener, SocketAddrPair)> = HashMap::new();
     let mut mux_spawner: JoinSet<(SocketAddr, MuxError)> = JoinSet::new();
+    let mut reset_notified = reset.0.waiter();
     loop {
         tokio::select! {
+            () = reset_notified.notified() => {
+                openers.clear();
+                mux_spawner = JoinSet::new();
+            }
             Some(res) = mux_spawner.join_next() => {
                 let (addr, e) = res.unwrap();
                 warn!(?e, ?addr, "MUX error");

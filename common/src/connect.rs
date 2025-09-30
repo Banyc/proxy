@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{addr::BothVerIp, config::Merge};
+use crate::{addr::BothVerIp, config::Merge, notify::Notify};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -38,3 +38,6 @@ fn option_merge<T>(a: Option<T>, b: Option<T>) -> Result<Option<T>, ()> {
         (None, None) => None,
     })
 }
+
+#[derive(Debug, Clone)]
+pub struct ConnectorReset(pub Notify);

@@ -8,7 +8,7 @@ use ae::anti_replay::{ReplayValidator, TimeValidator};
 use common::{
     anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     config::{Merge, merge_map},
-    connect::ConnectorConfig,
+    connect::{ConnectorConfig, ConnectorReset},
     error::{AnyError, AnyResult},
     proto::{
         connect::udp::UdpConnector,
@@ -17,6 +17,7 @@ use common::{
         route::{StreamConnConfigBuilder, UdpConnConfigBuilder},
     },
     stream::pool::{StreamConnPool, StreamPoolBuilder},
+    suspend::Suspended,
 };
 use config::ReadConfig;
 use protocol::{
@@ -30,6 +31,8 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::config::ConfigChanged;
+
 pub mod config;
 pub mod monitor;
 pub mod profiling;
@@ -37,13 +40,11 @@ pub mod profiling;
 pub struct ServeContext {
     pub stream_session_table: Option<StreamSessionTable>,
     pub udp_session_table: Option<UdpSessionTable>,
+    pub config_changed: ConfigChanged,
+    pub system_suspended: Suspended,
 }
 
-pub async fn serve<CR>(
-    notify_rx: Arc<tokio::sync::Notify>,
-    config_reader: CR,
-    serve_context: ServeContext,
-) -> Result<(), ServeError>
+pub async fn serve<CR>(config_reader: CR, serve_context: ServeContext) -> Result<(), ServeError>
 where
     CR: ReadConfig<Config = ServerConfig>,
 {
@@ -61,12 +62,14 @@ where
     let udp_validator = Arc::new(TimeValidator::new(
         VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
     ));
+    let connector_reset = ConnectorReset(serve_context.system_suspended.0);
     let context = Context {
         stream: StreamContext {
             session_table: serve_context.stream_session_table,
             pool: stream_pool,
             connector_table: Arc::new(build_concrete_stream_connector_table(
                 ConnectorConfig::default(),
+                connector_reset,
             )),
             replay_validator: Arc::clone(&stream_validator),
         },
@@ -90,6 +93,7 @@ where
     .await?;
 
     let mut _cancellation_guard = cancellation.drop_guard();
+    let mut config_changed = serve_context.config_changed.0.waiter();
 
     loop {
         tokio::select! {
@@ -97,7 +101,7 @@ where
                 let res = res.unwrap();
                 res.map_err(ServeError::ServerTask)?;
             }
-            _ = notify_rx.notified() => {
+            _ = config_changed.notified() => {
                 info!("Config file changed");
 
                 // Wait for file change to settle
