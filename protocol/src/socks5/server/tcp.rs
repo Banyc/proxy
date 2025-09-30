@@ -27,7 +27,7 @@ use common::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
-use tracing::{error, trace, warn};
+use tracing::{trace, warn};
 
 use crate::socks5::messages::{
     Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,

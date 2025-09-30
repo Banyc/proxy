@@ -14,7 +14,7 @@ use tokio::{
     net::{ToSocketAddrs, UdpSocket},
 };
 use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
-use tracing::{error, info, instrument, trace, warn};
+use tracing::{info, instrument, trace, warn};
 
 use common::{
     addr::any_addr,

@@ -17,7 +17,7 @@ use crate::{
 use async_speed_limit::Limiter;
 use serde::Deserialize;
 use thiserror::Error;
-use tracing::{error, info, instrument, warn};
+use tracing::{info, instrument, warn};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 

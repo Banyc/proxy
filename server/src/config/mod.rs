@@ -43,8 +43,9 @@ impl file_watcher_tokio::HandleEvent for ConfigWatcher {
 pub fn spawn_watch_tasks(config_file_paths: &[Arc<str>]) -> ConfigChanged {
     let watcher = ConfigWatcher::new();
     let notify = watcher.notify().clone();
-    config_file_paths.iter().cloned().for_each(|path| {
+    config_file_paths.iter().for_each(|path| {
         let watcher = watcher.clone();
+        let path = path.clone();
         tokio::spawn(async move { file_watcher_tokio::watch_file(path.as_ref(), watcher).await });
     });
     notify

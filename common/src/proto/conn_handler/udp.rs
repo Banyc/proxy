@@ -22,7 +22,7 @@ use crate::{
 use async_speed_limit::Limiter;
 use thiserror::Error;
 use tokio::net::{ToSocketAddrs, UdpSocket};
-use tracing::{error, instrument, trace, warn};
+use tracing::{instrument, trace, warn};
 use udp_listener::{Conn, ConnWrite};
 
 use super::ListenerBindError;

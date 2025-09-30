@@ -13,7 +13,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::ToSocketAddrs,
 };
-use tracing::{error, info, instrument, trace, warn};
+use tracing::{info, instrument, trace, warn};
 
 use common::{
     addr::any_addr,

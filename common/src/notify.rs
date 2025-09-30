@@ -14,6 +14,9 @@ pub struct Waiter {
     waiters: Arc<Mutex<Waiters>>,
 }
 impl Waiter {
+    pub fn has_notified(&self) -> bool {
+        !self.event.is_empty()
+    }
     pub async fn notified(&mut self) {
         self.event.recv().await.unwrap();
     }

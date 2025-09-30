@@ -29,7 +29,7 @@ use metrics::counter;
 use primitive::arena::obj_pool::ArcObjPool;
 use thiserror::Error;
 use tokio::net::UdpSocket;
-use tracing::{error, instrument, trace, warn};
+use tracing::{instrument, trace, warn};
 
 #[derive(Debug)]
 pub struct UdpProxyClient {

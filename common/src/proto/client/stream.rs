@@ -14,7 +14,7 @@ use crate::{
 use ae::anti_replay::ValidatorRef;
 use metrics::counter;
 use thiserror::Error;
-use tracing::{error, instrument, trace};
+use tracing::{instrument, trace};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 

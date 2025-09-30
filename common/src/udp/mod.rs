@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use thiserror::Error;
-use tracing::error;
 
 pub mod respond;
 pub mod server;

@@ -16,7 +16,7 @@ use common::{
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{error, instrument, warn};
+use tracing::{instrument, warn};
 
 use super::proxy_server::TcpServer;
 

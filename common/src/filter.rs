@@ -135,12 +135,13 @@ impl LeafMatcher {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
 enum AddrListMatcherBuilder {
     Many(Vec<AddrMatcherBuilder>),
     Single(AddrMatcherBuilder),
+    #[default]
     Any,
 }
 impl AddrListMatcherBuilder {
@@ -155,11 +156,6 @@ impl AddrListMatcherBuilder {
             Self::Single(matcher) => AddrListMatcher::Some(vec![matcher.build()?].into()),
             Self::Any => AddrListMatcher::Any,
         })
-    }
-}
-impl Default for AddrListMatcherBuilder {
-    fn default() -> Self {
-        Self::Any
     }
 }
 
@@ -233,12 +229,13 @@ impl AddrMatcher {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
 enum PortListMatcherBuilder {
     Many(Vec<PortMatcherBuilder>),
     Single(PortMatcherBuilder),
+    #[default]
     Any,
 }
 impl PortListMatcherBuilder {
@@ -253,11 +250,6 @@ impl PortListMatcherBuilder {
             Self::Single(matcher) => PortListMatcher::Some(vec![matcher.build()].into()),
             Self::Any => PortListMatcher::Any,
         }
-    }
-}
-impl Default for PortListMatcherBuilder {
-    fn default() -> Self {
-        Self::Any
     }
 }
 

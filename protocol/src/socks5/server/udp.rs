@@ -20,7 +20,7 @@ use common::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::{ToSocketAddrs, UdpSocket};
-use tracing::{error, warn};
+use tracing::warn;
 use udp_listener::Conn;
 
 use crate::socks5::messages::UdpRequestHeader;
