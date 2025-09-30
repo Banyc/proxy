@@ -41,7 +41,7 @@ where
 
     async fn serve(
         self,
-        set_conn_handler_rx: tokio::sync::mpsc::Receiver<Self::ConnHandler>,
+        set_conn_handler_rx: loading::ReplaceConnHandlerRx<Self::ConnHandler>,
     ) -> AnyResult {
         self.serve_(set_conn_handler_rx).await.map_err(|e| e.into())
     }
@@ -53,7 +53,7 @@ where
     #[instrument(skip(self))]
     async fn serve_(
         self,
-        mut set_conn_handler_rx: tokio::sync::mpsc::Receiver<ConnHandler>,
+        mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
     ) -> Result<(), ServeError> {
         let mut conn_handler = Arc::new(self.conn_handler);
 
@@ -106,7 +106,7 @@ where
                         conn_handler.handle_flow(flow).await;
                     });
                 }
-                res = set_conn_handler_rx.recv() => {
+                res = set_conn_handler_rx.0.recv() => {
                     let new_hook = match res {
                         Some(new_hook) => new_hook,
                         None => break,
@@ -134,8 +134,5 @@ pub enum ServeError {
 pub trait UdpServerHandleConn: loading::HandleConn {
     fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>>;
 
-    fn handle_flow(
-        &self,
-        conn: Conn<UdpSocket, Flow, Packet>,
-    ) -> impl Future<Output = ()> + Send;
+    fn handle_flow(&self, conn: Conn<UdpSocket, Flow, Packet>) -> impl Future<Output = ()> + Send;
 }

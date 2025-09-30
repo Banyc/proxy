@@ -12,7 +12,7 @@ mod tests {
         anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         connect::ConnectorConfig,
         header::route::RouteErrorKind,
-        loading::Serve,
+        loading::{self, Serve},
         proto::{
             client::{
                 self,
@@ -54,7 +54,8 @@ mod tests {
         let server = proxy.build(addr).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         join_set.spawn(async move {
-            let (_set_conn_handler_tx, set_conn_handler_rx) = tokio::sync::mpsc::channel(64);
+            let (_set_conn_handler_tx, set_conn_handler_rx) =
+                loading::replace_conn_handler_channel();
             server.serve(set_conn_handler_rx).await.unwrap();
         });
         ConnConfig {
@@ -185,6 +186,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn stress_test() {
+        tokio::time::sleep(Duration::from_secs_f64(0.6)).await;
+
         let context = udp_context();
 
         let mut join_set = tokio::task::JoinSet::new();

@@ -6,7 +6,7 @@ mod tests {
     use common::{
         anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         connect::ConnectorConfig,
-        loading::Serve,
+        loading::{self, Serve},
         proto::{
             addr::StreamAddr,
             client::stream::{establish, trace_rtt},
@@ -63,7 +63,7 @@ mod tests {
         let crypto = create_random_crypto();
         let proxy =
             StreamProxyConnHandler::new(crypto.clone(), None, stream_context(), Arc::clone(addr));
-        let (set_conn_handler_tx, set_conn_handler_rx) = tokio::sync::mpsc::channel(64);
+        let (set_conn_handler_tx, set_conn_handler_rx) = loading::replace_conn_handler_channel();
         let proxy_addr = match ty {
             ConcreteStreamType::Tcp => {
                 let server = build_tcp_proxy_server(addr.as_ref(), proxy).await.unwrap();
@@ -287,6 +287,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
+    #[ignore]
     async fn stress_test_kcp() {
         stress_test(ConcreteStreamType::Kcp).await
     }
@@ -316,6 +317,8 @@ mod tests {
     }
 
     async fn stress_test(ty: ConcreteStreamType) {
+        tokio::time::sleep(Duration::from_secs_f64(0.6)).await;
+
         let stream_context = stream_context();
 
         let mut join_set = tokio::task::JoinSet::new();

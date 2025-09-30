@@ -65,7 +65,7 @@ where
 
     async fn serve(
         self,
-        set_conn_handler_rx: tokio::sync::mpsc::Receiver<Self::ConnHandler>,
+        set_conn_handler_rx: loading::ReplaceConnHandlerRx<Self::ConnHandler>,
     ) -> AnyResult {
         self.serve_(set_conn_handler_rx).await.map_err(|e| e.into())
     }
@@ -77,7 +77,7 @@ where
     #[instrument(skip(self))]
     async fn serve_(
         self,
-        mut set_conn_handler_rx: tokio::sync::mpsc::Receiver<ConnHandler>,
+        mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
     ) -> Result<(), ServeError> {
         let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
@@ -102,7 +102,7 @@ where
                         conn_handler.handle_stream(IoTcpStream(stream)).await;
                     });
                 }
-                res = set_conn_handler_rx.recv() => {
+                res = set_conn_handler_rx.0.recv() => {
                     let new_conn_handler = match res {
                         Some(new_conn_handler) => new_conn_handler,
                         None => break,
@@ -320,7 +320,8 @@ mod tests {
                 .unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
             tokio::spawn(async move {
-                let (_set_conn_handler_tx, set_conn_handler_rx) = tokio::sync::mpsc::channel(64);
+                let (_set_conn_handler_tx, set_conn_handler_rx) =
+                    loading::replace_conn_handler_channel();
                 server.serve(set_conn_handler_rx).await.unwrap();
             });
             proxy_addr

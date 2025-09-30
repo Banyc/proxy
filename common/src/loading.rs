@@ -1,9 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
-    fmt::Debug,
     sync::Arc,
 };
 
+use derive_more::Debug;
 use tokio::sync::mpsc;
 
 use crate::error::AnyResult;
@@ -12,7 +12,7 @@ use crate::error::AnyResult;
 #[derive(Debug)]
 pub struct Loader<ConnHandler> {
     /// Handles of the listeners using the actor model pattern
-    handles: HashMap<Arc<str>, mpsc::Sender<ConnHandler>>,
+    handles: HashMap<Arc<str>, ReplaceConnHandlerTx<ConnHandler>>,
 }
 impl<ConnHandler> Loader<ConnHandler>
 where
@@ -41,13 +41,13 @@ where
             // Hot reloading
             if let Some(handle) = self.handles.get(server.key()) {
                 let conn_handler = server.build_conn_handler()?;
-                handle.send(conn_handler).await.unwrap();
+                handle.0.send(conn_handler).await.unwrap();
                 continue;
             }
 
             // Spawn server
             let key = server.key().to_owned();
-            let (set_conn_handler_tx, set_conn_handler_rx) = tokio::sync::mpsc::channel(64);
+            let (set_conn_handler_tx, set_conn_handler_rx) = replace_conn_handler_channel();
             let server = server.build_server().await?;
             self.handles.insert(key, set_conn_handler_tx);
             join_set.spawn(async move {
@@ -89,6 +89,20 @@ pub trait Serve {
     /// If the other end of `set_conn_handler_rx` is dropped, the listener must despawn eventually but still keep all its connections alive.
     fn serve(
         self,
-        set_conn_handler_rx: tokio::sync::mpsc::Receiver<Self::ConnHandler>,
+        set_conn_handler_rx: ReplaceConnHandlerRx<Self::ConnHandler>,
     ) -> impl Future<Output = AnyResult> + Send;
+}
+
+#[derive(Debug)]
+#[debug(bound(ConnHandler:))]
+pub struct ReplaceConnHandlerTx<ConnHandler>(pub mpsc::Sender<ConnHandler>);
+#[derive(Debug)]
+#[debug(bound(ConnHandler:))]
+pub struct ReplaceConnHandlerRx<ConnHandler>(pub mpsc::Receiver<ConnHandler>);
+pub fn replace_conn_handler_channel<ConnHandler>() -> (
+    ReplaceConnHandlerTx<ConnHandler>,
+    ReplaceConnHandlerRx<ConnHandler>,
+) {
+    let (tx, rx) = tokio::sync::mpsc::channel(64);
+    (ReplaceConnHandlerTx(tx), ReplaceConnHandlerRx(rx))
 }

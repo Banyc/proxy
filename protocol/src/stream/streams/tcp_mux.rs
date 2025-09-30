@@ -66,7 +66,7 @@ where
 
     async fn serve(
         self,
-        set_conn_handler_rx: tokio::sync::mpsc::Receiver<Self::ConnHandler>,
+        set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
     ) -> AnyResult {
         self.serve_(set_conn_handler_rx).await.map_err(|e| e.into())
     }
@@ -78,7 +78,7 @@ where
     #[instrument(skip(self))]
     async fn serve_(
         mut self,
-        mut set_conn_handler_rx: tokio::sync::mpsc::Receiver<ConnHandler>,
+        mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
     ) -> Result<(), ServeError> {
         let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
@@ -128,7 +128,7 @@ where
                         }).await;
                     });
                 }
-                res = set_conn_handler_rx.recv() => {
+                res = set_conn_handler_rx.0.recv() => {
                     let new_conn_handler = match res {
                         Some(new_conn_handler) => new_conn_handler,
                         None => break,
