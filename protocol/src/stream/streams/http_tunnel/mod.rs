@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, sync::Arc, time::SystemTime};
+use std::{borrow::Cow, collections::HashMap, io, sync::Arc, time::SystemTime};
 
 use crate::stream::{
     addr::ConcreteStreamType,
@@ -208,6 +208,15 @@ impl HttpAccessConnHandler {
                         dn_gauge: None,
                     })
                 });
+                let req = {
+                    let mut req = req;
+                    let mut uri = core::mem::take(req.uri_mut());
+                    let mut headers = core::mem::take(req.headers_mut());
+                    transform_absolute_form_req(&mut uri, &mut headers);
+                    *req.uri_mut() = uri;
+                    *req.headers_mut() = headers;
+                    req
+                };
                 let res = tls_http(upstream, req, session_guard).await;
                 info!(%addr, "Direct {} finished", method);
                 return res;
@@ -574,4 +583,34 @@ fn respond_with_rejection() -> Response<BoxBody<Bytes, hyper::Error>> {
         .status(503)
         .body(full("Blocked"))
         .unwrap()
+}
+
+/// ref: <https://datatracker.ietf.org/doc/html/rfc9112#name-absolute-form>
+fn transform_absolute_form_req(uri: &mut http::Uri, headers: &mut http::HeaderMap) {
+    let Some(auth) = uri.authority() else {
+        return;
+    };
+    // `uri` is absolute-form
+    let new_host_value: Cow<str> = match auth.port() {
+        Some(port) => format!("{}:{port}", auth.host()).into(),
+        None => auth.host().into(),
+    };
+    let new_host_value = new_host_value.parse().unwrap();
+    headers.insert(http::header::HOST, new_host_value);
+
+    // in case origin failed to parse absolute-form
+    let relative_ref = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    *uri = relative_ref.parse().unwrap();
+}
+#[cfg(test)]
+#[test]
+fn test_transform_absolute_form_req() {
+    let absolute_form: http::Uri = "http://www.example.org/pub/WWW/TheProject.html"
+        .parse()
+        .unwrap();
+    let mut uri = absolute_form;
+    let mut headers = http::HeaderMap::new();
+    transform_absolute_form_req(&mut uri, &mut headers);
+    assert_eq!(headers.get(http::header::HOST).unwrap(), "www.example.org");
+    assert_eq!(uri.to_string(), "/pub/WWW/TheProject.html");
 }
