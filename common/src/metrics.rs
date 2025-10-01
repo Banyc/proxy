@@ -1,5 +1,9 @@
-use std::time::Duration;
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
+use hdv_derive::HdvSerde;
 use monitor_table::row::LiteralValue;
 use primitive::ops::unit::{HumanBytes, HumanDuration};
 
@@ -40,5 +44,21 @@ pub fn display_value(header: &str, value: Option<LiteralValue>) -> String {
             format!("{thruput:.1}/s")
         }
         _ => v.to_string(),
+    }
+}
+
+#[derive(Debug, HdvSerde)]
+pub struct GaugeView {
+    pub thruput: f64,
+    pub bytes: u64,
+}
+impl GaugeView {
+    pub fn from_gauge_handle(g: &Mutex<tokio_throughput::GaugeHandle>, now: Instant) -> Self {
+        let mut g = g.lock().unwrap();
+        g.update(now);
+        Self {
+            thruput: g.thruput(),
+            bytes: g.total_bytes(),
+        }
     }
 }

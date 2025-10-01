@@ -13,7 +13,7 @@ use tokio_throughput::GaugeHandle;
 
 use crate::{
     addr::InternetAddrHdv,
-    metrics::display_value,
+    metrics::{GaugeView, display_value},
     proto::addr::{StreamAddr, StreamAddrHdv},
 };
 
@@ -104,22 +104,6 @@ impl SessionView {
             downstream_remote,
             up,
             dn,
-        }
-    }
-}
-
-#[derive(Debug, HdvSerde)]
-struct GaugeView {
-    pub thruput: f64,
-    pub bytes: u64,
-}
-impl GaugeView {
-    pub fn from_gauge_handle(g: &Mutex<tokio_throughput::GaugeHandle>, now: Instant) -> Self {
-        let mut g = g.lock().unwrap();
-        g.update(now);
-        Self {
-            thruput: g.thruput(),
-            bytes: g.total_bytes(),
         }
     }
 }

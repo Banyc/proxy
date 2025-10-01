@@ -13,7 +13,7 @@ use tokio_throughput::GaugeHandle;
 
 use crate::{
     addr::{InternetAddr, InternetAddrHdv},
-    metrics::display_value,
+    metrics::{GaugeView, display_value},
 };
 
 pub type UdpSessionTable = Table<Session>;
@@ -54,8 +54,8 @@ struct SessionHdv {
     pub upstream_local: Option<InternetAddrHdv>,
     pub upstream_remote: InternetAddrHdv,
     pub downstream_remote: InternetAddrHdv,
-    pub up: GaugeHdv,
-    pub dn: GaugeHdv,
+    pub up: GaugeView,
+    pub dn: GaugeView,
 }
 impl SessionHdv {
     pub fn from_session(s: &Session) -> Self {
@@ -80,8 +80,8 @@ impl SessionHdv {
         let upstream_remote = (&s.upstream_remote).into();
         let downstream_remote = s.downstream_remote.into();
         let now = Instant::now();
-        let up = GaugeHdv::from_gauge_handle(&s.up_gauge, now);
-        let dn = GaugeHdv::from_gauge_handle(&s.dn_gauge, now);
+        let up = GaugeView::from_gauge_handle(&s.up_gauge, now);
+        let dn = GaugeView::from_gauge_handle(&s.dn_gauge, now);
 
         Self {
             destination,
@@ -93,22 +93,6 @@ impl SessionHdv {
             downstream_remote,
             up,
             dn,
-        }
-    }
-}
-
-#[derive(Debug, HdvSerde)]
-struct GaugeHdv {
-    pub thruput: f64,
-    pub bytes: u64,
-}
-impl GaugeHdv {
-    pub fn from_gauge_handle(g: &Mutex<tokio_throughput::GaugeHandle>, now: Instant) -> Self {
-        let mut g = g.lock().unwrap();
-        g.update(now);
-        Self {
-            thruput: g.thruput(),
-            bytes: g.total_bytes(),
         }
     }
 }

@@ -17,6 +17,9 @@ impl Waiter {
     pub fn has_notified(&self) -> bool {
         !self.event.is_empty()
     }
+    pub fn remove_notified(&mut self) -> bool {
+        self.event.try_recv().is_ok()
+    }
     pub async fn notified(&mut self) {
         self.event.recv().await.unwrap();
     }
