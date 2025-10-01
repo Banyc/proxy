@@ -208,10 +208,14 @@ mod tests {
     async fn test_notified() {
         let n = Notify::new();
         let mut w1 = n.waiter();
+        assert!(!w1.has_notified());
 
         n.notify_waiters();
         let mut w2 = n.waiter();
+        assert!(!w2.has_notified());
+
         w1.notified().await;
+        assert!(!w1.has_notified());
 
         let n2 = Notify::new();
         let n3 = Notify::new();
@@ -220,10 +224,15 @@ mod tests {
         assert_eq!(n.targets.child_notifies.len(), 2);
 
         let mut w3 = n2.waiter();
+        assert!(!w3.has_notified());
+
         n.notify_waiters();
         w2.notified().await;
         w1.notified().await;
         w3.notified().await;
+        assert!(!w1.has_notified());
+        assert!(!w2.has_notified());
+        assert!(!w3.has_notified());
 
         drop(w1);
         assert_eq!(n.targets.waiters.len(), 1);
@@ -231,6 +240,8 @@ mod tests {
         n.notify_waiters();
         w2.notified().await;
         w3.notified().await;
+        assert!(!w2.has_notified());
+        assert!(!w3.has_notified());
 
         drop(w2);
         assert_eq!(n.targets.waiters.len(), 0);
