@@ -590,7 +590,11 @@ fn transform_absolute_form_req(uri: &mut http::Uri, headers: &mut http::HeaderMa
     let Some(auth) = uri.authority() else {
         return;
     };
-    // `uri` is absolute-form
+    if uri.scheme().is_none() {
+        return;
+    }
+    // `uri` is in absolute-form
+
     let new_host_value: Cow<str> = match auth.port() {
         Some(port) => format!("{}:{port}", auth.host()).into(),
         None => auth.host().into(),
@@ -598,7 +602,7 @@ fn transform_absolute_form_req(uri: &mut http::Uri, headers: &mut http::HeaderMa
     let new_host_value = new_host_value.parse().unwrap();
     headers.insert(http::header::HOST, new_host_value);
 
-    // in case origin failed to parse absolute-form
+    // in case origin fails to parse absolute-form
     let relative_ref = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
     *uri = relative_ref.parse().unwrap();
 }
@@ -610,6 +614,11 @@ fn test_transform_absolute_form_req() {
         .unwrap();
     let mut uri = absolute_form;
     let mut headers = http::HeaderMap::new();
+
+    transform_absolute_form_req(&mut uri, &mut headers);
+    assert_eq!(headers.get(http::header::HOST).unwrap(), "www.example.org");
+    assert_eq!(uri.to_string(), "/pub/WWW/TheProject.html");
+
     transform_absolute_form_req(&mut uri, &mut headers);
     assert_eq!(headers.get(http::header::HOST).unwrap(), "www.example.org");
     assert_eq!(uri.to_string(), "/pub/WWW/TheProject.html");
