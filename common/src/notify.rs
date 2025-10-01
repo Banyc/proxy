@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use crate::notify::iter_set::{GuardedIterSet, IterSetEntryGuard};
 
 fn binary_event_channel() -> (BinaryEventTx, BinaryEventRx) {
@@ -75,11 +77,16 @@ mod iter_set {
     }
     #[allow(unused)]
     impl<T> GuardedIterSet<T> {
+        #[must_use]
         pub fn add(&self, v: T) -> IterSetEntryGuard<T> {
             let ptr = self.ptr.clone();
             let mut buf = self.ptr.lock().unwrap();
             let index = buf.append(v);
-            IterSetEntryGuard { buf: ptr, index }
+            IterSetEntryGuard {
+                buf: ptr,
+                index,
+                leak: false,
+            }
         }
         pub fn values_mut(&self, mut f: impl FnMut(&mut T)) {
             let mut buf = self.ptr.lock().unwrap();
@@ -95,9 +102,18 @@ mod iter_set {
     pub struct IterSetEntryGuard<T> {
         buf: Arc<Mutex<IterSet<T>>>,
         index: Arc<AtomicUsize>,
+        leak: bool,
+    }
+    impl<T> IterSetEntryGuard<T> {
+        pub fn leak(mut self) {
+            self.leak = true;
+        }
     }
     impl<T> Drop for IterSetEntryGuard<T> {
         fn drop(&mut self) {
+            if self.leak {
+                return;
+            }
             let mut buf = self.buf.lock().unwrap();
             let i = self.index.load(std::sync::atomic::Ordering::Relaxed);
             buf.remove(i);
@@ -108,7 +124,7 @@ mod iter_set {
 #[derive(Debug)]
 pub struct Waiter {
     event: BinaryEventRx,
-    _guard: IterSetEntryGuard<BinaryEventTx>,
+    _parent_guard: IterSetEntryGuard<BinaryEventTx>,
 }
 impl Waiter {
     pub fn has_notified(&self) -> bool {
@@ -118,33 +134,64 @@ impl Waiter {
         self.event.0.try_recv().is_ok()
     }
     pub async fn notified(&mut self) {
+        // unwrap: `self` still holds the event tx through `self._parent_guard`
         self.event.0.recv().await.unwrap();
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Notify {
+#[derive(Debug, Clone, Default)]
+struct NotifyTargets {
     waiters: GuardedIterSet<BinaryEventTx>,
+    child_notifies: GuardedIterSet<Self>,
 }
-impl Notify {
-    pub fn new() -> Self {
-        Self {
-            waiters: GuardedIterSet::default(),
-        }
+impl NotifyTargets {
+    pub fn notify_waiters(&self) {
+        self.waiters.values_mut(|waiter| {
+            assert!(!waiter.0.is_closed());
+            let _ = waiter.0.try_send(());
+        });
+        self.child_notifies
+            .values_mut(|notify| notify.notify_waiters());
     }
     pub fn waiter(&self) -> Waiter {
         let (tx, rx) = binary_event_channel();
         let guard = self.waiters.add(tx);
         Waiter {
             event: rx,
-            _guard: guard,
+            _parent_guard: guard,
         }
     }
+    #[must_use]
+    pub fn add_child_targets(&self, child: Self) -> IterSetEntryGuard<Self> {
+        self.child_notifies.add(child)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Notify {
+    parent_guard: Arc<Mutex<Vec<IterSetEntryGuard<NotifyTargets>>>>,
+    targets: NotifyTargets,
+}
+impl Notify {
+    pub fn new() -> Self {
+        Self {
+            targets: NotifyTargets::default(),
+            parent_guard: Arc::new(Mutex::new(vec![])),
+        }
+    }
+    pub fn strong_add_child_notify(&self, child: &Self) {
+        let child_guard = self.targets.add_child_targets(child.targets.clone());
+        child_guard.leak();
+    }
+    pub fn weak_add_child_notify(&self, child: &Self) {
+        let child_guard = self.targets.add_child_targets(child.targets.clone());
+        child.parent_guard.lock().unwrap().push(child_guard);
+    }
+    pub fn waiter(&self) -> Waiter {
+        self.targets.waiter()
+    }
     pub fn notify_waiters(&self) {
-        self.waiters.values_mut(|waiter| {
-            assert!(!waiter.0.is_closed());
-            let _ = waiter.0.try_send(());
-        });
+        self.targets.notify_waiters();
     }
 }
 impl Default for Notify {
@@ -166,17 +213,32 @@ mod tests {
         let mut w2 = n.waiter();
         w1.notified().await;
 
+        let n2 = Notify::new();
+        let n3 = Notify::new();
+        n.weak_add_child_notify(&n2);
+        n.strong_add_child_notify(&n3);
+        assert_eq!(n.targets.child_notifies.len(), 2);
+
+        let mut w3 = n2.waiter();
         n.notify_waiters();
         w2.notified().await;
         w1.notified().await;
+        w3.notified().await;
 
         drop(w1);
-        assert_eq!(n.waiters.len(), 1);
+        assert_eq!(n.targets.waiters.len(), 1);
 
         n.notify_waiters();
         w2.notified().await;
+        w3.notified().await;
 
         drop(w2);
-        assert_eq!(n.waiters.len(), 0);
+        assert_eq!(n.targets.waiters.len(), 0);
+
+        drop(n3);
+        assert_eq!(n.targets.child_notifies.len(), 2);
+
+        drop(n2);
+        assert_eq!(n.targets.child_notifies.len(), 1);
     }
 }
