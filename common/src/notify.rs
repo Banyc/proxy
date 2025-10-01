@@ -1,27 +1,36 @@
 use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
+fn binary_event_channel() -> (BinaryEventTx, BinaryEventRx) {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    (BinaryEventTx(tx), BinaryEventRx(rx))
+}
+#[derive(Debug)]
+struct BinaryEventTx(pub tokio::sync::mpsc::Sender<()>);
+#[derive(Debug)]
+struct BinaryEventRx(pub tokio::sync::mpsc::Receiver<()>);
+
 #[derive(Debug)]
 struct WaiterHandler {
-    pub trigger: tokio::sync::mpsc::Sender<()>,
+    pub trigger: BinaryEventTx,
     pub index: Arc<AtomicUsize>,
 }
 type Waiters = Vec<WaiterHandler>;
 
 #[derive(Debug)]
 pub struct Waiter {
-    event: tokio::sync::mpsc::Receiver<()>,
+    event: BinaryEventRx,
     waiter_index: Arc<AtomicUsize>,
     waiters: Arc<Mutex<Waiters>>,
 }
 impl Waiter {
     pub fn has_notified(&self) -> bool {
-        !self.event.is_empty()
+        !self.event.0.is_empty()
     }
     pub fn remove_notified(&mut self) -> bool {
-        self.event.try_recv().is_ok()
+        self.event.0.try_recv().is_ok()
     }
     pub async fn notified(&mut self) {
-        self.event.recv().await.unwrap();
+        self.event.0.recv().await.unwrap();
     }
 }
 impl Drop for Waiter {
@@ -52,7 +61,7 @@ impl Notify {
         let waiters_ref = self.waiters.clone();
         let mut waiters = self.waiters.lock().unwrap();
         let new_index = Arc::new(AtomicUsize::new(waiters.len()));
-        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let (tx, rx) = binary_event_channel();
         let waiter_handler = WaiterHandler {
             trigger: tx,
             index: new_index.clone(),
@@ -67,8 +76,8 @@ impl Notify {
     pub fn notify_waiters(&self) {
         let mut waiters = self.waiters.lock().unwrap();
         for waiter in &mut *waiters {
-            assert!(!waiter.trigger.is_closed());
-            let _ = waiter.trigger.try_send(());
+            assert!(!waiter.trigger.0.is_closed());
+            let _ = waiter.trigger.0.try_send(());
         }
     }
 }
