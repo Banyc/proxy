@@ -18,7 +18,7 @@ use common::{
         log::stream::{LOGGER, SimplifiedStreamLog, SimplifiedStreamProxyLog},
         metrics::stream::Session,
     },
-    route::RouteAction,
+    route::{ConnSelector, RouteAction},
     udp::TIMEOUT,
 };
 use http_body_util::{BodyExt, combinators::BoxBody};
@@ -35,65 +35,83 @@ pub async fn run_proxy_mode(
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError> {
     let start = (std::time::Instant::now(), std::time::SystemTime::now());
 
-    let method = req.method().clone();
-    let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
-    let port = req.uri().port_u16().unwrap_or(80);
-    let addr = InternetAddr::from_host_and_port(host, port)?;
-    let addr = StreamAddr {
-        address: addr,
-        stream_type: ConcreteStreamType::Tcp.to_string().into(),
+    let dst_addr = {
+        let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
+        let port = req.uri().port_u16().ok_or(TunnelError::HttpNoPort)?;
+        let addr = InternetAddr::from_host_and_port(host, port)?;
+        StreamAddr {
+            address: addr,
+            stream_type: ConcreteStreamType::Tcp.to_string().into(),
+        }
     };
-
-    let action = ctx.route_table.action(&addr.address);
-    let conn_selector = match action {
-        RouteAction::ConnSelector(conn_selector) => conn_selector,
+    let action = ctx.route_table.action(&dst_addr.address);
+    match action {
+        RouteAction::ConnSelector(conn_selector) => {
+            proxy(conn_selector, dst_addr, req, start, ctx).await
+        }
         RouteAction::Block => {
-            trace!(?addr, "Blocked {method}");
+            trace!(addr = ?dst_addr, "Blocked {method}", method = req.method());
             return Ok(respond_with_rejection());
         }
-        RouteAction::Direct => {
-            let sock_addr = addr
-                .address
-                .to_socket_addr()
-                .await
-                .map_err(TunnelError::Direct)?;
+        RouteAction::Direct => direct(dst_addr, req, ctx).await,
+    }
+}
 
-            let upstream = ctx
-                .stream_context
-                .connector_table
-                .timed_connect(TCP_STREAM_TYPE, sock_addr, TIMEOUT)
-                .await
-                .map_err(TunnelError::Direct)?;
-            let session_guard = ctx.stream_context.session_table.as_ref().map(|s| {
-                s.set_scope_owned(Session {
-                    start: SystemTime::now(),
-                    end: None,
-                    destination: Some(addr.clone()),
-                    upstream_local: upstream.local_addr().ok(),
-                    upstream_remote: addr.clone(),
-                    downstream_local: Arc::clone(&ctx.listen_addr),
-                    downstream_remote: None,
-                    up_gauge: None,
-                    dn_gauge: None,
-                })
-            });
-            let req = {
-                let mut req = req;
-                let mut uri = core::mem::take(req.uri_mut());
-                let mut headers = core::mem::take(req.headers_mut());
-                transform_absolute_form_req(&mut uri, &mut headers);
-                *req.uri_mut() = uri;
-                *req.headers_mut() = headers;
-                req
-            };
-            let res = tls_http(upstream, req, session_guard).await;
-            info!(%addr, "Direct {method} finished");
-            return res;
-        }
+#[instrument(skip_all, fields(addr = ?dst_addr))]
+async fn direct(
+    dst_addr: StreamAddr,
+    req: Request<Incoming>,
+    ctx: &HttpAccessConnContext,
+) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError> {
+    let sock_addr = dst_addr
+        .address
+        .to_socket_addr()
+        .await
+        .map_err(TunnelError::Direct)?;
+    let upstream = ctx
+        .stream_context
+        .connector_table
+        .timed_connect(TCP_STREAM_TYPE, sock_addr, TIMEOUT)
+        .await
+        .map_err(TunnelError::Direct)?;
+    let session_guard = ctx.stream_context.session_table.as_ref().map(|s| {
+        s.set_scope_owned(Session {
+            start: SystemTime::now(),
+            end: None,
+            destination: Some(dst_addr.clone()),
+            upstream_local: upstream.local_addr().ok(),
+            upstream_remote: dst_addr.clone(),
+            downstream_local: Arc::clone(&ctx.listen_addr),
+            downstream_remote: None,
+            up_gauge: None,
+            dn_gauge: None,
+        })
+    });
+    let req = {
+        let mut req = req;
+        let mut uri = core::mem::take(req.uri_mut());
+        let mut headers = core::mem::take(req.headers_mut());
+        transform_absolute_form_req(&mut uri, &mut headers);
+        *req.uri_mut() = uri;
+        *req.headers_mut() = headers;
+        req
     };
+    let method = req.method().clone();
+    let res = tls_http(upstream, req, session_guard).await;
+    info!("Direct {method} finished");
+    return res;
+}
 
+#[instrument(skip_all, fields(addr = ?dst_addr))]
+async fn proxy(
+    conn_selector: &ConnSelector<StreamAddr>,
+    dst_addr: StreamAddr,
+    req: Request<Incoming>,
+    start: (std::time::Instant, std::time::SystemTime),
+    ctx: &HttpAccessConnContext,
+) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError> {
     // Establish proxy chain
-    let (chain, payload_crypto) = match conn_selector.as_ref() {
+    let (chain, payload_crypto) = match conn_selector {
         common::route::ConnSelector::Empty => ([].into(), None),
         common::route::ConnSelector::Some(conn_selector1) => {
             let proxy_chain = conn_selector1.choose_chain();
@@ -103,13 +121,13 @@ pub async fn run_proxy_mode(
             )
         }
     };
-    let upstream = establish(&chain, addr.clone(), &ctx.stream_context).await?;
+    let upstream = establish(&chain, dst_addr.clone(), &ctx.stream_context).await?;
 
     let session_guard = ctx.stream_context.session_table.as_ref().map(|s| {
         s.set_scope_owned(Session {
             start: SystemTime::now(),
             end: None,
-            destination: Some(addr.clone()),
+            destination: Some(dst_addr.clone()),
             upstream_local: upstream.stream.local_addr().ok(),
             upstream_remote: upstream.addr.clone(),
             downstream_local: Arc::clone(&ctx.listen_addr),
@@ -118,6 +136,7 @@ pub async fn run_proxy_mode(
             dn_gauge: None,
         })
     });
+    let method = req.method().clone();
     let res = match &payload_crypto {
         Some(crypto) => {
             // Establish encrypted stream
@@ -138,7 +157,7 @@ pub async fn run_proxy_mode(
             upstream_sock_addr: upstream.sock_addr,
             downstream_addr: None,
         },
-        destination: addr.address,
+        destination: dst_addr.address,
     };
     info!(%log, "{method} finished");
 
@@ -150,6 +169,7 @@ pub async fn run_proxy_mode(
     res
 }
 
+#[instrument(skip_all)]
 async fn tls_http<Upstream>(
     upstream: Upstream,
     req: Request<Incoming>,

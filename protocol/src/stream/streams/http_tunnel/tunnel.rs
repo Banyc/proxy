@@ -29,7 +29,7 @@ use hyper_util::rt::TokioIo;
 use thiserror::Error;
 use tracing::{instrument, trace, warn};
 
-#[instrument(skip_all, fields(dst_addr))]
+#[instrument(skip_all)]
 pub async fn run_tunnel_mode(
     ctx: &HttpAccessConnContext,
     req: Request<Incoming>,

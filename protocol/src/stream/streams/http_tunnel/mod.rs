@@ -182,6 +182,8 @@ pub enum TunnelError {
     HyperError(#[from] hyper::Error),
     #[error("No host in HTTP request")]
     HttpNoHost,
+    #[error("No port in HTTP request")]
+    HttpNoPort,
     #[error("Direct connection error: {0}")]
     Direct(#[source] io::Error),
     #[error("Invalid address: {0}")]
