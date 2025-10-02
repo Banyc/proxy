@@ -3,11 +3,10 @@ use std::{borrow::Cow, sync::Arc, time::SystemTime};
 use crate::stream::{
     addr::ConcreteStreamType,
     streams::{
-        http_tunnel::{HttpAccessConnContext, TunnelError, respond_with_rejection},
+        http_tunnel::{HttpAccessConnContext, ReturnType, TunnelError, respond_with_rejection},
         tcp::proxy_server::TCP_STREAM_TYPE,
     },
 };
-use bytes::Bytes;
 use common::{
     addr::InternetAddr,
     log::Timing,
@@ -21,20 +20,18 @@ use common::{
     route::{ConnSelector, RouteAction},
     udp::TIMEOUT,
 };
-use http_body_util::{BodyExt, combinators::BoxBody};
-use hyper::{Request, Response, body::Incoming, http};
+use http_body_util::BodyExt;
+use hyper::{Request, body::Incoming, http};
 use hyper_util::rt::TokioIo;
 use monitor_table::table::RowOwnedGuard;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{info, instrument, trace, warn};
 
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(method = %req.method()))]
 pub async fn run_proxy_mode(
     ctx: &HttpAccessConnContext,
     req: Request<hyper::body::Incoming>,
-) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError> {
-    let start = (std::time::Instant::now(), std::time::SystemTime::now());
-
+) -> ReturnType {
     let dst_addr = {
         let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
         let port = req.uri().port_u16().ok_or(TunnelError::HttpNoPort)?;
@@ -44,25 +41,32 @@ pub async fn run_proxy_mode(
             stream_type: ConcreteStreamType::Tcp.to_string().into(),
         }
     };
+    dispatch(dst_addr, req, ctx).await
+}
+
+#[instrument(skip_all, fields(addr = ?dst_addr))]
+async fn dispatch(
+    dst_addr: StreamAddr,
+    req: Request<Incoming>,
+    ctx: &HttpAccessConnContext,
+) -> ReturnType {
     let action = ctx.route_table.action(&dst_addr.address);
     match action {
-        RouteAction::ConnSelector(conn_selector) => {
-            proxy(conn_selector, dst_addr, req, start, ctx).await
-        }
+        RouteAction::ConnSelector(conn_selector) => proxy(conn_selector, dst_addr, req, ctx).await,
         RouteAction::Block => {
-            trace!(addr = ?dst_addr, "Blocked {method}", method = req.method());
+            trace!("Blocked");
             return Ok(respond_with_rejection());
         }
         RouteAction::Direct => direct(dst_addr, req, ctx).await,
     }
 }
 
-#[instrument(skip_all, fields(addr = ?dst_addr))]
+#[instrument(skip_all)]
 async fn direct(
     dst_addr: StreamAddr,
     req: Request<Incoming>,
     ctx: &HttpAccessConnContext,
-) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError> {
+) -> ReturnType {
     let sock_addr = dst_addr
         .address
         .to_socket_addr()
@@ -96,20 +100,20 @@ async fn direct(
         *req.headers_mut() = headers;
         req
     };
-    let method = req.method().clone();
     let res = tls_http(upstream, req, session_guard).await;
-    info!("Direct {method} finished");
+    info!("Direct finished");
     return res;
 }
 
-#[instrument(skip_all, fields(addr = ?dst_addr))]
+#[instrument(skip_all)]
 async fn proxy(
     conn_selector: &ConnSelector<StreamAddr>,
     dst_addr: StreamAddr,
     req: Request<Incoming>,
-    start: (std::time::Instant, std::time::SystemTime),
     ctx: &HttpAccessConnContext,
-) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError> {
+) -> ReturnType {
+    let start = (std::time::Instant::now(), std::time::SystemTime::now());
+
     // Establish proxy chain
     let (chain, payload_crypto) = match conn_selector {
         common::route::ConnSelector::Empty => ([].into(), None),
@@ -136,7 +140,6 @@ async fn proxy(
             dn_gauge: None,
         })
     });
-    let method = req.method().clone();
     let res = match &payload_crypto {
         Some(crypto) => {
             // Establish encrypted stream
@@ -159,7 +162,7 @@ async fn proxy(
         },
         destination: dst_addr.address,
     };
-    info!(%log, "{method} finished");
+    info!(%log, "Finished");
 
     let record = (&log).into();
     if let Some(x) = LOGGER.lock().unwrap().as_ref() {
@@ -174,7 +177,7 @@ async fn tls_http<Upstream>(
     upstream: Upstream,
     req: Request<Incoming>,
     session_guard: Option<RowOwnedGuard<Session>>,
-) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>
+) -> ReturnType
 where
     Upstream: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
@@ -221,9 +224,10 @@ fn transform_absolute_form_req(uri: &mut http::Uri, headers: &mut http::HeaderMa
     }
     // `uri` is in absolute-form
 
+    let host = auth.host();
     let new_host_value: Cow<str> = match auth.port() {
-        Some(port) => format!("{}:{port}", auth.host()).into(),
-        None => auth.host().into(),
+        Some(port) => format!("{host}:{port}").into(),
+        None => host.into(),
     };
     let new_host_value = new_host_value.parse().unwrap();
     headers.insert(http::header::HOST, new_host_value);

@@ -28,6 +28,8 @@ use tracing::{instrument, trace, warn};
 mod proxy;
 mod tunnel;
 
+type ReturnType = Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HttpAccessServerConfig {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::stream::{
     addr::ConcreteStreamType,
     streams::{
-        http_tunnel::{HttpAccessConnContext, TunnelError, full, respond_with_rejection},
+        http_tunnel::{HttpAccessConnContext, ReturnType, full, respond_with_rejection},
         tcp::proxy_server::TCP_STREAM_TYPE,
     },
 };
@@ -30,10 +30,7 @@ use thiserror::Error;
 use tracing::{instrument, trace, warn};
 
 #[instrument(skip_all)]
-pub async fn run_tunnel_mode(
-    ctx: &HttpAccessConnContext,
-    req: Request<Incoming>,
-) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError> {
+pub async fn run_tunnel_mode(ctx: &HttpAccessConnContext, req: Request<Incoming>) -> ReturnType {
     // Received an HTTP request like:
     // ```
     // CONNECT www.domain.com:443 HTTP/1.1
@@ -59,6 +56,15 @@ pub async fn run_tunnel_mode(
         }
     };
     let dst_addr: InternetAddr = addr.parse()?;
+    dispatch(dst_addr, req, ctx).await
+}
+
+#[instrument(skip_all, fields(addr = ?dst_addr))]
+async fn dispatch(
+    dst_addr: InternetAddr,
+    req: Request<Incoming>,
+    ctx: &HttpAccessConnContext,
+) -> ReturnType {
     let action = ctx.route_table.action(&dst_addr);
     let action = match &action {
         RouteAction::ConnSelector(conn_selector) => {
