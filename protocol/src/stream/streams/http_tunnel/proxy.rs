@@ -95,7 +95,7 @@ async fn direct(
         let mut req = req;
         let mut uri = core::mem::take(req.uri_mut());
         let mut headers = core::mem::take(req.headers_mut());
-        transform_absolute_form_req(&mut uri, &mut headers);
+        transform_absolute_form_req(&mut uri, &mut headers, req.method());
         *req.uri_mut() = uri;
         *req.headers_mut() = headers;
         req
@@ -215,7 +215,11 @@ where
 }
 
 /// ref: <https://datatracker.ietf.org/doc/html/rfc9112#name-absolute-form>
-fn transform_absolute_form_req(uri: &mut http::Uri, headers: &mut http::HeaderMap) {
+fn transform_absolute_form_req(
+    uri: &mut http::Uri,
+    headers: &mut http::HeaderMap,
+    method: &http::Method,
+) {
     let Some(auth) = uri.authority() else {
         return;
     };
@@ -233,7 +237,15 @@ fn transform_absolute_form_req(uri: &mut http::Uri, headers: &mut http::HeaderMa
     headers.insert(http::header::HOST, new_host_value);
 
     // in case origin fails to parse absolute-form
-    let relative_ref = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    let default_origin_form = if method == http::Method::OPTIONS {
+        "*"
+    } else {
+        "/"
+    };
+    let relative_ref = uri
+        .path_and_query()
+        .map(|p| p.as_str())
+        .unwrap_or(default_origin_form);
     *uri = relative_ref.parse().unwrap();
 }
 #[cfg(test)]
@@ -244,12 +256,13 @@ fn test_transform_absolute_form_req() {
         .unwrap();
     let mut uri = absolute_form;
     let mut headers = http::HeaderMap::new();
+    let method = http::Method::GET;
 
-    transform_absolute_form_req(&mut uri, &mut headers);
+    transform_absolute_form_req(&mut uri, &mut headers, &method);
     assert_eq!(headers.get(http::header::HOST).unwrap(), "www.example.org");
     assert_eq!(uri.to_string(), "/pub/WWW/TheProject.html");
 
-    transform_absolute_form_req(&mut uri, &mut headers);
+    transform_absolute_form_req(&mut uri, &mut headers, &method);
     assert_eq!(headers.get(http::header::HOST).unwrap(), "www.example.org");
     assert_eq!(uri.to_string(), "/pub/WWW/TheProject.html");
 }
