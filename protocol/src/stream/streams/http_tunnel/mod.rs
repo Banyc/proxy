@@ -1,7 +1,7 @@
 use std::{collections::HashMap, io, sync::Arc};
 
 use crate::stream::streams::{
-    http_tunnel::{proxy::run_proxy, tunnel::run_tunnel},
+    http_tunnel::{proxy::run_proxy_mode, tunnel::run_tunnel_mode},
     tcp::proxy_server::TcpServer,
 };
 use async_speed_limit::Limiter;
@@ -168,9 +168,9 @@ async fn run_service(
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError> {
     trace!(?req, "Received request");
     if Method::CONNECT == req.method() {
-        run_tunnel(ctx, req).await
+        run_tunnel_mode(ctx, req).await
     } else {
-        run_proxy(ctx, req).await
+        run_proxy_mode(ctx, req).await
     }
 }
 

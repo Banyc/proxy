@@ -29,7 +29,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{info, instrument, trace, warn};
 
 #[instrument(skip_all)]
-pub async fn run_proxy(
+pub async fn run_proxy_mode(
     ctx: &HttpAccessConnContext,
     req: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError> {
