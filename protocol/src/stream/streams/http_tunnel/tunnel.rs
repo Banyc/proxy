@@ -47,8 +47,8 @@ pub async fn run_tunnel_mode(ctx: &HttpAccessConnContext, req: Request<Incoming>
     let addr = match host_addr(req.uri()) {
         Some(addr) => addr,
         None => {
-            let uri = req.uri().to_string();
-            warn!(?uri, "CONNECT host is not socket addr");
+            let uri = req.uri();
+            warn!(%uri, "CONNECT host is not socket addr");
             let mut resp = Response::new(full("CONNECT must be to a socket address"));
             *resp.status_mut() = http::StatusCode::BAD_REQUEST;
 
