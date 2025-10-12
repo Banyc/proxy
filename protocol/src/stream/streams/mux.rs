@@ -20,6 +20,8 @@ use tokio::{
 };
 use tracing::warn;
 
+const MAX_SEND_UNIT_SIZE: usize = 1024 * 4;
+
 pub fn server_mux_config() -> MuxConfig {
     MuxConfig {
         initiation: Initiation::Server,
@@ -206,6 +208,8 @@ impl AsyncWrite for IoMuxStream {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, io::Error>> {
+        let len = buf.len().min(MAX_SEND_UNIT_SIZE);
+        let buf = &buf[..len];
         std::pin::Pin::new(&mut self.stream).poll_write(cx, buf)
     }
     fn poll_flush(
