@@ -32,9 +32,12 @@ pub async fn run_proxy_mode(
     ctx: &HttpAccessConnContext,
     req: Request<hyper::body::Incoming>,
 ) -> ReturnType {
+    let scheme = || req.uri().scheme_str();
+    let port = req.uri().port_u16();
+    let port = port.or_else(|| scheme().and_then(http_default_port));
     let dst_addr = {
         let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
-        let port = req.uri().port_u16().ok_or(TunnelError::HttpNoPort)?;
+        let port = port.ok_or(TunnelError::HttpNoPort)?;
         let addr = InternetAddr::from_host_and_port(host, port)?;
         StreamAddr {
             address: addr,
@@ -42,6 +45,15 @@ pub async fn run_proxy_mode(
         }
     };
     dispatch(dst_addr, req, ctx).await
+}
+
+fn http_default_port(scheme: &str) -> Option<u16> {
+    let scheme = scheme.to_lowercase();
+    Some(match scheme.as_str() {
+        "http" => 80,
+        "https" => 443,
+        _ => return None,
+    })
 }
 
 #[instrument(skip_all, fields(addr = ?dst_addr))]
