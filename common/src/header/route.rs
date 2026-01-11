@@ -3,50 +3,24 @@ use thiserror::Error;
 
 use super::codec::AsHeader;
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, bincode::Encode, bincode::Decode,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct RouteRequest<Addr> {
     pub upstream: Option<Addr>,
 }
 impl<Addr> AsHeader for RouteRequest<Addr> {}
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, bincode::Encode, bincode::Decode,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct RouteResponse {
     pub result: Result<(), RouteError>,
 }
 impl AsHeader for RouteResponse {}
 
-#[derive(
-    Debug,
-    Error,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Deserialize,
-    Serialize,
-    bincode::Encode,
-    bincode::Decode,
-)]
+#[derive(Debug, Error, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[error("{kind}")]
 pub struct RouteError {
     pub kind: RouteErrorKind,
 }
-#[derive(
-    Debug,
-    Error,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Deserialize,
-    Serialize,
-    bincode::Encode,
-    bincode::Decode,
-)]
+#[derive(Debug, Error, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum RouteErrorKind {
     #[error("io error")]
     Io,

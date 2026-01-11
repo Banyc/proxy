@@ -15,7 +15,6 @@ async-speed-limit = { version = "0.4", features = ["tokio"] }
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"
-bincode = "2"
 bytes = "1"
 clap = "4"
 derive_more = "2"
@@ -36,6 +35,7 @@ monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.
 mptcp = { git = "https://github.com/Banyc/mptcp.git", tag = "v0.0.2" }
 mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.10" }
 pin-project-lite = "0.2"
+postcard = "1"
 primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.59" }
 rand = "0.9"
 regex = "1"

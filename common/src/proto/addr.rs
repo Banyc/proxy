@@ -20,9 +20,7 @@ impl StreamAddrBuilder {
 }
 
 /// A stream address
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, bincode::Encode, bincode::Decode,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct StreamAddr {
     pub address: InternetAddr,
     pub stream_type: Arc<str>,

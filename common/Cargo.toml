@@ -11,7 +11,6 @@ ahash = { workspace = true }
 async-speed-limit = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
-bincode = { workspace = true }
 bytes = { workspace = true }
 derive_more = { workspace = true, features = ["full"] }
 duplicate = { workspace = true }
@@ -22,6 +21,7 @@ hdv_derive = { workspace = true }
 metrics = { workspace = true }
 monitor_table = { workspace = true, features = ["hdv"] }
 pin-project-lite = { workspace = true }
+postcard = { workspace = true }
 primitive = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }

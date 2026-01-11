@@ -5,16 +5,12 @@ use std::{
 
 use ae::anti_replay::ValidatorRef;
 use duplicate::duplicate_item;
+use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{instrument, trace};
 
 pub const MAX_HEADER_LEN: usize = 1024;
-const BINCODE_CONFIG: bincode::config::Configuration<
-    bincode::config::LittleEndian,
-    bincode::config::Varint,
-    bincode::config::NoLimit,
-> = bincode::config::standard();
 
 pub trait AsHeader {}
 
@@ -31,7 +27,7 @@ pub async fn read_header<Reader, Header>(
 ) -> Result<Header, CodecError>
 where
     Reader: reader_bounds,
-    Header: std::fmt::Debug + AsHeader + bincode::Decode<()>,
+    Header: std::fmt::Debug + AsHeader + DeserializeOwned,
 {
     let mut buf = [0; MAX_HEADER_LEN * 2];
     let mut start_pos = 0;
@@ -61,8 +57,7 @@ where
         },
     };
     let hdr_buf = &buf[start_pos..end_pos];
-    let mut rdr = io::Cursor::new(hdr_buf);
-    let header = bincode::decode_from_std_read(&mut rdr, BINCODE_CONFIG)?;
+    let header = postcard::from_bytes(hdr_buf)?;
     trace!(?header, "Read header");
 
     Ok(header)
@@ -81,13 +76,10 @@ pub async fn write_header<Writer, Header>(
 ) -> Result<(), CodecError>
 where
     Writer: writer_bounds,
-    Header: std::fmt::Debug + AsHeader + bincode::Encode,
+    Header: std::fmt::Debug + AsHeader + Serialize,
 {
     let mut hdr_buf = [0; MAX_HEADER_LEN];
-    let mut hdr_wtr = io::Cursor::new(&mut hdr_buf[..]);
-    bincode::encode_into_std_write(header, &mut hdr_wtr, BINCODE_CONFIG)?;
-    let len = hdr_wtr.position();
-    let hdr_buf = &hdr_buf[..len as usize];
+    let hdr_buf = postcard::to_slice(header, &mut hdr_buf)?;
 
     let timestamped = true;
     let mut buf = [0; MAX_HEADER_LEN * 2];
@@ -121,7 +113,7 @@ pub async fn timed_read_header_async<Reader, Header>(
 ) -> Result<Header, CodecError>
 where
     Reader: AsyncRead + Unpin,
-    Header: std::fmt::Debug + AsHeader + bincode::Decode<()>,
+    Header: std::fmt::Debug + AsHeader + DeserializeOwned,
 {
     let res = tokio::time::timeout(timeout, read_header_async(reader, key, validator)).await;
     match res {
@@ -141,7 +133,7 @@ pub async fn timed_write_header_async<Writer, Header>(
 ) -> Result<(), CodecError>
 where
     Writer: AsyncWrite + Unpin,
-    Header: std::fmt::Debug + AsHeader + bincode::Encode,
+    Header: std::fmt::Debug + AsHeader + Serialize,
 {
     let res = tokio::time::timeout(timeout, write_header_async(writer, header, key)).await;
     match res {
@@ -157,10 +149,8 @@ where
 pub enum CodecError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
-    #[error("Encode error: {0}")]
-    Encode(#[from] bincode::error::EncodeError),
-    #[error("Decode error: {0}")]
-    Decode(#[from] bincode::error::DecodeError),
+    #[error("Codec error: {0}")]
+    Codec(#[from] postcard::Error),
     #[error("Data tempered")]
     Integrity,
 }
