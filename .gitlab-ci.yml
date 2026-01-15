@@ -1,0 +1,85 @@
+variables:
+  IMAGE_RUST: "rust"
+  IMAGE_RUST_XWIN: "messense/cargo-xwin"
+  IMAGE_RUST_ZIGBUILD: "ghcr.io/rust-cross/cargo-zigbuild"
+  PATH_CONFIG: "server/config.toml"
+  TARGET_WINDOWS: "x86_64-pc-windows-msvc"
+  TARGET_LINUX: "x86_64-unknown-linux-musl"
+  TARGET_MACOS_ARM: "aarch64-apple-darwin"
+  TARGET_MACOS_INTEL: "x86_64-apple-darwin"
+
+stages:
+  - build
+
+build.linux:
+  stage: build
+  image: "${IMAGE_RUST_ZIGBUILD}"
+  script:
+    - "rustup target add ${TARGET_LINUX}"
+    - "cargo zigbuild --release --target ${TARGET_LINUX}"
+  artifacts:
+    when: on_success
+    access: all
+    expire_in: "30 days"
+    paths:
+      - "target/${TARGET_LINUX}/release/proxy"
+      - "${PATH_CONFIG}"
+    name: "${TARGET_LINUX}"
+
+build.windows:
+  stage: build
+  image: "${IMAGE_RUST_XWIN}"
+  script:
+    - "rustup target add ${TARGET_WINDOWS}"
+    - "cargo xwin build --release --target ${TARGET_WINDOWS}"
+  artifacts:
+    when: on_success
+    access: all
+    expire_in: "30 days"
+    paths:
+      - "target/${TARGET_WINDOWS}/release/proxy.exe"
+      - "${PATH_CONFIG}"
+    name: "${TARGET_WINDOWS}"
+
+build.macos.arm:
+  stage: build
+  image: "${IMAGE_RUST_ZIGBUILD}"
+  script:
+    - "rustup target add ${TARGET_MACOS_ARM}"
+    - "cargo zigbuild --release --target ${TARGET_MACOS_ARM}"
+  artifacts:
+    when: on_success
+    access: all
+    expire_in: "30 days"
+    paths:
+      - "target/${TARGET_MACOS_ARM}/release/proxy"
+      - "${PATH_CONFIG}"
+    name: "${TARGET_MACOS_ARM}"
+
+build.macos.intel:
+  stage: build
+  image: "${IMAGE_RUST_ZIGBUILD}"
+  script:
+    - "rustup target add ${TARGET_MACOS_INTEL}"
+    - "cargo zigbuild --release --target ${TARGET_MACOS_INTEL}"
+  artifacts:
+    when: on_success
+    access: all
+    expire_in: "30 days"
+    paths:
+      - "target/${TARGET_MACOS_INTEL}/release/proxy"
+      - "${PATH_CONFIG}"
+    name: "${TARGET_MACOS_INTEL}"
+
+.build.native:
+  stage: build
+  image: "${IMAGE_RUST}"
+  script:
+    - "cargo build --release"
+  artifacts:
+    when: on_success
+    access: all
+    expire_in: "30 days"
+    paths:
+      - "target/release/proxy"
+      - "${PATH_CONFIG}"

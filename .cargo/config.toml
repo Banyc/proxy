@@ -1,0 +1,7 @@
+# [target.x86_64-pc-windows-msvc]
+# rustflags = [
+#     # "-C",
+#     # "link-args=/VERBOSE",
+#     "-C",
+#     "link-args=/PDBPAGESIZE:32768",
+# ]
