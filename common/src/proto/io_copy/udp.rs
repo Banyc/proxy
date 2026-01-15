@@ -261,7 +261,7 @@ where
 
                 // Gauge
                 if let Some(g) = &up_gauge {
-                    g.update(packet.slice().len() as u64);
+                    g.add(packet.slice().len() as u64);
                 }
 
                 // Encrypt/Decrypt payload
@@ -321,7 +321,7 @@ where
 
                 // Gauge
                 if let Some(g) = &dn_gauge {
-                    g.update(pkt.len() as u64);
+                    g.add(pkt.len() as u64);
                 }
 
                 // Encrypt/Decrypt payload

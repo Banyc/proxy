@@ -1,4 +1,5 @@
-#![feature(test)]
+#![cfg_attr(feature = "nightly", feature(test))]
+#[cfg(feature = "nightly")]
 extern crate test;
 
 pub mod addr;

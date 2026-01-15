@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.dependencies]
-ae = { git = "https://github.com/Banyc/ae.git", tag = "v0.0.3" }
+ae = { git = "https://github.com/Banyc/ae.git", tag = "v0.0.4" }
 ahash = "0.8"
 anyhow = "1"
 async-speed-limit = { version = "0.4", features = ["tokio"] }
@@ -50,10 +50,10 @@ thiserror = "2"
 tokio = "1"
 tokio-io-timeout = "1"
 tokio-util = "0.7"
-tokio_chacha20 = { git = "https://github.com/Banyc/tokio_chacha20.git", tag = "v0.0.7" }
+tokio_chacha20 = { git = "https://github.com/Banyc/tokio_chacha20.git", tag = "v0.0.8" }
 tokio_conn_pool = { git = "https://github.com/Banyc/tokio_conn_pool.git", rev = "8454496666bc1960223ca2eb78535fe2fd30cfbe" }
 tokio_kcp = "0.9"
-tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", tag = "v0.0.1" }
+tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", tag = "v0.0.2" }
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = "0.3"

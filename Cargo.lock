@@ -20,7 +20,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 [[package]]
 name = "ae"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/ae.git?tag=v0.0.3#8fbf991517f65209b04d6bda08e10adbe8d3a33f"
+source = "git+https://github.com/Banyc/ae.git?tag=v0.0.4#bfd4ff746a9bd3a3ff65cb6950765b0da24c0200"
 dependencies = [
  "duplicate",
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
@@ -4110,7 +4110,7 @@ dependencies = [
 [[package]]
 name = "tokio_chacha20"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/tokio_chacha20.git?tag=v0.0.7#7bc641180e8edb151a08f704f59ca95577fd74e6"
+source = "git+https://github.com/Banyc/tokio_chacha20.git?tag=v0.0.8#6513c3dcff5746002a3a11938bf144639701fbdc"
 dependencies = [
  "arrayvec",
  "base64",
@@ -4154,7 +4154,7 @@ dependencies = [
 [[package]]
 name = "tokio_throughput"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/tokio_throughput.git?tag=v0.0.1#8e84144fe96f6e285dfbd56a2a0d94f0243224a8"
+source = "git+https://github.com/Banyc/tokio_throughput.git?tag=v0.0.2#78ccac1f75ff1cc8d7f0eb869bf0b415376037d1"
 dependencies = [
  "strict-num",
  "tokio",
