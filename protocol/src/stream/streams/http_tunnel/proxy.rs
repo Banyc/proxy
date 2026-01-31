@@ -35,8 +35,14 @@ pub async fn run_proxy_mode(
     let scheme = || req.uri().scheme_str();
     let port = req.uri().port_u16();
     let port = port.or_else(|| scheme().and_then(http_default_port));
+    let req = req_modify_path(req);
     let dst_addr = {
-        let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
+        // let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
+        let host = req
+            .headers()
+            .get(hyper::header::HOST)
+            .ok_or(TunnelError::HttpNoHost)?;
+        let host = host.to_str().map_err(|_| TunnelError::HttpNoHost)?;
         let port = port.ok_or(TunnelError::HttpNoPort)?;
         let addr = InternetAddr::from_host_and_port(host, port)?;
         StreamAddr {
@@ -103,15 +109,6 @@ async fn direct(
             dn_gauge: None,
         })
     });
-    let req = {
-        let mut req = req;
-        let mut uri = core::mem::take(req.uri_mut());
-        let mut headers = core::mem::take(req.headers_mut());
-        transform_absolute_form_req(&mut uri, &mut headers, req.method());
-        *req.uri_mut() = uri;
-        *req.headers_mut() = headers;
-        req
-    };
     let res = tls_http(upstream, req, session_guard).await;
     info!("Direct finished");
     return res;
@@ -226,6 +223,15 @@ where
     Ok(resp.map(|b| b.boxed()))
 }
 
+fn req_modify_path<T>(req: Request<T>) -> Request<T> {
+    let mut req = req;
+    let mut uri = core::mem::take(req.uri_mut());
+    let mut headers = core::mem::take(req.headers_mut());
+    transform_absolute_form_req(&mut uri, &mut headers, req.method());
+    *req.uri_mut() = uri;
+    *req.headers_mut() = headers;
+    req
+}
 /// ref: <https://datatracker.ietf.org/doc/html/rfc9112#name-absolute-form>
 fn transform_absolute_form_req(
     uri: &mut http::Uri,
