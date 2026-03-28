@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;

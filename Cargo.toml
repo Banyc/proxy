@@ -37,7 +37,7 @@ mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.10" }
 pin-project-lite = "0.2"
 postcard = "1"
 primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.59" }
-rand = "0.9"
+rand = "0.10"
 regex = "1"
 rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.70" }
 scopeguard = "1"
@@ -54,7 +54,7 @@ tokio_chacha20 = { git = "https://github.com/Banyc/tokio_chacha20.git", tag = "v
 tokio_conn_pool = { git = "https://github.com/Banyc/tokio_conn_pool.git", rev = "8454496666bc1960223ca2eb78535fe2fd30cfbe" }
 tokio_kcp = "0.9"
 tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", tag = "v0.0.2" }
-toml = "0.9"
+toml = "1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.13" }
