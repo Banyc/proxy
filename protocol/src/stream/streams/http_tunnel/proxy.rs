@@ -27,29 +27,64 @@ use monitor_table::table::RowOwnedGuard;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{info, instrument, trace, warn};
 
+#[derive(Debug, Clone, Copy)]
+struct ParsedHostHeader<'a> {
+    pub host: &'a str,
+    pub port: Option<u16>,
+}
+impl<'a> ParsedHostHeader<'a> {
+    fn from_str(s: &'a str) -> Option<Self> {
+        let Some((host, port)) = s.split_once(":") else {
+            return Some(Self {
+                host: s,
+                port: None,
+            });
+        };
+        let port = port.parse().ok()?;
+        Some(Self {
+            host,
+            port: Some(port),
+        })
+    }
+}
+
+fn get_authority_from_req(
+    req: &Request<hyper::body::Incoming>,
+) -> Result<InternetAddr, TunnelError> {
+    let scheme = || req.uri().scheme_str();
+    let scheme_port = || scheme().and_then(http_default_port);
+    let req_target_host = req.uri().host();
+    let req_target_port = req.uri().port_u16();
+    let host_header = || {
+        req.headers()
+            .get(hyper::header::HOST)
+            .ok_or(TunnelError::HttpNoHost)
+    };
+    if let (Some(host), Some(port)) = (req_target_host, req_target_port) {
+        return Ok(InternetAddr::from_host_and_port(host, port)?);
+    }
+    let host_header = host_header()?;
+    let host_header = host_header.to_str().map_err(|_| TunnelError::HttpNoHost)?;
+    let host_header = ParsedHostHeader::from_str(host_header).ok_or(TunnelError::HttpNoPort)?;
+    let host = req_target_host.unwrap_or(host_header.host);
+    let port = req_target_port
+        .or(host_header.port)
+        .or_else(scheme_port)
+        .ok_or(TunnelError::HttpNoPort)?;
+    Ok(InternetAddr::from_host_and_port(host, port)?)
+}
+
 #[instrument(skip_all, fields(method = %req.method()))]
 pub async fn run_proxy_mode(
     ctx: &HttpAccessConnContext,
     req: Request<hyper::body::Incoming>,
 ) -> ReturnType {
-    let scheme = || req.uri().scheme_str();
-    let port = req.uri().port_u16();
-    let port = port.or_else(|| scheme().and_then(http_default_port));
-    let req = req_modify_path(req);
-    let dst_addr = {
-        // let host = req.uri().host().ok_or(TunnelError::HttpNoHost)?;
-        let host = req
-            .headers()
-            .get(hyper::header::HOST)
-            .ok_or(TunnelError::HttpNoHost)?;
-        let host = host.to_str().map_err(|_| TunnelError::HttpNoHost)?;
-        let port = port.ok_or(TunnelError::HttpNoPort)?;
-        let addr = InternetAddr::from_host_and_port(host, port)?;
-        StreamAddr {
-            address: addr,
-            stream_type: ConcreteStreamType::Tcp.to_string().into(),
-        }
+    let dst_addr = get_authority_from_req(&req)?;
+    let dst_addr = StreamAddr {
+        address: dst_addr,
+        stream_type: ConcreteStreamType::Tcp.to_string().into(),
     };
+    let req = req_modify_path(req);
     dispatch(dst_addr, req, ctx).await
 }
 
