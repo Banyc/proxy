@@ -4264,7 +4264,7 @@ dependencies = [
 [[package]]
 name = "tokio_throughput"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/tokio_throughput.git?tag=v0.0.2#78ccac1f75ff1cc8d7f0eb869bf0b415376037d1"
+source = "git+https://github.com/Banyc/tokio_throughput.git?tag=v0.0.3#746d959f83f8bf4ae2d2e980118b566e73381cdc"
 dependencies = [
  "strict-num",
  "tokio",
