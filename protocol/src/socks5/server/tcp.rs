@@ -350,8 +350,8 @@ impl Socks5ServerTcpAccessConnHandler {
                 );
             }
             RouteAction::Direct => {
-                let sock_addr = match relay_request.destination.to_socket_addr().await {
-                    Ok(sock_addr) => sock_addr,
+                let sock_addrs = match relay_request.destination.to_socket_addrs().await {
+                    Ok(sock_addrs) => sock_addrs,
                     Err(e) => {
                         return (
                             general_socks_server_failure(),
@@ -362,10 +362,10 @@ impl Socks5ServerTcpAccessConnHandler {
                         );
                     }
                 };
-                let upstream = match self
+                let (upstream, sock_addr) = match self
                     .stream_context
                     .connector_table
-                    .timed_connect(TCP_STREAM_TYPE, sock_addr, TIMEOUT)
+                    .timed_connect_2(TCP_STREAM_TYPE, sock_addrs, TIMEOUT)
                     .await
                 {
                     Ok(upstream) => upstream,

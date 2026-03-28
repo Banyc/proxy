@@ -120,15 +120,15 @@ async fn direct(
     req: Request<Incoming>,
     ctx: &HttpAccessConnContext,
 ) -> ReturnType {
-    let sock_addr = dst_addr
+    let sock_addrs = dst_addr
         .address
-        .to_socket_addr()
+        .to_socket_addrs()
         .await
         .map_err(TunnelError::Direct)?;
-    let upstream = ctx
+    let (upstream, _) = ctx
         .stream_context
         .connector_table
-        .timed_connect(TCP_STREAM_TYPE, sock_addr, TIMEOUT)
+        .timed_connect_2(TCP_STREAM_TYPE, sock_addrs, TIMEOUT)
         .await
         .map_err(TunnelError::Direct)?;
     let session_guard = ctx.stream_context.session_table.as_ref().map(|s| {

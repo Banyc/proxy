@@ -14,12 +14,12 @@ ae = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-common = { path = "../common" }
+common = { workspace = true }
 dhat = { workspace = true, optional = true }
 file_watcher_tokio = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
-protocol = { path = "../protocol" }
+protocol = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 swap = { workspace = true }
 thiserror = { workspace = true }

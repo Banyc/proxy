@@ -137,21 +137,25 @@ struct DirectContext {
 }
 #[instrument(skip_all)]
 async fn direct(ctx: DirectContext, upgraded: Upgraded) {
-    let dst_sock_addr = match ctx.dst_addr.to_socket_addr().await {
+    let dst_sock_addrs = match ctx.dst_addr.to_socket_addrs().await {
         Ok(sock_addr) => sock_addr,
         Err(e) => {
             warn!(?e, "Failed to resolve address");
             return;
         }
     };
-    let upstream = match ctx
+    let (upstream, dst_sock_addr) = match ctx
         .connector_table
-        .timed_connect(TCP_STREAM_TYPE, dst_sock_addr, TIMEOUT)
+        .timed_connect_2(TCP_STREAM_TYPE, dst_sock_addrs.iter().copied(), TIMEOUT)
         .await
     {
         Ok(upstream) => upstream,
         Err(e) => {
-            warn!(?e, ?dst_sock_addr, "Failed to connect to upstream directly");
+            warn!(
+                ?e,
+                ?dst_sock_addrs,
+                "Failed to connect to upstream directly"
+            );
             return;
         }
     };

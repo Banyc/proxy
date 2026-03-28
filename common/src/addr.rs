@@ -8,6 +8,7 @@ use std::{
 };
 
 use hdv_derive::HdvSerde;
+use mitsein::prelude::*;
 use primitive::map::{MapInsert, hash_map::HashGetMut, weak_lru::WeakLru};
 use serde::{Deserialize, Serialize, de::Visitor};
 use thiserror::Error;
@@ -128,27 +129,27 @@ impl InternetAddr {
         }
     }
 
-    pub async fn to_socket_addr(&self) -> io::Result<SocketAddr> {
+    pub async fn to_socket_addrs(&self) -> io::Result<Vec1<SocketAddr>> {
         match self {
-            Self(InternetAddrKind::SocketAddr(addr)) => Ok(*addr),
+            Self(InternetAddrKind::SocketAddr(addr)) => Ok(vec1![*addr]),
             Self(InternetAddrKind::DomainName { addr, port }) => {
+                let no_addr_err = || io::Error::new(io::ErrorKind::InvalidData, "No address");
                 let res = lookup_host((addr.as_ref(), *port))
                     .await
-                    .and_then(|mut res| {
-                        res.next()
-                            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No address"))
-                    });
+                    .map(|res| res.collect::<Vec<SocketAddr>>())
+                    .and_then(|addrs| Vec1::try_from(addrs).map_err(|_| no_addr_err()));
 
                 match &res {
-                    Ok(resolved_addr) => {
+                    Ok(resolved_addrs) => {
+                        let first_addr = *resolved_addrs.first();
                         if let Ok(mut store) = RESOLVED_SOCKET_ADDR.try_lock() {
-                            store.insert(addr.clone(), resolved_addr.ip());
+                            store.insert(addr.clone(), first_addr.ip());
                         }
                     }
                     Err(_) => {
                         let mut store = RESOLVED_SOCKET_ADDR.lock().unwrap();
                         if let Some(ip) = store.get_mut(addr.as_ref()) {
-                            return Ok(SocketAddr::new(*ip, *port));
+                            return Ok(vec1![SocketAddr::new(*ip, *port)]);
                         }
                     }
                 }

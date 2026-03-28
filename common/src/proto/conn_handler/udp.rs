@@ -68,17 +68,18 @@ impl UdpProxyConnHandler {
         }
 
         // Prevent connections to localhost
-        let resolved_upstream = flow
+        let resolved_upstream = *flow
             .upstream
             .as_ref()
             .unwrap()
             .0
-            .to_socket_addr()
+            .to_socket_addrs()
             .await
             .map_err(|e| ProxyError::Resolve {
                 source: e,
                 addr: flow.upstream.as_ref().unwrap().0.clone(),
-            })?;
+            })?
+            .first();
         if resolved_upstream.ip().is_loopback() {
             return Err(ProxyError::Loopback {
                 addr: flow.upstream.as_ref().unwrap().0.clone(),

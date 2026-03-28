@@ -19,6 +19,7 @@ futures-core = { workspace = true }
 hdv = { workspace = true }
 hdv_derive = { workspace = true }
 metrics = { workspace = true }
+mitsein = { workspace = true }
 monitor_table = { workspace = true, features = ["hdv"] }
 pin-project-lite = { workspace = true }
 postcard = { workspace = true }

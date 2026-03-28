@@ -109,15 +109,17 @@ impl tokio_conn_pool::Connect for PoolConnector {
     type Connection = Box<dyn AsConn>;
     async fn connect(&self) -> Option<Self::Connection> {
         let addr = self.conn.address.clone();
-        let sock_addr = addr.address.to_socket_addr().await.ok()?;
-        self.connector_table
-            .timed_connect(
+        let sock_addrs = addr.address.to_socket_addrs().await.ok()?;
+        let (stream, _sock_addr) = self
+            .connector_table
+            .timed_connect_2(
                 &self.conn.address.stream_type,
-                sock_addr,
+                sock_addrs,
                 HEARTBEAT_INTERVAL,
             )
             .await
-            .ok()
+            .ok()?;
+        Some(stream)
     }
 }
 
@@ -152,29 +154,29 @@ pub async fn connect_with_pool(
         return Ok((stream, sock_addr));
     }
 
-    let sock_addr = addr
-        .address
-        .to_socket_addr()
-        .await
-        .map_err(|e| ConnectError::ResolveAddr {
-            source: e,
-            addr: addr.clone(),
-        })?;
-    if !allow_loopback && sock_addr.ip().is_loopback() {
+    let sock_addrs =
+        addr.address
+            .to_socket_addrs()
+            .await
+            .map_err(|e| ConnectError::ResolveAddr {
+                source: e,
+                addr: addr.clone(),
+            })?;
+    if !allow_loopback && sock_addrs.iter().any(|addr| addr.ip().is_loopback()) {
         // Prevent connections to localhost
         return Err(ConnectError::Loopback {
             addr: addr.clone(),
-            sock_addr,
+            sock_addrs: sock_addrs.into(),
         });
     }
-    let stream = stream_context
+    let (stream, sock_addr) = stream_context
         .connector_table
-        .timed_connect(&addr.stream_type, sock_addr, timeout)
+        .timed_connect_2(&addr.stream_type, sock_addrs.iter().copied(), timeout)
         .await
         .map_err(|e| ConnectError::ConnectAddr {
             source: e,
             addr: addr.clone(),
-            sock_addr,
+            sock_addrs: sock_addrs.into(),
         })?;
     Ok((stream, sock_addr))
 }
@@ -186,16 +188,16 @@ pub enum ConnectError {
         source: io::Error,
         addr: StreamAddr,
     },
-    #[error("Refused to connect to loopback address: {addr}, {sock_addr}")]
+    #[error("Refused to connect to loopback address: {addr}, {sock_addrs:?}")]
     Loopback {
         addr: StreamAddr,
-        sock_addr: SocketAddr,
+        sock_addrs: Vec<SocketAddr>,
     },
-    #[error("Failed to connect to address: {source}, {addr}, {sock_addr}")]
+    #[error("Failed to connect to address: {source}, {addr}, {sock_addrs:?}")]
     ConnectAddr {
         #[source]
         source: io::Error,
         addr: StreamAddr,
-        sock_addr: SocketAddr,
+        sock_addrs: Vec<SocketAddr>,
     },
 }

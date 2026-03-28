@@ -46,12 +46,14 @@ impl UdpProxyClient {
     ) -> Result<UdpProxyClient, EstablishError> {
         // If there are no proxy configs, just connect to the destination
         if proxies.is_empty() {
-            let addr = destination.to_socket_addr().await.map_err(|e| {
-                EstablishError::ResolveDestination {
+            let addr = *destination
+                .to_socket_addrs()
+                .await
+                .map_err(|e| EstablishError::ResolveDestination {
                     source: e,
                     addr: destination.clone(),
-                }
-            })?;
+                })?
+                .first();
             let upstream = context.connector.connect(addr).await.map_err(|e| {
                 EstablishError::ConnectDestination {
                     source: e,
@@ -72,14 +74,14 @@ impl UdpProxyClient {
 
         // Connect to upstream
         let proxy_addr = proxies[0].address.clone();
-        let addr =
-            proxy_addr
-                .to_socket_addr()
-                .await
-                .map_err(|e| EstablishError::ResolveFirstProxy {
-                    source: e,
-                    addr: proxy_addr.clone(),
-                })?;
+        let addr = *proxy_addr
+            .to_socket_addrs()
+            .await
+            .map_err(|e| EstablishError::ResolveFirstProxy {
+                source: e,
+                addr: proxy_addr.clone(),
+            })?
+            .first();
         let upstream = context.connector.connect(addr).await.map_err(|e| {
             EstablishError::ConnectFirstProxy {
                 source: e,
@@ -371,7 +373,7 @@ pub async fn trace_rtt(
 
     // Connect to upstream
     let proxy_addr = &proxies[0].address;
-    let addr = proxy_addr.to_socket_addr().await?;
+    let addr = *proxy_addr.to_socket_addrs().await?.first();
     let upstream = context.connector.connect(addr).await?;
 
     // Convert addresses to headers
