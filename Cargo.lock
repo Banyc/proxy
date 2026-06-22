@@ -2079,7 +2079,7 @@ dependencies = [
 [[package]]
 name = "mux"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/mux.git?tag=v0.0.10#b1b68f6b9489c6db396f1112e24f771bf583bb17"
+source = "git+https://github.com/Banyc/mux.git?tag=v0.0.11#19a286d89b43f47a26eeebe4abdfb03a5b6b620b"
 dependencies = [
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
  "tokio",
