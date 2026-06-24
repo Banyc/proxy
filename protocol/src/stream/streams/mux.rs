@@ -18,7 +18,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     task::JoinSet,
 };
-use tracing::warn;
+use tracing::{debug, trace, warn};
 
 const MAX_SEND_UNIT_SIZE: usize = 1024 * 4;
 
@@ -70,9 +70,21 @@ pub async fn run_mux_connector<R, W, Fut>(
                 mux_spawner = JoinSet::new();
             }
             Some(res) = mux_spawner.join_next() => {
-                let (addr, e) = res.unwrap();
-                warn!(?e, ?addr, "MUX error");
-                openers.remove(&addr);
+                match res {
+                    Ok((addr, e)) => {
+                        warn!(?e, ?addr, "MUX error");
+                        openers.remove(&addr);
+                    }
+                    Err(e) if e.is_cancelled() => {
+                        // Cancellation is a normal lifecycle event (reset/
+                        // shutdown aborts in-flight tasks). Don't treat it as
+                        // an error; trace for diagnostics only.
+                        trace!(?e, "MUX task cancelled (normal shutdown/reset)");
+                    }
+                    Err(e) => {
+                        warn!(?e, "MUX supervision task failed to join");
+                    }
+                }
             }
             res = connect_request_rx.recv() => {
                 let Some(msg) = res else {
@@ -138,7 +150,30 @@ where
     let mut spawner = JoinSet::new();
     let (opener, _) = spawn_mux_no_reconnection(reader, writer, config, &mut spawner);
     mux_spawner.spawn(async move {
-        let e = spawner.join_next().await.unwrap().unwrap();
+        let e = match spawner.join_next().await {
+            Some(Ok(e)) => e,
+            // The inner mux supervision task was cancelled (e.g. abort_all
+            // during a reset). Map to MuxError::TaskJoin so the outer
+            // supervisor logs it without panicking.
+            Some(Err(e)) if e.is_cancelled() => {
+                debug!("build_opener: inner mux task cancelled");
+                MuxError::TaskJoin {
+                    task: "mux",
+                    source: e,
+                }
+            }
+            Some(Err(e)) => {
+                warn!(?e, "build_opener: inner mux task join error");
+                MuxError::TaskJoin {
+                    task: "mux",
+                    source: e,
+                }
+            }
+            None => {
+                debug!("build_opener: inner mux task produced no result");
+                MuxError::TaskStopped { task: "mux" }
+            }
+        };
         (listen_addr, e)
     });
     opener

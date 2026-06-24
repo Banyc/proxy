@@ -88,8 +88,13 @@ where
             trace!("Waiting for connection");
             tokio::select! {
                 Some(res) = self.mux.join_next() => {
-                    let e = res.unwrap();
-                    warn!(?e, ?addr, "MUX error");
+                    match res {
+                        Ok(e) => warn!(?e, ?addr, "MUX error"),
+                        Err(e) if e.is_cancelled() => {
+                            trace!(?e, "MUX task cancelled (normal shutdown/reset)");
+                        }
+                        Err(e) => warn!(?e, ?addr, "MUX supervision task failed to join"),
+                    }
                 }
                 res = self.listener.accept_without_handshake(self.fec) => {
                     let stream = match res {
