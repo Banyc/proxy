@@ -404,6 +404,78 @@ mod tests {
     // }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    #[ignore]
+    async fn perf_bulk_rtp_mux_fec() {
+        use std::time::Instant;
+
+        tokio::time::sleep(Duration::from_secs_f64(0.6)).await;
+
+        let stream_context = stream_context();
+
+        let mut join_set = tokio::task::JoinSet::new();
+
+        // Start proxy servers
+        let mut proxies = Vec::new();
+        let addr = Arc::from("0.0.0.0:0");
+        for _ in 0..STRESS_CHAINS {
+            let proxy_config =
+                spawn_proxy(&mut join_set, &addr, ConcreteStreamType::RtpMuxFec).await;
+            proxies.push(proxy_config);
+        }
+
+        // Local TCP receiver: reads exactly TOTAL_BYTES then sends 1-byte ack
+        const TOTAL_BYTES: usize = 32 * 1024 * 1024;
+        const CHUNK: usize = 64 * 1024;
+
+        let listener = TcpListener::bind("[::]:0").await.unwrap();
+        let receiver_addr = listener.local_addr().unwrap();
+        let receiver_greet_addr = StreamAddr {
+            address: receiver_addr.into(),
+            stream_type: ConcreteStreamType::Tcp.to_string().into(),
+        };
+
+        join_set.spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut got = 0usize;
+            let mut buf = [0u8; CHUNK];
+            while got < TOTAL_BYTES {
+                let want = std::cmp::min(CHUNK, TOTAL_BYTES - got);
+                let n = stream.read_exact(&mut buf[..want]).await.unwrap();
+                debug_assert_eq!(n, want);
+                got += n;
+            }
+            assert_eq!(got, TOTAL_BYTES);
+            stream.write_all(&[0u8]).await.unwrap();
+        });
+
+        // Establish a single stream through the proxy chain
+        let ConnAndAddr { mut stream, .. } =
+            establish(&proxies, receiver_greet_addr, &stream_context)
+                .await
+                .unwrap();
+
+        // Send TOTAL_BYTES in CHUNK-sized chunks
+        let chunk = vec![0u8; CHUNK];
+        let start = Instant::now();
+        let mut sent = 0usize;
+        while sent < TOTAL_BYTES {
+            let want = std::cmp::min(CHUNK, TOTAL_BYTES - sent);
+            stream.write_all(&chunk[..want]).await.unwrap();
+            sent += want;
+        }
+        // Wait for the 1-byte ack from the receiver
+        let mut ack = [0u8; 1];
+        stream.read_exact(&mut ack).await.unwrap();
+        let elapsed = start.elapsed();
+
+        let mib = (TOTAL_BYTES as f64) / (1024.0 * 1024.0);
+        let secs = elapsed.as_secs_f64();
+        let mib_s = mib / secs;
+        println!("perf_bulk_rtp_mux_fec_mib_s={mib_s:.3}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_no_proxies() {
         // Start proxy servers
 

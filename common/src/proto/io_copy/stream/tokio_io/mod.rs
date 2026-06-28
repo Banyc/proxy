@@ -7,4 +7,4 @@ pub use copy_bidirectional::{BytesCopied, CopyBiError, copy_bidirectional};
 pub use timed_copy_bidirectional::{TimedCopyBidirectionalResult, timed_copy_bidirectional};
 pub use timeout_stream::TimeoutStreamShared;
 
-const DEFAULT_BUF_SIZE: usize = 8 * 1024;
+const DEFAULT_BUF_SIZE: usize = 64 * 1024;
