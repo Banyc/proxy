@@ -145,9 +145,9 @@ dependencies = [
 
 [[package]]
 name = "arc-swap"
-version = "1.9.1"
+version = "1.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
+checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
 dependencies = [
  "rustversion",
 ]
@@ -2126,7 +2126,6 @@ dependencies = [
 [[package]]
 name = "mux"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/mux.git?tag=v0.0.15#5d0b05ecedaafc6fd5eaabf4c563c670c51699bd"
 dependencies = [
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
  "tokio",
@@ -3490,7 +3489,6 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.73#6996b93ca84ea6368796f86982863a8705263e6d"
 dependencies = [
  "async-trait",
  "async_async_io",
