@@ -477,25 +477,113 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_no_proxies() {
-        // Start proxy servers
-
         let mut join_set = tokio::task::JoinSet::new();
 
-        // Message to send
         let req_msg = b"hello world";
         let resp_msg = b"goodbye world";
 
-        // Start greet server
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
 
-        // Connect to proxy server
         let ConnAndAddr { mut stream, .. } =
             establish(&[], greet_addr, &stream_context()).await.unwrap();
 
-        // Send message
         stream.write_all(req_msg).await.unwrap();
-
-        // Read response
         read_response(&mut stream, resp_msg).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_rtp_mux_migration_integrity() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        tokio::time::sleep(Duration::from_secs_f64(0.6)).await;
+
+        let stream_context = stream_context();
+        let mut join_set = tokio::task::JoinSet::new();
+
+        // Start proxy server
+        let addr = Arc::from("0.0.0.0:0");
+        let proxy_config =
+            spawn_proxy(&mut join_set, &addr, ConcreteStreamType::RtpMux).await;
+        let proxies = vec![proxy_config];
+
+        // Start an echo server that reads a 4-byte length prefix then echoes
+        // back exactly that many bytes. This lets us test both directions
+        // independently.
+        let listener = TcpListener::bind("[::]:0").await.unwrap();
+        let echo_addr = listener.local_addr().unwrap();
+        let greet_addr = StreamAddr {
+            address: echo_addr.into(),
+            stream_type: ConcreteStreamType::Tcp.to_string().into(),
+        };
+        join_set.spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(x) => x,
+                    Err(_) => break,
+                };
+                tokio::spawn(async move {
+                    let mut len_buf = [0u8; 4];
+                    if sock.read_exact(&mut len_buf).await.is_err() {
+                        return;
+                    }
+                    let len = u32::from_be_bytes(len_buf) as usize;
+                    let len = std::cmp::min(len, 1024 * 1024);
+                    let mut data = vec![0u8; len];
+                    if sock.read_exact(&mut data).await.is_err() {
+                        return;
+                    }
+                    let _ = sock.write_all(&len_buf).await;
+                    let _ = sock.write_all(&data).await;
+                });
+            }
+        });
+
+        let concurrent = 4;
+        let mut handles = tokio::task::JoinSet::new();
+
+        for stream_idx in 0..concurrent {
+            let proxies = proxies.clone();
+            let greet_addr = greet_addr.clone();
+            let stream_context = stream_context.clone();
+            handles.spawn(async move {
+                let ConnAndAddr { mut stream, .. } =
+                    establish(&proxies, greet_addr, &stream_context)
+                        .await
+                        .unwrap();
+
+                // Large burst >2048 → bulk lane
+                let large: Vec<u8> = (0..4096u16).map(|i| ((i + stream_idx as u16) % 256) as u8).collect();
+                let len = large.len() as u32;
+                stream.write_all(&len.to_be_bytes()).await.unwrap();
+                stream.write_all(&large).await.unwrap();
+
+                // Read echo
+                let mut echo_len_buf = [0u8; 4];
+                stream.read_exact(&mut echo_len_buf).await.unwrap();
+                assert_eq!(u32::from_be_bytes(echo_len_buf), len);
+                let mut echo = vec![0u8; large.len()];
+                stream.read_exact(&mut echo).await.unwrap();
+                assert_eq!(echo, large, "large echo mismatch stream {stream_idx}");
+
+                // Many small writes → interactive lane (after demotion)
+                for i in 0..20u8 {
+                    let small: Vec<u8> = vec![i; 64];
+                    let slen = small.len() as u32;
+                    stream.write_all(&slen.to_be_bytes()).await.unwrap();
+                    stream.write_all(&small).await.unwrap();
+
+                    let mut sel_buf = [0u8; 4];
+                    stream.read_exact(&mut sel_buf).await.unwrap();
+                    assert_eq!(u32::from_be_bytes(sel_buf), slen);
+                    let mut small_echo = vec![0u8; 64];
+                    stream.read_exact(&mut small_echo).await.unwrap();
+                    assert_eq!(small_echo, small, "small echo mismatch stream {stream_idx} iter {i}");
+                }
+            });
+        }
+
+        while let Some(x) = handles.join_next().await {
+            x.unwrap();
+        }
     }
 }

@@ -1,12 +1,16 @@
 use std::{
+    collections::HashMap,
     io,
     net::SocketAddr,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
+    time::Duration,
 };
 
 use async_trait::async_trait;
 use metrics::counter;
-use mux::{MuxError, spawn_mux_no_reconnection};
+use mux::{
+    DualMuxError, LaneClass, MuxError, PairingNonce, complete_pairing, spawn_dual_mux_acceptor,
+};
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::{net::ToSocketAddrs, task::JoinSet};
@@ -31,30 +35,45 @@ use common::{
     stream::{AsConn, StreamServerHandleConn},
 };
 
-use crate::stream::streams::mux::{run_mux_accepter, server_mux_config};
-
-use super::mux::{
-    ConnectRequestTx, IoMuxStream, SocketAddrPair, connect_request_channel, run_mux_connector,
+use crate::stream::streams::mux::{
+    MigratingConnStream, SocketAddrPair, bulk_client_mux_config, interactive_client_mux_config,
+    interactive_server_mux_config, run_dual_mux_accepter,
 };
+
+use rtp::transmission::{fec_tuning::FecTuning, frame_delivery::FrameDelivery};
+
+const PAIRING_DEADLINE: Duration = Duration::from_secs(10);
+const HELLO_DEADLINE: Duration = Duration::from_secs(5);
+
+// ---------------------------------------------------------------------------
+// RtpMuxServer — dual-lane accept
+// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 pub struct RtpMuxServer<ConnHandler> {
-    listener: rtp::udp::Listener,
+    interactive_listener: rtp::udp::Listener,
+    _bulk_listener: rtp::udp::Listener,
     mux: JoinSet<MuxError>,
     conn_handler: ConnHandler,
     fec: bool,
 }
 impl<ConnHandler> RtpMuxServer<ConnHandler> {
-    pub fn new(listener: rtp::udp::Listener, conn_handler: ConnHandler, fec: bool) -> Self {
+    pub fn new(
+        interactive_listener: rtp::udp::Listener,
+        bulk_listener: rtp::udp::Listener,
+        conn_handler: ConnHandler,
+        fec: bool,
+    ) -> Self {
         Self {
-            listener,
+            interactive_listener,
+            _bulk_listener: bulk_listener,
             mux: JoinSet::new(),
             conn_handler,
             fec,
         }
     }
     pub fn listener(&self) -> &rtp::udp::Listener {
-        &self.listener
+        &self.interactive_listener
     }
 }
 impl<ConnHandler> loading::Serve for RtpMuxServer<ConnHandler>
@@ -79,11 +98,18 @@ where
         mut self,
         mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
     ) -> Result<(), ServeError> {
-        let addr = self.listener.local_addr();
-        info!(?addr, "Listening");
-        // Arc conn_handler
+        let addr = self.interactive_listener.local_addr();
+        let bulk_addr = self._bulk_listener.local_addr();
+        info!(
+            ?addr,
+            ?bulk_addr,
+            "Listening (interactive + bulk dual-lane)"
+        );
+
         let mut conn_handler = Arc::new(self.conn_handler);
-        let mut accepting = JoinSet::new();
+        let pending: Arc<Mutex<HashMap<PairingNonce, mux::PendingAcceptor>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
         loop {
             trace!("Waiting for connection");
             tokio::select! {
@@ -96,32 +122,56 @@ where
                         Err(e) => warn!(?e, ?addr, "MUX supervision task failed to join"),
                     }
                 }
-                res = self.listener.accept_without_handshake(self.fec) => {
+                // Interactive lane accept (frame-delivery rtp)
+                res = self.interactive_listener.accept_without_handshake_with_mss_fec_tuning_and_frame_delivery(
+                    self.fec,
+                    rtp::udp::NO_FEC_MSS,
+                    FecTuning::default(),
+                    FrameDelivery::enabled(),
+                ) => {
                     let stream = match res {
                         Ok(res) => res,
                         Err(e) => {
-                            warn!(?e, ?addr, "RTP accept error");
+                            warn!(?e, ?addr, "Interactive RTP accept error");
                             continue;
                         }
                     };
                     counter!("stream.rtp_mux.rtp.accepts").increment(1);
-                    let addr = SocketAddrPair {
-                        local_addr: self.listener.local_addr(),
-                        peer_addr: stream.peer_addr,
-                    };
+                    let peer = stream.peer_addr;
                     let r = stream.read.into_async_read();
                     let w = stream.write.into_async_write();
-                    let (_, accepter) = spawn_mux_no_reconnection(r, w, server_mux_config(), &mut self.mux);
-                    let conn_handler = Arc::clone(&conn_handler);
-                    accepting.spawn(async move {
-                        run_mux_accepter(accepter, addr, |stream| {
-                            counter!("stream.rtp_mux.mux.accepts").increment(1);
-                            let conn_handler = Arc::clone(&conn_handler);
-                            tokio::spawn(async move {
-                                conn_handler.handle_stream(stream).await;
-                            });
-                        }).await;
-                    });
+                    let config = interactive_server_mux_config();
+                    let expected_class = LaneClass::Interactive;
+                    spawn_lane_accept(
+                        r, w, config, expected_class, peer, addr,
+                        pending.clone(),
+                        conn_handler.clone(),
+                    );
+                }
+                // Bulk lane accept (stock rtp)
+                res = self._bulk_listener.accept_without_handshake(self.fec) => {
+                    let stream = match res {
+                        Ok(res) => res,
+                        Err(e) => {
+                            warn!(?e, ?bulk_addr, "Bulk RTP accept error");
+                            continue;
+                        }
+                    };
+                    counter!("stream.rtp_mux.rtp.accepts").increment(1);
+                    let peer = stream.peer_addr;
+                    let r = stream.read.into_async_read();
+                    let w = stream.write.into_async_write();
+                    let config = mux::MuxConfig {
+                        initiation: mux::Initiation::Server,
+                        heartbeat_interval: Duration::from_secs(5),
+                        frame_reassembly: false,
+                    };
+                    let expected_class = LaneClass::Bulk;
+                    spawn_lane_accept(
+                        r, w, config, expected_class, peer, bulk_addr,
+                        pending.clone(),
+                        conn_handler.clone(),
+                    );
                 }
                 res = set_conn_handler_rx.0.recv() => {
                     let new_conn_handler = match res {
@@ -136,6 +186,99 @@ where
         Ok(())
     }
 }
+
+fn spawn_lane_accept<
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+>(
+    r: R,
+    w: W,
+    config: mux::MuxConfig,
+    expected_class: LaneClass,
+    peer: SocketAddr,
+    local_addr: SocketAddr,
+    pending: Arc<Mutex<HashMap<PairingNonce, mux::PendingAcceptor>>>,
+    conn_handler: Arc<impl StreamServerHandleConn + Send + Sync + 'static>,
+) {
+    tokio::spawn(async move {
+        let result = spawn_dual_mux_acceptor(r, w, config, HELLO_DEADLINE).await;
+        let (class, nonce, lane_pending) = match result {
+            Ok(x) => x,
+            Err(DualMuxError::HelloDeadline) => {
+                warn!(?peer, "Lane hello deadline elapsed");
+                counter!("stream.rtp_mux.hello_timeout").increment(1);
+                return;
+            }
+            Err(DualMuxError::LaneHello(e)) => {
+                warn!(?e, ?peer, "Lane hello read error");
+                counter!("stream.rtp_mux.hello_timeout").increment(1);
+                return;
+            }
+            Err(e) => {
+                warn!(?e, ?peer, "Lane accept error");
+                return;
+            }
+        };
+
+        if class != expected_class {
+            warn!(?peer, ?class, ?expected_class, "Lane class mismatch");
+            counter!("stream.rtp_mux.class_mismatch").increment(1);
+            return;
+        }
+
+        // Check for existing pending lane
+        let existing = {
+            let mut guard = pending.lock().unwrap();
+            guard.remove(&nonce)
+        };
+
+        if let Some(other) = existing {
+            counter!("stream.rtp_mux.paired").increment(1);
+            let mut local_mux = JoinSet::new();
+            match complete_pairing(other, lane_pending, &mut local_mux) {
+                Ok((_dual_opener, dual_accepter)) => {
+                    let addr_pair = SocketAddrPair {
+                        local_addr,
+                        peer_addr: peer,
+                    };
+                    tokio::spawn(async move {
+                        let _mux = local_mux;
+                        run_dual_mux_accepter(dual_accepter, addr_pair, |stream| {
+                            counter!("stream.rtp_mux.mux.accepts").increment(1);
+                            let conn_handler = Arc::clone(&conn_handler);
+                            tokio::spawn(async move {
+                                conn_handler.handle_stream(stream).await;
+                            });
+                        })
+                        .await;
+                    });
+                }
+                Err(e) => {
+                    warn!(?e, "Pairing failed");
+                    counter!("stream.rtp_mux.pairing_timeout").increment(1);
+                }
+            }
+        } else {
+            // Store for later pairing. Schedule expiry.
+            pending.lock().unwrap().insert(nonce, lane_pending);
+            let nonce_for_expiry = nonce;
+            let pending_for_expiry = pending.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(PAIRING_DEADLINE).await;
+                if pending_for_expiry
+                    .lock()
+                    .unwrap()
+                    .remove(&nonce_for_expiry)
+                    .is_some()
+                {
+                    warn!(?peer, ?nonce_for_expiry, "Pairing deadline expired");
+                    counter!("stream.rtp_mux.pairing_timeout").increment(1);
+                }
+            });
+        }
+    });
+}
+
 #[derive(Debug, Error)]
 pub enum ServeError {
     #[error("Failed to get local address: {0}")]
@@ -148,39 +291,21 @@ pub enum ServeError {
     },
 }
 
+// ---------------------------------------------------------------------------
+// RtpMuxConnector — dual-lane connect
+// ---------------------------------------------------------------------------
+
 #[derive(Debug)]
 pub struct RtpMuxConnector {
-    connect_request_tx: ConnectRequestTx,
+    connect_request_tx: DualConnectRequestTx,
     _connector: JoinSet<()>,
 }
 impl RtpMuxConnector {
     pub fn new(config: Arc<RwLock<ConnectorConfig>>, reset: ConnectorReset, fec: bool) -> Self {
-        let (connect_request_tx, connect_request_rx) = connect_request_channel();
+        let (connect_request_tx, connect_request_rx) = dual_connect_request_channel();
         let mut connector = JoinSet::new();
         connector.spawn(async move {
-            run_mux_connector(reset, connect_request_rx, move |addr| {
-                let config = config.clone();
-                async move {
-                    let bind = config
-                        .read()
-                        .unwrap()
-                        .bind
-                        .get_matched(&addr.ip())
-                        .map(|ip| SocketAddr::new(ip, 0))
-                        .unwrap_or_else(|| any_addr(&addr.ip()));
-                    let connected =
-                        rtp::udp::connect_without_handshake(bind, addr, None, fec).await?;
-                    let addr = SocketAddrPair {
-                        local_addr: connected.local_addr,
-                        peer_addr: connected.peer_addr,
-                    };
-                    counter!("stream.rtp_mux.rtp.connects").increment(1);
-                    let r = connected.read.into_async_read();
-                    let w = connected.write.into_async_write();
-                    Ok(((r, w), addr))
-                }
-            })
-            .await;
+            run_dual_mux_connector_main(reset, connect_request_rx, config, fec).await;
         });
         Self {
             connect_request_tx,
@@ -191,16 +316,222 @@ impl RtpMuxConnector {
 #[async_trait]
 impl StreamConnect for RtpMuxConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>> {
-        let ((r, w), addr) = self.connect_request_tx.send(addr).await?;
-        counter!("stream.rtp_mux.mux.connects").increment(1);
-        let stream = tokio_chacha20::stream::DuplexStream::new(r, w);
-        Ok(Box::new(IoMuxStream::new(stream, addr)))
+        let stream = self.connect_request_tx.send(addr).await?;
+        Ok(Box::new(stream))
     }
 }
+
+async fn run_dual_mux_connector_main(
+    reset: ConnectorReset,
+    mut connect_request_rx: DualConnectRequestRx,
+    config: Arc<RwLock<ConnectorConfig>>,
+    fec: bool,
+) {
+    use std::collections::{HashMap, hash_map};
+
+    let mut dual_openers: HashMap<SocketAddr, (mux::DualStreamOpener, SocketAddrPair)> =
+        HashMap::new();
+    let mut mux_spawner: JoinSet<(SocketAddr, MuxError)> = JoinSet::new();
+    let mut reset_notified = reset.0.waiter();
+
+    loop {
+        tokio::select! {
+            () = reset_notified.notified() => {
+                dual_openers.clear();
+                mux_spawner = JoinSet::new();
+            }
+            Some(res) = mux_spawner.join_next() => {
+                match res {
+                    Ok((addr, e)) => {
+                        warn!(?e, ?addr, "Dual-lane MUX error");
+                        dual_openers.remove(&addr);
+                    }
+                    Err(e) if e.is_cancelled() => {
+                        trace!(?e, "Dual-lane MUX task cancelled");
+                    }
+                    Err(e) => {
+                        warn!(?e, "Dual-lane MUX supervision task failed to join");
+                    }
+                }
+            }
+            res = connect_request_rx.recv() => {
+                let Some(msg) = res else {
+                    break;
+                };
+                if let hash_map::Entry::Vacant(e) = dual_openers.entry(msg.listen_addr) {
+                    match connect_dual_lane(msg.listen_addr, &config, fec, &mut mux_spawner).await {
+                        Ok((opener, addr_pair)) => { e.insert((opener, addr_pair)); }
+                        Err(err) => {
+                            let _ = msg.stream.send(Err(err));
+                            continue;
+                        }
+                    }
+                }
+                let (opener, addr_pair) = dual_openers.get(&msg.listen_addr).unwrap();
+                let stream_id = rand::random::<u64>();
+                let (writer, reader_rx) = opener.open_migrating_with_reader(
+                    stream_id,
+                    LaneClass::Interactive,
+                );
+
+                counter!("stream.rtp_mux.rtp.connects").increment(1);
+                counter!("stream.rtp_mux.mux.connects").increment(1);
+
+                let stream = MigratingConnStream::new(writer, reader_rx, *addr_pair);
+                let _ = msg.stream.send(Ok(stream));
+            }
+        }
+    }
+}
+
+async fn connect_dual_lane(
+    addr: SocketAddr,
+    config: &Arc<RwLock<ConnectorConfig>>,
+    fec: bool,
+    mux_spawner: &mut JoinSet<(SocketAddr, MuxError)>,
+) -> io::Result<(mux::DualStreamOpener, SocketAddrPair)> {
+    let bind_ip = config
+        .read()
+        .unwrap()
+        .bind
+        .get_matched(&addr.ip())
+        .map(|ip| SocketAddr::new(ip, 0))
+        .unwrap_or_else(|| any_addr(&addr.ip()));
+
+    // Interactive lane: frame-delivery rtp
+    let int_connected = rtp::udp::connect_with_mss_fec_tuning_and_frame_delivery(
+        SocketAddr::new(bind_ip.ip(), bind_ip.port()),
+        addr,
+        None,
+        false,
+        fec,
+        rtp::udp::NO_FEC_MSS,
+        FecTuning::default(),
+        FrameDelivery::enabled(),
+    )
+    .await?;
+    let int_local = int_connected.local_addr;
+
+    // Bulk lane: stock rtp, port+1
+    let bulk_addr = SocketAddr::new(addr.ip(), addr.port().wrapping_add(1));
+    let bulk_bind = SocketAddr::new(bind_ip.ip(), 0);
+    let bulk_connected =
+        rtp::udp::connect_without_handshake(bulk_bind, bulk_addr, None, fec).await?;
+
+    // Write lane hellos
+    let nonce = PairingNonce::generate();
+    let int_r = int_connected.read.into_async_read();
+    let mut int_w = int_connected.write.into_async_write();
+    let bulk_r = bulk_connected.read.into_async_read();
+    let mut bulk_w = bulk_connected.write.into_async_write();
+
+    if let Err(e) = mux::write_lane_hello(&mut int_w, LaneClass::Interactive, nonce).await {
+        return Err(io::Error::other(format!("interactive lane hello: {e:?}")));
+    }
+    if let Err(e) = mux::write_lane_hello(&mut bulk_w, LaneClass::Bulk, nonce).await {
+        return Err(io::Error::other(format!("bulk lane hello: {e:?}")));
+    }
+
+    // Spawn mux per lane with per-lane configs
+    let int_config = interactive_client_mux_config();
+    let bulk_config = bulk_client_mux_config();
+
+    let mut int_spawner = JoinSet::new();
+    let (int_opener, int_accepter) =
+        mux::spawn_mux_no_reconnection(int_r, int_w, int_config, &mut int_spawner);
+    let mut bulk_spawner = JoinSet::new();
+    let (bulk_opener, bulk_accepter) =
+        mux::spawn_mux_no_reconnection(bulk_r, bulk_w, bulk_config, &mut bulk_spawner);
+
+    let mut dual_supervisor = JoinSet::new();
+    let (dual_opener, _dual_accepter) = mux::spawn_dual_mux_paired_supervised(
+        int_opener,
+        int_accepter,
+        int_spawner,
+        bulk_opener,
+        bulk_accepter,
+        bulk_spawner,
+        &mut dual_supervisor,
+    );
+
+    let addr_key = addr;
+    mux_spawner.spawn(async move {
+        let e = match dual_supervisor.join_next().await {
+            Some(Ok(e)) => e,
+            Some(Err(e)) if e.is_cancelled() => MuxError::TaskJoin {
+                task: "dual_lane",
+                source: e,
+            },
+            Some(Err(e)) => MuxError::TaskJoin {
+                task: "dual_lane",
+                source: e,
+            },
+            None => MuxError::TaskStopped { task: "dual_lane" },
+        };
+        (addr_key, e)
+    });
+
+    let addr_pair = SocketAddrPair {
+        local_addr: int_local,
+        peer_addr: addr,
+    };
+    Ok((dual_opener, addr_pair))
+}
+
+// ---------------------------------------------------------------------------
+// Dual connect request channel
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+struct DualConnectRequestMsg {
+    pub listen_addr: SocketAddr,
+    pub stream: tokio::sync::oneshot::Sender<io::Result<MigratingConnStream>>,
+}
+pub(crate) fn dual_connect_request_channel() -> (DualConnectRequestTx, DualConnectRequestRx) {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    (DualConnectRequestTx { tx }, DualConnectRequestRx { rx })
+}
+#[derive(Debug)]
+pub(crate) struct DualConnectRequestTx {
+    tx: tokio::sync::mpsc::Sender<DualConnectRequestMsg>,
+}
+impl DualConnectRequestTx {
+    pub async fn send(&self, listen_addr: SocketAddr) -> io::Result<MigratingConnStream> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let msg = DualConnectRequestMsg {
+            listen_addr,
+            stream: tx,
+        };
+        self.tx.send(msg).await.unwrap();
+        rx.await.unwrap()
+    }
+}
+#[derive(Debug)]
+pub(crate) struct DualConnectRequestRx {
+    rx: tokio::sync::mpsc::Receiver<DualConnectRequestMsg>,
+}
+impl DualConnectRequestRx {
+    async fn recv(&mut self) -> Option<DualConnectRequestMsg> {
+        self.rx.recv().await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Config / builder
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RtpMuxListenerConfig {
+    /// Address to listen on for the **interactive** lane.
+    ///
+    /// The **bulk** lane is bound to `listen_addr` port + 1.  Both ports
+    /// must be free at startup; `port+1` is never configurable — the peer
+    /// MUST connect its bulk lane to `addr.port + 1`.  This is a flag-day
+    /// change: old single-connection peers cannot interoperate.
+    ///
+    /// No `frame_delivery` config knob — the interactive lane always uses
+    /// frame-delivery rtp; the bulk lane always uses stock rtp.
     pub listen_addr: Arc<str>,
     pub fec: bool,
 }
@@ -258,13 +589,18 @@ pub enum RtpMuxProxyServerBuildError {
     Server(#[from] ListenerBindError),
 }
 pub async fn build_rtp_mux_proxy_server(
-    listen_addr: impl ToSocketAddrs,
+    listen_addr: impl ToSocketAddrs + Clone + std::fmt::Debug,
     stream_proxy: StreamProxyConnHandler,
     fec: bool,
 ) -> Result<RtpMuxServer<StreamProxyConnHandler>, ListenerBindError> {
-    let listener = rtp::udp::Listener::bind(listen_addr)
+    let interactive_listener = rtp::udp::Listener::bind(listen_addr.clone())
         .await
         .map_err(ListenerBindError)?;
-    let server = RtpMuxServer::new(listener, stream_proxy, fec);
+    let int_addr = interactive_listener.local_addr();
+    let bulk_addr = SocketAddr::new(int_addr.ip(), int_addr.port().wrapping_add(1));
+    let bulk_listener = rtp::udp::Listener::bind(bulk_addr)
+        .await
+        .map_err(ListenerBindError)?;
+    let server = RtpMuxServer::new(interactive_listener, bulk_listener, stream_proxy, fec);
     Ok(server)
 }
