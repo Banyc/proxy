@@ -522,18 +522,20 @@ mod tests {
                     Err(_) => break,
                 };
                 tokio::spawn(async move {
-                    let mut len_buf = [0u8; 4];
-                    if sock.read_exact(&mut len_buf).await.is_err() {
-                        return;
+                    loop {
+                        let mut len_buf = [0u8; 4];
+                        if sock.read_exact(&mut len_buf).await.is_err() {
+                            return;
+                        }
+                        let len = u32::from_be_bytes(len_buf) as usize;
+                        let len = std::cmp::min(len, 1024 * 1024);
+                        let mut data = vec![0u8; len];
+                        if sock.read_exact(&mut data).await.is_err() {
+                            return;
+                        }
+                        let _ = sock.write_all(&len_buf).await;
+                        let _ = sock.write_all(&data).await;
                     }
-                    let len = u32::from_be_bytes(len_buf) as usize;
-                    let len = std::cmp::min(len, 1024 * 1024);
-                    let mut data = vec![0u8; len];
-                    if sock.read_exact(&mut data).await.is_err() {
-                        return;
-                    }
-                    let _ = sock.write_all(&len_buf).await;
-                    let _ = sock.write_all(&data).await;
                 });
             }
         });
