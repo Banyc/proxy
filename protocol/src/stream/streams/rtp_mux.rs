@@ -9,7 +9,8 @@ use std::{
 use async_trait::async_trait;
 use metrics::counter;
 use mux::{
-    DualMuxError, LaneClass, MuxError, PairingNonce, complete_pairing, spawn_dual_mux_acceptor,
+    LaneClass, MuxError, PairingNonce, complete_pairing, read_lane_hello,
+    spawn_mux_no_reconnection,
 };
 use serde::Deserialize;
 use thiserror::Error;
@@ -40,7 +41,10 @@ use crate::stream::streams::mux::{
     interactive_server_mux_config, run_dual_mux_accepter,
 };
 
-use rtp::transmission::{fec_tuning::FecTuning, frame_delivery::FrameDelivery};
+use rtp::{
+    socket::{ReadStream, WriteStream},
+    transmission::{fec_tuning::FecTuning, frame_delivery::FrameDelivery},
+};
 
 const PAIRING_DEADLINE: Duration = Duration::from_secs(10);
 const HELLO_DEADLINE: Duration = Duration::from_secs(5);
@@ -148,8 +152,13 @@ where
                         conn_handler.clone(),
                     );
                 }
-                // Bulk lane accept (stock rtp)
-                res = self._bulk_listener.accept_without_handshake(self.fec) => {
+                // Bulk lane accept (stock rtp — explicit FrameDelivery::default())
+                res = self._bulk_listener.accept_without_handshake_with_mss_fec_tuning_and_frame_delivery(
+                    self.fec,
+                    rtp::udp::NO_FEC_MSS,
+                    FecTuning::default(),
+                    FrameDelivery::default(),
+                ) => {
                     let stream = match res {
                         Ok(res) => res,
                         Err(e) => {
@@ -187,12 +196,9 @@ where
     }
 }
 
-fn spawn_lane_accept<
-    R: tokio::io::AsyncRead + Unpin + Send + 'static,
-    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
->(
-    r: R,
-    w: W,
+fn spawn_lane_accept(
+    mut r: ReadStream,
+    mut w: WriteStream,
     config: mux::MuxConfig,
     expected_class: LaneClass,
     peer: SocketAddr,
@@ -201,38 +207,54 @@ fn spawn_lane_accept<
     conn_handler: Arc<impl StreamServerHandleConn + Send + Sync + 'static>,
 ) {
     tokio::spawn(async move {
-        let result = spawn_dual_mux_acceptor(r, w, config, HELLO_DEADLINE).await;
-        let (class, nonce, lane_pending) = match result {
-            Ok(x) => x,
-            Err(DualMuxError::HelloDeadline) => {
-                warn!(?peer, "Lane hello deadline elapsed");
-                counter!("stream.rtp_mux.hello_timeout").increment(1);
-                return;
-            }
-            Err(DualMuxError::LaneHello(e)) => {
-                warn!(?e, ?peer, "Lane hello read error");
-                counter!("stream.rtp_mux.hello_timeout").increment(1);
-                return;
-            }
-            Err(e) => {
-                warn!(?e, ?peer, "Lane accept error");
-                return;
-            }
-        };
+        // Read lane hello manually — if it fails we send a kill-and-abort
+        // on the raw transport so the RTP transmission layer is released
+        // at once rather than lingering through a graceful FIN handshake
+        // (S8: prompt abort for rejected lanes).
+        let (class, nonce) =
+            match tokio::time::timeout(HELLO_DEADLINE, read_lane_hello(&mut r)).await {
+                Ok(Ok(x)) => x,
+                Ok(Err(e)) => {
+                    warn!(?e, ?peer, "Lane hello read error");
+                    counter!("stream.rtp_mux.hello_timeout").increment(1);
+                    w.send_kill_and_abort().await;
+                    return;
+                }
+                Err(_) => {
+                    warn!(?peer, "Lane hello deadline elapsed");
+                    counter!("stream.rtp_mux.hello_timeout").increment(1);
+                    w.send_kill_and_abort().await;
+                    return;
+                }
+            };
 
         if class != expected_class {
             warn!(?peer, ?class, ?expected_class, "Lane class mismatch");
             counter!("stream.rtp_mux.class_mismatch").increment(1);
+            w.send_kill_and_abort().await;
             return;
         }
 
-        // Check for existing pending lane
-        let existing = {
-            let mut guard = pending.lock().unwrap();
-            guard.remove(&nonce)
+        // Spawn mux session
+        let mut lane_spawner = JoinSet::new();
+        let (opener, accepter) = spawn_mux_no_reconnection(r, w, config, &mut lane_spawner);
+
+        let lane_pending = mux::PendingAcceptor {
+            class,
+            nonce,
+            opener,
+            accepter,
+            spawner: lane_spawner,
         };
 
+        // Check for existing pending lane.  remove + insert must be a single
+        // critical section so two same-nonce lanes cannot race, both see None,
+        // and silently overwrite each other's PendingAcceptor.
+        let mut guard = pending.lock().unwrap();
+        let existing = guard.remove(&nonce);
+
         if let Some(other) = existing {
+            drop(guard);
             counter!("stream.rtp_mux.paired").increment(1);
             let mut local_mux = JoinSet::new();
             match complete_pairing(other, lane_pending, &mut local_mux) {
@@ -260,7 +282,8 @@ fn spawn_lane_accept<
             }
         } else {
             // Store for later pairing. Schedule expiry.
-            pending.lock().unwrap().insert(nonce, lane_pending);
+            guard.insert(nonce, lane_pending);
+            drop(guard);
             let nonce_for_expiry = nonce;
             let pending_for_expiry = pending.clone();
             tokio::spawn(async move {
@@ -412,11 +435,22 @@ async fn connect_dual_lane(
     .await?;
     let int_local = int_connected.local_addr;
 
-    // Bulk lane: stock rtp, port+1
+    // Bulk lane: stock rtp, port+1 — explicit FrameDelivery::default() so
+    // an asymmetric RTP_FRAME_DELIVERY env between client and server cannot
+    // wedge the bulk lane with mismatched framing.
     let bulk_addr = SocketAddr::new(addr.ip(), addr.port().wrapping_add(1));
     let bulk_bind = SocketAddr::new(bind_ip.ip(), 0);
-    let bulk_connected =
-        rtp::udp::connect_without_handshake(bulk_bind, bulk_addr, None, fec).await?;
+    let bulk_connected = rtp::udp::connect_with_mss_fec_tuning_and_frame_delivery(
+        bulk_bind,
+        bulk_addr,
+        None,
+        false,
+        fec,
+        rtp::udp::NO_FEC_MSS,
+        FecTuning::default(),
+        FrameDelivery::default(),
+    )
+    .await?;
 
     // Write lane hellos
     let nonce = PairingNonce::generate();
@@ -453,6 +487,25 @@ async fn connect_dual_lane(
         bulk_spawner,
         &mut dual_supervisor,
     );
+
+    // Birth verification: if either lane's mux session dies within the
+    // grace period, fail the connect so the caller can retry rather
+    // than receiving a dead opener whose first write fails.  The biased
+    // select ensures the death branch wins when both the supervisor
+    // finished and the grace sleep elapsed — without bias the opener
+    // could be returned dead, bypassing birth-retry.
+    const BIRTH_GRACE: Duration = Duration::from_millis(200);
+    tokio::select! {
+        biased;
+        result = dual_supervisor.join_next() => {
+            return Err(io::Error::other(format!(
+                "dual-lane birth failed: {:?}", result
+            )));
+        }
+        _ = tokio::time::sleep(BIRTH_GRACE) => {
+            // Grace period elapsed; lanes are alive
+        }
+    }
 
     let addr_key = addr;
     mux_spawner.spawn(async move {
