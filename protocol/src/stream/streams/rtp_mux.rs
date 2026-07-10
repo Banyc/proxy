@@ -3,14 +3,15 @@ use std::{
     io,
     net::SocketAddr,
     sync::{Arc, Mutex, RwLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 use metrics::counter;
 use mux::{
     LaneClass, MuxError, PairingNonce, complete_pairing, read_lane_hello,
-    spawn_mux_no_reconnection,
+    spawn_mux_no_reconnection, spawn_mux_no_reconnection_with_first_receive_deadline,
+    write_birth_heartbeat,
 };
 use serde::Deserialize;
 use thiserror::Error;
@@ -48,6 +49,9 @@ use rtp::{
 
 const PAIRING_DEADLINE: Duration = Duration::from_secs(10);
 const HELLO_DEADLINE: Duration = Duration::from_secs(5);
+const BIRTH_LIVENESS_DEADLINE: Duration = Duration::from_millis(2500);
+const BIRTH_LIVENESS_GRACE: Duration = Duration::from_millis(250);
+const MAX_DUAL_CONNECT_ATTEMPTS: usize = 3;
 
 // ---------------------------------------------------------------------------
 // RtpMuxServer — dual-lane accept
@@ -207,37 +211,52 @@ fn spawn_lane_accept(
     conn_handler: Arc<impl StreamServerHandleConn + Send + Sync + 'static>,
 ) {
     tokio::spawn(async move {
-        // Read lane hello manually — if it fails we send a kill-and-abort
-        // on the raw transport so the RTP transmission layer is released
-        // at once rather than lingering through a graceful FIN handshake
-        // (S8: prompt abort for rejected lanes).
-        let (class, nonce) =
-            match tokio::time::timeout(HELLO_DEADLINE, read_lane_hello(&mut r)).await {
-                Ok(Ok(x)) => x,
-                Ok(Err(e)) => {
-                    warn!(?e, ?peer, "Lane hello read error");
-                    counter!("stream.rtp_mux.hello_timeout").increment(1);
-                    w.send_kill_and_abort().await;
-                    return;
-                }
-                Err(_) => {
-                    warn!(?peer, "Lane hello deadline elapsed");
-                    counter!("stream.rtp_mux.hello_timeout").increment(1);
-                    w.send_kill_and_abort().await;
-                    return;
-                }
-            };
+        let started = Instant::now();
+
+        let (class, nonce) = match tokio::time::timeout(HELLO_DEADLINE, read_lane_hello(&mut r)).await {
+            Ok(Ok(x)) => x,
+            Err(_) => {
+                let elapsed = started.elapsed();
+                let reason = format!("hello deadline elapsed");
+                signal_rejected_lane(&mut w, peer, local_addr, expected_class, elapsed, &reason).await;
+                counter!("stream.rtp_mux.hello_timeout").increment(1);
+                return;
+            }
+            Ok(Err(e)) => {
+                let elapsed = started.elapsed();
+                let reason = format!("hello read/parse error: {e:?}");
+                signal_rejected_lane(&mut w, peer, local_addr, expected_class, elapsed, &reason).await;
+                counter!("stream.rtp_mux.hello_timeout").increment(1);
+                return;
+            }
+        };
+
+        let elapsed = started.elapsed();
 
         if class != expected_class {
-            warn!(?peer, ?class, ?expected_class, "Lane class mismatch");
+            let reason = format!("lane class mismatch: got {class:?}");
+            signal_rejected_lane(&mut w, peer, local_addr, expected_class, elapsed, &reason).await;
             counter!("stream.rtp_mux.class_mismatch").increment(1);
-            w.send_kill_and_abort().await;
             return;
         }
 
-        // Spawn mux session
+        if let Err(e) = write_birth_heartbeat(&mut w).await {
+            let kill_result = w.send_kill_and_abort().await;
+            warn!(
+                ?e,
+                ?kill_result,
+                ?peer,
+                ?local_addr,
+                ?expected_class,
+                "Failed to write RTP mux birth heartbeat; killed lane"
+            );
+            counter!("stream.rtp_mux.birth_heartbeat_error").increment(1);
+            return;
+        }
+
         let mut lane_spawner = JoinSet::new();
-        let (opener, accepter) = spawn_mux_no_reconnection(r, w, config, &mut lane_spawner);
+        let (opener, accepter) =
+            spawn_mux_no_reconnection(r, w, config, &mut lane_spawner);
 
         let lane_pending = mux::PendingAcceptor {
             class,
@@ -247,14 +266,20 @@ fn spawn_lane_accept(
             spawner: lane_spawner,
         };
 
-        // Check for existing pending lane.  remove + insert must be a single
-        // critical section so two same-nonce lanes cannot race, both see None,
-        // and silently overwrite each other's PendingAcceptor.
-        let mut guard = pending.lock().unwrap();
-        let existing = guard.remove(&nonce);
+        let existing = {
+            let mut guard = pending.lock().unwrap();
+            match guard.entry(nonce) {
+                std::collections::hash_map::Entry::Occupied(entry) => {
+                    Some((entry.remove(), lane_pending))
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(lane_pending);
+                    None
+                }
+            }
+        };
 
-        if let Some(other) = existing {
-            drop(guard);
+        if let Some((other, lane_pending)) = existing {
             counter!("stream.rtp_mux.paired").increment(1);
             let mut local_mux = JoinSet::new();
             match complete_pairing(other, lane_pending, &mut local_mux) {
@@ -266,7 +291,7 @@ fn spawn_lane_accept(
                     tokio::spawn(async move {
                         let _mux = local_mux;
                         run_dual_mux_accepter(dual_accepter, addr_pair, |stream| {
-                            counter!("stream.rtp_mux.mux.accepts").increment(1);
+                            counter!("stream.rtp_mux.accepts").increment(1);
                             let conn_handler = Arc::clone(&conn_handler);
                             tokio::spawn(async move {
                                 conn_handler.handle_stream(stream).await;
@@ -276,14 +301,11 @@ fn spawn_lane_accept(
                     });
                 }
                 Err(e) => {
-                    warn!(?e, "Pairing failed");
+                    warn!(?e, ?peer, ?local_addr, "Pairing failed");
                     counter!("stream.rtp_mux.pairing_timeout").increment(1);
                 }
             }
         } else {
-            // Store for later pairing. Schedule expiry.
-            guard.insert(nonce, lane_pending);
-            drop(guard);
             let nonce_for_expiry = nonce;
             let pending_for_expiry = pending.clone();
             tokio::spawn(async move {
@@ -294,12 +316,38 @@ fn spawn_lane_accept(
                     .remove(&nonce_for_expiry)
                     .is_some()
                 {
-                    warn!(?peer, ?nonce_for_expiry, "Pairing deadline expired");
+                    warn!(
+                        ?peer,
+                        ?local_addr,
+                        ?expected_class,
+                        ?nonce_for_expiry,
+                        "Pairing deadline expired"
+                    );
                     counter!("stream.rtp_mux.pairing_timeout").increment(1);
                 }
             });
         }
     });
+}
+
+async fn signal_rejected_lane(
+    writer: &mut WriteStream,
+    peer: SocketAddr,
+    local_addr: SocketAddr,
+    expected_class: LaneClass,
+    elapsed: Duration,
+    reason: &str,
+) {
+    let kill_result = writer.send_kill_and_abort().await;
+    warn!(
+        ?kill_result,
+        ?peer,
+        ?local_addr,
+        ?expected_class,
+        elapsed_ms = elapsed.as_millis(),
+        %reason,
+        "Rejected RTP mux lane; sent kill packet and aborted lane"
+    );
 }
 
 #[derive(Debug, Error)]
@@ -407,7 +455,60 @@ async fn run_dual_mux_connector_main(
     }
 }
 
+fn dual_supervisor_result(res: Option<Result<MuxError, tokio::task::JoinError>>) -> MuxError {
+    match res {
+        Some(Ok(e)) => e,
+        Some(Err(e)) => MuxError::TaskJoin {
+            task: "dual_lane",
+            source: e,
+        },
+        None => MuxError::TaskStopped { task: "dual_lane" },
+    }
+}
+
 async fn connect_dual_lane(
+    addr: SocketAddr,
+    config: &Arc<RwLock<ConnectorConfig>>,
+    fec: bool,
+    mux_spawner: &mut JoinSet<(SocketAddr, MuxError)>,
+) -> io::Result<(mux::DualStreamOpener, SocketAddrPair)> {
+    let mut last_err = None;
+    for attempt in 1..=MAX_DUAL_CONNECT_ATTEMPTS {
+        let started = Instant::now();
+        match connect_dual_lane_once(addr, config, fec, mux_spawner).await {
+            Ok(pair) => {
+                if attempt > 1 {
+                    info!(
+                        ?addr,
+                        attempt,
+                        elapsed_ms = started.elapsed().as_millis(),
+                        "RTP mux dual-lane birth recovered after retry"
+                    );
+                }
+                return Ok(pair);
+            }
+            Err(e) => {
+                let will_retry = attempt < MAX_DUAL_CONNECT_ATTEMPTS;
+                warn!(
+                    ?e,
+                    ?addr,
+                    attempt,
+                    max_attempts = MAX_DUAL_CONNECT_ATTEMPTS,
+                    will_retry,
+                    elapsed_ms = started.elapsed().as_millis(),
+                    "RTP mux dual-lane birth failed"
+                );
+                last_err = Some(e);
+                if will_retry {
+                    tokio::time::sleep(Duration::from_millis(25 * attempt as u64)).await;
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| io::Error::other("RTP mux dual-lane birth failed")))
+}
+
+async fn connect_dual_lane_once(
     addr: SocketAddr,
     config: &Arc<RwLock<ConnectorConfig>>,
     fec: bool,
@@ -421,7 +522,6 @@ async fn connect_dual_lane(
         .map(|ip| SocketAddr::new(ip, 0))
         .unwrap_or_else(|| any_addr(&addr.ip()));
 
-    // Interactive lane: frame-delivery rtp
     let int_connected = rtp::udp::connect_with_mss_fec_tuning_and_frame_delivery(
         SocketAddr::new(bind_ip.ip(), bind_ip.port()),
         addr,
@@ -435,9 +535,6 @@ async fn connect_dual_lane(
     .await?;
     let int_local = int_connected.local_addr;
 
-    // Bulk lane: stock rtp, port+1 — explicit FrameDelivery::default() so
-    // an asymmetric RTP_FRAME_DELIVERY env between client and server cannot
-    // wedge the bulk lane with mismatched framing.
     let bulk_addr = SocketAddr::new(addr.ip(), addr.port().wrapping_add(1));
     let bulk_bind = SocketAddr::new(bind_ip.ip(), 0);
     let bulk_connected = rtp::udp::connect_with_mss_fec_tuning_and_frame_delivery(
@@ -452,7 +549,6 @@ async fn connect_dual_lane(
     )
     .await?;
 
-    // Write lane hellos
     let nonce = PairingNonce::generate();
     let int_r = int_connected.read.into_async_read();
     let mut int_w = int_connected.write.into_async_write();
@@ -463,19 +559,29 @@ async fn connect_dual_lane(
         return Err(io::Error::other(format!("interactive lane hello: {e:?}")));
     }
     if let Err(e) = mux::write_lane_hello(&mut bulk_w, LaneClass::Bulk, nonce).await {
+        let _ = int_w.send_kill_and_abort().await;
         return Err(io::Error::other(format!("bulk lane hello: {e:?}")));
     }
 
-    // Spawn mux per lane with per-lane configs
     let int_config = interactive_client_mux_config();
     let bulk_config = bulk_client_mux_config();
 
     let mut int_spawner = JoinSet::new();
-    let (int_opener, int_accepter) =
-        mux::spawn_mux_no_reconnection(int_r, int_w, int_config, &mut int_spawner);
+    let (int_opener, int_accepter) = spawn_mux_no_reconnection_with_first_receive_deadline(
+        int_r,
+        int_w,
+        int_config,
+        BIRTH_LIVENESS_DEADLINE,
+        &mut int_spawner,
+    );
     let mut bulk_spawner = JoinSet::new();
-    let (bulk_opener, bulk_accepter) =
-        mux::spawn_mux_no_reconnection(bulk_r, bulk_w, bulk_config, &mut bulk_spawner);
+    let (bulk_opener, bulk_accepter) = spawn_mux_no_reconnection_with_first_receive_deadline(
+        bulk_r,
+        bulk_w,
+        bulk_config,
+        BIRTH_LIVENESS_DEADLINE,
+        &mut bulk_spawner,
+    );
 
     let mut dual_supervisor = JoinSet::new();
     let (dual_opener, _dual_accepter) = mux::spawn_dual_mux_paired_supervised(
@@ -488,39 +594,22 @@ async fn connect_dual_lane(
         &mut dual_supervisor,
     );
 
-    // Birth verification: if either lane's mux session dies within the
-    // grace period, fail the connect so the caller can retry rather
-    // than receiving a dead opener whose first write fails.  The biased
-    // select ensures the death branch wins when both the supervisor
-    // finished and the grace sleep elapsed — without bias the opener
-    // could be returned dead, bypassing birth-retry.
-    const BIRTH_GRACE: Duration = Duration::from_millis(200);
+    let birth_wait = BIRTH_LIVENESS_DEADLINE + BIRTH_LIVENESS_GRACE;
     tokio::select! {
         biased;
-        result = dual_supervisor.join_next() => {
-            return Err(io::Error::other(format!(
-                "dual-lane birth failed: {:?}", result
-            )));
+        res = dual_supervisor.join_next() => {
+            let e = dual_supervisor_result(res);
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                format!("dual-lane birth liveness failed: {e:?}"),
+            ));
         }
-        _ = tokio::time::sleep(BIRTH_GRACE) => {
-            // Grace period elapsed; lanes are alive
-        }
+        () = tokio::time::sleep(birth_wait) => {}
     }
 
     let addr_key = addr;
     mux_spawner.spawn(async move {
-        let e = match dual_supervisor.join_next().await {
-            Some(Ok(e)) => e,
-            Some(Err(e)) if e.is_cancelled() => MuxError::TaskJoin {
-                task: "dual_lane",
-                source: e,
-            },
-            Some(Err(e)) => MuxError::TaskJoin {
-                task: "dual_lane",
-                source: e,
-            },
-            None => MuxError::TaskStopped { task: "dual_lane" },
-        };
+        let e = dual_supervisor_result(dual_supervisor.join_next().await);
         (addr_key, e)
     });
 
