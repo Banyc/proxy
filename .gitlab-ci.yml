@@ -13,6 +13,7 @@ stages:
 
 build.linux:
   stage: build
+  extends: .build.common
   image: "${IMAGE_RUST_ZIGBUILD}"
   script:
     - "rustup target add ${TARGET_LINUX}"
@@ -25,6 +26,7 @@ build.linux:
 
 build.windows:
   stage: build
+  extends: .build.common
   image: "${IMAGE_RUST_XWIN}"
   script:
     - "rustup target add ${TARGET_WINDOWS}"
@@ -37,6 +39,7 @@ build.windows:
 
 build.macos.arm:
   stage: build
+  extends: .build.common
   image: "${IMAGE_RUST_ZIGBUILD}"
   script:
     - "rustup target add ${TARGET_MACOS_ARM}"
@@ -49,6 +52,7 @@ build.macos.arm:
 
 build.macos.intel:
   stage: build
+  extends: .build.common
   image: "${IMAGE_RUST_ZIGBUILD}"
   script:
     - "rustup target add ${TARGET_MACOS_INTEL}"
@@ -61,6 +65,7 @@ build.macos.intel:
 
 .build.native:
   stage: build
+  extends: .build.common
   image: "${IMAGE_RUST}"
   script:
     - "cargo build --release"
@@ -68,3 +73,7 @@ build.macos.intel:
     paths:
       - "target/release/proxy"
       - "${PATH_CONFIG}"
+
+.build.common:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master"

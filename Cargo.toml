@@ -33,13 +33,13 @@ metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.0.15" }
 mptcp = { git = "https://github.com/Banyc/mptcp.git", tag = "v0.0.2" }
-mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.15" }
+mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.19" }
 pin-project-lite = "0.2"
 postcard = "1"
 primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.59" }
 rand = "0.10"
 regex = "1"
-rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.73" }
+rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.76" }
 scopeguard = "1"
 serde = "1"
 serde_json = "1"
@@ -65,9 +65,3 @@ protocol = { path = "protocol" }
 [profile.profiling]
 inherits = "release"
 debug = true
-
-[patch."https://github.com/Banyc/mux.git"]
-mux = { path = "../mux" }
-
-[patch."https://github.com/Banyc/rtp.git"]
-rtp = { path = "../rtp" }
