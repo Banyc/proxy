@@ -65,3 +65,8 @@ protocol = { path = "protocol" }
 [profile.profiling]
 inherits = "release"
 debug = true
+
+[patch."https://github.com/Banyc/rtp.git"]
+rtp = { path = "../rtp" }
+[patch."https://github.com/Banyc/mux.git"]
+mux = { path = "../mux" }
