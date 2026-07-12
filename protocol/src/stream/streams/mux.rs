@@ -56,14 +56,14 @@ pub fn bulk_server_mux_config() -> MuxConfig {
     MuxConfig {
         initiation: Initiation::Server,
         heartbeat_interval: Duration::from_secs(5),
-        frame_reassembly: false,
+        frame_reassembly: true,
     }
 }
 pub fn bulk_client_mux_config() -> MuxConfig {
     MuxConfig {
         initiation: Initiation::Client,
         heartbeat_interval: Duration::from_secs(5),
-        frame_reassembly: false,
+        frame_reassembly: true,
     }
 }
 
@@ -614,5 +614,18 @@ impl<R, W> HasIoAddr for IoMuxStream<R, W> {
     }
     fn local_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.addr.local_addr)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dual_lane_configs_keep_heartbeats_out_of_transport_hol() {
+        assert!(interactive_client_mux_config().frame_reassembly);
+        assert!(interactive_server_mux_config().frame_reassembly);
+        assert!(bulk_client_mux_config().frame_reassembly);
+        assert!(bulk_server_mux_config().frame_reassembly);
     }
 }

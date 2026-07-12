@@ -38,8 +38,8 @@ use common::{
 };
 
 use crate::stream::streams::mux::{
-    MigratingConnStream, SocketAddrPair, bulk_client_mux_config, interactive_client_mux_config,
-    interactive_server_mux_config, run_dual_mux_accepter,
+    MigratingConnStream, SocketAddrPair, bulk_client_mux_config, bulk_server_mux_config,
+    interactive_client_mux_config, interactive_server_mux_config, run_dual_mux_accepter,
 };
 
 use rtp::{
@@ -52,6 +52,10 @@ const HELLO_DEADLINE: Duration = Duration::from_secs(5);
 const BIRTH_LIVENESS_DEADLINE: Duration = Duration::from_millis(2500);
 const BIRTH_LIVENESS_GRACE: Duration = Duration::from_millis(250);
 const MAX_DUAL_CONNECT_ATTEMPTS: usize = 3;
+
+const fn dual_lane_frame_delivery() -> FrameDelivery {
+    FrameDelivery::enabled()
+}
 
 // ---------------------------------------------------------------------------
 // RtpMuxServer — dual-lane accept
@@ -135,7 +139,7 @@ where
                     self.fec,
                     rtp::udp::NO_FEC_MSS,
                     FecTuning::default(),
-                    FrameDelivery::enabled(),
+                    dual_lane_frame_delivery(),
                 ) => {
                     let stream = match res {
                         Ok(res) => res,
@@ -161,7 +165,7 @@ where
                     self.fec,
                     rtp::udp::NO_FEC_MSS,
                     FecTuning::default(),
-                    FrameDelivery::default(),
+                    dual_lane_frame_delivery(),
                 ) => {
                     let stream = match res {
                         Ok(res) => res,
@@ -174,11 +178,7 @@ where
                     let peer = stream.peer_addr;
                     let r = stream.read.into_async_read();
                     let w = stream.write.into_async_write();
-                    let config = mux::MuxConfig {
-                        initiation: mux::Initiation::Server,
-                        heartbeat_interval: Duration::from_secs(5),
-                        frame_reassembly: false,
-                    };
+                    let config = bulk_server_mux_config();
                     let expected_class = LaneClass::Bulk;
                     spawn_lane_accept(
                         r, w, config, expected_class, peer, bulk_addr,
@@ -530,7 +530,7 @@ async fn connect_dual_lane_once(
         fec,
         rtp::udp::NO_FEC_MSS,
         FecTuning::default(),
-        FrameDelivery::enabled(),
+        dual_lane_frame_delivery(),
     )
     .await?;
     let int_local = int_connected.local_addr;
@@ -545,7 +545,7 @@ async fn connect_dual_lane_once(
         fec,
         rtp::udp::NO_FEC_MSS,
         FecTuning::default(),
-        FrameDelivery::default(),
+        dual_lane_frame_delivery(),
     )
     .await?;
 
@@ -672,8 +672,9 @@ pub struct RtpMuxListenerConfig {
     /// MUST connect its bulk lane to `addr.port + 1`.  This is a flag-day
     /// change: old single-connection peers cannot interoperate.
     ///
-    /// No `frame_delivery` config knob — the interactive lane always uses
-    /// frame-delivery rtp; the bulk lane always uses stock rtp.
+    /// No `frame_delivery` config knob — both lanes always use frame-delivery
+    /// RTP so either lane's heartbeat can bypass
+    /// an unrelated packet gap.
     pub listen_addr: Arc<str>,
     pub fec: bool,
 }
@@ -745,4 +746,14 @@ pub async fn build_rtp_mux_proxy_server(
         .map_err(ListenerBindError)?;
     let server = RtpMuxServer::new(interactive_listener, bulk_listener, stream_proxy, fec);
     Ok(server)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_rtp_lanes_enable_frame_delivery() {
+        assert!(dual_lane_frame_delivery().enabled);
+    }
 }

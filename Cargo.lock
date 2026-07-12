@@ -3490,7 +3490,7 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.76#33982275eed5f0e1523aa96dad30712d6ce55af2"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.77#d1132bef25f661f950b6905205bae027d2e2064c"
 dependencies = [
  "async-trait",
  "async_async_io",
