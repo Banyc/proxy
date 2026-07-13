@@ -4,6 +4,7 @@ use crate::{
     addr::ParseInternetAddrError,
     loading,
     proto::{
+        addr::StreamAddr,
         conn::stream::ConnAndAddr,
         context::StreamContext,
         io_copy::stream::{ConnContext, CopyBidirectional},
@@ -158,14 +159,18 @@ impl StreamServerHandleConn for StreamProxyConnHandler {
         match self.proxy(stream).await {
             Ok(ProxyResult::IoCopy) => (),
             Ok(ProxyResult::Echo) => info!(?local_addr, ?peer_addr, "Echo finished"),
-            Err(e) => warn!(
-                event = "stream_proxy_failed",
-                ?e,
-                ?local_addr,
-                ?peer_addr,
-                listener = %self.listen_addr,
-                "Proxy error"
-            ),
+            Err(e) => {
+                let upstream_addr = e.upstream_addr();
+                warn!(
+                    event = "stream_proxy_failed",
+                    ?e,
+                    dn = ?peer_addr,
+                    up = ?upstream_addr,
+                    dn_local = ?local_addr,
+                    listener = %self.listen_addr,
+                    "Proxy error"
+                );
+            }
         }
     }
 }
@@ -204,10 +209,8 @@ impl StreamProxyAcceptor {
         .await?
         {
             Some(addr) => addr,
-            None => return Ok(None), // Echo
+            None => return Ok(None),
         };
-
-        // Connect to upstream
         let (upstream, sock_addr) =
             connect_with_pool(&addr, &self.stream_context, false, IO_TIMEOUT)
                 .await
@@ -216,10 +219,9 @@ impl StreamProxyAcceptor {
                     StreamProxyAcceptorError::ConnectUpstream {
                         source: e,
                         downstream_addr,
+                        upstream_addr: addr.clone(),
                     }
                 })?;
-
-        // Return upstream
         Ok(Some(ConnAndAddr {
             stream: upstream,
             addr,
@@ -235,15 +237,32 @@ pub enum StreamProxyServerError {
     #[error("Failed to establish proxy chain: {0}")]
     EstablishProxyChain(#[from] StreamProxyAcceptorError),
 }
+impl StreamProxyServerError {
+    fn upstream_addr(&self) -> Option<&StreamAddr> {
+        match self {
+            Self::EstablishProxyChain(error) => error.upstream_addr(),
+            Self::DownstreamAddr(_) => None,
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum StreamProxyAcceptorError {
     #[error("Steer error: {0}")]
     Steer(#[from] SteerError),
-    #[error("Failed to connect to upstream: {source}, {downstream_addr:?}")]
+    #[error("Failed to connect to upstream {upstream_addr:?}")]
     ConnectUpstream {
         #[source]
         source: ConnectError,
         downstream_addr: Option<SocketAddr>,
+        upstream_addr: StreamAddr,
     },
+}
+impl StreamProxyAcceptorError {
+    fn upstream_addr(&self) -> Option<&StreamAddr> {
+        match self {
+            Self::ConnectUpstream { upstream_addr, .. } => Some(upstream_addr),
+            Self::Steer(_) => None,
+        }
+    }
 }

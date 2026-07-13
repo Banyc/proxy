@@ -263,8 +263,8 @@ fn spawn_lane_accept(
             warn!(
                 ?e,
                 ?kill_result,
-                ?peer,
-                ?local_addr,
+                dn = ?peer,
+                dn_local = ?local_addr,
                 ?expected_class,
                 "Failed to write RTP mux birth heartbeat; killed lane"
             );
@@ -401,8 +401,8 @@ async fn signal_rejected_lane(
     let kill_result = writer.send_kill_and_abort().await;
     warn!(
         ?kill_result,
-        ?peer,
-        ?local_addr,
+        dn = ?peer,
+        dn_local = ?local_addr,
         ?expected_class,
         elapsed_ms = elapsed.as_millis(),
         %reason,
@@ -477,10 +477,9 @@ async fn run_dual_mux_connector_main(
                             warn!(
                                 event = "rtp_mux_session_terminated",
                                 ?e,
-                                ?addr,
                                 nonce = ?session.nonce,
-                                local_addr = ?session.addr_pair.local_addr,
-                                peer_addr = ?session.addr_pair.peer_addr,
+                                up = ?session.addr_pair.peer_addr,
+                                up_local = ?session.addr_pair.local_addr,
                                 opened_streams = session.opened_streams,
                                 uptime_ms = session.connected_at.elapsed().as_millis(),
                                 "RTP mux dual-lane session terminated"
@@ -489,7 +488,7 @@ async fn run_dual_mux_connector_main(
                             warn!(
                                 event = "rtp_mux_session_terminated",
                                 ?e,
-                                ?addr,
+                                up = ?addr,
                                 "RTP mux dual-lane session terminated without connector state"
                             );
                         }

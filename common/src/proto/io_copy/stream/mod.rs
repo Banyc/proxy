@@ -140,18 +140,34 @@ where
         let (log, res) = get_log_from_copy_result(self.conn_context, res);
         match &res {
             Ok(()) => {
-                info!(%log, "{log_prefix}: I/O copy finished");
+                info!(
+                    dn = ?log.downstream_addr,
+                    up = ?log.upstream_addr,
+                    up_sock = ?log.upstream_sock_addr,
+                    %log,
+                    "{log_prefix}: I/O copy finished"
+                );
             }
             Err(e) if is_timed_out(e) => {
                 info!(
                     event = "stream_io_copy_timed_out",
                     ?e,
+                    dn = ?log.downstream_addr,
+                    up = ?log.upstream_addr,
+                    up_sock = ?log.upstream_sock_addr,
                     %log,
                     "{log_prefix}: I/O copy timed out"
                 );
             }
             Err(e) => {
-                info!(?e, %log, "{log_prefix}: I/O copy error");
+                info!(
+                    ?e,
+                    dn = ?log.downstream_addr,
+                    up = ?log.upstream_addr,
+                    up_sock = ?log.upstream_sock_addr,
+                    %log,
+                    "{log_prefix}: I/O copy error"
+                );
             }
         }
         (log, res)
