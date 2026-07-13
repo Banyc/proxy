@@ -302,7 +302,6 @@ fn spawn_lane_accept(
 
         if let Some((other, lane_pending)) = existing {
             counter!("stream.rtp_mux.paired").increment(1);
-            let paired_at = Instant::now();
             let other_peer = other.peer;
             let other_local_addr = other.local_addr;
             let other_class = other.pending.class;
@@ -319,6 +318,7 @@ fn spawn_lane_accept(
                     };
                     let conn_handler2 = Arc::clone(&conn_handler);
                     tokio::spawn(async move {
+                        let paired_at = Instant::now();
                         let mut local_mux = local_mux;
                         let accepted_streams =
                             run_dual_mux_accepter(dual_accepter, addr_pair, |stream| {
@@ -487,7 +487,7 @@ async fn run_dual_mux_connector_main(
                             );
                         } else {
                             warn!(
-                                event = "rtp_mux_session_terminated_without_connector_state",
+                                event = "rtp_mux_session_terminated",
                                 ?e,
                                 ?addr,
                                 "RTP mux dual-lane session terminated without connector state"
@@ -523,8 +523,8 @@ async fn run_dual_mux_connector_main(
                 );
 
                 session.opened_streams += 1;
-                counter!("stream.rtp_mux.rtp.connects").increment(1);
-                counter!("stream.rtp_mux.mux.connects").increment(1);
+                counter!("stream.rtp_mux.rtp_connects").increment(1);
+                counter!("stream.rtp_mux.mux_connects").increment(1);
 
                 let stream = MigratingConnStream::new(writer, reader_rx, session.addr_pair);
                 let _ = msg.stream.send(Ok(stream));
