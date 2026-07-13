@@ -2126,6 +2126,7 @@ dependencies = [
 [[package]]
 name = "mux"
 version = "0.1.0"
+source = "git+https://github.com/Banyc/mux.git?tag=v0.0.20#2b996cea3db0a796e45c4163f5ad98f14f65dfcd"
 dependencies = [
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
  "tokio",
@@ -3499,6 +3500,7 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.78#8912ad42a47e301404a4a6fc6eb56d96973bf9a8"
 dependencies = [
  "async-trait",
  "async_async_io",
