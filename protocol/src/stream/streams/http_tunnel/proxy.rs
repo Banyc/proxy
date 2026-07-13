@@ -27,6 +27,9 @@ use monitor_table::table::RowOwnedGuard;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{info, instrument, trace, warn};
 
+const DEFAULT_PORT_HTTP: u16 = 80;
+const DEFAULT_PORT_HTTPS: u16 = 443;
+
 #[derive(Debug, Clone, Copy)]
 struct ParsedHostHeader<'a> {
     pub host: &'a str,
@@ -70,6 +73,7 @@ fn get_authority_from_req(
     let port = req_target_port
         .or(host_header.port)
         .or_else(scheme_port)
+        .or_else(|| req.uri().scheme().is_none().then_some(DEFAULT_PORT_HTTP))
         .ok_or(TunnelError::HttpNoPort)?;
     Ok(InternetAddr::from_host_and_port(host, port)?)
 }
@@ -91,8 +95,8 @@ pub async fn run_proxy_mode(
 fn http_default_port(scheme: &str) -> Option<u16> {
     let scheme = scheme.to_lowercase();
     Some(match scheme.as_str() {
-        "http" => 80,
-        "https" => 443,
+        "http" => DEFAULT_PORT_HTTP,
+        "https" => DEFAULT_PORT_HTTPS,
         _ => return None,
     })
 }
