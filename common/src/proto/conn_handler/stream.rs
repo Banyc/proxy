@@ -103,7 +103,7 @@ impl StreamProxyConnHandler {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn proxy<Downstream>(
         &self,
         mut downstream: Downstream,
@@ -148,15 +148,24 @@ impl StreamProxyConnHandler {
 }
 impl loading::HandleConn for StreamProxyConnHandler {}
 impl StreamServerHandleConn for StreamProxyConnHandler {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn handle_stream<Stream>(&self, stream: Stream)
     where
         Stream: AsConn + std::fmt::Debug,
     {
+        let local_addr = stream.local_addr().ok();
+        let peer_addr = stream.peer_addr().ok();
         match self.proxy(stream).await {
             Ok(ProxyResult::IoCopy) => (),
-            Ok(ProxyResult::Echo) => info!("Echo finished"),
-            Err(e) => warn!(?e, "Proxy error"),
+            Ok(ProxyResult::Echo) => info!(?local_addr, ?peer_addr, "Echo finished"),
+            Err(e) => warn!(
+                event = "stream_proxy_failed",
+                ?e,
+                ?local_addr,
+                ?peer_addr,
+                listener = %self.listen_addr,
+                "Proxy error"
+            ),
         }
     }
 }
@@ -179,7 +188,7 @@ impl StreamProxyAcceptor {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn establish<Downstream>(
         &self,
         downstream: &mut Downstream,

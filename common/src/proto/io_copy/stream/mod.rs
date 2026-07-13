@@ -142,6 +142,14 @@ where
             Ok(()) => {
                 info!(%log, "{log_prefix}: I/O copy finished");
             }
+            Err(e) if is_timed_out(e) => {
+                info!(
+                    event = "stream_io_copy_timed_out",
+                    ?e,
+                    %log,
+                    "{log_prefix}: I/O copy timed out"
+                );
+            }
             Err(e) => {
                 info!(?e, %log, "{log_prefix}: I/O copy error");
             }
@@ -222,6 +230,14 @@ where
         }
         None => tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await,
     }
+}
+
+fn is_timed_out(err: &tokio_io::CopyBiError) -> bool {
+    let io_err = match err {
+        tokio_io::CopyBiError::FromAToB(e) => e,
+        tokio_io::CopyBiError::FromBToA(e) => e,
+    };
+    io_err.kind() == std::io::ErrorKind::TimedOut
 }
 
 fn get_log_from_copy_result(

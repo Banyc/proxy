@@ -153,8 +153,9 @@ pub async fn run_dual_mux_accepter(
     accepter: DualStreamAccepter,
     addr: SocketAddrPair,
     mut handle_conn: impl FnMut(DualIoMuxStream),
-) {
+) -> u64 {
     let mut mac = accepter.into_migrating_only();
+    let mut accepted_streams = 0;
     loop {
         let accepted = match mac.accept().await {
             Ok(a) => a,
@@ -171,7 +172,9 @@ pub async fn run_dual_mux_accepter(
             }
         };
         handle_conn(stream);
+        accepted_streams += 1;
     }
+    accepted_streams
 }
 
 /// Wraps either a plain or a migrating accepted mux stream.
@@ -319,7 +322,7 @@ where
                 }
             }
             Some(Err(e)) => {
-                warn!(?e, "build_opener: inner mux task join error");
+                debug!(?e, "build_opener: inner mux task join error");
                 MuxError::TaskJoin {
                     task: "mux",
                     source: e,
