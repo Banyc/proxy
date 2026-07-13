@@ -12,8 +12,8 @@ use common::{
     stream::{AsConn, HasIoAddr, OwnIoStream},
 };
 use mux::{
-    AcceptedStream, DeadControl, DualStreamAccepter, DualStreamOpener, Initiation, MuxConfig,
-    MuxError, MigratingStreamWriter, PairingNonce, SplicedReader, StreamAccepter,
+    AcceptedStream, DeadControl, DualStreamAccepter, DualStreamOpener, Initiation,
+    MigratingStreamWriter, MuxConfig, MuxError, PairingNonce, SplicedReader, StreamAccepter,
     StreamOpener, StreamReader, StreamWriter, spawn_dual_mux_paired_supervised,
     spawn_mux_no_reconnection,
 };
@@ -389,8 +389,7 @@ pub struct SocketAddrPair {
 /// the gen-0 reader from `open_migrating_with_reader`.
 pub struct MigratingConnStream {
     write_tx: tokio::sync::mpsc::UnboundedSender<WriteMsg>,
-    pending_result:
-        Option<tokio::sync::oneshot::Receiver<io::Result<usize>>>,
+    pending_result: Option<tokio::sync::oneshot::Receiver<io::Result<usize>>>,
     reader_state: MigratingReaderState,
     addr: SocketAddrPair,
     _shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -415,8 +414,7 @@ impl MigratingConnStream {
         reader_rx: tokio::sync::oneshot::Receiver<StreamReader>,
         addr: SocketAddrPair,
     ) -> Self {
-        let (write_tx, mut write_rx) =
-            tokio::sync::mpsc::unbounded_channel::<WriteMsg>();
+        let (write_tx, mut write_rx) = tokio::sync::mpsc::unbounded_channel::<WriteMsg>();
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
         let bg = tokio::spawn(async move {
             loop {
@@ -463,24 +461,21 @@ impl AsyncRead for MigratingConnStream {
     ) -> std::task::Poll<io::Result<()>> {
         loop {
             match &mut self.reader_state {
-                MigratingReaderState::Pending { rx } => {
-                    match Pin::new(rx).poll(cx) {
-                        std::task::Poll::Ready(Ok(reader)) => {
-                            self.reader_state =
-                                MigratingReaderState::Ready { reader };
-                        }
-                        std::task::Poll::Ready(Err(_)) => {
-                            self.reader_state = MigratingReaderState::Failed;
-                            return std::task::Poll::Ready(Err(io::Error::new(
-                                io::ErrorKind::BrokenPipe,
-                                "gen-0 reader channel closed before write",
-                            )));
-                        }
-                        std::task::Poll::Pending => {
-                            return std::task::Poll::Pending;
-                        }
+                MigratingReaderState::Pending { rx } => match Pin::new(rx).poll(cx) {
+                    std::task::Poll::Ready(Ok(reader)) => {
+                        self.reader_state = MigratingReaderState::Ready { reader };
                     }
-                }
+                    std::task::Poll::Ready(Err(_)) => {
+                        self.reader_state = MigratingReaderState::Failed;
+                        return std::task::Poll::Ready(Err(io::Error::new(
+                            io::ErrorKind::BrokenPipe,
+                            "gen-0 reader channel closed before write",
+                        )));
+                    }
+                    std::task::Poll::Pending => {
+                        return std::task::Poll::Pending;
+                    }
+                },
                 MigratingReaderState::Ready { reader } => {
                     return Pin::new(reader).poll_read(cx, buf);
                 }
@@ -562,10 +557,7 @@ pub struct IoMuxStream<R, W> {
     addr: SocketAddrPair,
 }
 impl<R, W> IoMuxStream<R, W> {
-    pub fn new(
-        stream: tokio_chacha20::stream::DuplexStream<R, W>,
-        addr: SocketAddrPair,
-    ) -> Self {
+    pub fn new(stream: tokio_chacha20::stream::DuplexStream<R, W>, addr: SocketAddrPair) -> Self {
         Self { stream, addr }
     }
 }
@@ -599,11 +591,7 @@ impl<R: Unpin, W: AsyncWrite + Unpin> AsyncWrite for IoMuxStream<R, W> {
         Pin::new(&mut self.stream).poll_shutdown(cx)
     }
 }
-impl<R, W> AsConn for IoMuxStream<R, W>
-where
-    Self: OwnIoStream,
-{
-}
+impl<R, W> AsConn for IoMuxStream<R, W> where Self: OwnIoStream {}
 impl<R, W> OwnIoStream for IoMuxStream<R, W>
 where
     R: std::fmt::Debug + Send + Sync + Unpin + 'static,

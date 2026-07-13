@@ -56,7 +56,9 @@ impl CopyBuffer {
                         ErrorKind::NotConnected
                         | ErrorKind::ConnectionReset
                         | ErrorKind::BrokenPipe => {
-                            debug!("tokio copy: read data: ignore NotConnected/ConnectionReset/BrokenPipe error ignored");
+                            debug!(
+                                "tokio copy: read data: ignore NotConnected/ConnectionReset/BrokenPipe error ignored"
+                            );
                         }
                         _ => return Poll::Ready(Err(err)),
                     },

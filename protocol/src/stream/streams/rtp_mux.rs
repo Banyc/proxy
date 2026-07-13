@@ -227,19 +227,23 @@ fn spawn_lane_accept(
     tokio::spawn(async move {
         let started = Instant::now();
 
-        let (class, nonce) = match tokio::time::timeout(HELLO_DEADLINE, read_lane_hello(&mut r)).await {
+        let (class, nonce) = match tokio::time::timeout(HELLO_DEADLINE, read_lane_hello(&mut r))
+            .await
+        {
             Ok(Ok(x)) => x,
             Err(_) => {
                 let elapsed = started.elapsed();
-                let reason = format!("hello deadline elapsed");
-                signal_rejected_lane(&mut w, peer, local_addr, expected_class, elapsed, &reason).await;
+                let reason = "hello deadline elapsed".to_string();
+                signal_rejected_lane(&mut w, peer, local_addr, expected_class, elapsed, &reason)
+                    .await;
                 counter!("stream.rtp_mux.hello_timeout").increment(1);
                 return;
             }
             Ok(Err(e)) => {
                 let elapsed = started.elapsed();
                 let reason = format!("hello read/parse error: {e:?}");
-                signal_rejected_lane(&mut w, peer, local_addr, expected_class, elapsed, &reason).await;
+                signal_rejected_lane(&mut w, peer, local_addr, expected_class, elapsed, &reason)
+                    .await;
                 counter!("stream.rtp_mux.hello_timeout").increment(1);
                 return;
             }
@@ -269,8 +273,7 @@ fn spawn_lane_accept(
         }
 
         let mut lane_spawner = JoinSet::new();
-        let (opener, accepter) =
-            spawn_mux_no_reconnection(r, w, config, &mut lane_spawner);
+        let (opener, accepter) = spawn_mux_no_reconnection(r, w, config, &mut lane_spawner);
 
         let lane_pending = PendingLane {
             pending: mux::PendingAcceptor {
@@ -317,18 +320,22 @@ fn spawn_lane_accept(
                     let conn_handler2 = Arc::clone(&conn_handler);
                     tokio::spawn(async move {
                         let mut local_mux = local_mux;
-                        let accepted_streams = run_dual_mux_accepter(dual_accepter, addr_pair, |stream| {
-                            counter!("stream.rtp_mux.accepts").increment(1);
-                            let conn_handler = Arc::clone(&conn_handler2);
-                            tokio::spawn(async move {
-                                conn_handler.handle_stream(stream).await;
-                            });
-                        })
-                        .await;
+                        let accepted_streams =
+                            run_dual_mux_accepter(dual_accepter, addr_pair, |stream| {
+                                counter!("stream.rtp_mux.accepts").increment(1);
+                                let conn_handler = Arc::clone(&conn_handler2);
+                                tokio::spawn(async move {
+                                    conn_handler.handle_stream(stream).await;
+                                });
+                            })
+                            .await;
 
                         let error = match local_mux.join_next().await {
                             Some(Ok(e)) => e,
-                            Some(Err(source)) => MuxError::TaskJoin { task: "dual_lane", source },
+                            Some(Err(source)) => MuxError::TaskJoin {
+                                task: "dual_lane",
+                                source,
+                            },
                             None => MuxError::TaskStopped { task: "dual_lane" },
                         };
 
@@ -453,8 +460,7 @@ async fn run_dual_mux_connector_main(
 ) {
     use std::collections::{HashMap, hash_map};
 
-    let mut dual_openers: HashMap<SocketAddr, ConnectedDualLane> =
-        HashMap::new();
+    let mut dual_openers: HashMap<SocketAddr, ConnectedDualLane> = HashMap::new();
     let mut mux_spawner: JoinSet<(SocketAddr, MuxError)> = JoinSet::new();
     let mut reset_notified = reset.0.waiter();
 

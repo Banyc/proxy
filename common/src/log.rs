@@ -6,9 +6,9 @@ use std::{
 };
 
 use file_rotating_log::{
-    rotator::{spawn_flushers, LogRotator, RotationPolicy},
-    time_past::{DailyContains, TimePast},
     LogWriter,
+    rotator::{LogRotator, RotationPolicy, spawn_flushers},
+    time_past::{DailyContains, TimePast},
 };
 use hdv::{
     io::text::{HdvTextWriter, HdvTextWriterOptions},

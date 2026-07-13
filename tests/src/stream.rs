@@ -502,8 +502,7 @@ mod tests {
 
         // Start proxy server
         let addr = Arc::from("0.0.0.0:0");
-        let proxy_config =
-            spawn_proxy(&mut join_set, &addr, ConcreteStreamType::RtpMux).await;
+        let proxy_config = spawn_proxy(&mut join_set, &addr, ConcreteStreamType::RtpMux).await;
         let proxies = vec![proxy_config];
 
         // Start an echo server that reads a 4-byte length prefix then echoes
@@ -554,7 +553,9 @@ mod tests {
                         .unwrap();
 
                 // Large burst >2048 → bulk lane
-                let large: Vec<u8> = (0..4096u16).map(|i| ((i + stream_idx as u16) % 256) as u8).collect();
+                let large: Vec<u8> = (0..4096u16)
+                    .map(|i| ((i + stream_idx as u16) % 256) as u8)
+                    .collect();
                 let len = large.len() as u32;
                 stream.write_all(&len.to_be_bytes()).await.unwrap();
                 stream.write_all(&large).await.unwrap();
@@ -579,7 +580,10 @@ mod tests {
                     assert_eq!(u32::from_be_bytes(sel_buf), slen);
                     let mut small_echo = vec![0u8; 64];
                     stream.read_exact(&mut small_echo).await.unwrap();
-                    assert_eq!(small_echo, small, "small echo mismatch stream {stream_idx} iter {i}");
+                    assert_eq!(
+                        small_echo, small,
+                        "small echo mismatch stream {stream_idx} iter {i}"
+                    );
                 }
             });
         }

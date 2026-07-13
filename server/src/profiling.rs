@@ -1,5 +1,5 @@
 #[cfg(feature = "dhat-heap")]
-use axum::{extract::State, routing::get, Router};
+use axum::{Router, extract::State, routing::get};
 #[cfg(feature = "dhat-heap")]
 pub fn profiler_router(profiler: dhat::Profiler) -> Router {
     Router::new()
