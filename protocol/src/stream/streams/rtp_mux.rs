@@ -119,7 +119,7 @@ impl<ConnHandler> RtpMuxServer<ConnHandler>
 where
     ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
 {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn serve_(
         mut self,
         mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
@@ -169,9 +169,8 @@ where
                     let config = interactive_server_mux_config();
                     let expected_class = LaneClass::Interactive;
                     spawn_lane_accept(
-                        r, w, config, expected_class, peer, addr,
+                        r, w, config, conn_handler.clone(), expected_class, peer, addr,
                         pending.clone(),
-                        conn_handler.clone(),
                     );
                 }
                 // Bulk lane accept (stock rtp — explicit FrameDelivery::default())
@@ -195,9 +194,8 @@ where
                     let config = bulk_server_mux_config();
                     let expected_class = LaneClass::Bulk;
                     spawn_lane_accept(
-                        r, w, config, expected_class, peer, bulk_addr,
+                        r, w, config, conn_handler.clone(), expected_class, peer, bulk_addr,
                         pending.clone(),
-                        conn_handler.clone(),
                     );
                 }
                 res = set_conn_handler_rx.0.recv() => {
@@ -218,15 +216,14 @@ fn spawn_lane_accept(
     mut r: ReadStream,
     mut w: WriteStream,
     config: mux::MuxConfig,
+    conn_handler: Arc<impl StreamServerHandleConn + Send + Sync + 'static>,
     expected_class: LaneClass,
     peer: SocketAddr,
     local_addr: SocketAddr,
     pending: Arc<Mutex<HashMap<PairingNonce, PendingLane>>>,
-    conn_handler: Arc<impl StreamServerHandleConn + Send + Sync + 'static>,
 ) {
     tokio::spawn(async move {
         let started = Instant::now();
-
         let (class, nonce) = match tokio::time::timeout(HELLO_DEADLINE, read_lane_hello(&mut r))
             .await
         {
@@ -248,16 +245,13 @@ fn spawn_lane_accept(
                 return;
             }
         };
-
         let elapsed = started.elapsed();
-
         if class != expected_class {
             let reason = format!("lane class mismatch: got {class:?}");
             signal_rejected_lane(&mut w, peer, local_addr, expected_class, elapsed, &reason).await;
             counter!("stream.rtp_mux.class_mismatch").increment(1);
             return;
         }
-
         if let Err(e) = write_birth_heartbeat(&mut w).await {
             let kill_result = w.send_kill_and_abort().await;
             warn!(
@@ -271,10 +265,8 @@ fn spawn_lane_accept(
             counter!("stream.rtp_mux.birth_heartbeat_error").increment(1);
             return;
         }
-
         let mut lane_spawner = JoinSet::new();
         let (opener, accepter) = spawn_mux_no_reconnection(r, w, config, &mut lane_spawner);
-
         let lane_pending = PendingLane {
             pending: mux::PendingAcceptor {
                 class,
@@ -286,7 +278,6 @@ fn spawn_lane_accept(
             peer,
             local_addr,
         };
-
         let existing = {
             let mut guard = pending.lock().unwrap();
             match guard.entry(nonce) {
@@ -299,7 +290,6 @@ fn spawn_lane_accept(
                 }
             }
         };
-
         if let Some((other, lane_pending)) = existing {
             counter!("stream.rtp_mux.paired").increment(1);
             let other_peer = other.peer;
@@ -308,10 +298,24 @@ fn spawn_lane_accept(
             let current_peer = lane_pending.peer;
             let current_local_addr = lane_pending.local_addr;
             let current_class = lane_pending.pending.class;
-
             let mut local_mux = JoinSet::new();
             match complete_pairing(other.pending, lane_pending.pending, &mut local_mux) {
                 Ok((_dual_opener, dual_accepter)) => {
+                    let (interactive_dn, interactive_local, bulk_dn, bulk_local) = match other_class
+                    {
+                        LaneClass::Interactive => (
+                            other_peer,
+                            other_local_addr,
+                            current_peer,
+                            current_local_addr,
+                        ),
+                        LaneClass::Bulk => (
+                            current_peer,
+                            current_local_addr,
+                            other_peer,
+                            other_local_addr,
+                        ),
+                    };
                     let addr_pair = SocketAddrPair {
                         local_addr,
                         peer_addr: peer,
@@ -329,7 +333,6 @@ fn spawn_lane_accept(
                                 });
                             })
                             .await;
-
                         let error = match local_mux.join_next().await {
                             Some(Ok(e)) => e,
                             Some(Err(source)) => MuxError::TaskJoin {
@@ -338,17 +341,14 @@ fn spawn_lane_accept(
                             },
                             None => MuxError::TaskStopped { task: "dual_lane" },
                         };
-
                         warn!(
                             event = "rtp_mux_session_terminated",
                             ?error,
                             ?nonce,
-                            ?other_peer,
-                            ?other_local_addr,
-                            ?other_class,
-                            ?current_peer,
-                            ?current_local_addr,
-                            ?current_class,
+                            dn_interactive = ?interactive_dn,
+                            dn_interactive_local = ?interactive_local,
+                            dn_bulk = ?bulk_dn,
+                            dn_bulk_local = ?bulk_local,
                             accepted_streams,
                             uptime_ms = paired_at.elapsed().as_millis(),
                             "RTP mux dual-lane session terminated"
@@ -359,11 +359,11 @@ fn spawn_lane_accept(
                     warn!(
                         ?e,
                         ?nonce,
-                        ?other_peer,
-                        ?other_local_addr,
+                        dn_other = ?other_peer,
+                        dn_other_local = ?other_local_addr,
                         ?other_class,
-                        ?current_peer,
-                        ?current_local_addr,
+                        dn_current = ?current_peer,
+                        dn_current_local = ?current_local_addr,
                         ?current_class,
                         "RTP mux dual-lane pairing failed"
                     );
@@ -377,8 +377,8 @@ fn spawn_lane_accept(
                 tokio::time::sleep(PAIRING_DEADLINE).await;
                 if let Some(lane) = pending_for_expiry.lock().unwrap().remove(&nonce_for_expiry) {
                     warn!(
-                        ?lane.peer,
-                        ?lane.local_addr,
+                        dn = ?lane.peer,
+                        dn_local = ?lane.local_addr,
                         class = ?lane.pending.class,
                         ?nonce_for_expiry,
                         "Pairing deadline expired"

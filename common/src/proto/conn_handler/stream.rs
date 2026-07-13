@@ -250,7 +250,7 @@ impl StreamProxyServerError {
 pub enum StreamProxyAcceptorError {
     #[error("Steer error: {0}")]
     Steer(#[from] SteerError),
-    #[error("Failed to connect to upstream {upstream_addr:?}")]
+    #[error("Failed to connect to upstream {upstream_addr}: {source}, {downstream_addr:?}")]
     ConnectUpstream {
         #[source]
         source: ConnectError,

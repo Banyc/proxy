@@ -74,7 +74,7 @@ impl<ConnHandler> TcpServer<ConnHandler>
 where
     ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
 {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn serve_(
         self,
         mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,

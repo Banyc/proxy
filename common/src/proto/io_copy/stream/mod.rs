@@ -114,7 +114,6 @@ where
                     en_dir,
                 )
                 .await;
-
                 session.inspect_mut(|session| {
                     session.end = Some(SystemTime::now());
                 });
@@ -122,7 +121,6 @@ where
                     let _session = session;
                     tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
                 });
-
                 res
             }
             None => {
@@ -136,13 +134,12 @@ where
                 .await
             }
         };
-
         let (log, res) = get_log_from_copy_result(self.conn_context, res);
         match &res {
             Ok(()) => {
                 info!(
                     dn = ?log.downstream_addr,
-                    up = ?log.upstream_addr,
+                    up = %log.upstream_addr,
                     up_sock = ?log.upstream_sock_addr,
                     %log,
                     "{log_prefix}: I/O copy finished"
@@ -153,7 +150,7 @@ where
                     event = "stream_io_copy_timed_out",
                     ?e,
                     dn = ?log.downstream_addr,
-                    up = ?log.upstream_addr,
+                    up = %log.upstream_addr,
                     up_sock = ?log.upstream_sock_addr,
                     %log,
                     "{log_prefix}: I/O copy timed out"
@@ -163,7 +160,7 @@ where
                 info!(
                     ?e,
                     dn = ?log.downstream_addr,
-                    up = ?log.upstream_addr,
+                    up = %log.upstream_addr,
                     up_sock = ?log.upstream_sock_addr,
                     %log,
                     "{log_prefix}: I/O copy error"

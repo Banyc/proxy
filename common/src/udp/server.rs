@@ -50,7 +50,7 @@ impl<ConnHandler> UdpServer<ConnHandler>
 where
     ConnHandler: UdpServerHandleConn + Send + Sync + 'static,
 {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn serve_(
         self,
         mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,

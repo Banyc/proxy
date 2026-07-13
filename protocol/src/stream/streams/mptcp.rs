@@ -68,7 +68,7 @@ impl<ConnHandler> MptcpServer<ConnHandler>
 where
     ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
 {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn serve_(
         mut self,
         mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
