@@ -154,7 +154,7 @@ pub async fn run_dual_mux_accepter(
     addr: SocketAddrPair,
     mut handle_conn: impl FnMut(DualIoMuxStream),
 ) {
-    let mut mac = accepter.into_migrating_capable();
+    let mut mac = accepter.into_migrating_only();
     loop {
         let accepted = match mac.accept().await {
             Ok(a) => a,
