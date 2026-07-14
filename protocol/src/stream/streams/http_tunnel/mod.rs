@@ -239,7 +239,7 @@ async fn run_service(
 #[derive(Debug, Error)]
 pub enum TunnelError {
     #[error("Failed to establish proxy chain: {0}")]
-    EstablishProxyChain(#[from] StreamEstablishError),
+    EstablishProxyChain(Box<StreamEstablishError>),
     #[error("Hyper error: {0}")]
     HyperError(#[from] hyper::Error),
     #[error("No host in HTTP request")]
@@ -251,15 +251,21 @@ pub enum TunnelError {
     #[error("Invalid address: {0}")]
     Address(#[from] ParseInternetAddrError),
 }
+impl From<StreamEstablishError> for TunnelError {
+    fn from(e: StreamEstablishError) -> Self {
+        TunnelError::EstablishProxyChain(Box::new(e))
+    }
+}
 impl TunnelError {
     fn upstream_addr(&self) -> Option<&common::proto::addr::StreamAddr> {
         match self {
-            Self::EstablishProxyChain(e) => match e {
-                StreamEstablishError::WriteHeartbeatUpgrade { upstream_addr, .. }
+            Self::EstablishProxyChain(e) => match e.as_ref() {
+                StreamEstablishError::ConnectDestination { upstream_addr, .. }
+                | StreamEstablishError::ConnectFirstProxyServer { upstream_addr, .. }
+                | StreamEstablishError::WriteHeartbeatUpgrade { upstream_addr, .. }
                 | StreamEstablishError::WriteStreamRequestHeader { upstream_addr, .. } => {
                     Some(upstream_addr)
                 }
-                _ => None,
             },
             _ => None,
         }
@@ -321,5 +327,48 @@ mod tests {
             http_failure_upstream(&TunnelError::HttpNoPort, Some(&context)).as_deref(),
             Some("api.example.com")
         );
+    }
+
+    #[test]
+    fn connect_error_exposes_attempted_upstream_address() {
+        let addr = common::proto::addr::StreamAddr {
+            address: "127.0.0.1:8080".parse().unwrap(),
+            stream_type: "tcp".into(),
+        };
+        let source = common::stream::pool::ConnectError::ConnectAddr {
+            source: io::Error::other("test"),
+            addr: addr.clone(),
+            sock_addrs: vec![],
+        };
+        let err = StreamEstablishError::ConnectDestination {
+            source,
+            upstream_addr: addr.clone(),
+        };
+        let tunnel_err = TunnelError::EstablishProxyChain(Box::new(err));
+        assert!(tunnel_err.upstream_addr().is_some());
+        let up = tunnel_err.upstream_addr().unwrap();
+        assert_eq!(up.address.to_string(), "127.0.0.1:8080");
+        assert_eq!(up.stream_type.as_ref(), "tcp");
+    }
+
+    #[test]
+    fn establish_error_exposes_structured_upstream_address() {
+        let addr = common::proto::addr::StreamAddr {
+            address: "10.0.0.1:9090".parse().unwrap(),
+            stream_type: "rtp-mux".into(),
+        };
+        let source = common::stream::pool::ConnectError::ConnectAddr {
+            source: io::Error::other("test"),
+            addr: addr.clone(),
+            sock_addrs: vec![],
+        };
+        let err = StreamEstablishError::ConnectFirstProxyServer {
+            source,
+            upstream_addr: addr.clone(),
+        };
+        let tunnel_err = TunnelError::from(err);
+        let up = tunnel_err.upstream_addr().unwrap();
+        assert_eq!(up.stream_type.as_ref(), "rtp-mux");
+        assert_eq!(up.address.to_string(), "10.0.0.1:9090");
     }
 }

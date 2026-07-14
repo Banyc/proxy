@@ -37,9 +37,12 @@ use common::{
     stream::{AsConn, StreamServerHandleConn},
 };
 
-use crate::stream::streams::mux::{
-    MigratingConnStream, SocketAddrPair, bulk_client_mux_config, bulk_server_mux_config,
-    interactive_client_mux_config, interactive_server_mux_config, run_dual_mux_accepter,
+use crate::stream::streams::{
+    accept_error::AcceptErrorBackoff,
+    mux::{
+        MigratingConnStream, SocketAddrPair, bulk_client_mux_config, bulk_server_mux_config,
+        interactive_client_mux_config, interactive_server_mux_config, run_dual_mux_accepter,
+    },
 };
 
 use rtp::{
@@ -52,6 +55,15 @@ const HELLO_DEADLINE: Duration = Duration::from_secs(5);
 const BIRTH_LIVENESS_DEADLINE: Duration = Duration::from_millis(2500);
 const BIRTH_LIVENESS_GRACE: Duration = Duration::from_millis(250);
 const MAX_DUAL_CONNECT_ATTEMPTS: usize = 3;
+
+fn bulk_lane_addr(interactive: SocketAddr) -> io::Result<SocketAddr> {
+    let port = interactive.port().checked_add(1).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "RTP mux bulk lane port overflows u16")
+    })?;
+    let mut bulk = interactive;
+    bulk.set_port(port);
+    Ok(bulk)
+}
 
 const fn dual_lane_frame_delivery() -> FrameDelivery {
     FrameDelivery::enabled()
@@ -135,6 +147,8 @@ where
         let mut conn_handler = Arc::new(self.conn_handler);
         let pending: Arc<Mutex<HashMap<PairingNonce, PendingLane>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let mut interactive_backoff = AcceptErrorBackoff::default();
+        let mut bulk_backoff = AcceptErrorBackoff::default();
 
         loop {
             trace!("Waiting for connection");
@@ -158,7 +172,7 @@ where
                     let stream = match res {
                         Ok(res) => res,
                         Err(e) => {
-                            warn!(?e, ?addr, "Interactive RTP accept error");
+                            let _ = interactive_backoff.failed_dispatching("rtp_mux_interactive", addr, e);
                             continue;
                         }
                     };
@@ -183,7 +197,7 @@ where
                     let stream = match res {
                         Ok(res) => res,
                         Err(e) => {
-                            warn!(?e, ?bulk_addr, "Bulk RTP accept error");
+                            let _ = bulk_backoff.failed_dispatching("rtp_mux_bulk", bulk_addr, e);
                             continue;
                         }
                     };
@@ -623,7 +637,7 @@ async fn connect_dual_lane_once(
     .await?;
     let int_local = int_connected.local_addr;
 
-    let bulk_addr = SocketAddr::new(addr.ip(), addr.port().wrapping_add(1));
+    let bulk_addr = bulk_lane_addr(addr)?;
     let bulk_bind = SocketAddr::new(bind_ip.ip(), 0);
     let bulk_connected = rtp::udp::connect_with_mss_fec_tuning_and_frame_delivery(
         bulk_bind,
@@ -834,7 +848,7 @@ pub async fn build_rtp_mux_proxy_server(
         .await
         .map_err(ListenerBindError)?;
     let int_addr = interactive_listener.local_addr();
-    let bulk_addr = SocketAddr::new(int_addr.ip(), int_addr.port().wrapping_add(1));
+    let bulk_addr = bulk_lane_addr(int_addr).map_err(ListenerBindError)?;
     let bulk_listener = rtp::udp::Listener::bind(bulk_addr)
         .await
         .map_err(ListenerBindError)?;
@@ -845,9 +859,16 @@ pub async fn build_rtp_mux_proxy_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
     fn both_rtp_lanes_enable_frame_delivery() {
         assert!(dual_lane_frame_delivery().enabled);
+    }
+
+    #[test]
+    fn bulk_lane_port_rejects_overflow() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 65535);
+        assert!(bulk_lane_addr(addr).is_err());
     }
 }

@@ -13,7 +13,9 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::ToSocketAddrs,
 };
-use tracing::{info, instrument, trace, warn};
+use tracing::{info, instrument, trace};
+
+use crate::stream::streams::accept_error::AcceptErrorBackoff;
 
 use common::{
     addr::any_addr,
@@ -83,6 +85,7 @@ where
         info!(?addr, "Listening");
         // Arc conn_handler
         let mut conn_handler = Arc::new(self.conn_handler);
+        let mut accept_backoff = AcceptErrorBackoff::default();
         loop {
             trace!("Waiting for connection");
             tokio::select! {
@@ -90,7 +93,7 @@ where
                     let stream = match res {
                         Ok(res) => res,
                         Err(e) => {
-                            warn!(?e, ?addr, "Accept error");
+                            let _ = accept_backoff.failed_dispatching("rtp", addr, e);
                             continue;
                         }
                     };

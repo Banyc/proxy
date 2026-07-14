@@ -28,7 +28,10 @@ pub async fn establish(
     if proxies.is_empty() {
         let (stream, sock_addr) = connect_with_pool(&destination, stream_context, true, IO_TIMEOUT)
             .await
-            .map_err(StreamEstablishError::ConnectDestination)?;
+            .map_err(|source| StreamEstablishError::ConnectDestination {
+                source,
+                upstream_addr: destination.clone(),
+            })?;
         return Ok(ConnAndAddr {
             stream,
             addr: destination,
@@ -41,7 +44,10 @@ pub async fn establish(
         let proxy_addr = &proxies[0].address;
         let (stream, sock_addr) = connect_with_pool(proxy_addr, stream_context, true, IO_TIMEOUT)
             .await
-            .map_err(StreamEstablishError::ConnectFirstProxyServer)?;
+            .map_err(|source| StreamEstablishError::ConnectFirstProxyServer {
+                source,
+                upstream_addr: proxy_addr.clone(),
+            })?;
         (stream, proxy_addr.clone(), sock_addr)
     };
 
@@ -75,10 +81,18 @@ pub async fn establish(
 
 #[derive(Debug, Error)]
 pub enum StreamEstablishError {
-    #[error("Failed to connect to destination: {0}")]
-    ConnectDestination(#[source] ConnectError),
-    #[error("Failed to connect to first proxy server: {0}")]
-    ConnectFirstProxyServer(#[source] ConnectError),
+    #[error("Failed to connect to destination: {source}, {upstream_addr}")]
+    ConnectDestination {
+        #[source]
+        source: ConnectError,
+        upstream_addr: StreamAddr,
+    },
+    #[error("Failed to connect to first proxy server: {source}, {upstream_addr}")]
+    ConnectFirstProxyServer {
+        #[source]
+        source: ConnectError,
+        upstream_addr: StreamAddr,
+    },
     #[error("Failed to write heartbeat upgrade to upstream: {source}, {upstream_addr}")]
     WriteHeartbeatUpgrade {
         #[source]

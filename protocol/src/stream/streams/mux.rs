@@ -1,9 +1,12 @@
 use std::{
     collections::{HashMap, hash_map},
+    fmt,
     future::Future,
     io,
     net::SocketAddr,
     pin::Pin,
+    sync::{Arc, Mutex},
+    task::Poll,
     time::Duration,
 };
 
@@ -19,6 +22,7 @@ use mux::{
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
+    sync::Notify,
     task::JoinSet,
 };
 use tracing::{debug, trace, warn};
@@ -383,69 +387,109 @@ pub struct SocketAddrPair {
     pub peer_addr: SocketAddr,
 }
 
-/// Bridges [`MigratingStreamWriter`] + a pending gen-0 reader into a
-/// bidirectional [`AsyncRead`] + [`AsyncWrite`] stream.  Writes are
-/// dispatched to a background task that owns the writer; reads resolve
-/// the gen-0 reader from `open_migrating_with_reader`.
-pub struct MigratingConnStream {
-    write_tx: tokio::sync::mpsc::UnboundedSender<WriteMsg>,
-    pending_result: Option<tokio::sync::oneshot::Receiver<io::Result<usize>>>,
-    reader_state: MigratingReaderState,
-    addr: SocketAddrPair,
-    _shutdown_tx: tokio::sync::watch::Sender<bool>,
-    _bg: tokio::task::JoinHandle<()>,
+const MIGRATING_WRITE_QUEUE_CAPACITY: usize = 8;
+const MIGRATING_WRITE_MAX_CHUNK: usize = 64 * 1024;
+
+enum WriteCommand {
+    Data(Vec<u8>),
+    Flush(tokio::sync::oneshot::Sender<Result<(), BackgroundWriteError>>),
+    Shutdown(tokio::sync::oneshot::Sender<Result<(), BackgroundWriteError>>),
 }
-struct WriteMsg {
-    buf: Vec<u8>,
-    reply: tokio::sync::oneshot::Sender<io::Result<usize>>,
+
+#[derive(Debug, Clone)]
+struct BackgroundWriteError {
+    message: String,
 }
+
+impl fmt::Display for BackgroundWriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for BackgroundWriteError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ControlKind {
+    Flush,
+    Shutdown,
+}
+
+struct PendingControl {
+    kind: ControlKind,
+    reply: tokio::sync::oneshot::Receiver<Result<(), BackgroundWriteError>>,
+}
+
 enum MigratingReaderState {
     Pending {
         rx: tokio::sync::oneshot::Receiver<StreamReader>,
     },
     Ready {
         reader: StreamReader,
+        unpark: Arc<Notify>,
     },
-    Failed,
 }
+
+pub struct MigratingConnStream {
+    write_tx: tokio_util::sync::PollSender<WriteCommand>,
+    pending_control: Option<PendingControl>,
+    reader_state: MigratingReaderState,
+    addr: SocketAddrPair,
+    shutdown_complete: bool,
+    bg_error: Arc<Mutex<Option<BackgroundWriteError>>>,
+    _bg: tokio::task::JoinHandle<()>,
+}
+
 impl MigratingConnStream {
     pub fn new(
         mut writer: MigratingStreamWriter,
         reader_rx: tokio::sync::oneshot::Receiver<StreamReader>,
         addr: SocketAddrPair,
     ) -> Self {
-        let (write_tx, mut write_rx) = tokio::sync::mpsc::unbounded_channel::<WriteMsg>();
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+        let (write_tx, mut write_rx) =
+            tokio::sync::mpsc::channel::<WriteCommand>(MIGRATING_WRITE_QUEUE_CAPACITY);
+        let bg_error = Arc::new(Mutex::new(None::<BackgroundWriteError>));
+        let bg_error_clone = bg_error.clone();
         let bg = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = shutdown_rx.changed() => {
-                        let _ = writer.shutdown();
-                        return;
+            while let Some(cmd) = write_rx.recv().await {
+                match cmd {
+                    WriteCommand::Data(buf) => {
+                        if let Err(e) = writer.write_all(&buf).await {
+                            *bg_error_clone.lock().unwrap() = Some(BackgroundWriteError {
+                                message: format!("{e:?}"),
+                            });
+                            return;
+                        }
                     }
-                    msg = write_rx.recv() => {
-                        let Some(msg) = msg else { return };
-                        let result = writer
-                            .write_all(&msg.buf)
-                            .await
-                            .map(|()| msg.buf.len())
-                            .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, format!("{e:?}")));
-                        let _ = msg.reply.send(result);
+                    WriteCommand::Flush(reply) => {
+                        let _ = reply.send(Ok(()));
+                    }
+                    WriteCommand::Shutdown(reply) => {
+                        let result =
+                            writer.finalize().await.map_err(|e| BackgroundWriteError {
+                                message: format!("{e:?}"),
+                            });
+                        if let Err(ref e) = result {
+                            *bg_error_clone.lock().unwrap() = Some(e.clone());
+                        }
+                        let _ = reply.send(result);
+                        return;
                     }
                 }
             }
         });
         Self {
-            write_tx,
-            pending_result: None,
+            write_tx: tokio_util::sync::PollSender::new(write_tx),
+            pending_control: None,
             reader_state: MigratingReaderState::Pending { rx: reader_rx },
             addr,
-            _shutdown_tx: shutdown_tx,
+            shutdown_complete: false,
+            bg_error,
             _bg: bg,
         }
     }
 }
+
 impl std::fmt::Debug for MigratingConnStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MigratingConnStream")
@@ -453,6 +497,7 @@ impl std::fmt::Debug for MigratingConnStream {
             .finish_non_exhaustive()
     }
 }
+
 impl AsyncRead for MigratingConnStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -463,10 +508,10 @@ impl AsyncRead for MigratingConnStream {
             match &mut self.reader_state {
                 MigratingReaderState::Pending { rx } => match Pin::new(rx).poll(cx) {
                     std::task::Poll::Ready(Ok(reader)) => {
-                        self.reader_state = MigratingReaderState::Ready { reader };
+                        let unpark = Arc::new(Notify::new());
+                        self.reader_state = MigratingReaderState::Ready { reader, unpark };
                     }
                     std::task::Poll::Ready(Err(_)) => {
-                        self.reader_state = MigratingReaderState::Failed;
                         return std::task::Poll::Ready(Err(io::Error::new(
                             io::ErrorKind::BrokenPipe,
                             "gen-0 reader channel closed before write",
@@ -476,68 +521,177 @@ impl AsyncRead for MigratingConnStream {
                         return std::task::Poll::Pending;
                     }
                 },
-                MigratingReaderState::Ready { reader } => {
+                MigratingReaderState::Ready { reader, .. } => {
                     return Pin::new(reader).poll_read(cx, buf);
-                }
-                MigratingReaderState::Failed => {
-                    return std::task::Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "reader failed",
-                    )));
                 }
             }
         }
     }
 }
+
 impl AsyncWrite for MigratingConnStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, io::Error>> {
-        if let Some(rx) = &mut self.pending_result {
-            match Pin::new(rx).poll(cx) {
-                std::task::Poll::Ready(Ok(result)) => {
-                    self.pending_result = None;
-                    std::task::Poll::Ready(result)
-                }
-                std::task::Poll::Ready(Err(_)) => {
-                    self.pending_result = None;
-                    std::task::Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "write task panicked",
-                    )))
-                }
-                std::task::Poll::Pending => std::task::Poll::Pending,
-            }
-        } else {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            let msg = WriteMsg {
-                buf: buf.to_vec(),
-                reply: tx,
-            };
-            if self.write_tx.send(msg).is_err() {
-                return std::task::Poll::Ready(Err(io::Error::new(
+        if self.shutdown_complete {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "stream shut down",
+            )));
+        }
+        if let Some(ref err) = *self.bg_error.lock().unwrap() {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                err.to_string(),
+            )));
+        }
+        if self.pending_control.is_some() {
+            return Poll::Pending;
+        }
+        let chunk = buf.len().min(MIGRATING_WRITE_MAX_CHUNK);
+        let item = WriteCommand::Data(buf[..chunk].to_vec());
+        match self.write_tx.poll_reserve(cx) {
+            Poll::Ready(Ok(())) => match self.write_tx.send_item(item) {
+                Ok(()) => Poll::Ready(Ok(chunk)),
+                Err(_) => Poll::Ready(Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "write task gone",
-                )));
-            }
-            self.pending_result = Some(rx);
-            cx.waker().wake_by_ref();
-            std::task::Poll::Pending
+                ))),
+            },
+            Poll::Ready(Err(_)) => Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "write channel closed",
+            ))),
+            Poll::Pending => Poll::Pending,
         }
     }
+
     fn poll_flush(
-        self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), io::Error>> {
-        std::task::Poll::Ready(Ok(()))
+        if self.shutdown_complete {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "stream shut down",
+            )));
+        }
+        if let Some(ref err) = *self.bg_error.lock().unwrap() {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                err.to_string(),
+            )));
+        }
+        match &mut self.pending_control {
+            None => {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let item = WriteCommand::Flush(tx);
+                match self.write_tx.poll_reserve(cx) {
+                    Poll::Ready(Ok(())) => {
+                        let _ = self.write_tx.send_item(item);
+                        self.pending_control = Some(PendingControl {
+                            kind: ControlKind::Flush,
+                            reply: rx,
+                        });
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    }
+                    Poll::Ready(Err(_)) => Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "write channel closed",
+                    ))),
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+            Some(ctrl) => match Pin::new(&mut ctrl.reply).poll(cx) {
+                Poll::Ready(Ok(Ok(()))) => {
+                    self.pending_control = None;
+                    Poll::Ready(Ok(()))
+                }
+                Poll::Ready(Ok(Err(e))) => {
+                    self.pending_control = None;
+                    Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        e.to_string(),
+                    )))
+                }
+                Poll::Ready(Err(_)) => {
+                    self.pending_control = None;
+                    Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "flush reply dropped",
+                    )))
+                }
+                Poll::Pending => Poll::Pending,
+            },
+        }
     }
+
     fn poll_shutdown(
-        self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), io::Error>> {
-        std::task::Poll::Ready(Ok(()))
+        if self.shutdown_complete {
+            return Poll::Ready(Ok(()));
+        }
+        let bg_err = self.bg_error.lock().unwrap().clone();
+        if let Some(ref err) = bg_err {
+            self.shutdown_complete = true;
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                err.to_string(),
+            )));
+        }
+        match &mut self.pending_control {
+            Some(ctrl) if ctrl.kind == ControlKind::Shutdown => {
+                match Pin::new(&mut ctrl.reply).poll(cx) {
+                    Poll::Ready(Ok(Ok(()))) => {
+                        self.pending_control = None;
+                        self.shutdown_complete = true;
+                        Poll::Ready(Ok(()))
+                    }
+                    Poll::Ready(Ok(Err(e))) => {
+                        self.pending_control = None;
+                        self.shutdown_complete = true;
+                        Poll::Ready(Err(io::Error::new(
+                            io::ErrorKind::BrokenPipe,
+                            e.to_string(),
+                        )))
+                    }
+                    Poll::Ready(Err(_)) => {
+                        self.pending_control = None;
+                        self.shutdown_complete = true;
+                        Poll::Ready(Ok(()))
+                    }
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+            Some(_) => {
+                return Poll::Pending;
+            }
+            None => {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let item = WriteCommand::Shutdown(tx);
+                match self.write_tx.poll_reserve(cx) {
+                    Poll::Ready(Ok(())) => {
+                        let _ = self.write_tx.send_item(item);
+                        self.pending_control = Some(PendingControl {
+                            kind: ControlKind::Shutdown,
+                            reply: rx,
+                        });
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    }
+                    Poll::Ready(Err(_)) => {
+                        self.shutdown_complete = true;
+                        Poll::Ready(Ok(()))
+                    }
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+        }
     }
 }
 impl OwnIoStream for MigratingConnStream {}
