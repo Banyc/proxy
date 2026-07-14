@@ -3,7 +3,7 @@ use std::{
     io,
     net::SocketAddr,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -38,6 +38,7 @@ mod proxy;
 mod tunnel;
 
 type ReturnType = Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>;
+type RequestErrorContext = Arc<Mutex<Option<HttpFailureReporter>>>;
 
 #[derive(Debug, Clone)]
 struct HttpDownstreamContext {
@@ -52,6 +53,7 @@ struct HttpRequestFailure {
     reported: AtomicBool,
 }
 
+#[derive(Debug, Clone)]
 struct HttpFailureReporter {
     failure: Arc<HttpRequestFailure>,
     downstream: HttpDownstreamContext,
@@ -60,7 +62,12 @@ struct HttpFailureReporter {
 
 impl HttpFailureReporter {
     fn report(&self, error: &TunnelError, attempted_upstream: Option<&str>) {
-        if self.failure.reported.swap(true, Ordering::Relaxed) {
+        if self
+            .failure
+            .reported
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .is_err()
+        {
             return;
         }
         if let Some(up) = attempted_upstream {
@@ -82,6 +89,18 @@ impl HttpFailureReporter {
             "HTTP tunnel proxy failed"
         );
     }
+}
+
+fn retain_failed_request_context(
+    request_error_context: &RequestErrorContext,
+    reporter: HttpFailureReporter,
+    result: ReturnType,
+) -> ReturnType {
+    if let Err(error) = &result {
+        *request_error_context.lock().unwrap() = Some(reporter.clone());
+        reporter.report(error, None);
+    }
+    result
 }
 
 #[derive(Debug, Clone)]
@@ -229,13 +248,7 @@ impl StreamServerHandleConn for HttpAccessConnHandler {
             local: dn_local,
         };
         let listener = Arc::clone(&self.ctx.listen_addr);
-        if let Err(e) = proxy(&self.ctx, stream, downstream, listener).await {
-            warn!(
-                event = "http_tunnel_proxy_failed",
-                error = %e,
-                listener = %self.ctx.listen_addr,
-                "HTTP tunnel proxy top-level failure"
-            );
+        if let Err(_e) = proxy(&self.ctx, stream, downstream, listener).await {
         }
     }
 }
@@ -251,7 +264,8 @@ where
 {
     let downstream_ctx = Arc::new(downstream_ctx);
     let listener = Arc::clone(&listener);
-    hyper::server::conn::http1::Builder::new()
+    let request_error_context: RequestErrorContext = Arc::new(Mutex::new(None));
+    let result = hyper::server::conn::http1::Builder::new()
         .preserve_header_case(true)
         .title_case_headers(true)
         .serve_connection(
@@ -262,12 +276,26 @@ where
                     req,
                     Arc::clone(&downstream_ctx),
                     Arc::clone(&listener),
+                    &request_error_context,
                 )
             }),
         )
         .with_upgrades()
-        .await?;
-    Ok(())
+        .await
+        .map_err(TunnelError::HyperError);
+    if let Err(ref e) = result {
+        if let Some(reporter) = request_error_context.lock().unwrap().take() {
+            reporter.report(e, None);
+        } else {
+            warn!(
+                event = "http_tunnel_proxy_failed",
+                error = %e,
+                listener = %ctx.listen_addr,
+                "HTTP tunnel proxy top-level failure"
+            );
+        }
+    }
+    result
 }
 #[instrument(skip_all)]
 async fn run_service(
@@ -275,6 +303,7 @@ async fn run_service(
     req: Request<hyper::body::Incoming>,
     downstream_ctx: Arc<HttpDownstreamContext>,
     listener: Arc<str>,
+    request_error_context: &RequestErrorContext,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError> {
     let request_context = HttpRequestContext::from_request(&req);
     trace!(?request_context, "Received request");
@@ -289,11 +318,11 @@ async fn run_service(
         listener,
     };
     let res = if Method::CONNECT == req.method() {
-        run_tunnel_mode(ctx, req, reporter).await
+        run_tunnel_mode(ctx, req, reporter.clone()).await
     } else {
-        run_proxy_mode(ctx, req, reporter).await
+        run_proxy_mode(ctx, req, reporter.clone()).await
     };
-    res
+    retain_failed_request_context(request_error_context, reporter, res)
 }
 
 #[derive(Debug, Error)]
@@ -306,6 +335,8 @@ pub enum TunnelError {
     HttpNoHost,
     #[error("No port in HTTP request")]
     HttpNoPort,
+    #[error("Invalid port in HTTP request: {0}")]
+    HttpInvalidPort(String),
     #[error("Invalid HTTP host: {0}")]
     HttpInvalidHost(String),
     #[error("Direct connection error: {0}")]
@@ -497,6 +528,18 @@ mod tests {
             .unwrap();
         let result = proxy::get_authority_from_req_for_test(&req);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn host_port_out_of_range_is_rejected() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/")
+            .header(hyper::header::HOST, "example.com:99999")
+            .body(())
+            .unwrap();
+        let result = proxy::get_authority_from_req_for_test(&req);
+        assert!(matches!(result, Err(TunnelError::HttpInvalidPort(_))));
     }
 }
 

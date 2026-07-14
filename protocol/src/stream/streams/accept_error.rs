@@ -106,6 +106,25 @@ impl AcceptErrorBackoff {
         }
     }
 
+    pub(crate) fn retry_delay(&self) -> Option<std::time::Duration> {
+        self.retry_at.map(|retry_at| {
+            let now = Instant::now();
+            if retry_at > now {
+                retry_at.duration_since(now)
+            } else {
+                std::time::Duration::ZERO
+            }
+        })
+    }
+
+    pub(crate) async fn wait_for_accept_retry(&self) {
+        if let Some(delay) = self.retry_delay() {
+            if delay > std::time::Duration::ZERO {
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+
     pub(crate) fn retry_at(&self) -> Option<Instant> {
         self.retry_at
     }

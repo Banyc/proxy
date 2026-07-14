@@ -34,6 +34,14 @@ use tracing::{instrument, trace, warn};
 
 use super::TunnelError;
 
+#[derive(Debug)]
+enum ConnectFailure {
+    Upgrade(hyper::Error),
+    Resolution(std::io::Error),
+    DirectConnect(std::io::Error),
+    EstablishProxyChain(StreamEstablishError),
+}
+
 #[instrument(skip_all)]
 pub async fn run_tunnel_mode(
     ctx: &HttpAccessConnContext,
@@ -101,8 +109,39 @@ async fn dispatch(
             UpgradeAction::Direct(direct_ctx)
         }
     };
+    let (reporter_failure, reporter_downstream, reporter_listener, reporter_dst_addr) =
+        match &action {
+            UpgradeAction::Proxy(ctx) => (
+                ctx.failure.clone(),
+                ctx.downstream.clone(),
+                Arc::clone(&ctx.listener),
+                dst_addr.clone(),
+            ),
+            UpgradeAction::Direct(ctx) => (
+                ctx.failure.clone(),
+                ctx.downstream.clone(),
+                Arc::clone(&ctx.listener),
+                dst_addr.clone(),
+            ),
+        };
     tokio::task::spawn(async move {
-        upgrade(req, action, dst_addr).await;
+        if let Err(failure) = upgrade(req, action).await {
+            let tunnel_err: TunnelError = match failure {
+                ConnectFailure::Upgrade(e) => TunnelError::HyperError(e),
+                ConnectFailure::Resolution(e) | ConnectFailure::DirectConnect(e) => {
+                    TunnelError::Direct(e)
+                }
+                ConnectFailure::EstablishProxyChain(e) => {
+                    TunnelError::EstablishProxyChain(Box::new(e))
+                }
+            };
+            let reporter = HttpFailureReporter {
+                failure: reporter_failure,
+                downstream: reporter_downstream,
+                listener: reporter_listener,
+            };
+            reporter.report(&tunnel_err, Some(&reporter_dst_addr.to_string()));
+        }
     });
 
     Ok(Response::new(empty()))
@@ -113,48 +152,26 @@ enum UpgradeAction {
     Proxy(ProxyContext),
     Direct(DirectContext),
 }
-#[instrument(skip_all, fields(addr = ?_dst_addr))]
-async fn upgrade(req: Request<Incoming>, action: UpgradeAction, _dst_addr: InternetAddr) {
-    let upgraded = match hyper::upgrade::on(req).await {
-        Ok(upgraded) => upgraded,
-        Err(_e) => {
-            return;
-        }
-    };
+#[instrument(skip_all)]
+async fn upgrade(req: Request<Incoming>, action: UpgradeAction) -> Result<(), ConnectFailure> {
+    let upgraded = hyper::upgrade::on(req)
+        .await
+        .map_err(ConnectFailure::Upgrade)?;
     match action {
         UpgradeAction::Direct(ctx) => {
-            direct(ctx, upgraded).await;
+            direct(ctx, upgraded).await?;
         }
         UpgradeAction::Proxy(ctx) => {
-            if let Err(e) = proxy(&ctx, upgraded).await {
-                let reporter = HttpFailureReporter {
-                    failure: ctx.failure.clone(),
-                    downstream: ctx.downstream.clone(),
-                    listener: Arc::clone(&ctx.listener),
-                };
-                let destination = match &e {
-                    ProxyError::EstablishProxyChain(inner) => match inner {
-                        StreamEstablishError::ConnectDestination {
-                            upstream_addr, ..
-                        }
-                        | StreamEstablishError::ConnectFirstProxyServer {
-                            upstream_addr, ..
-                        }
-                        | StreamEstablishError::WriteHeartbeatUpgrade {
-                            upstream_addr, ..
-                        }
-                        | StreamEstablishError::WriteStreamRequestHeader {
-                            upstream_addr, ..
-                        } => Some(upstream_addr.address.to_string()),
-                    },
-                };
-                let tunnel_err = match e {
-                    ProxyError::EstablishProxyChain(inner) => TunnelError::EstablishProxyChain(Box::new(inner)),
-                };
-                reporter.report(&tunnel_err, destination.as_deref());
-            }
+            proxy(&ctx, upgraded)
+                .await
+                .map_err(|e| match e {
+                    ProxyError::EstablishProxyChain(inner) => {
+                        ConnectFailure::EstablishProxyChain(inner)
+                    }
+                })?;
         }
     }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -169,34 +186,17 @@ struct DirectContext {
     pub listener: Arc<str>,
 }
 #[instrument(skip_all)]
-async fn direct(ctx: DirectContext, upgraded: Upgraded) {
-    let dst_sock_addrs = match ctx.dst_addr.to_socket_addrs().await {
-        Ok(sock_addr) => sock_addr,
-        Err(e) => {
-            let reporter = HttpFailureReporter {
-                failure: ctx.failure,
-                downstream: ctx.downstream,
-                listener: ctx.listener,
-            };
-            reporter.report(&TunnelError::Direct(e), Some(&ctx.dst_addr.to_string()));
-            return;
-        }
-    };
-    let (upstream, dst_sock_addr) = match ctx
+async fn direct(ctx: DirectContext, upgraded: Upgraded) -> Result<(), ConnectFailure> {
+    let dst_sock_addrs = ctx
+        .dst_addr
+        .to_socket_addrs()
+        .await
+        .map_err(ConnectFailure::Resolution)?;
+    let (upstream, dst_sock_addr) = ctx
         .connector_table
         .timed_connect_2(TCP_STREAM_TYPE, dst_sock_addrs.iter().copied(), TIMEOUT)
         .await
-    {
-        Ok(upstream) => upstream,
-        Err(e) => {
-            warn!(
-                ?e,
-                ?dst_sock_addrs,
-                "Failed to connect to upstream directly"
-            );
-            return;
-        }
-    };
+        .map_err(ConnectFailure::DirectConnect)?;
     let upstream_addr = StreamAddr {
         stream_type: ConcreteStreamType::Tcp.to_string().into(),
         address: ctx.dst_addr,
@@ -220,6 +220,7 @@ async fn direct(ctx: DirectContext, upgraded: Upgraded) {
     }
     .serve_as_access_server("HTTP CONNECT direct")
     .await;
+    Ok(())
 }
 
 #[derive(Debug)]

@@ -53,6 +53,16 @@ fn get_authority_from_req<T>(req: &Request<T>) -> Result<InternetAddr, TunnelErr
     authority_to_internet_addr(&authority, scheme)
 }
 
+fn authority_has_explicit_port(authority: &Authority) -> bool {
+    let authority = authority.as_str();
+    if authority.starts_with('[') {
+        return authority
+            .find(']')
+            .is_some_and(|closing_bracket| closing_bracket + 1 < authority.len());
+    }
+    authority.contains(':')
+}
+
 fn authority_to_internet_addr(
     authority: &Authority,
     scheme: Option<&str>,
@@ -64,7 +74,15 @@ fn authority_to_internet_addr(
         None => Some(DEFAULT_PORT_HTTP),
         _ => None,
     });
-    let port = port.ok_or(TunnelError::HttpNoPort)?;
+    let port = match port {
+        Some(p) => p,
+        None => {
+            if authority_has_explicit_port(authority) {
+                return Err(TunnelError::HttpInvalidPort(authority.to_string()));
+            }
+            return Err(TunnelError::HttpNoPort);
+        }
+    };
     Ok(InternetAddr::from_host_and_port(host, port)?)
 }
 
@@ -123,17 +141,26 @@ async fn direct(
     ctx: &HttpAccessConnContext,
     reporter: HttpFailureReporter,
 ) -> ReturnType {
+    let destination = dst_addr.address.to_string();
     let sock_addrs = dst_addr
         .address
         .to_socket_addrs()
         .await
-        .map_err(TunnelError::Direct)?;
+        .map_err(|e| {
+            let err = TunnelError::Direct(e);
+            reporter.report(&err, Some(&destination));
+            err
+        })?;
     let (upstream, _upstream_sock) = ctx
         .stream_context
         .connector_table
         .timed_connect_2(TCP_STREAM_TYPE, sock_addrs, TIMEOUT)
         .await
-        .map_err(TunnelError::Direct)?;
+        .map_err(|e| {
+            let err = TunnelError::Direct(e);
+            reporter.report(&err, Some(&destination));
+            err
+        })?;
     let dn_remote = reporter.downstream.remote;
     let session_guard = ctx.stream_context.session_table.as_ref().map(|s| {
         s.set_scope_owned(Session {
@@ -252,17 +279,10 @@ where
             err
         })?;
 
-    let bg_reporter_failure = Arc::clone(&reporter.failure);
-    let bg_downstream = reporter.downstream.clone();
-    let bg_listener = Arc::clone(&reporter.listener);
+    let bg_reporter = reporter.clone();
     tokio::task::spawn(async move {
         if let Err(e) = conn.await {
             let err = TunnelError::BackgroundConnection(e);
-            let bg_reporter = HttpFailureReporter {
-                failure: bg_reporter_failure,
-                downstream: bg_downstream,
-                listener: bg_listener,
-            };
             bg_reporter.report(&err, None);
         }
     });

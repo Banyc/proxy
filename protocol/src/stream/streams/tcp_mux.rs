@@ -2,7 +2,6 @@ use std::{
     io,
     net::SocketAddr,
     sync::{Arc, RwLock},
-    time::Instant,
 };
 
 use async_trait::async_trait;
@@ -90,6 +89,22 @@ where
         let mut accept_backoff = AcceptErrorBackoff::default();
         loop {
             trace!("Waiting for connection");
+            if let Some(delay) = accept_backoff.retry_delay() {
+                if delay > std::time::Duration::ZERO {
+                    tokio::select! {
+                        _ = tokio::time::sleep(delay) => {}
+                        res = set_conn_handler_rx.0.recv() => {
+                            let new_conn_handler = match res {
+                                Some(new_conn_handler) => new_conn_handler,
+                                None => break,
+                            };
+                            info!(?addr, "Connection handler set");
+                            conn_handler = Arc::new(new_conn_handler);
+                            continue;
+                        }
+                    }
+                }
+            }
             tokio::select! {
                 Some(res) = self.mux.join_next() => {
                     let e = res.unwrap();
@@ -102,18 +117,8 @@ where
                             res
                         }
                         Err(e) => {
-                            match accept_backoff.failed("tcp_mux", addr, e) {
-                                Ok(()) => {
-                                    if let Some(retry_at) = accept_backoff.retry_at() {
-                                        let now = Instant::now();
-                                        if retry_at > now {
-                                            tokio::time::sleep(retry_at - now).await;
-                                        }
-                                    }
-                                    continue;
-                                }
-                                Err(fatal) => return Err(ServeError::Accept { source: fatal, addr }),
-                            }
+                            let _ = accept_backoff.failed("tcp_mux", addr, e);
+                            continue;
                         }
                     };
                     counter!("stream.tcp_mux.tcp.accepts").increment(1);
