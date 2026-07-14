@@ -87,31 +87,16 @@ where
         let mut accept_backoff = AcceptErrorBackoff::default();
         loop {
             trace!("Waiting for connection");
-            if let Some(delay) = accept_backoff.retry_delay() {
-                if delay > std::time::Duration::ZERO {
-                    tokio::select! {
-                        _ = tokio::time::sleep(delay) => {}
-                        res = set_conn_handler_rx.0.recv() => {
-                            let new_conn_handler = match res {
-                                Some(new_conn_handler) => new_conn_handler,
-                                None => break,
-                            };
-                            info!(?addr, "Connection handler set");
-                            conn_handler = Arc::new(new_conn_handler);
-                            continue;
-                        }
-                    }
-                }
-            }
             tokio::select! {
+                _ = accept_backoff.wait_for_accept_retry(), if accept_backoff.retry_delay().is_some() => {}
                 res = self.listener.accept() => {
                     let (stream, _) = match res {
                         Ok(res) => {
-                            accept_backoff.reset();
+                            accept_backoff.accepted("tcp", addr);
                             res
                         }
                         Err(e) => {
-                            let _ = accept_backoff.failed("tcp", addr, e);
+                            accept_backoff.failed("tcp", addr, e).map_err(|e| ServeError::Accept { source: e, addr })?;
                             continue;
                         }
                     };

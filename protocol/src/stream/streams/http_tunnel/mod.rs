@@ -61,6 +61,11 @@ struct HttpFailureReporter {
 }
 
 impl HttpFailureReporter {
+    fn destination(&self) -> Option<String> {
+        self.failure.destination.get().cloned()
+            .or_else(|| self.failure.request.authority.clone())
+    }
+
     fn report(&self, error: &TunnelError, attempted_upstream: Option<&str>) {
         if self
             .failure
@@ -75,17 +80,18 @@ impl HttpFailureReporter {
         }
         let destination = self.failure.destination.get();
         let request = &self.failure.request;
+        let up = error.upstream_addr().map(|a| a.address.to_string());
         warn!(
             event = "http_tunnel_proxy_failed",
             error = %error,
-            downstream_remote = ?self.downstream.remote,
-            downstream_local = ?self.downstream.local,
-            attempted_upstream = ?attempted_upstream,
-            destination = ?destination,
+            dn = ?self.downstream.remote,
+            dn_local = ?self.downstream.local,
+            listener = %self.listener,
             method = %request.method,
             uri = %request.uri,
             host = ?request.host,
-            listener = %self.listener,
+            destination = ?destination,
+            up = ?up,
             "HTTP tunnel proxy failed"
         );
     }
@@ -290,6 +296,8 @@ where
             warn!(
                 event = "http_tunnel_proxy_failed",
                 error = %e,
+                dn = ?downstream_ctx.remote,
+                dn_local = ?downstream_ctx.local,
                 listener = %ctx.listen_addr,
                 "HTTP tunnel proxy top-level failure"
             );

@@ -129,18 +129,28 @@ impl AcceptErrorBackoff {
         self.retry_at
     }
 
-    pub(crate) fn reset(&mut self) {
-        let had_errors = self.error_count > 0;
-        let was_logged = self.logged;
+    pub(crate) fn accepted(&mut self, listener: &str, addr: SocketAddr) {
+        if self.error_count > 0 && !self.logged {
+            let elapsed = self
+                .started_at
+                .map(|start| Instant::now().duration_since(start))
+                .unwrap_or_default();
+            tracing::warn!(
+                error_count = self.error_count,
+                first_error = %self.first_error.as_deref().unwrap_or("?"),
+                last_error = %self.last_error.as_deref().unwrap_or("?"),
+                elapsed_ms = elapsed.as_millis(),
+                listener,
+                %addr,
+                "Listener accept recovered after error streak"
+            );
+        }
         self.error_count = 0;
         self.started_at = None;
         self.first_error = None;
         self.last_error = None;
         self.logged = false;
         self.retry_at = None;
-        if had_errors && was_logged {
-            tracing::info!("Listener accept recovered after error streak");
-        }
     }
 }
 
@@ -220,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_clears_state_and_emits_recovery_if_logged() {
+    fn accepted_clears_state_after_logged_error_streak() {
         let mut backoff = AcceptErrorBackoff::default();
         let addr = "127.0.0.1:1234".parse().unwrap();
         for _ in 0..3 {
@@ -228,20 +238,20 @@ mod tests {
             let _ = backoff.failed("tcp", addr, err);
         }
         assert!(backoff.logged);
-        backoff.reset();
+        backoff.accepted("tcp", addr);
         assert_eq!(backoff.error_count, 0);
         assert!(backoff.first_error.is_none());
         assert!(!backoff.logged);
     }
 
     #[test]
-    fn reset_without_logged_errors_does_not_emit_recovery() {
+    fn accepted_clears_state_when_streak_not_yet_logged() {
         let mut backoff = AcceptErrorBackoff::default();
         let addr = "127.0.0.1:1234".parse().unwrap();
-        let err = io::Error::new(io::ErrorKind::WouldBlock, "test");
-        let _ = backoff.failed("tcp", addr, err);
+        let _ = backoff.failed("tcp", addr, io::Error::new(io::ErrorKind::WouldBlock, "test"));
         assert!(!backoff.logged);
-        backoff.reset();
+        backoff.accepted("tcp", addr);
         assert_eq!(backoff.error_count, 0);
+        assert!(!backoff.logged);
     }
 }

@@ -873,6 +873,8 @@ mod migrating_tests {
 
         let received = Arc::new(Mutex::new(Vec::<u8>::new()));
         let received2 = received.clone();
+        let peer_done = Arc::new(tokio::sync::Notify::new());
+        let peer_done2 = peer_done.clone();
         tokio::spawn(async move {
             let mut mac = srv_accepter.into_migrating_only();
             let accepted = mac.accept().await.unwrap();
@@ -882,6 +884,7 @@ mod migrating_tests {
                     let mut buf = Vec::new();
                     reader.read_to_end(&mut buf).await.unwrap();
                     *received2.lock().unwrap() = buf;
+                    peer_done2.notify_one();
                 }
                 _ => panic!("expected migrating stream"),
             }
@@ -896,38 +899,44 @@ mod migrating_tests {
         };
         let mut conn = MigratingConnStream::new(writer, reader_rx, addr);
 
-        let chunk = vec![0xAAu8; MIGRATING_WRITE_MAX_CHUNK];
+        let large_chunk = vec![0xAAu8; MIGRATING_WRITE_MAX_CHUNK];
         for _ in 0..MIGRATING_WRITE_QUEUE_CAPACITY {
-            conn.write_all(&chunk).await.unwrap();
+            tokio::io::AsyncWriteExt::write(&mut conn, &large_chunk).await.unwrap();
         }
 
-        let deadline = tokio::time::sleep(std::time::Duration::from_millis(500));
-        tokio::pin!(deadline);
-        let cancel_result = tokio::select! {
-            res = conn.write_all(&chunk) => Some(res),
-            () = &mut deadline => None,
-        };
-        assert!(
-            cancel_result.is_none(),
-            "pending large write was cancelled by deadline"
-        );
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Manual poll to exercise cancellation path
+        {
+            let mut conn_pin = std::pin::pin!(&mut conn);
+            let waker = futures::task::noop_waker();
+            let mut cx = std::task::Context::from_waker(&waker);
+            let poll_result = std::pin::Pin::new(&mut conn_pin)
+                .poll_write(&mut cx, &large_chunk);
+            assert!(
+                matches!(poll_result, std::task::Poll::Pending),
+                "bounded command queue should return Pending when full"
+            );
+        }
 
         let small = b"hello, world!";
-        conn.write_all(small).await.unwrap();
+        let small_written = conn.write(small).await.unwrap();
+        assert_eq!(small_written, small.len(), "small write should return exact length");
 
         conn.shutdown().await.unwrap();
 
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        tokio::time::timeout(Duration::from_secs(2), peer_done.notified())
+            .await
+            .expect("peer should receive data within timeout");
+
         let received = received.lock().unwrap().clone();
+        let expected_large = large_chunk.repeat(MIGRATING_WRITE_QUEUE_CAPACITY);
+        assert_eq!(received.len(), expected_large.len() + small.len());
         assert!(
-            received.ends_with(small),
-            "received bytes should end with small write"
+            received.starts_with(&expected_large),
+            "received data should start with accepted large-write bytes"
         );
         assert!(
-            received.len() > small.len(),
-            "should have received more than just the small write"
+            received.ends_with(small),
+            "received data should end with small write bytes"
         );
     }
 }
