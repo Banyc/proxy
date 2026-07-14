@@ -18,11 +18,7 @@ use mux::{
 };
 use serde::Deserialize;
 use thiserror::Error;
-use tokio::{
-    net::ToSocketAddrs,
-    sync::Notify,
-    task::JoinSet,
-};
+use tokio::{net::ToSocketAddrs, sync::Notify, task::JoinSet};
 use tracing::{debug, info, instrument, trace, warn};
 
 use common::{
@@ -86,7 +82,24 @@ const fn dual_lane_frame_delivery() -> FrameDelivery {
     FrameDelivery::enabled()
 }
 
+struct AdmittedLane {
+    read: ReadStream,
+    write: WriteStream,
+    config: mux::MuxConfig,
+    expected_class: LaneClass,
+    peer: SocketAddr,
+    local_addr: SocketAddr,
+    permit: PendingLanePermit,
+}
+
 struct PendingLane {
+    pending: mux::PendingAcceptor,
+    peer: SocketAddr,
+    local_addr: SocketAddr,
+    _permit: PendingLanePermit,
+}
+
+struct PreparedLane {
     pending: mux::PendingAcceptor,
     peer: SocketAddr,
     local_addr: SocketAddr,
@@ -104,7 +117,7 @@ struct ConnectedDualLane {
     addr_pair: SocketAddrPair,
     nonce: PairingNonce,
     connected_at: Instant,
-    opened_streams: std::cell::Cell<u64>,
+    opened_streams: u64,
 }
 
 struct ConnectedDualLaneBirth {
@@ -112,8 +125,9 @@ struct ConnectedDualLaneBirth {
     supervisor: JoinSet<MuxError>,
 }
 
-type DualLaneDial =
-    Pin<Box<dyn Future<Output = (SocketAddr, io::Result<ConnectedDualLaneBirth>)> + Send + 'static>>;
+type DualLaneDial = Pin<
+    Box<dyn Future<Output = (SocketAddr, io::Result<ConnectedDualLaneBirth>)> + Send + 'static>,
+>;
 
 type DualLaneDialResult =
     Pin<Box<dyn Future<Output = io::Result<ConnectedDualLaneBirth>> + Send + 'static>>;
@@ -179,8 +193,42 @@ enum PendingLaneEntry {
     Ready {
         lane: PendingLane,
         expires_at: Instant,
-        permit: PendingLanePermit,
     },
+}
+
+enum ExpiredPendingLane {
+    Building {
+        nonce: PairingNonce,
+        peer: SocketAddr,
+        local_addr: SocketAddr,
+        class: LaneClass,
+        ready: Arc<Notify>,
+        _permit: PendingLanePermit,
+    },
+    Ready {
+        nonce: PairingNonce,
+        lane: PendingLane,
+    },
+}
+
+impl PendingLaneEntry {
+    fn peer(&self) -> SocketAddr {
+        match self {
+            Self::Building { peer, .. } => *peer,
+            Self::Ready { lane, .. } => lane.peer,
+        }
+    }
+    fn class(&self) -> LaneClass {
+        match self {
+            Self::Building { class, .. } => *class,
+            Self::Ready { lane, .. } => lane.pending.class,
+        }
+    }
+    fn expires_at(&self) -> Instant {
+        match self {
+            Self::Building { expires_at, .. } | Self::Ready { expires_at, .. } => *expires_at,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -196,19 +244,85 @@ struct PendingLaneRegistry {
     changed: Notify,
 }
 
-#[derive(Clone, Debug)]
-struct RejectionSample {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum LaneRejectionClass {
+    Capacity,
+    HelloTimeout,
+    HelloParse,
+    ClassMismatch,
+    Admission,
+    PairingTimeout,
+    BirthHeartbeat,
+    ReservationLost,
+}
+
+#[derive(Debug, Clone)]
+struct RejectedLaneContext {
+    class: LaneRejectionClass,
     peer: SocketAddr,
-    local: SocketAddr,
-    class: LaneClass,
+    local_addr: SocketAddr,
+    expected_class: Option<LaneClass>,
     reason: String,
 }
 
-struct RejectionTracker {
-    last_log: Instant,
-    counts: HashMap<String, usize>,
-    first: Option<RejectionSample>,
-    last: Option<RejectionSample>,
+#[derive(Debug, Default)]
+struct LaneRejectionSummary {
+    total: u64,
+    by_class: HashMap<LaneRejectionClass, u64>,
+    first: Option<RejectedLaneContext>,
+    last: Option<RejectedLaneContext>,
+}
+
+#[derive(Debug, Default)]
+struct LaneRejectionLogInner {
+    summary: Mutex<LaneRejectionSummary>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct LaneRejectionLog {
+    inner: Arc<LaneRejectionLogInner>,
+}
+
+impl LaneRejectionLog {
+    fn record(&self, context: RejectedLaneContext) {
+        let mut summary = self.inner.summary.lock().unwrap();
+        summary.total = summary.total.saturating_add(1);
+        *summary.by_class.entry(context.class).or_default() = summary
+            .by_class
+            .get(&context.class)
+            .copied()
+            .unwrap_or_default()
+            .saturating_add(1);
+        summary.first.get_or_insert_with(|| context.clone());
+        summary.last = Some(context);
+    }
+    fn flush(&self) {
+        let summary = {
+            let mut summary = self.inner.summary.lock().unwrap();
+            if summary.total == 0 {
+                return;
+            }
+            std::mem::take(&mut *summary)
+        };
+        let first = summary.first.unwrap();
+        let last = summary.last.unwrap();
+        warn!(
+            event = "rtp_mux_lane_rejected",
+            rejected = summary.total,
+            rejection_classes = ?summary.by_class,
+            first_class = ?first.class,
+            first_dn = ?first.peer,
+            first_dn_local = ?first.local_addr,
+            first_expected_class = ?first.expected_class,
+            first_reason = %first.reason,
+            last_class = ?last.class,
+            last_dn = ?last.peer,
+            last_dn_local = ?last.local_addr,
+            last_expected_class = ?last.expected_class,
+            last_reason = %last.reason,
+            "Rejected RTP mux lanes"
+        );
+    }
 }
 
 impl PendingLaneRegistry {
@@ -219,164 +333,215 @@ impl PendingLaneRegistry {
         })
     }
 
-    fn new_rejection_tracker() -> Mutex<RejectionTracker> {
-        Mutex::new(RejectionTracker {
-            last_log: Instant::now(),
-            counts: HashMap::new(),
-            first: None,
-            last: None,
-        })
-    }
-
-    fn try_acquire(self: &Arc<Self>, peer: IpAddr) -> Option<PendingLanePermit> {
+    fn try_acquire(self: &Arc<Self>, peer: IpAddr) -> Result<PendingLanePermit, &'static str> {
         let mut state = self.state.lock().unwrap();
         if state.admitted >= MAX_PENDING_LANES {
-            return None;
+            return Err("total pending lane capacity exhausted");
         }
         let count = state.per_peer.get(&peer).copied().unwrap_or(0);
         if count >= MAX_PENDING_LANES_PER_PEER {
-            return None;
+            return Err("per-peer pending lane capacity exhausted");
         }
         state.admitted += 1;
         state.per_peer.insert(peer, count + 1);
-        Some(PendingLanePermit {
+        Ok(PendingLanePermit {
             registry: Arc::downgrade(self),
             peer,
         })
     }
 
     fn admit(
-        self: &Arc<Self>,
+        &self,
         nonce: PairingNonce,
+        class: LaneClass,
         peer: SocketAddr,
         local_addr: SocketAddr,
-        class: LaneClass,
         permit: &mut Option<PendingLanePermit>,
     ) -> PendingLaneAdmission {
         let mut state = self.state.lock().unwrap();
-        let expires_at = Instant::now() + PAIRING_DEADLINE;
-
-        match state.entries.entry(nonce) {
-            hash_map::Entry::Occupied(mut existing) => match existing.get_mut() {
-                PendingLaneEntry::Building {
-                    peer: existing_peer,
-                    class: existing_class,
-                    ready,
-                    pair_waiting,
-                    ..
-                } => {
-                    if peer.ip() != existing_peer.ip() {
-                        return PendingLaneAdmission::Reject("foreign peer nonce");
-                    }
-                    if class == *existing_class {
-                        return PendingLaneAdmission::Reject("duplicate class");
-                    }
-                    if *pair_waiting {
-                        return PendingLaneAdmission::Reject("duplicate waiter");
-                    }
-                    *pair_waiting = true;
-                    PendingLaneAdmission::Wait {
-                        ready: Arc::clone(ready),
-                        expires_at,
-                    }
+        if let Some(entry) = state.entries.get_mut(&nonce) {
+            if entry.peer().ip() != peer.ip() {
+                return PendingLaneAdmission::Reject("pairing nonce peer mismatch");
+            }
+            if entry.class() == class {
+                return PendingLaneAdmission::Reject("duplicate lane class for pairing nonce");
+            }
+            if let PendingLaneEntry::Building {
+                ready,
+                expires_at,
+                pair_waiting,
+                ..
+            } = entry
+            {
+                if *pair_waiting {
+                    return PendingLaneAdmission::Reject(
+                        "opposite lane is already waiting for pairing",
+                    );
                 }
-                PendingLaneEntry::Ready { .. } => {
-                    let entry = existing.remove();
-                    match entry {
-                        PendingLaneEntry::Ready {
-                            lane, expires_at, ..
-                        } => PendingLaneAdmission::Pair { lane, expires_at },
-                        _ => unreachable!(),
-                    }
-                }
-            },
-            hash_map::Entry::Vacant(e) => {
-                let p = match permit.take() {
-                    Some(p) => p,
-                    None => return PendingLaneAdmission::Reject("no permit available"),
+                *pair_waiting = true;
+                return PendingLaneAdmission::Wait {
+                    ready: Arc::clone(ready),
+                    expires_at: *expires_at,
                 };
-                let entry = PendingLaneEntry::Building {
+            }
+            if matches!(
+                state.entries.get(&nonce),
+                Some(PendingLaneEntry::Ready { .. })
+            ) {
+                let PendingLaneEntry::Ready { lane, expires_at } =
+                    state.entries.remove(&nonce).unwrap()
+                else {
+                    unreachable!()
+                };
+                drop(state);
+                self.changed.notify_one();
+                return PendingLaneAdmission::Pair { lane, expires_at };
+            }
+            unreachable!()
+        }
+        let ready = Arc::new(Notify::new());
+        state.entries.insert(
+            nonce,
+            PendingLaneEntry::Building {
+                peer,
+                local_addr,
+                class,
+                expires_at: Instant::now() + PAIRING_DEADLINE,
+                ready,
+                pair_waiting: false,
+                permit: permit
+                    .take()
+                    .expect("accepted RTP mux lane must retain its admission permit"),
+            },
+        );
+        drop(state);
+        self.changed.notify_one();
+        PendingLaneAdmission::Reserved
+    }
+
+    fn finish_reservation(
+        &self,
+        nonce: PairingNonce,
+        lane: PreparedLane,
+    ) -> Result<(), PreparedLane> {
+        let mut state = self.state.lock().unwrap();
+        let Some(entry) = state.entries.remove(&nonce) else {
+            return Err(lane);
+        };
+        let PendingLaneEntry::Building {
+            peer,
+            local_addr,
+            class,
+            expires_at,
+            ready,
+            pair_waiting,
+            permit,
+        } = entry
+        else {
+            state.entries.insert(nonce, entry);
+            return Err(lane);
+        };
+        if peer != lane.peer || class != lane.pending.class {
+            state.entries.insert(
+                nonce,
+                PendingLaneEntry::Building {
                     peer,
                     local_addr,
                     class,
                     expires_at,
-                    ready: Arc::new(Notify::new()),
-                    pair_waiting: false,
-                    permit: p,
-                };
-                e.insert(entry);
-                self.changed.notify_one();
-                PendingLaneAdmission::Reserved
-            }
+                    ready,
+                    pair_waiting,
+                    permit,
+                },
+            );
+            return Err(lane);
         }
+        let lane = PendingLane {
+            pending: lane.pending,
+            peer: lane.peer,
+            local_addr: lane.local_addr,
+            _permit: permit,
+        };
+        state
+            .entries
+            .insert(nonce, PendingLaneEntry::Ready { lane, expires_at });
+        drop(state);
+        ready.notify_one();
+        self.changed.notify_one();
+        Ok(())
     }
 
-    fn fulfill(
-        self: &Arc<Self>,
-        nonce: PairingNonce,
-        class: LaneClass,
-        peer: SocketAddr,
-        pending_lane: PendingLane,
-    ) -> Option<(PendingLane, PendingLane)> {
+    fn restore_ready(&self, nonce: PairingNonce, lane: PendingLane, expires_at: Instant) {
         let mut state = self.state.lock().unwrap();
-        let expires_at = Instant::now() + PAIRING_DEADLINE;
-
-        match state.entries.remove(&nonce) {
-            Some(PendingLaneEntry::Building {
-                ready,
-                pair_waiting,
-                peer: b_peer,
-                class: b_class,
-                permit,
-                ..
-            }) => {
-                if b_peer != peer || b_class != class {
-                    drop(permit);
-                    return None;
-                }
-                if pair_waiting {
-                    ready.notify_one();
-                }
-                state.entries.insert(
-                    nonce,
-                    PendingLaneEntry::Ready {
-                        lane: pending_lane,
-                        expires_at,
-                        permit,
-                    },
-                );
-                self.changed.notify_one();
-                None
-            }
-            Some(PendingLaneEntry::Ready {
-                lane: other, ..
-            }) => {
-                self.changed.notify_one();
-                Some((pending_lane, other))
-            }
-            None => None,
+        if state.entries.contains_key(&nonce) {
+            drop(state);
+            drop(lane);
+            return;
         }
+        state
+            .entries
+            .insert(nonce, PendingLaneEntry::Ready { lane, expires_at });
+        drop(state);
+        self.changed.notify_one();
     }
 
-    fn expire(&self) -> Vec<(PairingNonce, PendingLaneEntry)> {
+    fn cancel_reservation(&self, nonce: PairingNonce, peer: SocketAddr, class: LaneClass) {
         let mut state = self.state.lock().unwrap();
-        let now = Instant::now();
+        let should_remove = state.entries.get(&nonce).is_some_and(|entry| {
+            matches!(entry, PendingLaneEntry::Building { .. })
+                && entry.peer() == peer
+                && entry.class() == class
+        });
+        if !should_remove {
+            return;
+        }
+        let entry = state.entries.remove(&nonce).unwrap();
+        drop(state);
+        if let PendingLaneEntry::Building { ready, .. } = entry {
+            ready.notify_one();
+        }
+        self.changed.notify_one();
+    }
+
+    fn next_expiry(&self) -> Option<Instant> {
+        let state = self.state.lock().unwrap();
+        state.entries.values().map(|e| e.expires_at()).min()
+    }
+
+    fn expire(&self, now: Instant) -> Vec<ExpiredPendingLane> {
+        let mut state = self.state.lock().unwrap();
         let expired: Vec<PairingNonce> = state
             .entries
             .iter()
-            .filter(|(_, e)| {
-                let expires_at = match e {
-                    PendingLaneEntry::Building { expires_at, .. } => *expires_at,
-                    PendingLaneEntry::Ready { expires_at, .. } => *expires_at,
-                };
-                expires_at <= now
-            })
+            .filter(|(_, e)| e.expires_at() <= now)
             .map(|(k, _)| *k)
             .collect();
         let mut removed = Vec::new();
-        for k in &expired {
-            if let Some(entry) = state.entries.remove(k) {
-                removed.push((*k, entry));
+        for nonce in &expired {
+            if let Some(entry) = state.entries.remove(nonce) {
+                match entry {
+                    PendingLaneEntry::Building {
+                        peer,
+                        local_addr,
+                        class,
+                        ready,
+                        permit,
+                        ..
+                    } => removed.push(ExpiredPendingLane::Building {
+                        nonce: *nonce,
+                        peer,
+                        local_addr,
+                        class,
+                        ready,
+                        _permit: permit,
+                    }),
+                    PendingLaneEntry::Ready { lane, .. } => {
+                        removed.push(ExpiredPendingLane::Ready {
+                            nonce: *nonce,
+                            lane,
+                        });
+                    }
+                }
             }
         }
         removed
@@ -446,41 +611,20 @@ where
 
         let mut conn_handler = Arc::new(self.conn_handler);
         let registry = PendingLaneRegistry::new();
-        let rejection_tracker = Arc::new(PendingLaneRegistry::new_rejection_tracker());
+        let rejections = LaneRejectionLog::default();
         let mut interactive_backoff = AcceptErrorBackoff::default();
         let mut bulk_backoff = AcceptErrorBackoff::default();
 
-        let mut housekeeping = {
+        {
             let registry = Arc::clone(&registry);
-            let rejection_tracker = Arc::clone(&rejection_tracker);
-            tokio::spawn(async move {
-                let mut tick = tokio::time::interval(ADMISSION_REJECTION_LOG_INTERVAL);
-                loop {
-                    tokio::select! {
-                        () = registry.changed.notified() => {}
-                        _now = tick.tick() => {}
-                    }
-                    let expired = registry.expire();
-                    if !expired.is_empty() {
-                        counter!("stream.rtp_mux.pairing_timeout").increment(expired.len() as u64);
-                    }
-                    let mut rt = rejection_tracker.lock().unwrap();
-                    if rt.last_log.elapsed() >= ADMISSION_REJECTION_LOG_INTERVAL && !rt.counts.is_empty() {
-                        let counts: Vec<_> = rt.counts.drain().collect();
-                        warn!(
-                            ?counts,
-                            first_rejection = ?rt.first,
-                            last_rejection = ?rt.last,
-                            interval_secs = ADMISSION_REJECTION_LOG_INTERVAL.as_secs(),
-                            "RTP mux lane rejection summary"
-                        );
-                        rt.first = None;
-                        rt.last = None;
-                        rt.last_log = Instant::now();
-                    }
+            let rejections = rejections.clone();
+            self.mux.spawn(async move {
+                run_pending_lane_expiry(registry, rejections).await;
+                MuxError::TaskStopped {
+                    task: "pending_lane_expiry",
                 }
-            })
-        };
+            });
+        }
 
         loop {
             trace!("Waiting for connection");
@@ -494,11 +638,8 @@ where
                         Err(e) => warn!(?e, ?addr, "MUX supervision task failed to join"),
                     }
                 }
-                res = &mut housekeeping => {
-                    match res {
-                        Ok(()) => return Err(ServeError::PairingHousekeepingStopped),
-                        Err(source) => return Err(ServeError::PairingHousekeepingJoin { source }),
-                    }
+                _ = tokio::time::sleep(ADMISSION_REJECTION_LOG_INTERVAL) => {
+                    rejections.flush();
                 }
                 res = self.interactive_listener.accept_without_handshake_with_mss_fec_tuning_and_frame_delivery(
                     self.fec,
@@ -528,15 +669,24 @@ where
                     let config = interactive_server_mux_config();
                     let expected_class = LaneClass::Interactive;
                     let permit = match registry.try_acquire(peer.ip()) {
-                        Some(p) => p,
-                        None => {
-                            record_rejection(&rejection_tracker, expected_class, "permit_denied", peer, addr);
+                        Ok(p) => p,
+                        Err(reason) => {
+                            rejections.record(RejectedLaneContext {
+                                class: LaneRejectionClass::Capacity,
+                                peer,
+                                local_addr: addr,
+                                expected_class: Some(expected_class),
+                                reason: reason.to_string(),
+                            });
                             continue;
                         }
                     };
+                    let admitted = AdmittedLane {
+                        read: r, write: w, config, expected_class, peer, local_addr: addr, permit,
+                    };
                     spawn_lane_accept(
-                        r, w, config, conn_handler.clone(), expected_class, peer, addr,
-                        Arc::clone(&registry), permit, Arc::clone(&rejection_tracker),
+                        admitted, conn_handler.clone(),
+                        Arc::clone(&registry), rejections.clone(),
                     );
                 }
                 res = self._bulk_listener.accept_without_handshake_with_mss_fec_tuning_and_frame_delivery(
@@ -567,15 +717,24 @@ where
                     let config = bulk_server_mux_config();
                     let expected_class = LaneClass::Bulk;
                     let permit = match registry.try_acquire(peer.ip()) {
-                        Some(p) => p,
-                        None => {
-                            record_rejection(&rejection_tracker, expected_class, "permit_denied", peer, bulk_addr);
+                        Ok(p) => p,
+                        Err(reason) => {
+                            rejections.record(RejectedLaneContext {
+                                class: LaneRejectionClass::Capacity,
+                                peer,
+                                local_addr: bulk_addr,
+                                expected_class: Some(expected_class),
+                                reason: reason.to_string(),
+                            });
                             continue;
                         }
                     };
+                    let admitted = AdmittedLane {
+                        read: r, write: w, config, expected_class, peer, local_addr: bulk_addr, permit,
+                    };
                     spawn_lane_accept(
-                        r, w, config, conn_handler.clone(), expected_class, peer, bulk_addr,
-                        Arc::clone(&registry), permit, Arc::clone(&rejection_tracker),
+                        admitted, conn_handler.clone(),
+                        Arc::clone(&registry), rejections.clone(),
                     );
                 }
                 res = set_conn_handler_rx.0.recv() => {
@@ -588,114 +747,82 @@ where
                 }
             }
         }
-        housekeeping.abort();
         Ok(())
     }
 }
 
-fn record_rejection(
-    tracker: &Mutex<RejectionTracker>,
-    class: LaneClass,
-    reason: &str,
-    peer: SocketAddr,
-    local: SocketAddr,
-) {
-    let mut rt = tracker.lock().unwrap();
-    let key = format!("{class:?}:{reason}");
-    *rt.counts.entry(key).or_insert(0) += 1;
-    let sample = RejectionSample {
-        peer,
-        local,
-        class,
-        reason: reason.to_string(),
-    };
-    if rt.first.is_none() {
-        rt.first = Some(sample.clone());
-    }
-    rt.last = Some(sample);
-}
-
-fn pair_and_spawn(
-    a_lane: PendingLane,
-    b_lane: PendingLane,
-    conn_handler: Arc<impl StreamServerHandleConn + Send + Sync + 'static>,
-    nonce: PairingNonce,
-) {
-    counter!("stream.rtp_mux.paired").increment(1);
-    let a_peer = a_lane.peer;
-    let a_local = a_lane.local_addr;
-    let a_class = a_lane.pending.class;
-    let b_peer = b_lane.peer;
-    let b_local = b_lane.local_addr;
-    let addrs = classify_lane_addrs(a_class, a_peer, a_local, b_peer, b_local);
-    pair_lanes(a_lane, b_lane, conn_handler, addrs, nonce);
-}
-
 fn spawn_lane_accept(
-    mut r: ReadStream,
-    mut w: WriteStream,
-    config: mux::MuxConfig,
+    admitted: AdmittedLane,
     conn_handler: Arc<impl StreamServerHandleConn + Send + Sync + 'static>,
-    expected_class: LaneClass,
-    peer: SocketAddr,
-    local_addr: SocketAddr,
     registry: Arc<PendingLaneRegistry>,
-    permit: PendingLanePermit,
-    rejection_tracker: Arc<Mutex<RejectionTracker>>,
+    rejections: LaneRejectionLog,
 ) {
+    let AdmittedLane {
+        mut read,
+        mut write,
+        config,
+        expected_class,
+        peer,
+        local_addr,
+        permit,
+    } = admitted;
     tokio::spawn(async move {
         let started = Instant::now();
-        let (class, nonce) = match tokio::time::timeout(HELLO_DEADLINE, read_lane_hello(&mut r))
-            .await
-        {
-            Ok(Ok(x)) => x,
-            Err(_) => {
-                let elapsed = started.elapsed();
-                record_rejection(
-                    &rejection_tracker,
-                    expected_class,
-                    "hello_deadline",
-                    peer,
-                    local_addr,
-                );
-                signal_rejected_lane(&mut w, peer, local_addr, expected_class, elapsed, "hello deadline elapsed")
+        let (class, nonce) =
+            match tokio::time::timeout(HELLO_DEADLINE, read_lane_hello(&mut read)).await {
+                Ok(Ok(x)) => x,
+                Err(_) => {
+                    let elapsed = started.elapsed();
+                    signal_rejected_lane(
+                        &mut write,
+                        &rejections,
+                        RejectedLaneContext {
+                            class: LaneRejectionClass::HelloTimeout,
+                            peer,
+                            local_addr,
+                            expected_class: Some(expected_class),
+                            reason: "hello deadline elapsed".to_string(),
+                        },
+                        elapsed,
+                    )
                     .await;
-                drop(permit);
-                counter!("stream.rtp_mux.hello_timeout").increment(1);
-                return;
-            }
-            Ok(Err(e)) => {
-                let elapsed = started.elapsed();
-                record_rejection(
-                    &rejection_tracker,
-                    expected_class,
-                    "hello_read_error",
-                    peer,
-                    local_addr,
-                );
-                signal_rejected_lane(&mut w, peer, local_addr, expected_class, elapsed, &format!("hello read/parse error: {e:?}"))
+                    drop(permit);
+                    counter!("stream.rtp_mux.hello_timeout").increment(1);
+                    return;
+                }
+                Ok(Err(e)) => {
+                    let elapsed = started.elapsed();
+                    signal_rejected_lane(
+                        &mut write,
+                        &rejections,
+                        RejectedLaneContext {
+                            class: LaneRejectionClass::HelloParse,
+                            peer,
+                            local_addr,
+                            expected_class: Some(expected_class),
+                            reason: format!("hello read/parse error: {e:?}"),
+                        },
+                        elapsed,
+                    )
                     .await;
-                drop(permit);
-                counter!("stream.rtp_mux.hello_timeout").increment(1);
-                return;
-            }
-        };
+                    drop(permit);
+                    counter!("stream.rtp_mux.hello_timeout").increment(1);
+                    return;
+                }
+            };
         let elapsed = started.elapsed();
         if class != expected_class {
-            record_rejection(
-                &rejection_tracker,
-                expected_class,
-                "class_mismatch",
-                peer,
-                local_addr,
-            );
             signal_rejected_lane(
-                &mut w,
-                peer,
-                local_addr,
-                expected_class,
+                &mut write,
+                &rejections,
+                RejectedLaneContext {
+                    class: LaneRejectionClass::ClassMismatch,
+                    peer,
+                    local_addr,
+                    expected_class: Some(expected_class),
+                    reason: format!("lane class mismatch: got {class:?}"),
+                },
                 elapsed,
-                &format!("lane class mismatch: got {class:?}"),
             )
             .await;
             drop(permit);
@@ -704,30 +831,69 @@ fn spawn_lane_accept(
         }
 
         let mut permit_opt = Some(permit);
-        let admission = registry.admit(nonce, peer, local_addr, class, &mut permit_opt);
+        let admission = registry.admit(nonce, class, peer, local_addr, &mut permit_opt);
 
         match admission {
             PendingLaneAdmission::Reserved => {
-                if !write_birth_heartbeat_ok(&mut w, peer, local_addr, expected_class, &rejection_tracker).await {
-                    return;
+                match write_birth_heartbeat_result(&mut write).await {
+                    Err(elapsed) => {
+                        registry.cancel_reservation(nonce, peer, class);
+                        signal_rejected_lane(
+                            &mut write,
+                            &rejections,
+                            RejectedLaneContext {
+                                class: LaneRejectionClass::BirthHeartbeat,
+                                peer,
+                                local_addr,
+                                expected_class: Some(expected_class),
+                                reason: "birth heartbeat failed after reservation".to_string(),
+                            },
+                            elapsed,
+                        )
+                        .await;
+                        counter!("stream.rtp_mux.birth_heartbeat_error").increment(1);
+                        return;
+                    }
+                    Ok(()) => {}
                 }
 
                 let mut lane_spawner = JoinSet::new();
-                let (opener, accepter) = spawn_mux_no_reconnection(r, w, config, &mut lane_spawner);
-                let pending_lane = PendingLane {
-                    pending: mux::PendingAcceptor::new(class, nonce, opener, accepter, lane_spawner),
+                let (opener, accepter) =
+                    spawn_mux_no_reconnection(read, write, config, &mut lane_spawner);
+                let prepared = PreparedLane {
+                    pending: mux::PendingAcceptor::new(
+                        class,
+                        nonce,
+                        opener,
+                        accepter,
+                        lane_spawner,
+                    ),
                     peer,
                     local_addr,
                 };
 
-                let result = registry.fulfill(nonce, class, peer, pending_lane);
-                if let Some((a_lane, b_lane)) = result {
-                    pair_and_spawn(a_lane, b_lane, conn_handler, nonce);
-                }
+                let _ = registry.finish_reservation(nonce, prepared);
             }
             PendingLaneAdmission::Wait { ready, expires_at } => {
-                if !write_birth_heartbeat_ok(&mut w, peer, local_addr, expected_class, &rejection_tracker).await {
-                    return;
+                match write_birth_heartbeat_result(&mut write).await {
+                    Err(elapsed) => {
+                        signal_rejected_lane(
+                            &mut write,
+                            &rejections,
+                            RejectedLaneContext {
+                                class: LaneRejectionClass::BirthHeartbeat,
+                                peer,
+                                local_addr,
+                                expected_class: Some(expected_class),
+                                reason: "birth heartbeat failed while waiting".to_string(),
+                            },
+                            elapsed,
+                        )
+                        .await;
+                        counter!("stream.rtp_mux.birth_heartbeat_error").increment(1);
+                        return;
+                    }
+                    Ok(()) => {}
                 }
 
                 loop {
@@ -739,46 +905,66 @@ fn spawn_lane_accept(
 
                     match notified {
                         Err(_elapsed) => {
-                            let kill_result = w.send_kill_and_abort().await;
-                            warn!(
-                                ?kill_result,
-                                dn = ?peer,
-                                dn_local = ?local_addr,
-                                ?expected_class,
-                                "RTP mux lane wait expired; sending kill"
-                            );
-                            record_rejection(
-                                &rejection_tracker,
-                                expected_class,
-                                "pairing_deadline",
-                                peer,
-                                local_addr,
-                            );
+                            signal_rejected_lane(
+                                &mut write,
+                                &rejections,
+                                RejectedLaneContext {
+                                    class: LaneRejectionClass::PairingTimeout,
+                                    peer,
+                                    local_addr,
+                                    expected_class: Some(expected_class),
+                                    reason: "pairing deadline expired while waiting".to_string(),
+                                },
+                                started.elapsed(),
+                            )
+                            .await;
                             counter!("stream.rtp_mux.pairing_timeout").increment(1);
                             return;
                         }
                         Ok(()) => {
-                            let mut lane_spawner = JoinSet::new();
-                            let (opener, accepter) = spawn_mux_no_reconnection(r, w, config, &mut lane_spawner);
-                            let pending_lane = PendingLane {
-                                pending: mux::PendingAcceptor::new(class, nonce, opener, accepter, lane_spawner),
-                                peer,
-                                local_addr,
-                            };
-
-                            match registry.fulfill(nonce, class, peer, pending_lane) {
-                                Some((a_lane, b_lane)) => {
-                                    pair_and_spawn(a_lane, b_lane, conn_handler, nonce);
-                                    return;
-                                }
-                                None => {
-                                    record_rejection(
-                                        &rejection_tracker,
-                                        expected_class,
-                                        "reservation_lost",
+                            let admission =
+                                registry.admit(nonce, class, peer, local_addr, &mut None);
+                            match admission {
+                                PendingLaneAdmission::Pair {
+                                    lane: other_lane, ..
+                                } => {
+                                    let mut lane_spawner = JoinSet::new();
+                                    let (opener, accepter) = spawn_mux_no_reconnection(
+                                        read,
+                                        write,
+                                        config,
+                                        &mut lane_spawner,
+                                    );
+                                    let this_lane = PendingLane {
+                                        pending: mux::PendingAcceptor::new(
+                                            class,
+                                            nonce,
+                                            opener,
+                                            accepter,
+                                            lane_spawner,
+                                        ),
                                         peer,
                                         local_addr,
-                                    );
+                                        _permit: permit_opt.take().unwrap(),
+                                    };
+                                    pair_lanes_inner(this_lane, other_lane, conn_handler, nonce);
+                                    return;
+                                }
+                                _ => {
+                                    signal_rejected_lane(
+                                        &mut write,
+                                        &rejections,
+                                        RejectedLaneContext {
+                                            class: LaneRejectionClass::ReservationLost,
+                                            peer,
+                                            local_addr,
+                                            expected_class: Some(expected_class),
+                                            reason: "reservation lost after wait notify"
+                                                .to_string(),
+                                        },
+                                        started.elapsed(),
+                                    )
+                                    .await;
                                     counter!("stream.rtp_mux.pairing_timeout").increment(1);
                                     return;
                                 }
@@ -787,38 +973,64 @@ fn spawn_lane_accept(
                     }
                 }
             }
-            PendingLaneAdmission::Pair { lane: other_lane, .. } => {
-                if !write_birth_heartbeat_ok(&mut w, peer, local_addr, expected_class, &rejection_tracker).await {
-                    return;
+            PendingLaneAdmission::Pair {
+                lane: other_lane,
+                expires_at,
+            } => {
+                match write_birth_heartbeat_result(&mut write).await {
+                    Err(elapsed) => {
+                        registry.restore_ready(nonce, other_lane, expires_at);
+                        signal_rejected_lane(
+                            &mut write,
+                            &rejections,
+                            RejectedLaneContext {
+                                class: LaneRejectionClass::BirthHeartbeat,
+                                peer,
+                                local_addr,
+                                expected_class: Some(expected_class),
+                                reason: "birth heartbeat failed before pairing".to_string(),
+                            },
+                            elapsed,
+                        )
+                        .await;
+                        counter!("stream.rtp_mux.birth_heartbeat_error").increment(1);
+                        return;
+                    }
+                    Ok(()) => {}
                 }
 
                 let mut lane_spawner = JoinSet::new();
-                let (opener, accepter) = spawn_mux_no_reconnection(r, w, config, &mut lane_spawner);
-                let pending_lane = PendingLane {
-                    pending: mux::PendingAcceptor::new(class, nonce, opener, accepter, lane_spawner),
+                let (opener, accepter) =
+                    spawn_mux_no_reconnection(read, write, config, &mut lane_spawner);
+                let this_lane = PendingLane {
+                    pending: mux::PendingAcceptor::new(
+                        class,
+                        nonce,
+                        opener,
+                        accepter,
+                        lane_spawner,
+                    ),
                     peer,
                     local_addr,
+                    _permit: permit_opt.take().unwrap(),
                 };
 
-                pair_and_spawn(pending_lane, other_lane, conn_handler, nonce);
+                pair_lanes_inner(this_lane, other_lane, conn_handler, nonce);
             }
             PendingLaneAdmission::Reject(reason) => {
-                let kill_result = w.send_kill_and_abort().await;
-                warn!(
-                    ?kill_result,
-                    dn = ?peer,
-                    dn_local = ?local_addr,
-                    ?expected_class,
-                    %reason,
-                    "RTP mux lane admission rejected"
-                );
-                record_rejection(
-                    &rejection_tracker,
-                    expected_class,
-                    reason,
-                    peer,
-                    local_addr,
-                );
+                signal_rejected_lane(
+                    &mut write,
+                    &rejections,
+                    RejectedLaneContext {
+                        class: LaneRejectionClass::Admission,
+                        peer,
+                        local_addr,
+                        expected_class: Some(expected_class),
+                        reason: reason.to_string(),
+                    },
+                    started.elapsed(),
+                )
+                .await;
                 drop(permit_opt);
                 counter!("stream.rtp_mux.pairing_timeout").increment(1);
             }
@@ -826,54 +1038,80 @@ fn spawn_lane_accept(
     });
 }
 
-async fn write_birth_heartbeat_ok(
-    w: &mut WriteStream,
-    peer: SocketAddr,
-    local_addr: SocketAddr,
-    expected_class: LaneClass,
-    rejection_tracker: &Mutex<RejectionTracker>,
-) -> bool {
+async fn write_birth_heartbeat_result(w: &mut WriteStream) -> Result<(), Duration> {
+    let started = Instant::now();
     let result = tokio::time::timeout(HELLO_DEADLINE, write_birth_heartbeat(w)).await;
     match result {
-        Ok(Ok(())) => true,
-        Ok(Err(e)) => {
-            record_rejection(
-                rejection_tracker,
-                expected_class,
-                "birth_heartbeat_error",
-                peer,
-                local_addr,
-            );
-            let kill_result = w.send_kill_and_abort().await;
-            warn!(
-                ?e,
-                ?kill_result,
-                dn = ?peer,
-                dn_local = ?local_addr,
-                ?expected_class,
-                "Failed to write RTP mux birth heartbeat; killed lane"
-            );
-            counter!("stream.rtp_mux.birth_heartbeat_error").increment(1);
-            false
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) | Err(_) => {
+            let _ = w.send_kill_and_abort().await;
+            Err(started.elapsed())
         }
-        Err(_elapsed) => {
-            record_rejection(
-                rejection_tracker,
-                expected_class,
-                "birth_heartbeat_timeout",
-                peer,
-                local_addr,
-            );
-            let kill_result = w.send_kill_and_abort().await;
-            warn!(
-                ?kill_result,
-                dn = ?peer,
-                dn_local = ?local_addr,
-                ?expected_class,
-                "RTP mux birth heartbeat timeout; killed lane"
-            );
-            counter!("stream.rtp_mux.birth_heartbeat_error").increment(1);
-            false
+    }
+}
+
+async fn signal_rejected_lane(
+    writer: &mut WriteStream,
+    rejections: &LaneRejectionLog,
+    mut context: RejectedLaneContext,
+    elapsed: Duration,
+) {
+    let _ = writer.send_kill_and_abort().await;
+    context.reason = format!("{}; elapsed_ms={}", context.reason, elapsed.as_millis());
+    rejections.record(context);
+}
+
+fn pair_lanes_inner(
+    lane_a: PendingLane,
+    lane_b: PendingLane,
+    conn_handler: Arc<impl StreamServerHandleConn + Send + Sync + 'static>,
+    nonce: PairingNonce,
+) {
+    counter!("stream.rtp_mux.paired").increment(1);
+    let a_peer = lane_a.peer;
+    let a_local = lane_a.local_addr;
+    let a_class = lane_a.pending.class;
+    let b_peer = lane_b.peer;
+    let b_local = lane_b.local_addr;
+    let addrs = classify_lane_addrs(a_class, a_peer, a_local, b_peer, b_local);
+    pair_lanes(lane_a, lane_b, conn_handler, addrs, nonce);
+}
+
+async fn run_pending_lane_expiry(registry: Arc<PendingLaneRegistry>, rejections: LaneRejectionLog) {
+    loop {
+        let changed = registry.changed.notified();
+        let Some(expires_at) = registry.next_expiry() else {
+            changed.await;
+            continue;
+        };
+        tokio::select! {
+            () = tokio::time::sleep_until(expires_at.into()) => {
+                for expired in registry.expire(Instant::now()) {
+                    match expired {
+                        ExpiredPendingLane::Building { nonce, peer, local_addr, class, ready, .. } => {
+                            ready.notify_one();
+                            rejections.record(RejectedLaneContext {
+                                class: LaneRejectionClass::PairingTimeout,
+                                peer,
+                                local_addr,
+                                expected_class: Some(class),
+                                reason: format!("pairing deadline expired while preparing lane; nonce={nonce:?}"),
+                            });
+                        }
+                        ExpiredPendingLane::Ready { nonce, lane } => {
+                            rejections.record(RejectedLaneContext {
+                                class: LaneRejectionClass::PairingTimeout,
+                                peer: lane.peer,
+                                local_addr: lane.local_addr,
+                                expected_class: Some(lane.pending.class),
+                                reason: format!("pairing deadline expired; nonce={nonce:?}"),
+                            });
+                        }
+                    }
+                }
+                counter!("stream.rtp_mux.pairing_timeout").increment(1);
+            }
+            () = changed => {}
         }
     }
 }
@@ -919,15 +1157,14 @@ fn pair_lanes(
             tokio::spawn(async move {
                 let paired_at = Instant::now();
                 let mut local_mux = local_mux;
-                let accepted_streams =
-                    run_dual_mux_accepter(dual_accepter, addr_pair, |stream| {
-                        counter!("stream.rtp_mux.accepts").increment(1);
-                        let conn_handler = Arc::clone(&conn_handler2);
-                        tokio::spawn(async move {
-                            conn_handler.handle_stream(stream).await;
-                        });
-                    })
-                    .await;
+                let accepted_streams = run_dual_mux_accepter(dual_accepter, addr_pair, |stream| {
+                    counter!("stream.rtp_mux.accepts").increment(1);
+                    let conn_handler = Arc::clone(&conn_handler2);
+                    tokio::spawn(async move {
+                        conn_handler.handle_stream(stream).await;
+                    });
+                })
+                .await;
                 let error = match local_mux.join_next().await {
                     Some(Ok(e)) => e,
                     Some(Err(source)) => MuxError::TaskJoin {
@@ -967,26 +1204,6 @@ fn pair_lanes(
     }
 }
 
-async fn signal_rejected_lane(
-    writer: &mut WriteStream,
-    peer: SocketAddr,
-    local_addr: SocketAddr,
-    expected_class: LaneClass,
-    elapsed: Duration,
-    reason: &str,
-) {
-    let kill_result = writer.send_kill_and_abort().await;
-    warn!(
-        ?kill_result,
-        dn = ?peer,
-        dn_local = ?local_addr,
-        ?expected_class,
-        elapsed_ms = elapsed.as_millis(),
-        %reason,
-        "Rejected RTP mux lane; sent kill packet and aborted lane"
-    );
-}
-
 #[derive(Debug, Error)]
 pub enum ServeError {
     #[error("Failed to get local address: {0}")]
@@ -1019,8 +1236,15 @@ impl RtpMuxConnector {
     pub fn new(config: Arc<RwLock<ConnectorConfig>>, reset: ConnectorReset, fec: bool) -> Self {
         let (connect_request_tx, connect_request_rx) = dual_connect_request_channel();
         let mut connector = JoinSet::new();
+        let dialer: DualLaneDialer = {
+            let config = Arc::clone(&config);
+            Arc::new(move |addr| {
+                let config = Arc::clone(&config);
+                Box::pin(async move { connect_dual_lane(addr, &config, fec).await })
+            })
+        };
         connector.spawn(async move {
-            run_dual_mux_connector_main(reset, connect_request_rx, config, fec).await;
+            run_dual_mux_connector_main(reset, connect_request_rx, dialer).await;
         });
         Self {
             connect_request_tx,
@@ -1039,8 +1263,7 @@ impl StreamConnect for RtpMuxConnector {
 async fn run_dual_mux_connector_main(
     reset: ConnectorReset,
     mut connect_request_rx: DualConnectRequestRx,
-    config: Arc<RwLock<ConnectorConfig>>,
-    fec: bool,
+    dialer: DualLaneDialer,
 ) {
     let mut dual_openers: HashMap<SocketAddr, ConnectedDualLane> = HashMap::new();
     let mut mux_spawner: JoinSet<(SocketAddr, MuxError)> = JoinSet::new();
@@ -1079,7 +1302,7 @@ async fn run_dual_mux_connector_main(
                                 nonce = ?session.nonce,
                                 up = ?session.addr_pair.peer_addr,
                                 up_local = ?session.addr_pair.local_addr,
-                                opened_streams = session.opened_streams.get(),
+                                opened_streams = session.opened_streams,
                                 uptime_ms = session.connected_at.elapsed().as_millis(),
                                 "RTP mux dual-lane session terminated"
                             );
@@ -1104,7 +1327,7 @@ async fn run_dual_mux_connector_main(
                 in_flight_dials.remove(&addr);
                 match result {
                     Ok(birth) => {
-                        let ConnectedDualLaneBirth { session, supervisor } = birth;
+                        let ConnectedDualLaneBirth { mut session, supervisor } = birth;
                         let mut sup = supervisor;
                         let sup_addr = addr;
                         mux_spawner.spawn(async move {
@@ -1113,7 +1336,7 @@ async fn run_dual_mux_connector_main(
                         });
                         if let Some(waiters) = dial_waiters.remove(&addr) {
                             for tx in waiters {
-                                send_connected_stream(&session, tx);
+                                send_connected_stream(&mut session, tx);
                             }
                         }
                         dual_openers.insert(addr, session);
@@ -1133,7 +1356,7 @@ async fn run_dual_mux_connector_main(
                 let Some(msg) = res else {
                     break;
                 };
-                if let Some(session) = dual_openers.get(&msg.listen_addr) {
+                if let Some(session) = dual_openers.get_mut(&msg.listen_addr) {
                     send_connected_stream(session, msg.stream);
                     continue;
                 }
@@ -1169,10 +1392,10 @@ async fn run_dual_mux_connector_main(
                     .push(msg.stream);
                 if !is_in_flight {
                     in_flight_dials.insert(msg.listen_addr);
-                    let cfg = Arc::clone(&config);
+                    let dialer = Arc::clone(&dialer);
                     let r_addr = msg.listen_addr;
                     let dial: DualLaneDial = Box::pin(async move {
-                        let result = connect_dual_lane(r_addr, &cfg, fec).await;
+                        let result = dialer(r_addr).await.map(|birth| birth);
                         (r_addr, result)
                     });
                     pending_dials.push(dial);
@@ -1183,15 +1406,17 @@ async fn run_dual_mux_connector_main(
 }
 
 fn send_connected_stream(
-    session: &ConnectedDualLane,
+    session: &mut ConnectedDualLane,
     response: tokio::sync::oneshot::Sender<io::Result<MigratingConnStream>>,
 ) {
     if response.is_closed() {
         return;
     }
     let stream_id = rand::random::<u64>();
-    let (writer, reader_rx) = session.opener.open_migrating_with_reader(stream_id, LaneClass::Interactive);
-    session.opened_streams.set(session.opened_streams.get() + 1);
+    let (writer, reader_rx) = session
+        .opener
+        .open_migrating_with_reader(stream_id, LaneClass::Interactive);
+    session.opened_streams += 1;
     counter!("stream.rtp_mux.rtp_connects").increment(1);
     counter!("stream.rtp_mux.mux_connects").increment(1);
     let stream = MigratingConnStream::new(writer, reader_rx, session.addr_pair);
@@ -1390,7 +1615,7 @@ async fn connect_dual_lane_once(
         addr_pair,
         nonce,
         connected_at: Instant::now(),
-        opened_streams: std::cell::Cell::new(0),
+        opened_streams: 0,
     };
     Ok(ConnectedDualLaneBirth {
         session,
@@ -1520,7 +1745,6 @@ pub async fn build_rtp_mux_proxy_server(
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
-    use tokio::sync::oneshot;
 
     #[test]
     fn both_rtp_lanes_enable_frame_delivery() {
@@ -1542,7 +1766,7 @@ mod tests {
         let registry = PendingLaneRegistry::new();
         let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
         let permit = registry.try_acquire(ip);
-        assert!(permit.is_some());
+        assert!(permit.is_ok());
     }
 
     #[test]
@@ -1555,7 +1779,7 @@ mod tests {
             permits.push(p);
         }
         let extra = registry.try_acquire(ip);
-        assert!(extra.is_none());
+        assert!(extra.is_err());
     }
 
     #[test]
@@ -1566,7 +1790,7 @@ mod tests {
             let _permit = registry.try_acquire(ip).unwrap();
         }
         let permit2 = registry.try_acquire(ip);
-        assert!(permit2.is_some());
+        assert!(permit2.is_ok());
     }
 
     #[test]
@@ -1596,14 +1820,17 @@ mod tests {
         let nonce = PairingNonce::generate();
         let permit1 = registry.try_acquire(ip).unwrap();
         let mut opt1 = Some(permit1);
-        let admission = registry.admit(nonce, peer, local, LaneClass::Interactive, &mut opt1);
+        let admission = registry.admit(nonce, LaneClass::Interactive, peer, local, &mut opt1);
         assert!(matches!(admission, PendingLaneAdmission::Reserved));
         assert!(opt1.is_none());
 
         let permit2 = registry.try_acquire(ip).unwrap();
         let mut opt2 = Some(permit2);
-        let admission2 = registry.admit(nonce, peer, local, LaneClass::Interactive, &mut opt2);
-        assert!(matches!(admission2, PendingLaneAdmission::Reject("duplicate class")));
+        let admission2 = registry.admit(nonce, LaneClass::Interactive, peer, local, &mut opt2);
+        assert!(matches!(
+            admission2,
+            PendingLaneAdmission::Reject("duplicate lane class for pairing nonce")
+        ));
         assert!(opt2.is_some());
     }
 
@@ -1618,13 +1845,16 @@ mod tests {
         let nonce = PairingNonce::generate();
         let permit1 = registry.try_acquire(ip1).unwrap();
         let mut opt1 = Some(permit1);
-        let admission = registry.admit(nonce, peer1, local, LaneClass::Interactive, &mut opt1);
+        let admission = registry.admit(nonce, LaneClass::Interactive, peer1, local, &mut opt1);
         assert!(matches!(admission, PendingLaneAdmission::Reserved));
 
         let permit2 = registry.try_acquire(ip2).unwrap();
         let mut opt2 = Some(permit2);
-        let admission2 = registry.admit(nonce, peer2, local, LaneClass::Bulk, &mut opt2);
-        assert!(matches!(admission2, PendingLaneAdmission::Reject("foreign peer nonce")));
+        let admission2 = registry.admit(nonce, LaneClass::Bulk, peer2, local, &mut opt2);
+        assert!(matches!(
+            admission2,
+            PendingLaneAdmission::Reject("pairing nonce peer mismatch")
+        ));
         assert!(opt2.is_some());
     }
 
@@ -1633,28 +1863,45 @@ mod tests {
         let registry = PendingLaneRegistry::new();
         let a_addr: SocketAddr = "127.0.0.1:1000".parse().unwrap();
         let ip = a_addr.ip();
-        assert!(registry.try_acquire(ip).is_some());
-    }
-
-    #[test]
-    fn pairing_housekeeping_completion_is_fatal() {
-        assert!(matches!(
-            ServeError::PairingHousekeepingStopped,
-            ServeError::PairingHousekeepingStopped
-        ));
+        assert!(registry.try_acquire(ip).is_ok());
     }
 
     #[test]
     fn lane_rejection_log_aggregates_across_classes_peers_and_lanes() {
-        let tracker = PendingLaneRegistry::new_rejection_tracker();
+        let log = LaneRejectionLog::default();
         let peer: SocketAddr = "127.0.0.1:1000".parse().unwrap();
         let local: SocketAddr = "127.0.0.1:2000".parse().unwrap();
-        record_rejection(&tracker, LaneClass::Interactive, "test_reason", peer, local);
-        record_rejection(&tracker, LaneClass::Interactive, "test_reason", peer, local);
-        record_rejection(&tracker, LaneClass::Bulk, "test_reason", peer, local);
-        let rt = tracker.lock().unwrap();
-        assert_eq!(rt.counts.get("Interactive:test_reason"), Some(&2));
-        assert_eq!(rt.counts.get("Bulk:test_reason"), Some(&1));
+        log.record(RejectedLaneContext {
+            class: LaneRejectionClass::HelloTimeout,
+            peer,
+            local_addr: local,
+            expected_class: Some(LaneClass::Interactive),
+            reason: "test".to_string(),
+        });
+        log.record(RejectedLaneContext {
+            class: LaneRejectionClass::HelloTimeout,
+            peer,
+            local_addr: local,
+            expected_class: Some(LaneClass::Interactive),
+            reason: "test".to_string(),
+        });
+        log.record(RejectedLaneContext {
+            class: LaneRejectionClass::HelloParse,
+            peer,
+            local_addr: local,
+            expected_class: Some(LaneClass::Bulk),
+            reason: "test".to_string(),
+        });
+        let summary = log.inner.summary.lock().unwrap();
+        assert_eq!(summary.total, 3);
+        assert_eq!(
+            summary.by_class.get(&LaneRejectionClass::HelloTimeout),
+            Some(&2)
+        );
+        assert_eq!(
+            summary.by_class.get(&LaneRejectionClass::HelloParse),
+            Some(&1)
+        );
     }
 
     #[test]
@@ -1686,13 +1933,8 @@ mod tests {
         assert_eq!(addrs1.bulk_peer, bulk_peer);
         assert_eq!(addrs1.bulk_local, bulk_local);
 
-        let addrs2 = classify_lane_addrs(
-            LaneClass::Bulk,
-            bulk_peer,
-            bulk_local,
-            int_peer,
-            int_local,
-        );
+        let addrs2 =
+            classify_lane_addrs(LaneClass::Bulk, bulk_peer, bulk_local, int_peer, int_local);
         assert_eq!(addrs2.interactive_peer, int_peer);
         assert_eq!(addrs2.interactive_local, int_local);
         assert_eq!(addrs2.bulk_peer, bulk_peer);
@@ -1713,13 +1955,16 @@ mod tests {
 
         let permit1 = registry.try_acquire(ip).unwrap();
         let mut opt1 = Some(permit1);
-        let admission = registry.admit(nonce, peer, local, LaneClass::Interactive, &mut opt1);
+        let admission = registry.admit(nonce, LaneClass::Interactive, peer, local, &mut opt1);
         assert!(matches!(admission, PendingLaneAdmission::Reserved));
 
         let permit2 = registry.try_acquire(ip).unwrap();
         let mut opt2 = Some(permit2);
-        let admission2 = registry.admit(nonce, peer, local, LaneClass::Interactive, &mut opt2);
-        assert!(matches!(admission2, PendingLaneAdmission::Reject("duplicate class")));
+        let admission2 = registry.admit(nonce, LaneClass::Interactive, peer, local, &mut opt2);
+        assert!(matches!(
+            admission2,
+            PendingLaneAdmission::Reject("duplicate lane class for pairing nonce")
+        ));
     }
 
     #[test]
@@ -1732,11 +1977,11 @@ mod tests {
 
         let permit1 = registry.try_acquire(ip).unwrap();
         let mut opt1 = Some(permit1);
-        registry.admit(nonce, peer, local, LaneClass::Interactive, &mut opt1);
+        registry.admit(nonce, LaneClass::Interactive, peer, local, &mut opt1);
 
         let permit2 = registry.try_acquire(ip).unwrap();
         let mut opt2 = Some(permit2);
-        let admission2 = registry.admit(nonce, peer, local, LaneClass::Bulk, &mut opt2);
+        let admission2 = registry.admit(nonce, LaneClass::Bulk, peer, local, &mut opt2);
         assert!(
             matches!(admission2, PendingLaneAdmission::Wait { .. }),
             "opposite class while Building should return Wait"
@@ -1753,28 +1998,31 @@ mod tests {
 
         let permit1 = registry.try_acquire(ip).unwrap();
         let mut opt1 = Some(permit1);
-        registry.admit(nonce, peer, local, LaneClass::Interactive, &mut opt1);
+        registry.admit(nonce, LaneClass::Interactive, peer, local, &mut opt1);
 
         let permit2 = registry.try_acquire(ip).unwrap();
         let mut opt2 = Some(permit2);
-        let admission2 = registry.admit(nonce, peer, local, LaneClass::Bulk, &mut opt2);
+        let admission2 = registry.admit(nonce, LaneClass::Bulk, peer, local, &mut opt2);
         assert!(matches!(admission2, PendingLaneAdmission::Wait { .. }));
 
         let permit3 = registry.try_acquire(ip).unwrap();
         let mut opt3 = Some(permit3);
-        let admission3 = registry.admit(nonce, peer, local, LaneClass::Bulk, &mut opt3);
-        assert!(matches!(admission3, PendingLaneAdmission::Reject("duplicate waiter")));
+        let admission3 = registry.admit(nonce, LaneClass::Bulk, peer, local, &mut opt3);
+        assert!(matches!(
+            admission3,
+            PendingLaneAdmission::Reject("opposite lane is already waiting for pairing")
+        ));
     }
 
     #[test]
+    #[should_panic(expected = "accepted RTP mux lane must retain its admission permit")]
     fn admit_reject_no_permit() {
         let registry = PendingLaneRegistry::new();
         let peer: SocketAddr = "127.0.0.1:1000".parse().unwrap();
         let local: SocketAddr = "127.0.0.1:2000".parse().unwrap();
         let nonce = PairingNonce::generate();
         let mut opt: Option<PendingLanePermit> = None;
-        let admission = registry.admit(nonce, peer, local, LaneClass::Interactive, &mut opt);
-        assert!(matches!(admission, PendingLaneAdmission::Reject("no permit available")));
+        let _ = registry.admit(nonce, LaneClass::Interactive, peer, local, &mut opt);
     }
 
     #[test]
@@ -1789,104 +2037,367 @@ mod tests {
 
         let permit1 = registry.try_acquire(ip1).unwrap();
         let mut opt1 = Some(permit1);
-        registry.admit(nonce, peer1, local, LaneClass::Interactive, &mut opt1);
+        registry.admit(nonce, LaneClass::Interactive, peer1, local, &mut opt1);
 
         let permit2 = registry.try_acquire(ip2).unwrap();
         let mut opt2 = Some(permit2);
-        let admission2 = registry.admit(nonce, peer2, local, LaneClass::Bulk, &mut opt2);
-        assert!(matches!(admission2, PendingLaneAdmission::Reject("foreign peer nonce")));
+        let admission2 = registry.admit(nonce, LaneClass::Bulk, peer2, local, &mut opt2);
+        assert!(matches!(
+            admission2,
+            PendingLaneAdmission::Reject("pairing nonce peer mismatch")
+        ));
+    }
+
+    // -------------------------------------------------------------------
+    // Ready lane tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn ready_lane_rejects_foreign_peer_and_duplicate_class() {
+        let registry = PendingLaneRegistry::new();
+        let peer: SocketAddr = "127.0.0.1:1000".parse().unwrap();
+        let local: SocketAddr = "127.0.0.1:2000".parse().unwrap();
+        let nonce = PairingNonce::generate();
+
+        let permit = registry.try_acquire(peer.ip()).unwrap();
+        let mut opt = Some(permit);
+        let admission = registry.admit(nonce, LaneClass::Interactive, peer, local, &mut opt);
+        assert!(matches!(admission, PendingLaneAdmission::Reserved));
+
+        let foreign_peer: SocketAddr = "192.168.1.1:1000".parse().unwrap();
+        let permit2 = registry.try_acquire(foreign_peer.ip()).unwrap();
+        let mut opt2 = Some(permit2);
+        let admission2 = registry.admit(nonce, LaneClass::Bulk, foreign_peer, local, &mut opt2);
+        assert!(matches!(
+            admission2,
+            PendingLaneAdmission::Reject("pairing nonce peer mismatch")
+        ));
+
+        let peer_same: SocketAddr = "127.0.0.1:1001".parse().unwrap();
+        let permit3 = registry.try_acquire(peer_same.ip()).unwrap();
+        let mut opt3 = Some(permit3);
+        let admission3 = registry.admit(nonce, LaneClass::Interactive, peer_same, local, &mut opt3);
+        assert!(matches!(
+            admission3,
+            PendingLaneAdmission::Reject("duplicate lane class for pairing nonce")
+        ));
+    }
+
+    #[test]
+    fn ready_lane_pairs_opposite_class() {
+        let registry = PendingLaneRegistry::new();
+        let peer: SocketAddr = "127.0.0.1:1000".parse().unwrap();
+        let local: SocketAddr = "127.0.0.1:2000".parse().unwrap();
+        let nonce = PairingNonce::generate();
+
+        let permit = registry.try_acquire(peer.ip()).unwrap();
+        let mut opt = Some(permit);
+        registry.admit(nonce, LaneClass::Interactive, peer, local, &mut opt);
+
+        let permit2 = registry.try_acquire(peer.ip()).unwrap();
+        let mut opt2 = Some(permit2);
+        let admission2 = registry.admit(nonce, LaneClass::Bulk, peer, local, &mut opt2);
+        assert!(matches!(admission2, PendingLaneAdmission::Wait { .. }));
     }
 
     // -------------------------------------------------------------------
     // Connector tests
     // -------------------------------------------------------------------
 
-    #[tokio::test]
-    async fn pending_dial_does_not_block_other_destinations() {
-        let mut in_flight: HashSet<SocketAddr> = HashSet::new();
-        let addr1: SocketAddr = "127.0.0.1:1000".parse().unwrap();
-        let addr2: SocketAddr = "127.0.0.1:2000".parse().unwrap();
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-        in_flight.insert(addr1);
-        assert!(in_flight.contains(&addr1));
-        assert!(!in_flight.contains(&addr2));
-
-        assert!(MAX_CONCURRENT_DUAL_DIALS > 1);
+    fn spawn_test_connector(
+        dialer: DualLaneDialer,
+    ) -> (
+        Arc<DualConnectRequestTx>,
+        ConnectorReset,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let reset = ConnectorReset(common::notify::Notify::new());
+        let (tx, rx) = dual_connect_request_channel();
+        let coordinator_reset = reset.clone();
+        let coordinator = tokio::spawn(async move {
+            run_dual_mux_connector_main(coordinator_reset, rx, dialer).await;
+        });
+        (Arc::new(tx), reset, coordinator)
     }
 
-    #[test]
-    fn pending_dial_does_not_block_cached_session_requests() {
-        let addr: SocketAddr = "127.0.0.1:1000".parse().unwrap();
-        let openers: HashMap<SocketAddr, ConnectedDualLane> = HashMap::new();
-        assert!(openers.is_empty());
-        assert!(!openers.contains_key(&addr));
-        assert!(MAX_DIAL_WAITERS_PER_ADDR > 0);
+    async fn enqueue_connector_request(
+        tx: &DualConnectRequestTx,
+        addr: SocketAddr,
+    ) -> tokio::sync::oneshot::Receiver<io::Result<MigratingConnStream>> {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        tx.tx
+            .send(DualConnectRequestMsg {
+                listen_addr: addr,
+                stream: response_tx,
+            })
+            .await
+            .unwrap();
+        response_rx
     }
 
-    #[test]
-    fn pending_dial_does_not_block_dead_session_reaping() {
-        let e = MuxError::TaskStopped { task: "test" };
-        let result = dual_supervisor_result(Some(Ok(e)));
-        assert!(matches!(result, MuxError::TaskStopped { .. }));
+    async fn stop_test_connector(
+        tx: Arc<DualConnectRequestTx>,
+        coordinator: tokio::task::JoinHandle<()>,
+    ) {
+        drop(tx);
+        tokio::time::timeout(Duration::from_secs(1), coordinator)
+            .await
+            .expect("connector coordinator did not stop")
+            .unwrap();
     }
 
-    #[test]
-    fn connector_enforces_concurrent_dial_capacity_at_boundary() {
-        assert!(MAX_CONCURRENT_DUAL_DIALS > 0);
-        assert_eq!(MAX_CONCURRENT_DUAL_DIALS, 32);
-    }
-
-    #[tokio::test]
-    async fn connector_fails_all_waiter_capacity_and_reset_fails_every_waiter() {
-        assert!(MAX_DIAL_WAITERS_PER_ADDR > 0);
-
-        let addr: SocketAddr = "127.0.0.1:1000".parse().unwrap();
-        let mut waiters: HashMap<SocketAddr, Vec<oneshot::Sender<io::Result<()>>>> = HashMap::new();
-
-        for i in 0..MAX_DIAL_WAITERS_PER_ADDR {
-            let (tx, _rx) = oneshot::channel();
-            waiters.entry(addr).or_default().push(tx);
-            assert_eq!(waiters.get(&addr).unwrap().len(), i + 1);
+    fn fake_connected_birth(addr: SocketAddr, terminate: Option<tokio::sync::oneshot::Receiver<()>>) -> ConnectedDualLaneBirth {
+        let (interactive_local, interactive_peer) = tokio::io::duplex(64 * 1024);
+        let (bulk_local, bulk_peer) = tokio::io::duplex(64 * 1024);
+        let (interactive_local_read, interactive_local_write) = tokio::io::split(interactive_local);
+        let (interactive_peer_read, interactive_peer_write) = tokio::io::split(interactive_peer);
+        let (bulk_local_read, bulk_local_write) = tokio::io::split(bulk_local);
+        let (bulk_peer_read, bulk_peer_write) = tokio::io::split(bulk_peer);
+        let mut interactive_local_tasks = JoinSet::new();
+        let (interactive_opener, interactive_accepter) = spawn_mux_no_reconnection(interactive_local_read, interactive_local_write, interactive_client_mux_config(), &mut interactive_local_tasks);
+        let mut bulk_local_tasks = JoinSet::new();
+        let (bulk_opener, bulk_accepter) = spawn_mux_no_reconnection(bulk_local_read, bulk_local_write, bulk_client_mux_config(), &mut bulk_local_tasks);
+        let mut interactive_peer_tasks = JoinSet::new();
+        let (interactive_peer_opener, interactive_peer_accepter) = spawn_mux_no_reconnection(interactive_peer_read, interactive_peer_write, interactive_server_mux_config(), &mut interactive_peer_tasks);
+        let mut bulk_peer_tasks = JoinSet::new();
+        let (bulk_peer_opener, bulk_peer_accepter) = spawn_mux_no_reconnection(bulk_peer_read, bulk_peer_write, bulk_server_mux_config(), &mut bulk_peer_tasks);
+        let mut supervisor = JoinSet::new();
+        let (opener, _accepter) = mux::spawn_dual_mux_paired_supervised(interactive_opener, interactive_accepter, interactive_local_tasks, bulk_opener, bulk_accepter, bulk_local_tasks, &mut supervisor);
+        supervisor.spawn(async move {
+            let _keep_peer_alive = (interactive_peer_opener, interactive_peer_accepter, interactive_peer_tasks, bulk_peer_opener, bulk_peer_accepter, bulk_peer_tasks);
+            std::future::pending::<MuxError>().await
+        });
+        if let Some(terminate) = terminate {
+            supervisor.spawn(async move {
+                let _ = terminate.await;
+                MuxError::TaskStopped { task: "synthetic_dual_lane" }
+            });
         }
+        ConnectedDualLaneBirth {
+            session: ConnectedDualLane {
+                opener,
+                addr_pair: SocketAddrPair {
+                    local_addr: "192.0.2.100:40000".parse().unwrap(),
+                    peer_addr: addr,
+                },
+                nonce: PairingNonce::generate(),
+                connected_at: Instant::now(),
+                opened_streams: 0,
+            },
+            supervisor,
+        }
+    }
 
-        for (_, waiters) in waiters.drain() {
-            for tx in waiters {
-                let _ = tx.send(Err(io::Error::new(
-                    io::ErrorKind::ConnectionAborted,
-                    "connector reset",
-                )));
+    #[tokio::test] async fn pending_dial_does_not_block_other_destinations() {
+        let blocked_addr: SocketAddr = "192.0.2.1:50000".parse().unwrap();
+        let fast_addr: SocketAddr = "192.0.2.2:50000".parse().unwrap();
+        let blocked_started = Arc::new(tokio::sync::Notify::new());
+        let dialer: DualLaneDialer = Arc::new({
+            let blocked_started = Arc::clone(&blocked_started);
+            move |addr| {
+                if addr == blocked_addr {
+                    blocked_started.notify_one();
+                    Box::pin(std::future::pending())
+                } else {
+                    Box::pin(async { Err(io::Error::new(io::ErrorKind::ConnectionRefused, "synthetic dial failure")) })
+                }
             }
+        });
+        let (tx, _reset, coordinator) = spawn_test_connector(dialer);
+        let blocked_request = tokio::spawn({
+            let tx = Arc::clone(&tx);
+            async move { tx.send(blocked_addr).await }
+        });
+        blocked_started.notified().await;
+        let error = tokio::time::timeout(Duration::from_secs(1), tx.send(fast_addr))
+            .await
+            .expect("second destination was blocked by the first dial")
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
+        blocked_request.abort();
+        blocked_request.await.unwrap_err();
+        stop_test_connector(tx, coordinator).await;
+    }
+
+    #[tokio::test] async fn pending_dial_does_not_block_cached_session_requests() {
+        let cached_addr: SocketAddr = "192.0.2.1:50000".parse().unwrap();
+        let blocked_addr: SocketAddr = "192.0.2.2:50000".parse().unwrap();
+        let blocked_started = Arc::new(tokio::sync::Notify::new());
+        let dialer: DualLaneDialer = Arc::new({
+            let blocked_started = Arc::clone(&blocked_started);
+            move |addr| {
+                if addr == cached_addr {
+                    Box::pin(async move { Ok(fake_connected_birth(addr, None)) })
+                } else {
+                    blocked_started.notify_one();
+                    Box::pin(std::future::pending())
+                }
+            }
+        });
+        let (tx, reset, coordinator) = spawn_test_connector(dialer);
+        drop(tx.send(cached_addr).await.unwrap());
+        let blocked = enqueue_connector_request(&tx, blocked_addr).await;
+        blocked_started.notified().await;
+        let cached = tokio::time::timeout(Duration::from_secs(1), tx.send(cached_addr))
+            .await
+            .expect("pending dial blocked a cached session request")
+            .unwrap();
+        drop(cached);
+        reset.0.notify_waiters();
+        assert_eq!(blocked.await.unwrap().unwrap_err().kind(), io::ErrorKind::ConnectionAborted);
+        stop_test_connector(tx, coordinator).await;
+    }
+
+    #[tokio::test] async fn pending_dial_does_not_block_dead_session_reaping() {
+        let session_addr: SocketAddr = "192.0.2.1:50000".parse().unwrap();
+        let blocked_addr: SocketAddr = "192.0.2.2:50000".parse().unwrap();
+        let (terminate_tx, terminate_rx) = tokio::sync::oneshot::channel();
+        let terminate_rx = Arc::new(Mutex::new(Some(terminate_rx)));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let blocked_started = Arc::new(tokio::sync::Notify::new());
+        let dialer: DualLaneDialer = Arc::new({
+            let terminate_rx = Arc::clone(&terminate_rx);
+            let attempts = Arc::clone(&attempts);
+            let blocked_started = Arc::clone(&blocked_started);
+            move |addr| {
+                if addr == blocked_addr {
+                    blocked_started.notify_one();
+                    return Box::pin(std::future::pending());
+                }
+                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    let terminate = terminate_rx.lock().unwrap().take().unwrap();
+                    Box::pin(async move { Ok(fake_connected_birth(addr, Some(terminate))) })
+                } else {
+                    Box::pin(async { Err(io::Error::new(io::ErrorKind::ConnectionRefused, "synthetic redial failure")) })
+                }
+            }
+        });
+        let (tx, reset, coordinator) = spawn_test_connector(dialer);
+        drop(tx.send(session_addr).await.unwrap());
+        let blocked = enqueue_connector_request(&tx, blocked_addr).await;
+        blocked_started.notified().await;
+        terminate_tx.send(()).unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                match tx.send(session_addr).await {
+                    Ok(stream) => {
+                        drop(stream);
+                        tokio::task::yield_now().await;
+                    }
+                    Err(error) => break error,
+                }
+            }
+        })
+        .await
+        .expect("pending dial blocked dead-session reaping");
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        reset.0.notify_waiters();
+        assert_eq!(blocked.await.unwrap().unwrap_err().kind(), io::ErrorKind::ConnectionAborted);
+        stop_test_connector(tx, coordinator).await;
+    }
+
+    #[tokio::test] async fn connector_enforces_concurrent_dial_capacity_at_boundary() {
+        let dial_count = Arc::new(AtomicUsize::new(0));
+        let dialer: DualLaneDialer = Arc::new({
+            let dial_count = Arc::clone(&dial_count);
+            move |_addr| {
+                dial_count.fetch_add(1, Ordering::SeqCst);
+                Box::pin(std::future::pending())
+            }
+        });
+        let (tx, reset, coordinator) = spawn_test_connector(dialer);
+        let mut responses = Vec::new();
+        for port in 10_000..10_000 + MAX_CONCURRENT_DUAL_DIALS as u16 {
+            responses.push(enqueue_connector_request(&tx, SocketAddr::from(([192, 0, 2, 1], port))).await);
         }
-        assert!(waiters.is_empty());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while dial_count.load(Ordering::SeqCst) != MAX_CONCURRENT_DUAL_DIALS {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("coordinator did not start all admitted dials");
+        let rejected = enqueue_connector_request(&tx, SocketAddr::from(([192, 0, 2, 1], 20_000))).await;
+        assert_eq!(rejected.await.unwrap().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        reset.0.notify_waiters();
+        for response in responses {
+            assert_eq!(response.await.unwrap().unwrap_err().kind(), io::ErrorKind::ConnectionAborted);
+        }
+        stop_test_connector(tx, coordinator).await;
     }
 
-    #[tokio::test]
-    async fn closed_waiters_do_not_consume_per_destination_capacity() {
-        let addr: SocketAddr = "127.0.0.1:1000".parse().unwrap();
-        let mut waiters: HashMap<SocketAddr, Vec<oneshot::Sender<io::Result<()>>>> = HashMap::new();
-
-        let (tx1, rx1) = oneshot::channel::<io::Result<()>>();
-        waiters.entry(addr).or_default().push(tx1);
-        let (tx2, rx2) = oneshot::channel::<io::Result<()>>();
-        waiters.entry(addr).or_default().push(tx2);
-
-        drop(rx1);
-        drop(rx2);
-
-        waiters.entry(addr).or_default().retain(|tx| !tx.is_closed());
-        assert!(waiters.get(&addr).unwrap().is_empty());
+    #[tokio::test] async fn connector_enforces_waiter_capacity_and_reset_fails_every_waiter() {
+        let addr: SocketAddr = "192.0.2.1:50000".parse().unwrap();
+        let dialer: DualLaneDialer = Arc::new(|_addr| Box::pin(std::future::pending()));
+        let (tx, reset, coordinator) = spawn_test_connector(dialer);
+        let mut responses = Vec::new();
+        for _ in 0..MAX_DIAL_WAITERS_PER_ADDR {
+            responses.push(enqueue_connector_request(&tx, addr).await);
+        }
+        let rejected = enqueue_connector_request(&tx, addr).await;
+        assert_eq!(rejected.await.unwrap().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        reset.0.notify_waiters();
+        for response in responses {
+            assert_eq!(response.await.unwrap().unwrap_err().kind(), io::ErrorKind::ConnectionAborted);
+        }
+        stop_test_connector(tx, coordinator).await;
     }
 
-    #[test]
-    fn connector_can_redial_immediately_after_reset() {
-        let mut in_flight_dials: HashSet<SocketAddr> = HashSet::new();
-        let addr: SocketAddr = "127.0.0.1:1000".parse().unwrap();
+    #[tokio::test] async fn closed_waiters_do_not_consume_per_destination_capacity() {
+        let addr: SocketAddr = "192.0.2.1:50000".parse().unwrap();
+        let barrier_addr: SocketAddr = "192.0.2.2:50000".parse().unwrap();
+        let dialer: DualLaneDialer = Arc::new(move |dial_addr| {
+            if dial_addr == addr {
+                Box::pin(std::future::pending())
+            } else {
+                Box::pin(async { Err(io::Error::new(io::ErrorKind::ConnectionRefused, "synthetic barrier failure")) })
+            }
+        });
+        let (tx, reset, coordinator) = spawn_test_connector(dialer);
+        let first = enqueue_connector_request(&tx, addr).await;
+        for _ in 0..MAX_DIAL_WAITERS_PER_ADDR * 2 {
+            drop(enqueue_connector_request(&tx, addr).await);
+        }
+        let live = enqueue_connector_request(&tx, addr).await;
+        let barrier = enqueue_connector_request(&tx, barrier_addr).await;
+        assert_eq!(barrier.await.unwrap().unwrap_err().kind(), io::ErrorKind::ConnectionRefused);
+        reset.0.notify_waiters();
+        assert_eq!(first.await.unwrap().unwrap_err().kind(), io::ErrorKind::ConnectionAborted);
+        assert_eq!(live.await.unwrap().unwrap_err().kind(), io::ErrorKind::ConnectionAborted);
+        stop_test_connector(tx, coordinator).await;
+    }
 
-        in_flight_dials.insert(addr);
-        assert!(in_flight_dials.contains(&addr));
-
-        in_flight_dials.clear();
-        assert!(in_flight_dials.is_empty());
-        assert!(!in_flight_dials.contains(&addr));
+    #[tokio::test] async fn connector_can_redial_immediately_after_reset() {
+        let addr: SocketAddr = "192.0.2.1:50000".parse().unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let first_started = Arc::new(tokio::sync::Notify::new());
+        let dialer: DualLaneDialer = Arc::new({
+            let attempts = Arc::clone(&attempts);
+            let first_started = Arc::clone(&first_started);
+            move |_addr| {
+                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    first_started.notify_one();
+                    Box::pin(std::future::pending())
+                } else {
+                    Box::pin(async { Err(io::Error::new(io::ErrorKind::ConnectionRefused, "synthetic redial failure")) })
+                }
+            }
+        });
+        let (tx, reset, coordinator) = spawn_test_connector(dialer);
+        let first = enqueue_connector_request(&tx, addr).await;
+        first_started.notified().await;
+        reset.0.notify_waiters();
+        assert_eq!(first.await.unwrap().unwrap_err().kind(), io::ErrorKind::ConnectionAborted);
+        let error = tokio::time::timeout(Duration::from_secs(1), tx.send(addr))
+            .await
+            .expect("redial was not admitted after reset")
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        stop_test_connector(tx, coordinator).await;
     }
 }

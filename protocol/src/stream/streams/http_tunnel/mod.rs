@@ -61,8 +61,15 @@ struct HttpFailureReporter {
 }
 
 impl HttpFailureReporter {
+    fn set_destination(&self, destination: impl Into<String>) {
+        let _ = self.failure.destination.set(destination.into());
+    }
+
     fn destination(&self) -> Option<String> {
-        self.failure.destination.get().cloned()
+        self.failure
+            .destination
+            .get()
+            .cloned()
             .or_else(|| self.failure.request.authority.clone())
     }
 
@@ -70,17 +77,16 @@ impl HttpFailureReporter {
         if self
             .failure
             .reported
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
             .is_err()
         {
             return;
         }
-        if let Some(up) = attempted_upstream {
-            let _ = self.failure.destination.set(up.to_string());
-        }
-        let destination = self.failure.destination.get();
         let request = &self.failure.request;
-        let up = error.upstream_addr().map(|a| a.address.to_string());
+        let destination = self.destination();
+        let up = attempted_upstream
+            .map(str::to_owned)
+            .or_else(|| error.upstream_addr().map(|addr| addr.to_string()));
         warn!(
             event = "http_tunnel_proxy_failed",
             error = %error,
@@ -90,8 +96,8 @@ impl HttpFailureReporter {
             method = %request.method,
             uri = %request.uri,
             host = ?request.host,
-            destination = ?destination,
-            up = ?up,
+            ?destination,
+            ?up,
             "HTTP tunnel proxy failed"
         );
     }
@@ -254,8 +260,7 @@ impl StreamServerHandleConn for HttpAccessConnHandler {
             local: dn_local,
         };
         let listener = Arc::clone(&self.ctx.listen_addr);
-        if let Err(_e) = proxy(&self.ctx, stream, downstream, listener).await {
-        }
+        if let Err(_e) = proxy(&self.ctx, stream, downstream, listener).await {}
     }
 }
 

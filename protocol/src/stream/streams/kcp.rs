@@ -16,7 +16,7 @@ use tokio::{
 use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
 use tracing::{info, instrument, trace};
 
-use crate::stream::streams::accept_error::AcceptErrorBackoff;
+use crate::stream::streams::accept_error::{AcceptErrorBackoff, accept_after_retry};
 
 use common::{
     addr::any_addr,
@@ -87,8 +87,7 @@ where
         loop {
             trace!("Waiting for connection");
             tokio::select! {
-                _ = accept_backoff.wait_for_accept_retry(), if accept_backoff.retry_delay().is_some() => {}
-                res = self.listener.accept() => {
+                res = accept_after_retry(accept_backoff.retry_delay(), || self.listener.accept()) => {
                     let (stream, peer_addr) = match res {
                         Ok(res) => {
                             accept_backoff.accepted("kcp", addr);

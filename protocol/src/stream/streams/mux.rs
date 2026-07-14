@@ -487,10 +487,9 @@ impl MigratingConnStream {
                         }
                     }
                     WriteCommand::Shutdown(reply) => {
-                        let result =
-                            writer.finalize().await.map_err(|e| BackgroundWriteError {
-                                message: format!("{e:?}"),
-                            });
+                        let result = writer.finalize().await.map_err(|e| BackgroundWriteError {
+                            message: format!("{e:?}"),
+                        });
                         if let Err(ref e) = result {
                             *background_error_clone.lock().unwrap() = Some(e.clone());
                         }
@@ -533,9 +532,9 @@ impl MigratingConnStream {
         match result {
             Ok(Ok(())) => std::task::Poll::Ready(Ok(Some(kind))),
             Ok(Err(error)) => std::task::Poll::Ready(Err(error.into_io())),
-            Err(_) => std::task::Poll::Ready(Err(self.background_io_error(
-                "migrating stream background writer stopped",
-            ))),
+            Err(_) => std::task::Poll::Ready(Err(
+                self.background_io_error("migrating stream background writer stopped")
+            )),
         }
     }
 
@@ -808,6 +807,7 @@ impl<R, W> HasIoAddr for IoMuxStream<R, W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
 
     #[test]
     fn dual_lane_configs_keep_heartbeats_out_of_transport_hol() {
@@ -816,127 +816,74 @@ mod tests {
         assert!(bulk_client_mux_config().frame_reassembly);
         assert!(bulk_server_mux_config().frame_reassembly);
     }
-}
 
-#[cfg(test)]
-mod migrating_tests {
-    use super::*;
-    use std::sync::{Arc, Mutex};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn migrating_conn_write_is_cancellation_safe_and_shutdown_delivers_final() {
-        let buf_size = 4 * 1024 * 1024;
-        let (int_c2s, int_s2c) = tokio::io::duplex(buf_size);
-        let (bulk_c2s, bulk_s2c) = tokio::io::duplex(buf_size);
-
-        let (int_srv_r, int_srv_w) = tokio::io::split(int_c2s);
-        let (int_cli_r, int_cli_w) = tokio::io::split(int_s2c);
-        let (bulk_srv_r, bulk_srv_w) = tokio::io::split(bulk_c2s);
-        let (bulk_cli_r, bulk_cli_w) = tokio::io::split(bulk_s2c);
-
-        let mut srv_int = JoinSet::new();
-        let (int_srv_op, int_srv_acc) =
-            mux::spawn_mux_no_reconnection(int_srv_r, int_srv_w, server_mux_config(), &mut srv_int);
-        let mut srv_bulk = JoinSet::new();
-        let (bulk_srv_op, bulk_srv_acc) =
-            mux::spawn_mux_no_reconnection(bulk_srv_r, bulk_srv_w, server_mux_config(), &mut srv_bulk);
-
-        let mut cli_int = JoinSet::new();
-        let (int_cli_op, int_cli_acc) =
-            mux::spawn_mux_no_reconnection(int_cli_r, int_cli_w, client_mux_config(), &mut cli_int);
-        let mut cli_bulk = JoinSet::new();
-        let (bulk_cli_op, bulk_cli_acc) =
-            mux::spawn_mux_no_reconnection(bulk_cli_r, bulk_cli_w, client_mux_config(), &mut cli_bulk);
-
-        let mut srv_supervisor = JoinSet::new();
-        let (_srv_opener, srv_accepter) = mux::spawn_dual_mux_paired_supervised(
-            int_srv_op,
-            int_srv_acc,
-            srv_int,
-            bulk_srv_op,
-            bulk_srv_acc,
-            srv_bulk,
-            &mut srv_supervisor,
-        );
-
-        let mut cli_supervisor = JoinSet::new();
-        let (cli_opener, _cli_accepter) = mux::spawn_dual_mux_paired_supervised(
-            int_cli_op,
-            int_cli_acc,
-            cli_int,
-            bulk_cli_op,
-            bulk_cli_acc,
-            cli_bulk,
-            &mut cli_supervisor,
-        );
-
-        let received = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let received2 = received.clone();
-        let peer_done = Arc::new(tokio::sync::Notify::new());
-        let peer_done2 = peer_done.clone();
-        tokio::spawn(async move {
-            let mut mac = srv_accepter.into_migrating_only();
-            let accepted = mac.accept().await.unwrap();
-            match accepted {
-                mux::AcceptedStream::Migrating { reader, .. } => {
-                    let mut reader = reader;
-                    let mut buf = Vec::new();
-                    reader.read_to_end(&mut buf).await.unwrap();
-                    *received2.lock().unwrap() = buf;
-                    peer_done2.notify_one();
-                }
-                _ => panic!("expected migrating stream"),
-            }
-        });
-
-        let stream_id = 1u64;
-        let (writer, reader_rx) =
-            cli_opener.open_migrating_with_reader(stream_id, mux::LaneClass::Interactive);
-        let addr = SocketAddrPair {
-            local_addr: "127.0.0.1:1234".parse().unwrap(),
-            peer_addr: "127.0.0.1:5678".parse().unwrap(),
-        };
-        let mut conn = MigratingConnStream::new(writer, reader_rx, addr);
-
-        let large_chunk = vec![0xAAu8; MIGRATING_WRITE_MAX_CHUNK];
-        for _ in 0..MIGRATING_WRITE_QUEUE_CAPACITY {
-            tokio::io::AsyncWriteExt::write(&mut conn, &large_chunk).await.unwrap();
+    async fn make_dual_pair() -> (DualStreamOpener, DualStreamAccepter, JoinSet<MuxError>, JoinSet<MuxError>) {
+        fn lane(client_config: MuxConfig, server_config: MuxConfig) -> (StreamOpener, StreamAccepter, JoinSet<MuxError>, StreamOpener, StreamAccepter, JoinSet<MuxError>) {
+            let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+            let (client_read, client_write) = tokio::io::split(client_io);
+            let (server_read, server_write) = tokio::io::split(server_io);
+            let mut client_tasks = JoinSet::new();
+            let (client_opener, client_accepter) = spawn_mux_no_reconnection(client_read, client_write, client_config, &mut client_tasks);
+            let mut server_tasks = JoinSet::new();
+            let (server_opener, server_accepter) = spawn_mux_no_reconnection(server_read, server_write, server_config, &mut server_tasks);
+            (client_opener, client_accepter, client_tasks, server_opener, server_accepter, server_tasks)
         }
+        let (ci_o, ci_a, ci_t, si_o, si_a, si_t) = lane(interactive_client_mux_config(), interactive_server_mux_config());
+        let (cb_o, cb_a, cb_t, sb_o, sb_a, sb_t) = lane(bulk_client_mux_config(), bulk_server_mux_config());
+        let mut client_supervisor = JoinSet::new();
+        let (client_opener, _client_accepter) = spawn_dual_mux_paired_supervised(ci_o, ci_a, ci_t, cb_o, cb_a, cb_t, &mut client_supervisor);
+        let mut server_supervisor = JoinSet::new();
+        let (_server_opener, server_accepter) = spawn_dual_mux_paired_supervised(si_o, si_a, si_t, sb_o, sb_a, sb_t, &mut server_supervisor);
+        (client_opener, server_accepter, client_supervisor, server_supervisor)
+    }
 
-        // Manual poll to exercise cancellation path
-        {
-            let mut conn_pin = std::pin::pin!(&mut conn);
+    #[tokio::test(flavor = "multi_thread")] async fn migrating_conn_write_is_cancellation_safe_and_shutdown_delivers_final() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (opener, accepter, _client_tasks, _server_tasks) = make_dual_pair().await;
+        let addr = SocketAddrPair {
+            local_addr: "127.0.0.1:10000".parse().unwrap(),
+            peer_addr: "127.0.0.1:10001".parse().unwrap(),
+        };
+        let (writer, reader_rx) = opener.open_migrating_with_reader(42, mux::LaneClass::Interactive);
+        let mut stream = MigratingConnStream::new(writer, reader_rx, addr);
+        let (accepted_tx, mut accepted_rx) = tokio::sync::mpsc::unbounded_channel();
+        let accepter_task = tokio::spawn(async move {
+            run_dual_mux_accepter(accepter, addr, |stream| {
+                let _ = accepted_tx.send(stream);
+            }).await
+        });
+        let big = vec![0xA5; 256 * 1024];
+        let mut accepted_big_bytes = 0usize;
+        let mut saw_pending = false;
+        for _ in 0..MIGRATING_WRITE_QUEUE_CAPACITY + 2 {
             let waker = futures::task::noop_waker();
             let mut cx = std::task::Context::from_waker(&waker);
-            let poll_result = std::pin::Pin::new(&mut conn_pin)
-                .poll_write(&mut cx, &large_chunk);
-            assert!(
-                matches!(poll_result, std::task::Poll::Pending),
-                "bounded command queue should return Pending when full"
-            );
+            match Pin::new(&mut stream).poll_write(&mut cx, &big) {
+                std::task::Poll::Ready(Ok(n)) => {
+                    assert!(n <= MIGRATING_WRITE_MAX_CHUNK);
+                    accepted_big_bytes += n;
+                }
+                std::task::Poll::Pending => {
+                    saw_pending = true;
+                    break;
+                }
+                std::task::Poll::Ready(Err(error)) => panic!("unexpected write error: {error}"),
+            }
         }
-
-        let small = b"hello, world!";
-        let small_written = conn.write(small).await.unwrap();
-        assert_eq!(small_written, small.len(), "small write should return exact length");
-
-        conn.shutdown().await.unwrap();
-
-        tokio::time::timeout(Duration::from_secs(2), peer_done.notified())
-            .await
-            .expect("peer should receive data within timeout");
-
-        let received = received.lock().unwrap().clone();
-        let expected_large = large_chunk.repeat(MIGRATING_WRITE_QUEUE_CAPACITY);
-        assert_eq!(received.len(), expected_large.len() + small.len());
-        assert!(
-            received.starts_with(&expected_large),
-            "received data should start with accepted large-write bytes"
-        );
-        assert!(
-            received.ends_with(small),
-            "received data should end with small write bytes"
-        );
+        assert!(saw_pending, "bounded writer queue never applied backpressure");
+        let small = b"small-after-cancel";
+        let n = stream.write(small).await.unwrap();
+        assert_eq!(n, small.len());
+        let mut accepted = tokio::time::timeout(Duration::from_secs(2), accepted_rx.recv()).await.unwrap().unwrap();
+        let receive = tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            accepted.read_to_end(&mut bytes).await.unwrap();
+            bytes
+        });
+        stream.shutdown().await.unwrap();
+        let bytes = tokio::time::timeout(Duration::from_secs(3), receive).await.expect("FINAL was not delivered").unwrap();
+        assert_eq!(bytes.len(), accepted_big_bytes + small.len());
+        assert_eq!(&bytes[bytes.len() - small.len()..], small);
+        accepter_task.abort();
     }
 }

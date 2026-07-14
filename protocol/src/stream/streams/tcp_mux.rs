@@ -15,7 +15,7 @@ use tokio::{
 };
 use tracing::{info, instrument, trace, warn};
 
-use crate::stream::streams::accept_error::AcceptErrorBackoff;
+use crate::stream::streams::accept_error::{AcceptErrorBackoff, accept_after_retry};
 
 use common::{
     addr::any_addr,
@@ -90,12 +90,11 @@ where
         loop {
             trace!("Waiting for connection");
             tokio::select! {
-                _ = accept_backoff.wait_for_accept_retry(), if accept_backoff.retry_delay().is_some() => {}
                 Some(res) = self.mux.join_next() => {
                     let e = res.unwrap();
                     warn!(?e, ?addr, "MUX error");
                 }
-                res = self.listener.accept() => {
+                res = accept_after_retry(accept_backoff.retry_delay(), || self.listener.accept()) => {
                     let (stream, _) = match res {
                         Ok(res) => {
                             accept_backoff.accepted("tcp_mux", addr);

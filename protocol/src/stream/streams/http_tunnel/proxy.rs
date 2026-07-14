@@ -36,19 +36,18 @@ const DEFAULT_PORT_HTTPS: u16 = 443;
 fn get_authority_from_req<T>(req: &Request<T>) -> Result<InternetAddr, TunnelError> {
     let scheme = req.uri().scheme_str();
 
-    if let Some(auth) = req.uri().authority() {
-        return authority_to_internet_addr(auth, scheme);
+    if let Some(authority) = req.uri().authority() {
+        return authority_to_internet_addr(authority, scheme);
     }
 
-    let host_header = req
+    let host = req
         .headers()
         .get(hyper::header::HOST)
-        .ok_or(TunnelError::HttpNoHost)?;
-    let host_str = host_header
+        .ok_or(TunnelError::HttpNoHost)?
         .to_str()
         .map_err(|_| TunnelError::HttpInvalidHost("non-ascii host header".into()))?;
-    let authority = Authority::try_from(host_str)
-        .map_err(|e| TunnelError::HttpInvalidHost(e.to_string()))?;
+    let authority = Authority::try_from(host)
+        .map_err(|error| TunnelError::HttpInvalidHost(error.to_string()))?;
 
     authority_to_internet_addr(&authority, scheme)
 }
@@ -68,20 +67,20 @@ fn authority_to_internet_addr(
     scheme: Option<&str>,
 ) -> Result<InternetAddr, TunnelError> {
     let host = authority.host();
-    let port = authority.port_u16().or_else(|| match scheme {
-        Some("http") => Some(DEFAULT_PORT_HTTP),
-        Some("https") => Some(DEFAULT_PORT_HTTPS),
-        None => Some(DEFAULT_PORT_HTTP),
-        _ => None,
-    });
-    let port = match port {
-        Some(p) => p,
-        None => {
-            if authority_has_explicit_port(authority) {
-                return Err(TunnelError::HttpInvalidPort(authority.to_string()));
-            }
-            return Err(TunnelError::HttpNoPort);
+    let host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    let port = match authority.port_u16() {
+        Some(port) => port,
+        None if authority_has_explicit_port(authority) => {
+            return Err(TunnelError::HttpInvalidPort(authority.to_string()));
         }
+        None => match scheme {
+            Some("https") => DEFAULT_PORT_HTTPS,
+            Some("http") | None => DEFAULT_PORT_HTTP,
+            _ => return Err(TunnelError::HttpNoPort),
+        },
     };
     Ok(InternetAddr::from_host_and_port(host, port)?)
 }
@@ -106,6 +105,7 @@ pub async fn run_proxy_mode(
             return Err(e);
         }
     };
+    reporter.set_destination(dst_addr.to_string());
     let dst_addr_stream = StreamAddr {
         address: dst_addr,
         stream_type: ConcreteStreamType::Tcp.to_string().into(),
@@ -142,15 +142,11 @@ async fn direct(
     reporter: HttpFailureReporter,
 ) -> ReturnType {
     let destination = dst_addr.address.to_string();
-    let sock_addrs = dst_addr
-        .address
-        .to_socket_addrs()
-        .await
-        .map_err(|e| {
-            let err = TunnelError::Direct(e);
-            reporter.report(&err, Some(&destination));
-            err
-        })?;
+    let sock_addrs = dst_addr.address.to_socket_addrs().await.map_err(|e| {
+        let err = TunnelError::Direct(e);
+        reporter.report(&err, Some(&destination));
+        err
+    })?;
     let (upstream, _upstream_sock) = ctx
         .stream_context
         .connector_table
@@ -204,9 +200,7 @@ async fn proxy(
         Ok(u) => u,
         Err(e) => {
             let tunnel_err = TunnelError::from(e);
-            let destination = tunnel_err
-                .upstream_addr()
-                .map(|a| a.address.to_string());
+            let destination = tunnel_err.upstream_addr().map(|a| a.address.to_string());
             reporter.report(&tunnel_err, destination.as_deref());
             return Err(tunnel_err);
         }
@@ -356,11 +350,17 @@ mod address_tests {
         let method = hyper::http::Method::GET;
 
         super::transform_absolute_form_req(&mut uri, &mut headers, &method);
-        assert_eq!(headers.get(hyper::http::header::HOST).unwrap(), "www.example.org");
+        assert_eq!(
+            headers.get(hyper::http::header::HOST).unwrap(),
+            "www.example.org"
+        );
         assert_eq!(uri.to_string(), "/pub/WWW/TheProject.html");
 
         super::transform_absolute_form_req(&mut uri, &mut headers, &method);
-        assert_eq!(headers.get(hyper::http::header::HOST).unwrap(), "www.example.org");
+        assert_eq!(
+            headers.get(hyper::http::header::HOST).unwrap(),
+            "www.example.org"
+        );
         assert_eq!(uri.to_string(), "/pub/WWW/TheProject.html");
     }
 }

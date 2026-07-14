@@ -38,19 +38,14 @@ impl AcceptErrorBackoff {
         let error_msg = format!("{error}");
         self.record(error_msg);
         if !fatal {
-            let wait_ms =
-                INITIAL_BACKOFF_MS * 2u64.saturating_pow((self.error_count - 1) as u32);
+            let wait_ms = INITIAL_BACKOFF_MS * 2u64.saturating_pow((self.error_count - 1) as u32);
             let wait_ms = wait_ms.min(MAX_BACKOFF_MS);
             self.retry_at = Some(now + std::time::Duration::from_millis(wait_ms));
         } else {
             self.retry_at = None;
         }
         self.maybe_log(listener, addr, fatal);
-        if fatal {
-            Err(error)
-        } else {
-            Ok(())
-        }
+        if fatal { Err(error) } else { Ok(()) }
     }
 
     pub(crate) fn failed_dispatching(
@@ -64,11 +59,7 @@ impl AcceptErrorBackoff {
         self.record(error_msg);
         self.retry_at = None;
         self.maybe_log(listener, addr, fatal);
-        if fatal {
-            Err(error)
-        } else {
-            Ok(())
-        }
+        if fatal { Err(error) } else { Ok(()) }
     }
 
     fn record(&mut self, error_msg: String) {
@@ -117,14 +108,6 @@ impl AcceptErrorBackoff {
         })
     }
 
-    pub(crate) async fn wait_for_accept_retry(&self) {
-        if let Some(delay) = self.retry_delay() {
-            if delay > std::time::Duration::ZERO {
-                tokio::time::sleep(delay).await;
-            }
-        }
-    }
-
     pub(crate) fn retry_at(&self) -> Option<Instant> {
         self.retry_at
     }
@@ -152,6 +135,20 @@ impl AcceptErrorBackoff {
         self.logged = false;
         self.retry_at = None;
     }
+}
+
+pub(crate) async fn accept_after_retry<T, F, Fut>(
+    delay: Option<std::time::Duration>,
+    accept: F,
+) -> T
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
+    if let Some(delay) = delay {
+        tokio::time::sleep(delay).await;
+    }
+    accept().await
 }
 
 #[cfg(test)]
@@ -221,11 +218,23 @@ mod tests {
     fn non_fatal_error_does_not_log_until_third() {
         let mut backoff = AcceptErrorBackoff::default();
         let addr = "127.0.0.1:1234".parse().unwrap();
-        let _ = backoff.failed("tcp", addr, io::Error::new(io::ErrorKind::WouldBlock, "test"));
+        let _ = backoff.failed(
+            "tcp",
+            addr,
+            io::Error::new(io::ErrorKind::WouldBlock, "test"),
+        );
         assert!(!backoff.logged);
-        let _ = backoff.failed("tcp", addr, io::Error::new(io::ErrorKind::WouldBlock, "test"));
+        let _ = backoff.failed(
+            "tcp",
+            addr,
+            io::Error::new(io::ErrorKind::WouldBlock, "test"),
+        );
         assert!(!backoff.logged);
-        let _ = backoff.failed("tcp", addr, io::Error::new(io::ErrorKind::WouldBlock, "test"));
+        let _ = backoff.failed(
+            "tcp",
+            addr,
+            io::Error::new(io::ErrorKind::WouldBlock, "test"),
+        );
         assert!(backoff.logged);
     }
 
@@ -248,10 +257,37 @@ mod tests {
     fn accepted_clears_state_when_streak_not_yet_logged() {
         let mut backoff = AcceptErrorBackoff::default();
         let addr = "127.0.0.1:1234".parse().unwrap();
-        let _ = backoff.failed("tcp", addr, io::Error::new(io::ErrorKind::WouldBlock, "test"));
+        let _ = backoff.failed(
+            "tcp",
+            addr,
+            io::Error::new(io::ErrorKind::WouldBlock, "test"),
+        );
         assert!(!backoff.logged);
         backoff.accepted("tcp", addr);
         assert_eq!(backoff.error_count, 0);
         assert!(!backoff.logged);
+    }
+
+    #[tokio::test]
+    async fn accept_after_retry_does_not_poll_accept_before_deadline() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let polled = Arc::new(AtomicBool::new(false));
+        let future = accept_after_retry(Some(std::time::Duration::from_secs(60)), {
+            let polled = Arc::clone(&polled);
+            move || {
+                std::future::poll_fn(move |_| {
+                    polled.store(true, Ordering::SeqCst);
+                    std::task::Poll::Ready(())
+                })
+            }
+        });
+        tokio::pin!(future);
+        let waker = futures::task::noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        assert!(!polled.load(Ordering::SeqCst));
     }
 }

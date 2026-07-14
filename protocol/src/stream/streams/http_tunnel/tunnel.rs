@@ -162,13 +162,11 @@ async fn upgrade(req: Request<Incoming>, action: UpgradeAction) -> Result<(), Co
             direct(ctx, upgraded).await?;
         }
         UpgradeAction::Proxy(ctx) => {
-            proxy(&ctx, upgraded)
-                .await
-                .map_err(|e| match e {
-                    ProxyError::EstablishProxyChain(inner) => {
-                        ConnectFailure::EstablishProxyChain(inner)
-                    }
-                })?;
+            proxy(&ctx, upgraded).await.map_err(|e| match e {
+                ProxyError::EstablishProxyChain(inner) => {
+                    ConnectFailure::EstablishProxyChain(inner)
+                }
+            })?;
         }
     }
     Ok(())
