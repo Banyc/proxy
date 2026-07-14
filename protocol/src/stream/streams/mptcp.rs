@@ -1,4 +1,4 @@
-use std::{io, net::SocketAddr, num::NonZeroUsize, sync::Arc};
+use std::{io, net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use metrics::counter;
@@ -9,7 +9,9 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::ToSocketAddrs,
 };
-use tracing::{info, instrument, trace, warn};
+use tracing::{info, instrument, trace};
+
+use crate::stream::streams::accept_error::AcceptErrorBackoff;
 
 use common::{
     error::AnyResult,
@@ -80,17 +82,30 @@ where
             .unwrap()
             .map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
-        // Arc conn_handler
         let mut conn_handler = Arc::new(self.conn_handler);
+        let mut accept_backoff = AcceptErrorBackoff::default();
         loop {
             trace!("Waiting for connection");
             tokio::select! {
                 res = self.listener.accept() => {
                     let stream = match res {
-                        Ok(res) => res,
+                        Ok(res) => {
+                            accept_backoff.reset();
+                            res
+                        }
                         Err(e) => {
-                            warn!(?e, ?addr, "Accept error");
-                            continue;
+                            match accept_backoff.failed("mptcp", addr, e) {
+                                Ok(()) => {
+                                    if let Some(retry_at) = accept_backoff.retry_at() {
+                                        let now = Instant::now();
+                                        if retry_at > now {
+                                            tokio::time::sleep(retry_at - now).await;
+                                        }
+                                    }
+                                    continue;
+                                }
+                                Err(fatal) => return Err(ServeError::Accept { source: fatal, addr }),
+                            }
                         }
                     };
                     counter!("stream.mptcp.accepts").increment(1);

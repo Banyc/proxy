@@ -1,7 +1,11 @@
 use std::{
     collections::HashMap,
     io,
-    sync::{Arc, Mutex},
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use crate::stream::streams::{
@@ -26,6 +30,7 @@ use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::{Method, Request, Response, service::service_fn};
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use thiserror::Error;
 use tracing::{instrument, trace, warn};
 
@@ -33,13 +38,58 @@ mod proxy;
 mod tunnel;
 
 type ReturnType = Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>;
-type RequestErrorContext = Arc<Mutex<Option<HttpRequestContext>>>;
+
+#[derive(Debug, Clone)]
+struct HttpDownstreamContext {
+    remote: Option<SocketAddr>,
+    local: Option<SocketAddr>,
+}
+
+#[derive(Debug)]
+struct HttpRequestFailure {
+    request: HttpRequestContext,
+    destination: OnceLock<String>,
+    reported: AtomicBool,
+}
+
+struct HttpFailureReporter {
+    failure: Arc<HttpRequestFailure>,
+    downstream: HttpDownstreamContext,
+    listener: Arc<str>,
+}
+
+impl HttpFailureReporter {
+    fn report(&self, error: &TunnelError, attempted_upstream: Option<&str>) {
+        if self.failure.reported.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        if let Some(up) = attempted_upstream {
+            let _ = self.failure.destination.set(up.to_string());
+        }
+        let destination = self.failure.destination.get();
+        let request = &self.failure.request;
+        warn!(
+            event = "http_tunnel_proxy_failed",
+            error = %error,
+            downstream_remote = ?self.downstream.remote,
+            downstream_local = ?self.downstream.local,
+            attempted_upstream = ?attempted_upstream,
+            destination = ?destination,
+            method = %request.method,
+            uri = %request.uri,
+            host = ?request.host,
+            listener = %self.listener,
+            "HTTP tunnel proxy failed"
+        );
+    }
+}
 
 #[derive(Debug, Clone)]
 struct HttpRequestContext {
     method: Method,
     uri: hyper::Uri,
     host: Option<String>,
+    #[allow(dead_code)]
     authority: Option<String>,
 }
 impl HttpRequestContext {
@@ -53,7 +103,7 @@ impl HttpRequestContext {
         let authority = req
             .uri()
             .authority()
-            .map(|authority| authority.as_str().to_owned())
+            .map(|a| a.as_str().to_owned())
             .or_else(|| host.clone());
         Self {
             method: req.method().clone(),
@@ -172,27 +222,19 @@ impl StreamServerHandleConn for HttpAccessConnHandler {
     where
         Stream: OwnIoStream + HasIoAddr,
     {
-        let dn = stream.peer_addr().ok();
+        let dn_remote = stream.peer_addr().ok();
         let dn_local = stream.local_addr().ok();
-        let request_error_context = RequestErrorContext::default();
-        let res = proxy(&self.ctx, stream, Arc::clone(&request_error_context)).await;
-        if let Err(e) = res {
-            let request = request_error_context.lock().unwrap().take();
-            let method = request.as_ref().map(|request| &request.method);
-            let uri = request.as_ref().map(|request| &request.uri);
-            let host = request.as_ref().and_then(|request| request.host.as_deref());
-            let up = http_failure_upstream(&e, request.as_ref());
+        let downstream = HttpDownstreamContext {
+            remote: dn_remote,
+            local: dn_local,
+        };
+        let listener = Arc::clone(&self.ctx.listen_addr);
+        if let Err(e) = proxy(&self.ctx, stream, downstream, listener).await {
             warn!(
                 event = "http_tunnel_proxy_failed",
-                ?e,
-                ?dn,
-                ?dn_local,
-                ?up,
-                ?method,
-                ?uri,
-                ?host,
+                error = %e,
                 listener = %self.ctx.listen_addr,
-                "HTTP tunnel proxy failed"
+                "HTTP tunnel proxy top-level failure"
             );
         }
     }
@@ -201,17 +243,27 @@ impl StreamServerHandleConn for HttpAccessConnHandler {
 async fn proxy<Downstream>(
     ctx: &HttpAccessConnContext,
     downstream: Downstream,
-    request_error_context: RequestErrorContext,
+    downstream_ctx: HttpDownstreamContext,
+    listener: Arc<str>,
 ) -> Result<(), TunnelError>
 where
     Downstream: OwnIoStream,
 {
+    let downstream_ctx = Arc::new(downstream_ctx);
+    let listener = Arc::clone(&listener);
     hyper::server::conn::http1::Builder::new()
         .preserve_header_case(true)
         .title_case_headers(true)
         .serve_connection(
             TokioIo::new(downstream),
-            service_fn(|req| run_service(ctx, req, Arc::clone(&request_error_context))),
+            service_fn(|req| {
+                run_service(
+                    ctx,
+                    req,
+                    Arc::clone(&downstream_ctx),
+                    Arc::clone(&listener),
+                )
+            }),
         )
         .with_upgrades()
         .await?;
@@ -221,18 +273,26 @@ where
 async fn run_service(
     ctx: &HttpAccessConnContext,
     req: Request<hyper::body::Incoming>,
-    request_error_context: RequestErrorContext,
+    downstream_ctx: Arc<HttpDownstreamContext>,
+    listener: Arc<str>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError> {
     let request_context = HttpRequestContext::from_request(&req);
     trace!(?request_context, "Received request");
-    let res = if Method::CONNECT == req.method() {
-        run_tunnel_mode(ctx, req).await
-    } else {
-        run_proxy_mode(ctx, req).await
+    let failure = Arc::new(HttpRequestFailure {
+        request: request_context,
+        destination: OnceLock::new(),
+        reported: AtomicBool::new(false),
+    });
+    let reporter = HttpFailureReporter {
+        failure: Arc::clone(&failure),
+        downstream: (*downstream_ctx).clone(),
+        listener,
     };
-    if res.is_err() {
-        *request_error_context.lock().unwrap() = Some(request_context);
-    }
+    let res = if Method::CONNECT == req.method() {
+        run_tunnel_mode(ctx, req, reporter).await
+    } else {
+        run_proxy_mode(ctx, req, reporter).await
+    };
     res
 }
 
@@ -246,10 +306,18 @@ pub enum TunnelError {
     HttpNoHost,
     #[error("No port in HTTP request")]
     HttpNoPort,
+    #[error("Invalid HTTP host: {0}")]
+    HttpInvalidHost(String),
     #[error("Direct connection error: {0}")]
     Direct(#[source] io::Error),
     #[error("Invalid address: {0}")]
     Address(#[from] ParseInternetAddrError),
+    #[error("Upstream HTTP/1 handshake failed: {0}")]
+    UpstreamHandshake(#[source] hyper::Error),
+    #[error("Upstream HTTP request send failed: {0}")]
+    UpstreamRequestSend(#[source] hyper::Error),
+    #[error("Upstream background connection failed: {0}")]
+    BackgroundConnection(#[source] hyper::Error),
 }
 impl From<StreamEstablishError> for TunnelError {
     fn from(e: StreamEstablishError) -> Self {
@@ -270,16 +338,6 @@ impl TunnelError {
             _ => None,
         }
     }
-}
-
-fn http_failure_upstream(
-    error: &TunnelError,
-    request: Option<&HttpRequestContext>,
-) -> Option<String> {
-    error
-        .upstream_addr()
-        .map(ToString::to_string)
-        .or_else(|| request.and_then(|request| request.authority.clone()))
 }
 
 fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
@@ -312,21 +370,6 @@ mod tests {
         assert_eq!(context.uri, "/");
         assert_eq!(context.host.as_deref(), Some("api.example.com"));
         assert_eq!(context.authority.as_deref(), Some("api.example.com"));
-    }
-
-    #[test]
-    fn request_authority_falls_back_for_http_error_without_upstream() {
-        let request = Request::builder()
-            .method(Method::GET)
-            .uri("/")
-            .header(hyper::header::HOST, "api.example.com")
-            .body(())
-            .unwrap();
-        let context = HttpRequestContext::from_request(&request);
-        assert_eq!(
-            http_failure_upstream(&TunnelError::HttpNoPort, Some(&context)).as_deref(),
-            Some("api.example.com")
-        );
     }
 
     #[test]
@@ -371,4 +414,104 @@ mod tests {
         assert_eq!(up.stream_type.as_ref(), "rtp-mux");
         assert_eq!(up.address.to_string(), "10.0.0.1:9090");
     }
+
+    #[test]
+    fn failure_reporter_emits_only_once() {
+        let failure = Arc::new(HttpRequestFailure {
+            request: HttpRequestContext {
+                method: Method::GET,
+                uri: "/".parse().unwrap(),
+                host: None,
+                authority: None,
+            },
+            destination: OnceLock::new(),
+            reported: AtomicBool::new(false),
+        });
+        let reporter = HttpFailureReporter {
+            failure: Arc::clone(&failure),
+            downstream: HttpDownstreamContext {
+                remote: None,
+                local: None,
+            },
+            listener: Arc::from("test"),
+        };
+        reporter.report(&TunnelError::HttpNoHost, None);
+        assert!(failure.reported.load(Ordering::Relaxed));
+        reporter.report(&TunnelError::HttpNoPort, None);
+        assert!(failure.reported.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn origin_form_defaults_domain_and_ipv4_to_port_80() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/path")
+            .header(hyper::header::HOST, "example.com")
+            .body(())
+            .unwrap();
+        let authority = get_authority_for_test(&req).unwrap();
+        assert_eq!(authority.host(), "example.com");
+        assert_eq!(authority.port_u16(), None);
+    }
+
+    #[test]
+    fn host_authority_supports_bracketed_ipv6_with_and_without_port() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/path")
+            .header(hyper::header::HOST, "[::1]:8080")
+            .body(())
+            .unwrap();
+        let addr = proxy::get_authority_from_req_for_test(&req).unwrap();
+        assert_eq!(addr.to_string(), "[::1]:8080");
+
+        let req2 = Request::builder()
+            .method(Method::GET)
+            .uri("/path")
+            .header(hyper::header::HOST, "[::1]")
+            .body(())
+            .unwrap();
+        let addr2 = proxy::get_authority_from_req_for_test(&req2).unwrap();
+        assert_eq!(addr2.to_string(), "[::1]:80");
+    }
+
+    #[test]
+    fn absolute_form_authority_takes_precedence_over_host_header() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://absolute.example.com:9090/path")
+            .header(hyper::header::HOST, "ignored.example.com")
+            .body(())
+            .unwrap();
+        let addr = proxy::get_authority_from_req_for_test(&req).unwrap();
+        assert_eq!(addr.to_string(), "absolute.example.com:9090");
+    }
+
+    #[test]
+    fn malformed_host_port_is_not_treated_as_missing_port() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/")
+            .header(hyper::header::HOST, "example.com:abc")
+            .body(())
+            .unwrap();
+        let result = proxy::get_authority_from_req_for_test(&req);
+        assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+fn get_authority_for_test<B>(req: &Request<B>) -> Result<hyper::http::uri::Authority, TunnelError> {
+    if let Some(auth) = req.uri().authority() {
+        return Ok(auth.clone());
+    }
+    let host_header = req
+        .headers()
+        .get(hyper::header::HOST)
+        .ok_or(TunnelError::HttpNoHost)?;
+    let host_str = host_header
+        .to_str()
+        .map_err(|_| TunnelError::HttpInvalidHost("non-ascii host".into()))?;
+    hyper::http::uri::Authority::try_from(host_str)
+        .map_err(|e| TunnelError::HttpInvalidHost(e.to_string()))
 }

@@ -3,6 +3,7 @@ use std::{
     net::SocketAddr,
     pin::Pin,
     sync::{Arc, RwLock},
+    time::Instant,
 };
 
 use async_trait::async_trait;
@@ -13,7 +14,9 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpSocket, TcpStream, ToSocketAddrs},
 };
-use tracing::{info, instrument, trace, warn};
+use tracing::{info, instrument, trace};
+
+use crate::stream::streams::accept_error::AcceptErrorBackoff;
 
 use common::{
     addr::any_addr,
@@ -81,18 +84,30 @@ where
     ) -> Result<(), ServeError> {
         let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
         info!(?addr, "Listening");
-        // Arc conn_handler
         let mut conn_handler = Arc::new(self.conn_handler);
+        let mut accept_backoff = AcceptErrorBackoff::default();
         loop {
             trace!("Waiting for connection");
             tokio::select! {
                 res = self.listener.accept() => {
-                    // let (stream, _) = res.map_err(|e| ServeError::Accept { source: e, addr })?;
                     let (stream, _) = match res {
-                        Ok(res) => res,
+                        Ok(res) => {
+                            accept_backoff.reset();
+                            res
+                        }
                         Err(e) => {
-                            warn!(?e, ?addr, "Accept error");
-                            continue;
+                            match accept_backoff.failed("tcp", addr, e) {
+                                Ok(()) => {
+                                    if let Some(retry_at) = accept_backoff.retry_at() {
+                                        let now = Instant::now();
+                                        if retry_at > now {
+                                            tokio::time::sleep(retry_at - now).await;
+                                        }
+                                    }
+                                    continue;
+                                }
+                                Err(fatal) => return Err(ServeError::Accept { source: fatal, addr }),
+                            }
                         }
                     };
                     counter!("stream.tcp.accepts").increment(1);

@@ -1,9 +1,12 @@
-use std::{borrow::Cow, sync::Arc, time::SystemTime};
+use std::{sync::Arc, time::SystemTime};
 
 use crate::stream::{
     addr::ConcreteStreamType,
     streams::{
-        http_tunnel::{HttpAccessConnContext, ReturnType, TunnelError, respond_with_rejection},
+        http_tunnel::{
+            HttpAccessConnContext, HttpFailureReporter, ReturnType, TunnelError,
+            respond_with_rejection,
+        },
         tcp::proxy_server::TCP_STREAM_TYPE,
     },
 };
@@ -21,84 +24,76 @@ use common::{
     udp::TIMEOUT,
 };
 use http_body_util::BodyExt;
-use hyper::{Request, body::Incoming, http};
+use hyper::{Request, body::Incoming, http::uri::Authority};
 use hyper_util::rt::TokioIo;
 use monitor_table::table::RowOwnedGuard;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tracing::{info, instrument, trace, warn};
+use tracing::{info, instrument, trace};
 
 const DEFAULT_PORT_HTTP: u16 = 80;
 const DEFAULT_PORT_HTTPS: u16 = 443;
 
-#[derive(Debug, Clone, Copy)]
-struct ParsedHostHeader<'a> {
-    pub host: &'a str,
-    pub port: Option<u16>,
-}
-impl<'a> ParsedHostHeader<'a> {
-    fn from_str(s: &'a str) -> Option<Self> {
-        let Some((host, port)) = s.split_once(":") else {
-            return Some(Self {
-                host: s,
-                port: None,
-            });
-        };
-        let port = port.parse().ok()?;
-        Some(Self {
-            host,
-            port: Some(port),
-        })
+fn get_authority_from_req<T>(req: &Request<T>) -> Result<InternetAddr, TunnelError> {
+    let scheme = req.uri().scheme_str();
+
+    if let Some(auth) = req.uri().authority() {
+        return authority_to_internet_addr(auth, scheme);
     }
+
+    let host_header = req
+        .headers()
+        .get(hyper::header::HOST)
+        .ok_or(TunnelError::HttpNoHost)?;
+    let host_str = host_header
+        .to_str()
+        .map_err(|_| TunnelError::HttpInvalidHost("non-ascii host header".into()))?;
+    let authority = Authority::try_from(host_str)
+        .map_err(|e| TunnelError::HttpInvalidHost(e.to_string()))?;
+
+    authority_to_internet_addr(&authority, scheme)
 }
 
-fn get_authority_from_req(
-    req: &Request<hyper::body::Incoming>,
+fn authority_to_internet_addr(
+    authority: &Authority,
+    scheme: Option<&str>,
 ) -> Result<InternetAddr, TunnelError> {
-    let scheme = || req.uri().scheme_str();
-    let scheme_port = || scheme().and_then(http_default_port);
-    let req_target_host = req.uri().host();
-    let req_target_port = req.uri().port_u16();
-    let host_header = || {
-        req.headers()
-            .get(hyper::header::HOST)
-            .ok_or(TunnelError::HttpNoHost)
-    };
-    if let (Some(host), Some(port)) = (req_target_host, req_target_port) {
-        return Ok(InternetAddr::from_host_and_port(host, port)?);
-    }
-    let host_header = host_header()?;
-    let host_header = host_header.to_str().map_err(|_| TunnelError::HttpNoHost)?;
-    let host_header = ParsedHostHeader::from_str(host_header).ok_or(TunnelError::HttpNoPort)?;
-    let host = req_target_host.unwrap_or(host_header.host);
-    let port = req_target_port
-        .or(host_header.port)
-        .or_else(scheme_port)
-        .or_else(|| req.uri().scheme().is_none().then_some(DEFAULT_PORT_HTTP))
-        .ok_or(TunnelError::HttpNoPort)?;
+    let host = authority.host();
+    let port = authority.port_u16().or_else(|| match scheme {
+        Some("http") => Some(DEFAULT_PORT_HTTP),
+        Some("https") => Some(DEFAULT_PORT_HTTPS),
+        None => Some(DEFAULT_PORT_HTTP),
+        _ => None,
+    });
+    let port = port.ok_or(TunnelError::HttpNoPort)?;
     Ok(InternetAddr::from_host_and_port(host, port)?)
+}
+
+#[cfg(test)]
+pub(crate) fn get_authority_from_req_for_test<T>(
+    req: &Request<T>,
+) -> Result<InternetAddr, TunnelError> {
+    get_authority_from_req(req)
 }
 
 #[instrument(skip_all, fields(method = %req.method()))]
 pub async fn run_proxy_mode(
     ctx: &HttpAccessConnContext,
     req: Request<hyper::body::Incoming>,
+    reporter: HttpFailureReporter,
 ) -> ReturnType {
-    let dst_addr = get_authority_from_req(&req)?;
-    let dst_addr = StreamAddr {
+    let dst_addr = match get_authority_from_req(&req) {
+        Ok(addr) => addr,
+        Err(e) => {
+            reporter.report(&e, None);
+            return Err(e);
+        }
+    };
+    let dst_addr_stream = StreamAddr {
         address: dst_addr,
         stream_type: ConcreteStreamType::Tcp.to_string().into(),
     };
     let req = req_modify_path(req);
-    dispatch(dst_addr, req, ctx).await
-}
-
-fn http_default_port(scheme: &str) -> Option<u16> {
-    let scheme = scheme.to_lowercase();
-    Some(match scheme.as_str() {
-        "http" => DEFAULT_PORT_HTTP,
-        "https" => DEFAULT_PORT_HTTPS,
-        _ => return None,
-    })
+    dispatch(dst_addr_stream, req, ctx, reporter).await
 }
 
 #[instrument(skip_all, fields(addr = ?dst_addr))]
@@ -106,15 +101,18 @@ async fn dispatch(
     dst_addr: StreamAddr,
     req: Request<Incoming>,
     ctx: &HttpAccessConnContext,
+    reporter: HttpFailureReporter,
 ) -> ReturnType {
     let action = ctx.route_table.action(&dst_addr.address);
     match action {
-        RouteAction::ConnSelector(conn_selector) => proxy(conn_selector, dst_addr, req, ctx).await,
+        RouteAction::ConnSelector(conn_selector) => {
+            proxy(conn_selector, dst_addr, req, ctx, reporter).await
+        }
         RouteAction::Block => {
             trace!("Blocked");
-            return Ok(respond_with_rejection());
+            Ok(respond_with_rejection())
         }
-        RouteAction::Direct => direct(dst_addr, req, ctx).await,
+        RouteAction::Direct => direct(dst_addr, req, ctx, reporter).await,
     }
 }
 
@@ -123,18 +121,20 @@ async fn direct(
     dst_addr: StreamAddr,
     req: Request<Incoming>,
     ctx: &HttpAccessConnContext,
+    reporter: HttpFailureReporter,
 ) -> ReturnType {
     let sock_addrs = dst_addr
         .address
         .to_socket_addrs()
         .await
         .map_err(TunnelError::Direct)?;
-    let (upstream, _) = ctx
+    let (upstream, _upstream_sock) = ctx
         .stream_context
         .connector_table
         .timed_connect_2(TCP_STREAM_TYPE, sock_addrs, TIMEOUT)
         .await
         .map_err(TunnelError::Direct)?;
+    let dn_remote = reporter.downstream.remote;
     let session_guard = ctx.stream_context.session_table.as_ref().map(|s| {
         s.set_scope_owned(Session {
             start: SystemTime::now(),
@@ -143,14 +143,14 @@ async fn direct(
             upstream_local: upstream.local_addr().ok(),
             upstream_remote: dst_addr.clone(),
             downstream_local: Arc::clone(&ctx.listen_addr),
-            downstream_remote: None,
+            downstream_remote: dn_remote,
             up_gauge: None,
             dn_gauge: None,
         })
     });
-    let res = tls_http(upstream, req, session_guard).await;
+    let res = tls_http(upstream, req, session_guard, &reporter).await;
     info!("Direct finished");
-    return res;
+    res
 }
 
 #[instrument(skip_all)]
@@ -159,10 +159,10 @@ async fn proxy(
     dst_addr: StreamAddr,
     req: Request<Incoming>,
     ctx: &HttpAccessConnContext,
+    reporter: HttpFailureReporter,
 ) -> ReturnType {
     let start = (std::time::Instant::now(), std::time::SystemTime::now());
 
-    // Establish proxy chain
     let (chain, payload_crypto) = match conn_selector {
         common::route::ConnSelector::Empty => ([].into(), None),
         common::route::ConnSelector::Some(conn_selector1) => {
@@ -173,8 +173,20 @@ async fn proxy(
             )
         }
     };
-    let upstream = establish(&chain, dst_addr.clone(), &ctx.stream_context).await?;
+    let upstream = match establish(&chain, dst_addr.clone(), &ctx.stream_context).await {
+        Ok(u) => u,
+        Err(e) => {
+            let tunnel_err = TunnelError::from(e);
+            let destination = tunnel_err
+                .upstream_addr()
+                .map(|a| a.address.to_string());
+            reporter.report(&tunnel_err, destination.as_deref());
+            return Err(tunnel_err);
+        }
+    };
+    let upstream_addr = upstream.addr.clone();
 
+    let dn_remote = reporter.downstream.remote;
     let session_guard = ctx.stream_context.session_table.as_ref().map(|s| {
         s.set_scope_owned(Session {
             start: SystemTime::now(),
@@ -183,20 +195,19 @@ async fn proxy(
             upstream_local: upstream.stream.local_addr().ok(),
             upstream_remote: upstream.addr.clone(),
             downstream_local: Arc::clone(&ctx.listen_addr),
-            downstream_remote: None,
+            downstream_remote: dn_remote,
             up_gauge: None,
             dn_gauge: None,
         })
     });
     let res = match &payload_crypto {
         Some(crypto) => {
-            // Establish encrypted stream
             let (r, w) = tokio::io::split(upstream.stream);
             let (r, w) = same_key_nonce_ciphertext(crypto.key(), r, w);
             let upstream = tokio_chacha20::stream::DuplexStream::new(r, w);
-            tls_http(upstream, req, session_guard).await
+            tls_http(upstream, req, session_guard, &reporter).await
         }
-        None => tls_http(upstream.stream, req, session_guard).await,
+        None => tls_http(upstream.stream, req, session_guard, &reporter).await,
     };
 
     let end = std::time::Instant::now();
@@ -204,9 +215,9 @@ async fn proxy(
     let log = SimplifiedStreamProxyLog {
         stream: SimplifiedStreamLog {
             timing,
-            upstream_addr: upstream.addr,
+            upstream_addr,
             upstream_sock_addr: upstream.sock_addr,
-            downstream_addr: None,
+            downstream_addr: reporter.downstream.remote,
         },
         destination: dst_addr.address,
     };
@@ -225,30 +236,41 @@ async fn tls_http<Upstream>(
     upstream: Upstream,
     req: Request<Incoming>,
     session_guard: Option<RowOwnedGuard<Session>>,
+    reporter: &HttpFailureReporter,
 ) -> ReturnType
 where
     Upstream: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
-    // Establish TLS connection
     let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
         .preserve_header_case(true)
         .title_case_headers(true)
         .handshake(TokioIo::new(upstream))
         .await
         .map_err(|e| {
-            warn!(?e, "Failed to establish HTTP/1 handshake to upstream");
-            e
+            let err = TunnelError::UpstreamHandshake(e);
+            reporter.report(&err, None);
+            err
         })?;
+
+    let bg_reporter_failure = Arc::clone(&reporter.failure);
+    let bg_downstream = reporter.downstream.clone();
+    let bg_listener = Arc::clone(&reporter.listener);
     tokio::task::spawn(async move {
-        if let Err(err) = conn.await {
-            warn!(?err, "Connection failed");
+        if let Err(e) = conn.await {
+            let err = TunnelError::BackgroundConnection(e);
+            let bg_reporter = HttpFailureReporter {
+                failure: bg_reporter_failure,
+                downstream: bg_downstream,
+                listener: bg_listener,
+            };
+            bg_reporter.report(&err, None);
         }
     });
 
-    // Send HTTP/1 request
     let resp = sender.send_request(req).await.map_err(|e| {
-        warn!(?e, "Failed to send HTTP/1 request to upstream");
-        e
+        let err = TunnelError::UpstreamRequestSend(e);
+        reporter.report(&err, None);
+        err
     })?;
 
     if let Some(s) = &session_guard {
@@ -271,11 +293,10 @@ fn req_modify_path<T>(req: Request<T>) -> Request<T> {
     *req.headers_mut() = headers;
     req
 }
-/// ref: <https://datatracker.ietf.org/doc/html/rfc9112#name-absolute-form>
 fn transform_absolute_form_req(
-    uri: &mut http::Uri,
-    headers: &mut http::HeaderMap,
-    method: &http::Method,
+    uri: &mut hyper::http::Uri,
+    headers: &mut hyper::http::HeaderMap,
+    method: &hyper::http::Method,
 ) {
     let Some(auth) = uri.authority() else {
         return;
@@ -283,18 +304,16 @@ fn transform_absolute_form_req(
     if uri.scheme().is_none() {
         return;
     }
-    // `uri` is in absolute-form
 
     let host = auth.host();
-    let new_host_value: Cow<str> = match auth.port() {
+    let new_host_value: std::borrow::Cow<str> = match auth.port() {
         Some(port) => format!("{host}:{port}").into(),
         None => host.into(),
     };
     let new_host_value = new_host_value.parse().unwrap();
-    headers.insert(http::header::HOST, new_host_value);
+    headers.insert(hyper::http::header::HOST, new_host_value);
 
-    // in case origin fails to parse absolute-form
-    let default_origin_form = if method == http::Method::OPTIONS {
+    let default_origin_form = if method == hyper::http::Method::OPTIONS {
         "*"
     } else {
         "/"
@@ -306,20 +325,22 @@ fn transform_absolute_form_req(
     *uri = relative_ref.parse().unwrap();
 }
 #[cfg(test)]
-#[test]
-fn test_transform_absolute_form_req() {
-    let absolute_form: http::Uri = "http://www.example.org/pub/WWW/TheProject.html"
-        .parse()
-        .unwrap();
-    let mut uri = absolute_form;
-    let mut headers = http::HeaderMap::new();
-    let method = http::Method::GET;
+mod address_tests {
+    #[test]
+    fn test_transform_absolute_form_req() {
+        let absolute_form: hyper::http::Uri = "http://www.example.org/pub/WWW/TheProject.html"
+            .parse()
+            .unwrap();
+        let mut uri = absolute_form;
+        let mut headers = hyper::http::HeaderMap::new();
+        let method = hyper::http::Method::GET;
 
-    transform_absolute_form_req(&mut uri, &mut headers, &method);
-    assert_eq!(headers.get(http::header::HOST).unwrap(), "www.example.org");
-    assert_eq!(uri.to_string(), "/pub/WWW/TheProject.html");
+        super::transform_absolute_form_req(&mut uri, &mut headers, &method);
+        assert_eq!(headers.get(hyper::http::header::HOST).unwrap(), "www.example.org");
+        assert_eq!(uri.to_string(), "/pub/WWW/TheProject.html");
 
-    transform_absolute_form_req(&mut uri, &mut headers, &method);
-    assert_eq!(headers.get(http::header::HOST).unwrap(), "www.example.org");
-    assert_eq!(uri.to_string(), "/pub/WWW/TheProject.html");
+        super::transform_absolute_form_req(&mut uri, &mut headers, &method);
+        assert_eq!(headers.get(hyper::http::header::HOST).unwrap(), "www.example.org");
+        assert_eq!(uri.to_string(), "/pub/WWW/TheProject.html");
+    }
 }

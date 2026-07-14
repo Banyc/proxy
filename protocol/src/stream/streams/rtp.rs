@@ -91,10 +91,18 @@ where
             tokio::select! {
                 res = self.listener.accept_without_handshake(self.fec) => {
                     let stream = match res {
-                        Ok(res) => res,
+                        Ok(res) => {
+                            accept_backoff.reset();
+                            res
+                        }
                         Err(e) => {
-                            let _ = accept_backoff.failed_dispatching("rtp", addr, e);
-                            continue;
+                            match accept_backoff.failed_dispatching("rtp", addr, e) {
+                                Ok(()) => {
+                                    tokio::task::yield_now().await;
+                                    continue;
+                                }
+                                Err(fatal) => return Err(ServeError::Accept { source: fatal, addr }),
+                            }
                         }
                     };
                     let stream = AddressedRtpStream {

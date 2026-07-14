@@ -3,7 +3,10 @@ use std::sync::Arc;
 use crate::stream::{
     addr::ConcreteStreamType,
     streams::{
-        http_tunnel::{HttpAccessConnContext, ReturnType, full, respond_with_rejection},
+        http_tunnel::{
+            HttpAccessConnContext, HttpFailureReporter, HttpRequestFailure, ReturnType, full,
+            respond_with_rejection,
+        },
         tcp::proxy_server::TCP_STREAM_TYPE,
     },
 };
@@ -24,39 +27,38 @@ use common::{
     udp::TIMEOUT,
 };
 use http_body_util::{BodyExt, Empty, combinators::BoxBody};
-use hyper::{Request, Response, body::Incoming, http, upgrade::Upgraded};
+use hyper::{Request, Response, body::Incoming, upgrade::Upgraded};
 use hyper_util::rt::TokioIo;
 use thiserror::Error;
 use tracing::{instrument, trace, warn};
 
+use super::TunnelError;
+
 #[instrument(skip_all)]
-pub async fn run_tunnel_mode(ctx: &HttpAccessConnContext, req: Request<Incoming>) -> ReturnType {
-    // Received an HTTP request like:
-    // ```
-    // CONNECT www.domain.com:443 HTTP/1.1
-    // Host: www.domain.com:443
-    // Proxy-Connection: Keep-Alive
-    // ```
-    //
-    // When HTTP method is CONNECT we should return an empty body
-    // then we can eventually upgrade the connection and talk a new protocol.
-    //
-    // Note: only after client received an empty body with STATUS_OK can the
-    // connection be upgraded, so we can't return a response inside
-    // `on_upgrade` future.
+pub async fn run_tunnel_mode(
+    ctx: &HttpAccessConnContext,
+    req: Request<Incoming>,
+    reporter: HttpFailureReporter,
+) -> ReturnType {
     let addr = match host_addr(req.uri()) {
         Some(addr) => addr,
         None => {
             let uri = req.uri();
             warn!(%uri, "CONNECT host is not socket addr");
             let mut resp = Response::new(full("CONNECT must be to a socket address"));
-            *resp.status_mut() = http::StatusCode::BAD_REQUEST;
-
+            *resp.status_mut() = hyper::http::StatusCode::BAD_REQUEST;
             return Ok(resp);
         }
     };
-    let dst_addr: InternetAddr = addr.parse()?;
-    dispatch(dst_addr, req, ctx).await
+    let dst_addr: InternetAddr = match addr.parse() {
+        Ok(a) => a,
+        Err(e) => {
+            let err = TunnelError::Address(e);
+            reporter.report(&err, None);
+            return Err(err);
+        }
+    };
+    dispatch(dst_addr, req, ctx, reporter).await
 }
 
 #[instrument(skip_all, fields(addr = ?dst_addr))]
@@ -64,39 +66,45 @@ async fn dispatch(
     dst_addr: InternetAddr,
     req: Request<Incoming>,
     ctx: &HttpAccessConnContext,
+    reporter: HttpFailureReporter,
 ) -> ReturnType {
     let action = ctx.route_table.action(&dst_addr);
     let action = match &action {
         RouteAction::ConnSelector(conn_selector) => {
-            let ctx = ProxyContext {
+            let proxy_ctx = ProxyContext {
                 conn_selector: Arc::clone(conn_selector),
                 speed_limiter: ctx.speed_limiter.clone(),
                 stream_context: ctx.stream_context.clone(),
                 listen_addr: Arc::clone(&ctx.listen_addr),
                 dst_addr: dst_addr.clone(),
+                failure: reporter.failure.clone(),
+                downstream: reporter.downstream.clone(),
+                listener: Arc::clone(&reporter.listener),
             };
-            UpgradeAction::Proxy(ctx)
+            UpgradeAction::Proxy(proxy_ctx)
         }
         RouteAction::Block => {
             trace!(addr = ?dst_addr, "Blocked CONNECT");
             return Ok(respond_with_rejection());
         }
         RouteAction::Direct => {
-            let ctx = DirectContext {
+            let direct_ctx = DirectContext {
                 speed_limiter: ctx.speed_limiter.clone(),
                 session_table: ctx.stream_context.session_table.clone(),
                 listen_addr: Arc::clone(&ctx.listen_addr),
                 connector_table: ctx.stream_context.connector_table.clone(),
                 dst_addr: dst_addr.clone(),
+                failure: reporter.failure.clone(),
+                downstream: reporter.downstream.clone(),
+                listener: Arc::clone(&reporter.listener),
             };
-            UpgradeAction::Direct(ctx)
+            UpgradeAction::Direct(direct_ctx)
         }
     };
     tokio::task::spawn(async move {
         upgrade(req, action, dst_addr).await;
     });
 
-    // Return STATUS_OK
     Ok(Response::new(empty()))
 }
 
@@ -109,8 +117,7 @@ enum UpgradeAction {
 async fn upgrade(req: Request<Incoming>, action: UpgradeAction, _dst_addr: InternetAddr) {
     let upgraded = match hyper::upgrade::on(req).await {
         Ok(upgraded) => upgraded,
-        Err(e) => {
-            warn!(?e, "Upgrade error");
+        Err(_e) => {
             return;
         }
     };
@@ -119,10 +126,33 @@ async fn upgrade(req: Request<Incoming>, action: UpgradeAction, _dst_addr: Inter
             direct(ctx, upgraded).await;
         }
         UpgradeAction::Proxy(ctx) => {
-            match proxy(&ctx, upgraded).await {
-                Ok(()) => (),
-                Err(e) => warn!(?e, "CONNECT error"),
-            };
+            if let Err(e) = proxy(&ctx, upgraded).await {
+                let reporter = HttpFailureReporter {
+                    failure: ctx.failure.clone(),
+                    downstream: ctx.downstream.clone(),
+                    listener: Arc::clone(&ctx.listener),
+                };
+                let destination = match &e {
+                    ProxyError::EstablishProxyChain(inner) => match inner {
+                        StreamEstablishError::ConnectDestination {
+                            upstream_addr, ..
+                        }
+                        | StreamEstablishError::ConnectFirstProxyServer {
+                            upstream_addr, ..
+                        }
+                        | StreamEstablishError::WriteHeartbeatUpgrade {
+                            upstream_addr, ..
+                        }
+                        | StreamEstablishError::WriteStreamRequestHeader {
+                            upstream_addr, ..
+                        } => Some(upstream_addr.address.to_string()),
+                    },
+                };
+                let tunnel_err = match e {
+                    ProxyError::EstablishProxyChain(inner) => TunnelError::EstablishProxyChain(Box::new(inner)),
+                };
+                reporter.report(&tunnel_err, destination.as_deref());
+            }
         }
     }
 }
@@ -134,13 +164,21 @@ struct DirectContext {
     pub listen_addr: Arc<str>,
     pub connector_table: Arc<StreamConnectorTable>,
     pub dst_addr: InternetAddr,
+    pub failure: Arc<HttpRequestFailure>,
+    pub downstream: super::HttpDownstreamContext,
+    pub listener: Arc<str>,
 }
 #[instrument(skip_all)]
 async fn direct(ctx: DirectContext, upgraded: Upgraded) {
     let dst_sock_addrs = match ctx.dst_addr.to_socket_addrs().await {
         Ok(sock_addr) => sock_addr,
         Err(e) => {
-            warn!(?e, "Failed to resolve address");
+            let reporter = HttpFailureReporter {
+                failure: ctx.failure,
+                downstream: ctx.downstream,
+                listener: ctx.listener,
+            };
+            reporter.report(&TunnelError::Direct(e), Some(&ctx.dst_addr.to_string()));
             return;
         }
     };
@@ -168,7 +206,7 @@ async fn direct(ctx: DirectContext, upgraded: Upgraded) {
         upstream_remote: upstream_addr.clone(),
         upstream_remote_sock: dst_sock_addr,
         upstream_local: upstream.local_addr().ok(),
-        downstream_remote: None,
+        downstream_remote: ctx.downstream.remote,
         downstream_local: ctx.listen_addr,
         session_table: ctx.session_table,
         destination: Some(upstream_addr),
@@ -191,12 +229,12 @@ struct ProxyContext {
     pub stream_context: StreamContext,
     pub listen_addr: Arc<str>,
     pub dst_addr: InternetAddr,
+    pub failure: Arc<HttpRequestFailure>,
+    pub downstream: super::HttpDownstreamContext,
+    pub listener: Arc<str>,
 }
-// Create a TCP connection to host:port, build a tunnel between the connection and
-// the upgraded connection
 #[instrument(skip_all, fields(ctx.dst_addr))]
 async fn proxy(ctx: &ProxyContext, upgraded: Upgraded) -> Result<(), ProxyError> {
-    // Establish proxy chain
     let destination = StreamAddr {
         address: ctx.dst_addr.clone(),
         stream_type: ConcreteStreamType::Tcp.to_string().into(),
@@ -217,7 +255,7 @@ async fn proxy(ctx: &ProxyContext, upgraded: Upgraded) -> Result<(), ProxyError>
         start: (std::time::Instant::now(), std::time::SystemTime::now()),
         upstream_remote: upstream.addr,
         upstream_remote_sock: upstream.sock_addr,
-        downstream_remote: None,
+        downstream_remote: ctx.downstream.remote,
         downstream_local: Arc::clone(&ctx.listen_addr),
         upstream_local: upstream.stream.local_addr().ok(),
         session_table: ctx.stream_context.session_table.clone(),
@@ -242,7 +280,7 @@ enum ProxyError {
     EstablishProxyChain(#[from] StreamEstablishError),
 }
 
-fn host_addr(uri: &http::Uri) -> Option<String> {
+fn host_addr(uri: &hyper::http::Uri) -> Option<String> {
     uri.authority().map(|auth| auth.to_string())
 }
 
