@@ -398,6 +398,22 @@ fn respond_with_rejection() -> Response<BoxBody<Bytes, hyper::Error>> {
 }
 
 #[cfg(test)]
+fn get_authority_for_test<B>(req: &Request<B>) -> Result<hyper::http::uri::Authority, TunnelError> {
+    if let Some(auth) = req.uri().authority() {
+        return Ok(auth.clone());
+    }
+    let host_header = req
+        .headers()
+        .get(hyper::header::HOST)
+        .ok_or(TunnelError::HttpNoHost)?;
+    let host_str = host_header
+        .to_str()
+        .map_err(|_| TunnelError::HttpInvalidHost("non-ascii host".into()))?;
+    hyper::http::uri::Authority::try_from(host_str)
+        .map_err(|e| TunnelError::HttpInvalidHost(e.to_string()))
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -556,18 +572,3 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-fn get_authority_for_test<B>(req: &Request<B>) -> Result<hyper::http::uri::Authority, TunnelError> {
-    if let Some(auth) = req.uri().authority() {
-        return Ok(auth.clone());
-    }
-    let host_header = req
-        .headers()
-        .get(hyper::header::HOST)
-        .ok_or(TunnelError::HttpNoHost)?;
-    let host_str = host_header
-        .to_str()
-        .map_err(|_| TunnelError::HttpInvalidHost("non-ascii host".into()))?;
-    hyper::http::uri::Authority::try_from(host_str)
-        .map_err(|e| TunnelError::HttpInvalidHost(e.to_string()))
-}

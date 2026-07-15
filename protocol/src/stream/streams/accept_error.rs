@@ -108,6 +108,7 @@ impl AcceptErrorBackoff {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn retry_at(&self) -> Option<Instant> {
         self.retry_at
     }

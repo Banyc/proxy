@@ -246,9 +246,10 @@ impl HasIoAddr for DualIoMuxStream {
     }
 }
 
-/// Connect a dual-lane session to `addr`. Handles lane-hello pairing,
-/// FrameDelivery (interactive) vs stock (bulk), and returns a
-/// [`DualStreamOpener`] for opening migrating streams.
+pub struct DualMuxConnectorConfig {
+    pub interactive: MuxConfig,
+    pub bulk: MuxConfig,
+}
 pub async fn run_dual_mux_connector<
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -258,17 +259,15 @@ pub async fn run_dual_mux_connector<
     int_w: W,
     bulk_r: R,
     bulk_w: W,
-    int_config: MuxConfig,
-    bulk_config: MuxConfig,
+    config: DualMuxConnectorConfig,
     supervisor: &mut JoinSet<MuxError>,
 ) -> (DualStreamOpener, DualStreamAccepter) {
     let mut int_spawner = JoinSet::new();
     let (int_opener, int_accepter) =
-        spawn_mux_no_reconnection(int_r, int_w, int_config, &mut int_spawner);
+        spawn_mux_no_reconnection(int_r, int_w, config.interactive, &mut int_spawner);
     let mut bulk_spawner = JoinSet::new();
     let (bulk_opener, bulk_accepter) =
-        spawn_mux_no_reconnection(bulk_r, bulk_w, bulk_config, &mut bulk_spawner);
-
+        spawn_mux_no_reconnection(bulk_r, bulk_w, config.bulk, &mut bulk_spawner);
     spawn_dual_mux_paired_supervised(
         int_opener,
         int_accepter,
@@ -414,7 +413,7 @@ impl BackgroundWriteError {
         }
     }
 
-    fn into_io(&self) -> io::Error {
+    fn to_io(&self) -> io::Error {
         io::Error::new(io::ErrorKind::BrokenPipe, self.message.clone())
     }
 }
@@ -531,7 +530,7 @@ impl MigratingConnStream {
         }
         match result {
             Ok(Ok(())) => std::task::Poll::Ready(Ok(Some(kind))),
-            Ok(Err(error)) => std::task::Poll::Ready(Err(error.into_io())),
+            Ok(Err(error)) => std::task::Poll::Ready(Err(error.to_io())),
             Err(_) => std::task::Poll::Ready(Err(
                 self.background_io_error("migrating stream background writer stopped")
             )),
@@ -807,7 +806,6 @@ impl<R, W> HasIoAddr for IoMuxStream<R, W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::AsyncWriteExt;
 
     #[test]
     fn dual_lane_configs_keep_heartbeats_out_of_transport_hol() {

@@ -835,26 +835,23 @@ fn spawn_lane_accept(
 
         match admission {
             PendingLaneAdmission::Reserved => {
-                match write_birth_heartbeat_result(&mut write).await {
-                    Err(elapsed) => {
-                        registry.cancel_reservation(nonce, peer, class);
-                        signal_rejected_lane(
-                            &mut write,
-                            &rejections,
-                            RejectedLaneContext {
-                                class: LaneRejectionClass::BirthHeartbeat,
-                                peer,
-                                local_addr,
-                                expected_class: Some(expected_class),
-                                reason: "birth heartbeat failed after reservation".to_string(),
-                            },
-                            elapsed,
-                        )
-                        .await;
-                        counter!("stream.rtp_mux.birth_heartbeat_error").increment(1);
-                        return;
-                    }
-                    Ok(()) => {}
+                if let Err(elapsed) = write_birth_heartbeat_result(&mut write).await {
+                    registry.cancel_reservation(nonce, peer, class);
+                    signal_rejected_lane(
+                        &mut write,
+                        &rejections,
+                        RejectedLaneContext {
+                            class: LaneRejectionClass::BirthHeartbeat,
+                            peer,
+                            local_addr,
+                            expected_class: Some(expected_class),
+                            reason: "birth heartbeat failed after reservation".to_string(),
+                        },
+                        elapsed,
+                    )
+                    .await;
+                    counter!("stream.rtp_mux.birth_heartbeat_error").increment(1);
+                    return;
                 }
 
                 let mut lane_spawner = JoinSet::new();
@@ -875,99 +872,91 @@ fn spawn_lane_accept(
                 let _ = registry.finish_reservation(nonce, prepared);
             }
             PendingLaneAdmission::Wait { ready, expires_at } => {
-                match write_birth_heartbeat_result(&mut write).await {
-                    Err(elapsed) => {
+                if let Err(elapsed) = write_birth_heartbeat_result(&mut write).await {
+                    signal_rejected_lane(
+                        &mut write,
+                        &rejections,
+                        RejectedLaneContext {
+                            class: LaneRejectionClass::BirthHeartbeat,
+                            peer,
+                            local_addr,
+                            expected_class: Some(expected_class),
+                            reason: "birth heartbeat failed while waiting".to_string(),
+                        },
+                        elapsed,
+                    )
+                    .await;
+                    counter!("stream.rtp_mux.birth_heartbeat_error").increment(1);
+                    return;
+                }
+
+                let notified = tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(expires_at),
+                    ready.notified(),
+                )
+                .await;
+
+                match notified {
+                    Err(_elapsed) => {
                         signal_rejected_lane(
                             &mut write,
                             &rejections,
                             RejectedLaneContext {
-                                class: LaneRejectionClass::BirthHeartbeat,
+                                class: LaneRejectionClass::PairingTimeout,
                                 peer,
                                 local_addr,
                                 expected_class: Some(expected_class),
-                                reason: "birth heartbeat failed while waiting".to_string(),
+                                reason: "pairing deadline expired while waiting".to_string(),
                             },
-                            elapsed,
+                            started.elapsed(),
                         )
                         .await;
-                        counter!("stream.rtp_mux.birth_heartbeat_error").increment(1);
-                        return;
+                        counter!("stream.rtp_mux.pairing_timeout").increment(1);
                     }
-                    Ok(()) => {}
-                }
-
-                loop {
-                    let notified = tokio::time::timeout_at(
-                        tokio::time::Instant::from_std(expires_at),
-                        ready.notified(),
-                    )
-                    .await;
-
-                    match notified {
-                        Err(_elapsed) => {
-                            signal_rejected_lane(
-                                &mut write,
-                                &rejections,
-                                RejectedLaneContext {
-                                    class: LaneRejectionClass::PairingTimeout,
+                    Ok(()) => {
+                        let admission =
+                            registry.admit(nonce, class, peer, local_addr, &mut None);
+                        match admission {
+                            PendingLaneAdmission::Pair {
+                                lane: other_lane, ..
+                            } => {
+                                let mut lane_spawner = JoinSet::new();
+                                let (opener, accepter) = spawn_mux_no_reconnection(
+                                    read,
+                                    write,
+                                    config,
+                                    &mut lane_spawner,
+                                );
+                                let this_lane = PendingLane {
+                                    pending: mux::PendingAcceptor::new(
+                                        class,
+                                        nonce,
+                                        opener,
+                                        accepter,
+                                        lane_spawner,
+                                    ),
                                     peer,
                                     local_addr,
-                                    expected_class: Some(expected_class),
-                                    reason: "pairing deadline expired while waiting".to_string(),
-                                },
-                                started.elapsed(),
-                            )
-                            .await;
-                            counter!("stream.rtp_mux.pairing_timeout").increment(1);
-                            return;
-                        }
-                        Ok(()) => {
-                            let admission =
-                                registry.admit(nonce, class, peer, local_addr, &mut None);
-                            match admission {
-                                PendingLaneAdmission::Pair {
-                                    lane: other_lane, ..
-                                } => {
-                                    let mut lane_spawner = JoinSet::new();
-                                    let (opener, accepter) = spawn_mux_no_reconnection(
-                                        read,
-                                        write,
-                                        config,
-                                        &mut lane_spawner,
-                                    );
-                                    let this_lane = PendingLane {
-                                        pending: mux::PendingAcceptor::new(
-                                            class,
-                                            nonce,
-                                            opener,
-                                            accepter,
-                                            lane_spawner,
-                                        ),
+                                    _permit: permit_opt.take().unwrap(),
+                                };
+                                pair_lanes_inner(this_lane, other_lane, conn_handler, nonce);
+                            }
+                            _ => {
+                                signal_rejected_lane(
+                                    &mut write,
+                                    &rejections,
+                                    RejectedLaneContext {
+                                        class: LaneRejectionClass::ReservationLost,
                                         peer,
                                         local_addr,
-                                        _permit: permit_opt.take().unwrap(),
-                                    };
-                                    pair_lanes_inner(this_lane, other_lane, conn_handler, nonce);
-                                    return;
-                                }
-                                _ => {
-                                    signal_rejected_lane(
-                                        &mut write,
-                                        &rejections,
-                                        RejectedLaneContext {
-                                            class: LaneRejectionClass::ReservationLost,
-                                            peer,
-                                            local_addr,
-                                            expected_class: Some(expected_class),
-                                            reason: "reservation lost after wait notify"
-                                                .to_string(),
-                                        },
-                                        started.elapsed(),
-                                    )
-                                    .await;
-                                    counter!("stream.rtp_mux.pairing_timeout").increment(1);
-                                    return;
-                                }
+                                        expected_class: Some(expected_class),
+                                        reason: "reservation lost after wait notify"
+                                            .to_string(),
+                                    },
+                                    started.elapsed(),
+                                )
+                                .await;
+                                counter!("stream.rtp_mux.pairing_timeout").increment(1);
                             }
                         }
                     }
@@ -977,26 +966,23 @@ fn spawn_lane_accept(
                 lane: other_lane,
                 expires_at,
             } => {
-                match write_birth_heartbeat_result(&mut write).await {
-                    Err(elapsed) => {
-                        registry.restore_ready(nonce, other_lane, expires_at);
-                        signal_rejected_lane(
-                            &mut write,
-                            &rejections,
-                            RejectedLaneContext {
-                                class: LaneRejectionClass::BirthHeartbeat,
-                                peer,
-                                local_addr,
-                                expected_class: Some(expected_class),
-                                reason: "birth heartbeat failed before pairing".to_string(),
-                            },
-                            elapsed,
-                        )
-                        .await;
-                        counter!("stream.rtp_mux.birth_heartbeat_error").increment(1);
-                        return;
-                    }
-                    Ok(()) => {}
+                if let Err(elapsed) = write_birth_heartbeat_result(&mut write).await {
+                    registry.restore_ready(nonce, other_lane, expires_at);
+                    signal_rejected_lane(
+                        &mut write,
+                        &rejections,
+                        RejectedLaneContext {
+                            class: LaneRejectionClass::BirthHeartbeat,
+                            peer,
+                            local_addr,
+                            expected_class: Some(expected_class),
+                            reason: "birth heartbeat failed before pairing".to_string(),
+                        },
+                        elapsed,
+                    )
+                    .await;
+                    counter!("stream.rtp_mux.birth_heartbeat_error").increment(1);
+                    return;
                 }
 
                 let mut lane_spawner = JoinSet::new();
@@ -1395,7 +1381,7 @@ async fn run_dual_mux_connector_main(
                     let dialer = Arc::clone(&dialer);
                     let r_addr = msg.listen_addr;
                     let dial: DualLaneDial = Box::pin(async move {
-                        let result = dialer(r_addr).await.map(|birth| birth);
+                        let result = dialer(r_addr).await;
                         (r_addr, result)
                     });
                     pending_dials.push(dial);
@@ -2108,7 +2094,6 @@ mod tests {
     // Connector tests
     // -------------------------------------------------------------------
 
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn spawn_test_connector(
