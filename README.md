@@ -1,5 +1,9 @@
 # Proxy
 
+## Transport boundary
+
+Proxy may select TCP or RTP as the transport beneath mux, but transport-independent proxy and mux behavior should depend only on their common reliable-stream contract. Keep RTP-specific setup and exceptional behavior in the RTP-facing adapter so switching the transport does not require another mux state machine.
+
 ## Architecture
 
 <div style="background-color: white">
