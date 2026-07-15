@@ -1504,12 +1504,14 @@ async fn connect_dual_lane_once(
     let int_connected = rtp::udp::connect_with_mss_fec_tuning_and_frame_delivery(
         SocketAddr::new(bind_ip.ip(), bind_ip.port()),
         addr,
-        None,
-        false,
-        fec,
-        rtp::udp::NO_FEC_MSS,
-        FecTuning::default(),
-        dual_lane_frame_delivery(),
+        rtp::udp::ConnectConfig {
+            log_config: None,
+            handshake: false,
+            fec,
+            mss: rtp::udp::NO_FEC_MSS,
+            fec_tuning: FecTuning::default(),
+            frame_delivery: dual_lane_frame_delivery(),
+        },
     )
     .await?;
     let int_local = int_connected.local_addr;
@@ -1518,12 +1520,14 @@ async fn connect_dual_lane_once(
     let bulk_connected = rtp::udp::connect_with_mss_fec_tuning_and_frame_delivery(
         bulk_bind,
         bulk_addr,
-        None,
-        false,
-        fec,
-        rtp::udp::NO_FEC_MSS,
-        FecTuning::default(),
-        dual_lane_frame_delivery(),
+        rtp::udp::ConnectConfig {
+            log_config: None,
+            handshake: false,
+            fec,
+            mss: rtp::udp::NO_FEC_MSS,
+            fec_tuning: FecTuning::default(),
+            frame_delivery: dual_lane_frame_delivery(),
+        },
     )
     .await?;
 
