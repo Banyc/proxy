@@ -571,4 +571,3 @@ mod tests {
         assert!(matches!(result, Err(TunnelError::HttpInvalidPort(_))));
     }
 }
-

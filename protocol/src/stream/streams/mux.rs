@@ -815,40 +815,100 @@ mod tests {
         assert!(bulk_server_mux_config().frame_reassembly);
     }
 
-    async fn make_dual_pair() -> (DualStreamOpener, DualStreamAccepter, JoinSet<MuxError>, JoinSet<MuxError>) {
-        fn lane(client_config: MuxConfig, server_config: MuxConfig) -> (StreamOpener, StreamAccepter, JoinSet<MuxError>, StreamOpener, StreamAccepter, JoinSet<MuxError>) {
+    async fn make_dual_pair() -> (
+        DualStreamOpener,
+        DualStreamAccepter,
+        JoinSet<MuxError>,
+        JoinSet<MuxError>,
+    ) {
+        fn lane(
+            client_config: MuxConfig,
+            server_config: MuxConfig,
+        ) -> (
+            StreamOpener,
+            StreamAccepter,
+            JoinSet<MuxError>,
+            StreamOpener,
+            StreamAccepter,
+            JoinSet<MuxError>,
+        ) {
             let (client_io, server_io) = tokio::io::duplex(64 * 1024);
             let (client_read, client_write) = tokio::io::split(client_io);
             let (server_read, server_write) = tokio::io::split(server_io);
             let mut client_tasks = JoinSet::new();
-            let (client_opener, client_accepter) = spawn_mux_no_reconnection(client_read, client_write, client_config, &mut client_tasks);
+            let (client_opener, client_accepter) = spawn_mux_no_reconnection(
+                client_read,
+                client_write,
+                client_config,
+                &mut client_tasks,
+            );
             let mut server_tasks = JoinSet::new();
-            let (server_opener, server_accepter) = spawn_mux_no_reconnection(server_read, server_write, server_config, &mut server_tasks);
-            (client_opener, client_accepter, client_tasks, server_opener, server_accepter, server_tasks)
+            let (server_opener, server_accepter) = spawn_mux_no_reconnection(
+                server_read,
+                server_write,
+                server_config,
+                &mut server_tasks,
+            );
+            (
+                client_opener,
+                client_accepter,
+                client_tasks,
+                server_opener,
+                server_accepter,
+                server_tasks,
+            )
         }
-        let (ci_o, ci_a, ci_t, si_o, si_a, si_t) = lane(interactive_client_mux_config(), interactive_server_mux_config());
-        let (cb_o, cb_a, cb_t, sb_o, sb_a, sb_t) = lane(bulk_client_mux_config(), bulk_server_mux_config());
+        let (ci_o, ci_a, ci_t, si_o, si_a, si_t) = lane(
+            interactive_client_mux_config(),
+            interactive_server_mux_config(),
+        );
+        let (cb_o, cb_a, cb_t, sb_o, sb_a, sb_t) =
+            lane(bulk_client_mux_config(), bulk_server_mux_config());
         let mut client_supervisor = JoinSet::new();
-        let (client_opener, _client_accepter) = spawn_dual_mux_paired_supervised(ci_o, ci_a, ci_t, cb_o, cb_a, cb_t, &mut client_supervisor);
+        let (client_opener, _client_accepter) = spawn_dual_mux_paired_supervised(
+            ci_o,
+            ci_a,
+            ci_t,
+            cb_o,
+            cb_a,
+            cb_t,
+            &mut client_supervisor,
+        );
         let mut server_supervisor = JoinSet::new();
-        let (_server_opener, server_accepter) = spawn_dual_mux_paired_supervised(si_o, si_a, si_t, sb_o, sb_a, sb_t, &mut server_supervisor);
-        (client_opener, server_accepter, client_supervisor, server_supervisor)
+        let (_server_opener, server_accepter) = spawn_dual_mux_paired_supervised(
+            si_o,
+            si_a,
+            si_t,
+            sb_o,
+            sb_a,
+            sb_t,
+            &mut server_supervisor,
+        );
+        (
+            client_opener,
+            server_accepter,
+            client_supervisor,
+            server_supervisor,
+        )
     }
 
-    #[tokio::test(flavor = "multi_thread")] async fn migrating_conn_write_is_cancellation_safe_and_shutdown_delivers_final() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn migrating_conn_write_is_cancellation_safe_and_shutdown_delivers_final() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let (opener, accepter, _client_tasks, _server_tasks) = make_dual_pair().await;
         let addr = SocketAddrPair {
             local_addr: "127.0.0.1:10000".parse().unwrap(),
             peer_addr: "127.0.0.1:10001".parse().unwrap(),
         };
-        let (writer, reader_rx) = opener.open_migrating_with_reader(42, mux::LaneClass::Interactive);
+        let (writer, reader_rx) =
+            opener.open_migrating_with_reader(42, mux::LaneClass::Interactive);
         let mut stream = MigratingConnStream::new(writer, reader_rx, addr);
         let (accepted_tx, mut accepted_rx) = tokio::sync::mpsc::unbounded_channel();
         let accepter_task = tokio::spawn(async move {
             run_dual_mux_accepter(accepter, addr, |stream| {
                 let _ = accepted_tx.send(stream);
-            }).await
+            })
+            .await
         });
         let big = vec![0xA5; 256 * 1024];
         let mut accepted_big_bytes = 0usize;
@@ -868,18 +928,27 @@ mod tests {
                 std::task::Poll::Ready(Err(error)) => panic!("unexpected write error: {error}"),
             }
         }
-        assert!(saw_pending, "bounded writer queue never applied backpressure");
+        assert!(
+            saw_pending,
+            "bounded writer queue never applied backpressure"
+        );
         let small = b"small-after-cancel";
         let n = stream.write(small).await.unwrap();
         assert_eq!(n, small.len());
-        let mut accepted = tokio::time::timeout(Duration::from_secs(2), accepted_rx.recv()).await.unwrap().unwrap();
+        let mut accepted = tokio::time::timeout(Duration::from_secs(2), accepted_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
         let receive = tokio::spawn(async move {
             let mut bytes = Vec::new();
             accepted.read_to_end(&mut bytes).await.unwrap();
             bytes
         });
         stream.shutdown().await.unwrap();
-        let bytes = tokio::time::timeout(Duration::from_secs(3), receive).await.expect("FINAL was not delivered").unwrap();
+        let bytes = tokio::time::timeout(Duration::from_secs(3), receive)
+            .await
+            .expect("FINAL was not delivered")
+            .unwrap();
         assert_eq!(bytes.len(), accepted_big_bytes + small.len());
         assert_eq!(&bytes[bytes.len() - small.len()..], small);
         accepter_task.abort();

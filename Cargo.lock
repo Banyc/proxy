@@ -3018,6 +3018,7 @@ dependencies = [
  "rand 0.10.2",
  "regex",
  "rtp",
+ "rtp_mux",
  "serde",
  "serde_json",
  "swap",
@@ -3518,6 +3519,21 @@ dependencies = [
  "tokio",
  "tokio-util",
  "udp_listener",
+]
+
+[[package]]
+name = "rtp_mux"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "metrics",
+ "mux",
+ "rand 0.10.2",
+ "rtp",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
