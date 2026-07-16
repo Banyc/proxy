@@ -1,11 +1,9 @@
 use std::{
     collections::{HashMap, hash_map},
-    fmt,
     future::Future,
     io,
     net::SocketAddr,
     pin::Pin,
-    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -14,10 +12,8 @@ use common::{
     stream::{AsConn, HasIoAddr, OwnIoStream},
 };
 use mux::{
-    AcceptedStream, DeadControl, DualStreamAccepter, DualStreamOpener, Initiation,
-    MigratingStreamWriter, MuxConfig, MuxError, PairingNonce, SplicedReader, StreamAccepter,
-    StreamOpener, StreamReader, StreamWriter, spawn_dual_mux_paired_supervised,
-    spawn_mux_no_reconnection,
+    DeadControl, Initiation, MuxConfig, MuxError, StreamAccepter, StreamOpener, StreamReader,
+    StreamWriter, spawn_mux_no_reconnection,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -32,40 +28,12 @@ pub fn server_mux_config() -> MuxConfig {
         frame_reassembly: false,
     }
 }
+
 fn client_mux_config() -> MuxConfig {
     MuxConfig {
         initiation: Initiation::Client,
         heartbeat_interval: Duration::from_secs(5),
         frame_reassembly: false,
-    }
-}
-
-pub fn interactive_server_mux_config() -> MuxConfig {
-    MuxConfig {
-        initiation: Initiation::Server,
-        heartbeat_interval: Duration::from_secs(5),
-        frame_reassembly: true,
-    }
-}
-pub fn interactive_client_mux_config() -> MuxConfig {
-    MuxConfig {
-        initiation: Initiation::Client,
-        heartbeat_interval: Duration::from_secs(5),
-        frame_reassembly: true,
-    }
-}
-pub fn bulk_server_mux_config() -> MuxConfig {
-    MuxConfig {
-        initiation: Initiation::Server,
-        heartbeat_interval: Duration::from_secs(5),
-        frame_reassembly: true,
-    }
-}
-pub fn bulk_client_mux_config() -> MuxConfig {
-    MuxConfig {
-        initiation: Initiation::Client,
-        heartbeat_interval: Duration::from_secs(5),
-        frame_reassembly: true,
     }
 }
 
@@ -75,13 +43,12 @@ pub async fn run_mux_accepter(
     mut handle_conn: impl FnMut(IoMuxStream<StreamReader, StreamWriter>),
 ) {
     loop {
-        let (r, w) = match accepter.accept().await {
-            Ok(x) => x,
+        let (reader, writer) = match accepter.accept().await {
+            Ok(stream) => stream,
             Err(DeadControl {}) => break,
         };
-        let stream = tokio_chacha20::stream::DuplexStream::new(r, w);
-        let stream = IoMuxStream::new(stream, addr);
-        handle_conn(stream);
+        let stream = tokio_chacha20::stream::DuplexStream::new(reader, writer);
+        handle_conn(IoMuxStream::new(stream, addr));
     }
 }
 
@@ -103,184 +70,47 @@ pub async fn run_mux_connector<R, W, Fut>(
                 openers.clear();
                 mux_spawner = JoinSet::new();
             }
-            Some(res) = mux_spawner.join_next() => {
-                match res {
-                    Ok((addr, e)) => {
-                        warn!(?e, ?addr, "MUX error");
+            Some(result) = mux_spawner.join_next() => {
+                match result {
+                    Ok((addr, error)) => {
+                        warn!(?error, ?addr, "MUX error");
                         openers.remove(&addr);
                     }
-                    Err(e) if e.is_cancelled() => {
-                        trace!(?e, "MUX task cancelled (normal shutdown/reset)");
-                    }
-                    Err(e) => {
-                        warn!(?e, "MUX supervision task failed to join");
-                    }
+                    Err(error) if error.is_cancelled() => trace!(?error, "MUX task cancelled (normal shutdown/reset)"),
+                    Err(error) => warn!(?error, "MUX supervision task failed to join"),
                 }
             }
-            res = connect_request_rx.recv() => {
-                let Some(msg) = res else {
-                    break;
-                };
-                if let hash_map::Entry::Vacant(e) = openers.entry(msg.listen_addr) {
-                    let ((r, w), addr) = match connect(msg.listen_addr).await {
-                        Ok(x) => x,
-                        Err(e) => {
-                            let _ = msg.stream.send(Err(e));
+            result = connect_request_rx.recv() => {
+                let Some(message) = result else { break };
+                if let hash_map::Entry::Vacant(entry) = openers.entry(message.listen_addr) {
+                    let ((reader, writer), addr) = match connect(message.listen_addr).await {
+                        Ok(connection) => connection,
+                        Err(error) => {
+                            let _ = message.stream.send(Err(error));
                             continue;
                         }
                     };
-                    let opener = build_opener(msg.listen_addr, r, w, &mut mux_spawner).await;
-                    e.insert((opener, addr));
+                    let opener = build_opener(message.listen_addr, reader, writer, &mut mux_spawner).await;
+                    entry.insert((opener, addr));
                 }
-                let (opener, addr) = openers.get(&msg.listen_addr).unwrap();
+                let (opener, addr) = openers.get(&message.listen_addr).unwrap();
                 let stream = match opener.open().await {
-                    Ok(x) => x,
-                    Err(e) => {
-                        let e = convert_open_err(e, addr);
-                        let _ = msg.stream.send(Err(e));
-                        openers.remove(&msg.listen_addr).unwrap();
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        let error = convert_open_err(error, addr);
+                        let _ = message.stream.send(Err(error));
+                        openers.remove(&message.listen_addr).unwrap();
                         continue;
                     }
                 };
-                let _ = msg.stream.send(Ok((stream, *addr)));
+                let _ = message.stream.send(Ok((stream, *addr)));
             }
         }
     }
 }
 
-/// Dual-lane accepter. Wraps the [`DualStreamAccepter`] in a
-/// [`MigratingCapableAccepter`] and loops, feeding each accepted stream
-/// (migrating or plain) into `handle_conn` via [`DualIoMuxStream`].
-pub async fn run_dual_mux_accepter(
-    accepter: DualStreamAccepter,
-    addr: SocketAddrPair,
-    mut handle_conn: impl FnMut(DualIoMuxStream),
-) -> u64 {
-    let mut mac = accepter.into_migrating_only();
-    let mut accepted_streams = 0;
-    loop {
-        let accepted = match mac.accept().await {
-            Ok(a) => a,
-            Err(_) => break,
-        };
-        let stream = match accepted {
-            AcceptedStream::Migrating { reader, writer, .. } => {
-                let s = tokio_chacha20::stream::DuplexStream::new(reader, writer);
-                DualIoMuxStream::Migrating(IoMuxStream::new(s, addr))
-            }
-            AcceptedStream::Plain { reader, writer, .. } => {
-                let s = tokio_chacha20::stream::DuplexStream::new(reader, writer);
-                DualIoMuxStream::Plain(IoMuxStream::new(s, addr))
-            }
-        };
-        handle_conn(stream);
-        accepted_streams += 1;
-    }
-    accepted_streams
-}
-
-/// Wraps either a plain or a migrating accepted mux stream.
-/// Both variants implement [`AsConn`] so the callback sees a single
-/// homogeneous type.
-#[derive(Debug)]
-pub enum DualIoMuxStream {
-    Plain(IoMuxStream<StreamReader, StreamWriter>),
-    Migrating(IoMuxStream<SplicedReader, StreamWriter>),
-}
-impl AsyncRead for DualIoMuxStream {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<io::Result<()>> {
-        match &mut *self {
-            DualIoMuxStream::Plain(s) => Pin::new(s).poll_read(cx, buf),
-            DualIoMuxStream::Migrating(s) => Pin::new(s).poll_read(cx, buf),
-        }
-    }
-}
-impl AsyncWrite for DualIoMuxStream {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<Result<usize, io::Error>> {
-        match &mut *self {
-            DualIoMuxStream::Plain(s) => Pin::new(s).poll_write(cx, buf),
-            DualIoMuxStream::Migrating(s) => Pin::new(s).poll_write(cx, buf),
-        }
-    }
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
-        match &mut *self {
-            DualIoMuxStream::Plain(s) => Pin::new(s).poll_flush(cx),
-            DualIoMuxStream::Migrating(s) => Pin::new(s).poll_flush(cx),
-        }
-    }
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
-        match &mut *self {
-            DualIoMuxStream::Plain(s) => Pin::new(s).poll_shutdown(cx),
-            DualIoMuxStream::Migrating(s) => Pin::new(s).poll_shutdown(cx),
-        }
-    }
-}
-impl AsConn for DualIoMuxStream {}
-impl OwnIoStream for DualIoMuxStream {}
-impl HasIoAddr for DualIoMuxStream {
-    fn peer_addr(&self) -> io::Result<SocketAddr> {
-        match self {
-            DualIoMuxStream::Plain(s) => s.peer_addr(),
-            DualIoMuxStream::Migrating(s) => s.peer_addr(),
-        }
-    }
-    fn local_addr(&self) -> io::Result<SocketAddr> {
-        match self {
-            DualIoMuxStream::Plain(s) => s.local_addr(),
-            DualIoMuxStream::Migrating(s) => s.local_addr(),
-        }
-    }
-}
-
-pub struct DualMuxConnectorConfig {
-    pub interactive: MuxConfig,
-    pub bulk: MuxConfig,
-}
-pub async fn run_dual_mux_connector<
-    R: AsyncRead + Unpin + Send + 'static,
-    W: AsyncWrite + Unpin + Send + 'static,
->(
-    _nonce: PairingNonce,
-    int_r: R,
-    int_w: W,
-    bulk_r: R,
-    bulk_w: W,
-    config: DualMuxConnectorConfig,
-    supervisor: &mut JoinSet<MuxError>,
-) -> (DualStreamOpener, DualStreamAccepter) {
-    let mut int_spawner = JoinSet::new();
-    let (int_opener, int_accepter) =
-        spawn_mux_no_reconnection(int_r, int_w, config.interactive, &mut int_spawner);
-    let mut bulk_spawner = JoinSet::new();
-    let (bulk_opener, bulk_accepter) =
-        spawn_mux_no_reconnection(bulk_r, bulk_w, config.bulk, &mut bulk_spawner);
-    spawn_dual_mux_paired_supervised(
-        int_opener,
-        int_accepter,
-        int_spawner,
-        bulk_opener,
-        bulk_accepter,
-        bulk_spawner,
-        supervisor,
-    )
-}
-
-fn convert_open_err(err: mux::StreamOpenError, addr: &SocketAddrPair) -> io::Error {
-    match err {
+fn convert_open_err(error: mux::StreamOpenError, addr: &SocketAddrPair) -> io::Error {
+    match error {
         mux::StreamOpenError::DeadControl(DeadControl {}) => io::Error::new(
             io::ErrorKind::ConnectionReset,
             format!("dead control; {addr:?}"),
@@ -299,6 +129,7 @@ fn convert_open_err(err: mux::StreamOpenError, addr: &SocketAddrPair) -> io::Err
         },
     }
 }
+
 async fn build_opener<R, W>(
     listen_addr: SocketAddr,
     reader: R,
@@ -313,20 +144,20 @@ where
     let mut spawner = JoinSet::new();
     let (opener, _) = spawn_mux_no_reconnection(reader, writer, config, &mut spawner);
     mux_spawner.spawn(async move {
-        let e = match spawner.join_next().await {
-            Some(Ok(e)) => e,
-            Some(Err(e)) if e.is_cancelled() => {
+        let error = match spawner.join_next().await {
+            Some(Ok(error)) => error,
+            Some(Err(source)) if source.is_cancelled() => {
                 debug!("build_opener: inner mux task cancelled");
                 MuxError::TaskJoin {
                     task: "mux",
-                    source: e,
+                    source,
                 }
             }
-            Some(Err(e)) => {
-                debug!(?e, "build_opener: inner mux task join error");
+            Some(Err(source)) => {
+                debug!(?source, "build_opener: inner mux task join error");
                 MuxError::TaskJoin {
                     task: "mux",
-                    source: e,
+                    source,
                 }
             }
             None => {
@@ -334,44 +165,50 @@ where
                 MuxError::TaskStopped { task: "mux" }
             }
         };
-        (listen_addr, e)
+        (listen_addr, error)
     });
     opener
 }
+
 #[derive(Debug)]
 struct ConnectRequestMsg {
     pub listen_addr: SocketAddr,
     pub stream:
         tokio::sync::oneshot::Sender<io::Result<((StreamReader, StreamWriter), SocketAddrPair)>>,
 }
+
 pub fn connect_request_channel() -> (ConnectRequestTx, ConnectRequestRx) {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
-    let tx = ConnectRequestTx { tx };
-    let rx = ConnectRequestRx { rx };
-    (tx, rx)
+    (ConnectRequestTx { tx }, ConnectRequestRx { rx })
 }
+
 #[derive(Debug)]
 pub struct ConnectRequestTx {
     tx: tokio::sync::mpsc::Sender<ConnectRequestMsg>,
 }
+
 impl ConnectRequestTx {
     pub async fn send(
         &self,
         listen_addr: SocketAddr,
     ) -> io::Result<((StreamReader, StreamWriter), SocketAddrPair)> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let msg = ConnectRequestMsg {
-            listen_addr,
-            stream: tx,
-        };
-        self.tx.send(msg).await.unwrap();
+        self.tx
+            .send(ConnectRequestMsg {
+                listen_addr,
+                stream: tx,
+            })
+            .await
+            .unwrap();
         rx.await.unwrap()
     }
 }
+
 #[derive(Debug)]
 pub struct ConnectRequestRx {
     rx: tokio::sync::mpsc::Receiver<ConnectRequestMsg>,
 }
+
 impl ConnectRequestRx {
     async fn recv(&mut self) -> Option<ConnectRequestMsg> {
         self.rx.recv().await
@@ -384,378 +221,18 @@ pub struct SocketAddrPair {
     pub peer_addr: SocketAddr,
 }
 
-const MIGRATING_WRITE_QUEUE_CAPACITY: usize = 8;
-const MIGRATING_WRITE_MAX_CHUNK: usize = 64 * 1024;
-
-enum WriteCommand {
-    Data(Vec<u8>),
-    Flush(tokio::sync::oneshot::Sender<Result<(), BackgroundWriteError>>),
-    Shutdown(tokio::sync::oneshot::Sender<Result<(), BackgroundWriteError>>),
-}
-
-#[derive(Debug, Clone)]
-struct BackgroundWriteError {
-    message: String,
-}
-
-impl fmt::Display for BackgroundWriteError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl std::error::Error for BackgroundWriteError {}
-
-impl BackgroundWriteError {
-    fn from_debug(e: impl std::fmt::Debug) -> Self {
-        Self {
-            message: format!("{e:?}"),
-        }
-    }
-
-    fn to_io(&self) -> io::Error {
-        io::Error::new(io::ErrorKind::BrokenPipe, self.message.clone())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ControlKind {
-    Flush,
-    Shutdown,
-}
-
-struct PendingControl {
-    kind: ControlKind,
-    reply: tokio::sync::oneshot::Receiver<Result<(), BackgroundWriteError>>,
-}
-
-enum MigratingReaderState {
-    Pending {
-        rx: tokio::sync::oneshot::Receiver<StreamReader>,
-    },
-    Ready {
-        reader: StreamReader,
-    },
-    Failed,
-}
-
-pub struct MigratingConnStream {
-    write_tx: tokio_util::sync::PollSender<WriteCommand>,
-    pending_control: Option<PendingControl>,
-    background_error: Arc<Mutex<Option<BackgroundWriteError>>>,
-    shutdown_started: bool,
-    shutdown_complete: bool,
-    reader_state: MigratingReaderState,
-    addr: SocketAddrPair,
-    _bg: tokio::task::JoinHandle<()>,
-}
-
-impl MigratingConnStream {
-    pub fn new(
-        mut writer: MigratingStreamWriter,
-        reader_rx: tokio::sync::oneshot::Receiver<StreamReader>,
-        addr: SocketAddrPair,
-    ) -> Self {
-        let (write_tx, mut write_rx) =
-            tokio::sync::mpsc::channel::<WriteCommand>(MIGRATING_WRITE_QUEUE_CAPACITY);
-        let background_error = Arc::new(Mutex::new(None::<BackgroundWriteError>));
-        let background_error_clone = background_error.clone();
-        let bg = tokio::spawn(async move {
-            while let Some(cmd) = write_rx.recv().await {
-                match cmd {
-                    WriteCommand::Data(buf) => {
-                        if let Err(e) = writer.write_all(&buf).await {
-                            *background_error_clone.lock().unwrap() = Some(BackgroundWriteError {
-                                message: format!("{e:?}"),
-                            });
-                            return;
-                        }
-                    }
-                    WriteCommand::Flush(reply) => {
-                        let result = writer
-                            .flush()
-                            .await
-                            .map_err(BackgroundWriteError::from_debug);
-                        if let Err(error) = &result {
-                            *background_error_clone.lock().unwrap() = Some(error.clone());
-                        }
-                        let failed = result.is_err();
-                        let _ = reply.send(result);
-                        if failed {
-                            return;
-                        }
-                    }
-                    WriteCommand::Shutdown(reply) => {
-                        let result = writer.finalize().await.map_err(|e| BackgroundWriteError {
-                            message: format!("{e:?}"),
-                        });
-                        if let Err(ref e) = result {
-                            *background_error_clone.lock().unwrap() = Some(e.clone());
-                        }
-                        let _ = reply.send(result);
-                        return;
-                    }
-                }
-            }
-            let _ = writer.finalize().await;
-        });
-        Self {
-            write_tx: tokio_util::sync::PollSender::new(write_tx),
-            pending_control: None,
-            background_error,
-            shutdown_started: false,
-            shutdown_complete: false,
-            reader_state: MigratingReaderState::Pending { rx: reader_rx },
-            addr,
-            _bg: bg,
-        }
-    }
-
-    fn poll_pending_control(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<io::Result<Option<ControlKind>>> {
-        let Some(pending) = &mut self.pending_control else {
-            return std::task::Poll::Ready(Ok(None));
-        };
-        let kind = pending.kind;
-        let result = match Pin::new(&mut pending.reply).poll(cx) {
-            std::task::Poll::Pending => return std::task::Poll::Pending,
-            std::task::Poll::Ready(result) => result,
-        };
-        self.pending_control = None;
-        if kind == ControlKind::Shutdown {
-            self.shutdown_complete = true;
-            self.write_tx.close();
-        }
-        match result {
-            Ok(Ok(())) => std::task::Poll::Ready(Ok(Some(kind))),
-            Ok(Err(error)) => std::task::Poll::Ready(Err(error.to_io())),
-            Err(_) => std::task::Poll::Ready(Err(
-                self.background_io_error("migrating stream background writer stopped")
-            )),
-        }
-    }
-
-    fn background_io_error(&self, msg: &str) -> io::Error {
-        if let Some(ref err) = *self.background_error.lock().unwrap() {
-            io::Error::new(io::ErrorKind::BrokenPipe, err.message.clone())
-        } else {
-            io::Error::new(io::ErrorKind::BrokenPipe, msg)
-        }
-    }
-}
-
-impl std::fmt::Debug for MigratingConnStream {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MigratingConnStream")
-            .field("addr", &self.addr)
-            .finish_non_exhaustive()
-    }
-}
-
-impl AsyncRead for MigratingConnStream {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<io::Result<()>> {
-        loop {
-            match &mut self.reader_state {
-                MigratingReaderState::Pending { rx } => match Pin::new(rx).poll(cx) {
-                    std::task::Poll::Ready(Ok(reader)) => {
-                        self.reader_state = MigratingReaderState::Ready { reader };
-                    }
-                    std::task::Poll::Ready(Err(_)) => {
-                        self.reader_state = MigratingReaderState::Failed;
-                        return std::task::Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::BrokenPipe,
-                            "gen-0 reader channel closed before write",
-                        )));
-                    }
-                    std::task::Poll::Pending => {
-                        return std::task::Poll::Pending;
-                    }
-                },
-                MigratingReaderState::Ready { reader } => {
-                    return Pin::new(reader).poll_read(cx, buf);
-                }
-                MigratingReaderState::Failed => {
-                    return std::task::Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "gen-0 reader channel closed before write",
-                    )));
-                }
-            }
-        }
-    }
-}
-
-impl AsyncWrite for MigratingConnStream {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<Result<usize, io::Error>> {
-        match self.poll_pending_control(cx) {
-            std::task::Poll::Ready(Ok(Some(ControlKind::Shutdown))) => {
-                return std::task::Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "stream shut down",
-                )));
-            }
-            std::task::Poll::Ready(Ok(_)) => {}
-            std::task::Poll::Ready(Err(e)) => return std::task::Poll::Ready(Err(e)),
-            std::task::Poll::Pending => return std::task::Poll::Pending,
-        }
-
-        if self.shutdown_complete || self.shutdown_started {
-            return std::task::Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "stream shut down",
-            )));
-        }
-        if let Some(ref err) = *self.background_error.lock().unwrap() {
-            return std::task::Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                err.to_string(),
-            )));
-        }
-        let chunk = buf.len().min(MIGRATING_WRITE_MAX_CHUNK);
-        match self.write_tx.poll_reserve(cx) {
-            std::task::Poll::Ready(Ok(())) if chunk > 0 => {
-                let item = WriteCommand::Data(buf[..chunk].to_vec());
-                let _ = self.write_tx.send_item(item);
-                std::task::Poll::Ready(Ok(chunk))
-            }
-            std::task::Poll::Ready(Ok(())) => std::task::Poll::Ready(Ok(0)),
-            std::task::Poll::Ready(Err(_)) => std::task::Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "write channel closed",
-            ))),
-            std::task::Poll::Pending => std::task::Poll::Pending,
-        }
-    }
-
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
-        match self.poll_pending_control(cx) {
-            std::task::Poll::Ready(Ok(Some(ControlKind::Shutdown))) => {
-                return std::task::Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "stream shut down",
-                )));
-            }
-            std::task::Poll::Ready(Ok(Some(ControlKind::Flush))) => {
-                return std::task::Poll::Ready(Ok(()));
-            }
-            std::task::Poll::Ready(Ok(None)) => {}
-            std::task::Poll::Ready(Err(e)) => return std::task::Poll::Ready(Err(e)),
-            std::task::Poll::Pending => return std::task::Poll::Pending,
-        }
-
-        if self.shutdown_complete || self.shutdown_started {
-            return std::task::Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "stream shut down",
-            )));
-        }
-        if let Some(ref err) = *self.background_error.lock().unwrap() {
-            return std::task::Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                err.to_string(),
-            )));
-        }
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let item = WriteCommand::Flush(tx);
-        match self.write_tx.poll_reserve(cx) {
-            std::task::Poll::Ready(Ok(())) => {
-                let _ = self.write_tx.send_item(item);
-                self.pending_control = Some(PendingControl {
-                    kind: ControlKind::Flush,
-                    reply: rx,
-                });
-                cx.waker().wake_by_ref();
-                std::task::Poll::Pending
-            }
-            std::task::Poll::Ready(Err(_)) => std::task::Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "write channel closed",
-            ))),
-            std::task::Poll::Pending => std::task::Poll::Pending,
-        }
-    }
-
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
-        match self.poll_pending_control(cx) {
-            std::task::Poll::Ready(Ok(Some(ControlKind::Shutdown))) => {
-                return std::task::Poll::Ready(Ok(()));
-            }
-            std::task::Poll::Ready(Ok(_)) => {}
-            std::task::Poll::Ready(Err(e)) => return std::task::Poll::Ready(Err(e)),
-            std::task::Poll::Pending => return std::task::Poll::Pending,
-        }
-
-        if self.shutdown_complete {
-            return std::task::Poll::Ready(Ok(()));
-        }
-
-        let bg_err = self.background_error.lock().unwrap().clone();
-        if let Some(ref _err) = bg_err {
-            self.shutdown_complete = true;
-            return std::task::Poll::Ready(Err(self.background_io_error("background write error")));
-        }
-
-        self.shutdown_started = true;
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let item = WriteCommand::Shutdown(tx);
-        match self.write_tx.poll_reserve(cx) {
-            std::task::Poll::Ready(Ok(())) => {
-                let _ = self.write_tx.send_item(item);
-                self.pending_control = Some(PendingControl {
-                    kind: ControlKind::Shutdown,
-                    reply: rx,
-                });
-                cx.waker().wake_by_ref();
-                std::task::Poll::Pending
-            }
-            std::task::Poll::Ready(Err(_)) => {
-                self.shutdown_complete = true;
-                std::task::Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "write channel closed during shutdown",
-                )))
-            }
-            std::task::Poll::Pending => std::task::Poll::Pending,
-        }
-    }
-}
-impl OwnIoStream for MigratingConnStream {}
-impl AsConn for MigratingConnStream {}
-impl HasIoAddr for MigratingConnStream {
-    fn peer_addr(&self) -> io::Result<SocketAddr> {
-        Ok(self.addr.peer_addr)
-    }
-    fn local_addr(&self) -> io::Result<SocketAddr> {
-        Ok(self.addr.local_addr)
-    }
-}
-
 #[derive(Debug)]
 pub struct IoMuxStream<R, W> {
     stream: tokio_chacha20::stream::DuplexStream<R, W>,
     addr: SocketAddrPair,
 }
+
 impl<R, W> IoMuxStream<R, W> {
     pub fn new(stream: tokio_chacha20::stream::DuplexStream<R, W>, addr: SocketAddrPair) -> Self {
         Self { stream, addr }
     }
 }
+
 impl<R: AsyncRead + Unpin, W: Unpin> AsyncRead for IoMuxStream<R, W> {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -765,28 +242,33 @@ impl<R: AsyncRead + Unpin, W: Unpin> AsyncRead for IoMuxStream<R, W> {
         Pin::new(&mut self.stream).poll_read(cx, buf)
     }
 }
+
 impl<R: Unpin, W: AsyncWrite + Unpin> AsyncWrite for IoMuxStream<R, W> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
-    ) -> std::task::Poll<Result<usize, io::Error>> {
+    ) -> std::task::Poll<io::Result<usize>> {
         Pin::new(&mut self.stream).poll_write(cx, buf)
     }
+
     fn poll_flush(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
+    ) -> std::task::Poll<io::Result<()>> {
         Pin::new(&mut self.stream).poll_flush(cx)
     }
+
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
+    ) -> std::task::Poll<io::Result<()>> {
         Pin::new(&mut self.stream).poll_shutdown(cx)
     }
 }
+
 impl<R, W> AsConn for IoMuxStream<R, W> where Self: OwnIoStream {}
+
 impl<R, W> OwnIoStream for IoMuxStream<R, W>
 where
     R: std::fmt::Debug + Send + Sync + Unpin + 'static,
@@ -794,163 +276,13 @@ where
     Self: AsyncRead + AsyncWrite,
 {
 }
+
 impl<R, W> HasIoAddr for IoMuxStream<R, W> {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.addr.peer_addr)
     }
+
     fn local_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.addr.local_addr)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dual_lane_configs_keep_heartbeats_out_of_transport_hol() {
-        assert!(interactive_client_mux_config().frame_reassembly);
-        assert!(interactive_server_mux_config().frame_reassembly);
-        assert!(bulk_client_mux_config().frame_reassembly);
-        assert!(bulk_server_mux_config().frame_reassembly);
-    }
-
-    async fn make_dual_pair() -> (
-        DualStreamOpener,
-        DualStreamAccepter,
-        JoinSet<MuxError>,
-        JoinSet<MuxError>,
-    ) {
-        fn lane(
-            client_config: MuxConfig,
-            server_config: MuxConfig,
-        ) -> (
-            StreamOpener,
-            StreamAccepter,
-            JoinSet<MuxError>,
-            StreamOpener,
-            StreamAccepter,
-            JoinSet<MuxError>,
-        ) {
-            let (client_io, server_io) = tokio::io::duplex(64 * 1024);
-            let (client_read, client_write) = tokio::io::split(client_io);
-            let (server_read, server_write) = tokio::io::split(server_io);
-            let mut client_tasks = JoinSet::new();
-            let (client_opener, client_accepter) = spawn_mux_no_reconnection(
-                client_read,
-                client_write,
-                client_config,
-                &mut client_tasks,
-            );
-            let mut server_tasks = JoinSet::new();
-            let (server_opener, server_accepter) = spawn_mux_no_reconnection(
-                server_read,
-                server_write,
-                server_config,
-                &mut server_tasks,
-            );
-            (
-                client_opener,
-                client_accepter,
-                client_tasks,
-                server_opener,
-                server_accepter,
-                server_tasks,
-            )
-        }
-        let (ci_o, ci_a, ci_t, si_o, si_a, si_t) = lane(
-            interactive_client_mux_config(),
-            interactive_server_mux_config(),
-        );
-        let (cb_o, cb_a, cb_t, sb_o, sb_a, sb_t) =
-            lane(bulk_client_mux_config(), bulk_server_mux_config());
-        let mut client_supervisor = JoinSet::new();
-        let (client_opener, _client_accepter) = spawn_dual_mux_paired_supervised(
-            ci_o,
-            ci_a,
-            ci_t,
-            cb_o,
-            cb_a,
-            cb_t,
-            &mut client_supervisor,
-        );
-        let mut server_supervisor = JoinSet::new();
-        let (_server_opener, server_accepter) = spawn_dual_mux_paired_supervised(
-            si_o,
-            si_a,
-            si_t,
-            sb_o,
-            sb_a,
-            sb_t,
-            &mut server_supervisor,
-        );
-        (
-            client_opener,
-            server_accepter,
-            client_supervisor,
-            server_supervisor,
-        )
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn migrating_conn_write_is_cancellation_safe_and_shutdown_delivers_final() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let (opener, accepter, _client_tasks, _server_tasks) = make_dual_pair().await;
-        let addr = SocketAddrPair {
-            local_addr: "127.0.0.1:10000".parse().unwrap(),
-            peer_addr: "127.0.0.1:10001".parse().unwrap(),
-        };
-        let (writer, reader_rx) =
-            opener.open_migrating_with_reader(42, mux::LaneClass::Interactive);
-        let mut stream = MigratingConnStream::new(writer, reader_rx, addr);
-        let (accepted_tx, mut accepted_rx) = tokio::sync::mpsc::unbounded_channel();
-        let accepter_task = tokio::spawn(async move {
-            run_dual_mux_accepter(accepter, addr, |stream| {
-                let _ = accepted_tx.send(stream);
-            })
-            .await
-        });
-        let big = vec![0xA5; 256 * 1024];
-        let mut accepted_big_bytes = 0usize;
-        let mut saw_pending = false;
-        for _ in 0..MIGRATING_WRITE_QUEUE_CAPACITY + 2 {
-            let waker = futures::task::noop_waker();
-            let mut cx = std::task::Context::from_waker(&waker);
-            match Pin::new(&mut stream).poll_write(&mut cx, &big) {
-                std::task::Poll::Ready(Ok(n)) => {
-                    assert!(n <= MIGRATING_WRITE_MAX_CHUNK);
-                    accepted_big_bytes += n;
-                }
-                std::task::Poll::Pending => {
-                    saw_pending = true;
-                    break;
-                }
-                std::task::Poll::Ready(Err(error)) => panic!("unexpected write error: {error}"),
-            }
-        }
-        assert!(
-            saw_pending,
-            "bounded writer queue never applied backpressure"
-        );
-        let small = b"small-after-cancel";
-        let n = stream.write(small).await.unwrap();
-        assert_eq!(n, small.len());
-        let mut accepted = tokio::time::timeout(Duration::from_secs(2), accepted_rx.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        let receive = tokio::spawn(async move {
-            let mut bytes = Vec::new();
-            accepted.read_to_end(&mut bytes).await.unwrap();
-            bytes
-        });
-        stream.shutdown().await.unwrap();
-        let bytes = tokio::time::timeout(Duration::from_secs(3), receive)
-            .await
-            .expect("FINAL was not delivered")
-            .unwrap();
-        assert_eq!(bytes.len(), accepted_big_bytes + small.len());
-        assert_eq!(&bytes[bytes.len() - small.len()..], small);
-        accepter_task.abort();
     }
 }
