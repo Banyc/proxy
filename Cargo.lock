@@ -2126,6 +2126,18 @@ dependencies = [
 [[package]]
 name = "mux"
 version = "0.1.0"
+source = "git+https://github.com/Banyc/mux.git?tag=v0.0.21#02bc6fbcd8c18633a1743c637d1318659f781638"
+dependencies = [
+ "getrandom 0.2.17",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "mux"
+version = "0.1.0"
+source = "git+https://github.com/Banyc/mux.git?branch=dev#02bc6fbcd8c18633a1743c637d1318659f781638"
 dependencies = [
  "getrandom 0.2.17",
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
@@ -3013,11 +3025,11 @@ dependencies = [
  "metrics",
  "monitor_table",
  "mptcp",
- "mux",
+ "mux 0.1.0 (git+https://github.com/Banyc/mux.git?tag=v0.0.21)",
  "pin-project-lite",
  "rand 0.10.2",
  "regex",
- "rtp",
+ "rtp 0.1.0 (git+https://github.com/Banyc/rtp.git?tag=v0.0.79)",
  "rtp_mux",
  "serde",
  "serde_json",
@@ -3501,6 +3513,31 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.79#470fbf9af792f1b257dd32d0e1f39ae32087bf04"
+dependencies = [
+ "async-trait",
+ "async_async_io",
+ "byteorder",
+ "csv",
+ "dre",
+ "fec",
+ "libc",
+ "mpudp",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.56)",
+ "rand 0.10.2",
+ "self_assign",
+ "serde",
+ "tap",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "udp_listener",
+]
+
+[[package]]
+name = "rtp"
+version = "0.1.0"
+source = "git+https://github.com/Banyc/rtp.git?branch=dev#470fbf9af792f1b257dd32d0e1f39ae32087bf04"
 dependencies = [
  "async-trait",
  "async_async_io",
@@ -3524,12 +3561,13 @@ dependencies = [
 [[package]]
 name = "rtp_mux"
 version = "0.1.0"
+source = "git+https://github.com/Banyc/rtp_mux.git?tag=v0.0.1#8deeff0e79dc089cc87134050a867cd3f32ff1b2"
 dependencies = [
  "futures",
  "metrics",
- "mux",
+ "mux 0.1.0 (git+https://github.com/Banyc/mux.git?branch=dev)",
  "rand 0.10.2",
- "rtp",
+ "rtp 0.1.0 (git+https://github.com/Banyc/rtp.git?branch=dev)",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
