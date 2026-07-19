@@ -17,8 +17,9 @@ use tokio::net::lookup_host;
 use crate::route::IntoAddr;
 
 const RESOLVED_SOCKET_ADDR_SIZE: usize = 128;
-static RESOLVED_SOCKET_ADDR: LazyLock<Mutex<WeakLru<Arc<str>, IpAddr, RESOLVED_SOCKET_ADDR_SIZE>>> =
-    LazyLock::new(|| Mutex::new(WeakLru::new()));
+static RESOLVED_SOCKET_ADDR: LazyLock<
+    Mutex<WeakLru<Arc<str>, Vec<IpAddr>, RESOLVED_SOCKET_ADDR_SIZE>>,
+> = LazyLock::new(|| Mutex::new(WeakLru::new()));
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -138,18 +139,22 @@ impl InternetAddr {
                     .await
                     .map(|res| res.collect::<Vec<SocketAddr>>())
                     .and_then(|addrs| Vec1::try_from(addrs).map_err(|_| no_addr_err()));
-
                 match &res {
                     Ok(resolved_addrs) => {
-                        let first_addr = *resolved_addrs.first();
                         if let Ok(mut store) = RESOLVED_SOCKET_ADDR.try_lock() {
-                            store.insert(addr.clone(), first_addr.ip());
+                            let ips = resolved_addrs.iter().map(SocketAddr::ip).collect();
+                            store.insert(addr.clone(), ips);
                         }
                     }
                     Err(_) => {
                         let mut store = RESOLVED_SOCKET_ADDR.lock().unwrap();
-                        if let Some(ip) = store.get_mut(addr.as_ref()) {
-                            return Ok(vec1![SocketAddr::new(*ip, *port)]);
+                        if let Some(ips) = store.get_mut(addr.as_ref()) {
+                            let addrs = ips
+                                .iter()
+                                .copied()
+                                .map(|ip| SocketAddr::new(ip, *port))
+                                .collect::<Vec<_>>();
+                            return Vec1::try_from(addrs).map_err(|_| no_addr_err());
                         }
                     }
                 }
