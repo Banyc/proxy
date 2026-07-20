@@ -11,7 +11,8 @@ use scopeguard::defer;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_io::BytesCopied;
 use tokio_throughput::{ReadGauge, WriteGauge};
-use tracing::info;
+
+pub use crate::proto::log::stream::IoCopyFinished;
 
 use crate::{
     log::Timing,
@@ -42,32 +43,30 @@ where
 {
     pub async fn serve_as_proxy_server(
         self,
-        log_prefix: &str,
-    ) -> Result<(), tokio_io::CopyBiError> {
+    ) -> (IoCopyFinished, Result<(), tokio_io::CopyBiError>) {
         let session = self.session();
         let destination = self.conn_context.destination.clone();
 
-        let (metrics, res) = self
-            .serve(session, EncryptionDirection::Decrypt, log_prefix, destination.clone())
+        let (finished, metrics, res) = self
+            .serve(session, EncryptionDirection::Decrypt)
             .await;
         log(metrics, destination);
 
-        res
+        (finished, res)
     }
 
     pub async fn serve_as_access_server(
         self,
-        log_prefix: &str,
-    ) -> Result<(), tokio_io::CopyBiError> {
+    ) -> (IoCopyFinished, Result<(), tokio_io::CopyBiError>) {
         let session = self.session();
         let destination = self.conn_context.destination.clone();
 
-        let (metrics, res) = self
-            .serve(session, EncryptionDirection::Encrypt, log_prefix, destination.clone())
+        let (finished, metrics, res) = self
+            .serve(session, EncryptionDirection::Encrypt)
             .await;
         log(metrics, destination);
 
-        res
+        (finished, res)
     }
 
     fn session(&self) -> Option<(RowOwnedGuard<Session>, ReadGauge, WriteGauge)> {
@@ -101,9 +100,8 @@ where
             WriteGauge,
         )>,
         en_dir: EncryptionDirection,
-        log_prefix: &str,
-        destination: Option<StreamAddr>,
-    ) -> (StreamLog, Result<(), tokio_io::CopyBiError>) {
+    ) -> (IoCopyFinished, StreamLog, Result<(), tokio_io::CopyBiError>) {
+        let destination = self.conn_context.destination.clone();
         let res = match session {
             Some((session, r, w)) => {
                 let downstream = tokio_throughput::WholeStream::new(self.downstream, r, w);
@@ -136,43 +134,14 @@ where
             }
         };
         let (log, res) = get_log_from_copy_result(self.conn_context, res);
-        let dst = destination.as_ref().map(StreamAddr::to_string);
-        match &res {
-            Ok(()) => {
-                info!(
-                    dn = ?log.downstream_addr,
-                    up = %log.upstream_addr,
-                    up_sock = ?log.upstream_sock_addr,
-                    ?dst,
-                    %log,
-                    "{log_prefix}: I/O copy finished"
-                );
-            }
-            Err(e) if is_timed_out(e) => {
-                info!(
-                    event = "stream_io_copy_timed_out",
-                    ?e,
-                    dn = ?log.downstream_addr,
-                    up = %log.upstream_addr,
-                    up_sock = ?log.upstream_sock_addr,
-                    ?dst,
-                    %log,
-                    "{log_prefix}: I/O copy timed out"
-                );
-            }
-            Err(e) => {
-                info!(
-                    ?e,
-                    dn = ?log.downstream_addr,
-                    up = %log.upstream_addr,
-                    up_sock = ?log.upstream_sock_addr,
-                    ?dst,
-                    %log,
-                    "{log_prefix}: I/O copy error"
-                );
-            }
-        }
-        (log, res)
+        let finished = IoCopyFinished {
+            timing: log.timing.clone(),
+            upstream_addr: log.upstream_addr.clone(),
+            upstream_sock_addr: log.upstream_sock_addr,
+            downstream_addr: log.downstream_addr,
+            destination: destination.map(|d| d.address),
+        };
+        (finished, log, res)
     }
 }
 
@@ -248,14 +217,6 @@ where
         }
         None => tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await,
     }
-}
-
-fn is_timed_out(err: &tokio_io::CopyBiError) -> bool {
-    let io_err = match err {
-        tokio_io::CopyBiError::FromAToB(e) => e,
-        tokio_io::CopyBiError::FromBToA(e) => e,
-    };
-    io_err.kind() == std::io::ErrorKind::TimedOut
 }
 
 fn get_log_from_copy_result(

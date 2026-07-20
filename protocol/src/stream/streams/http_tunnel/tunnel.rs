@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 
 use crate::stream::{
     addr::ConcreteStreamType,
@@ -20,6 +20,7 @@ use common::{
         connect::stream::StreamConnectorTable,
         context::StreamContext,
         io_copy::stream::{ConnContext, CopyBidirectional},
+        log::stream::IoCopyFinished,
         metrics::stream::StreamSessionTable,
         route::StreamRouteGroup,
     },
@@ -30,9 +31,26 @@ use http_body_util::{BodyExt, Empty, combinators::BoxBody};
 use hyper::{Request, Response, body::Incoming, upgrade::Upgraded};
 use hyper_util::rt::TokioIo;
 use thiserror::Error;
-use tracing::{instrument, trace, warn};
+use tracing::{info, instrument, trace, warn};
 
 use super::TunnelError;
+
+pub struct HttpTunnelLog {
+    pub io: IoCopyFinished,
+    pub method: String,
+    pub uri: String,
+}
+
+impl fmt::Display for HttpTunnelLog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.io)?;
+        if self.method != "CONNECT" {
+            write!(f, ",method:{}", self.method)?;
+            write!(f, ",uri:{}", self.uri)?;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug)]
 enum ConnectFailure {
@@ -76,6 +94,8 @@ async fn dispatch(
     ctx: &HttpAccessConnContext,
     reporter: HttpFailureReporter,
 ) -> ReturnType {
+    let method = req.method().to_string();
+    let uri = req.uri().to_string();
     let action = ctx.route_table.action(&dst_addr);
     let action = match &action {
         RouteAction::ConnSelector(conn_selector) => {
@@ -88,6 +108,8 @@ async fn dispatch(
                 failure: reporter.failure.clone(),
                 downstream: reporter.downstream.clone(),
                 listener: Arc::clone(&reporter.listener),
+                method: method.clone(),
+                uri: uri.clone(),
             };
             UpgradeAction::Proxy(proxy_ctx)
         }
@@ -105,6 +127,8 @@ async fn dispatch(
                 failure: reporter.failure.clone(),
                 downstream: reporter.downstream.clone(),
                 listener: Arc::clone(&reporter.listener),
+                method: method.clone(),
+                uri: uri.clone(),
             };
             UpgradeAction::Direct(direct_ctx)
         }
@@ -182,6 +206,8 @@ struct DirectContext {
     pub failure: Arc<HttpRequestFailure>,
     pub downstream: super::HttpDownstreamContext,
     pub listener: Arc<str>,
+    pub method: String,
+    pub uri: String,
 }
 #[instrument(skip_all)]
 async fn direct(ctx: DirectContext, upgraded: Upgraded) -> Result<(), ConnectFailure> {
@@ -209,15 +235,20 @@ async fn direct(ctx: DirectContext, upgraded: Upgraded) -> Result<(), ConnectFai
         session_table: ctx.session_table,
         destination: Some(upstream_addr),
     };
-    let _ = CopyBidirectional {
+    let (io, res) = CopyBidirectional {
         downstream: TokioIo::new(upgraded),
         upstream,
         payload_crypto: None,
         speed_limiter: ctx.speed_limiter,
         conn_context,
     }
-    .serve_as_access_server("HTTP CONNECT direct")
+    .serve_as_access_server()
     .await;
+    let log = HttpTunnelLog { io, method: ctx.method, uri: ctx.uri };
+    match &res {
+        Ok(()) => info!(e = %log, "HTTP CONNECT direct: Finished"),
+        Err(err) => info!(e = %log, ?err, "HTTP CONNECT direct: Error"),
+    }
     Ok(())
 }
 
@@ -231,6 +262,8 @@ struct ProxyContext {
     pub failure: Arc<HttpRequestFailure>,
     pub downstream: super::HttpDownstreamContext,
     pub listener: Arc<str>,
+    pub method: String,
+    pub uri: String,
 }
 #[instrument(skip_all, fields(ctx.dst_addr))]
 async fn proxy(ctx: &ProxyContext, upgraded: Upgraded) -> Result<(), ProxyError> {
@@ -260,6 +293,8 @@ async fn proxy(ctx: &ProxyContext, upgraded: Upgraded) -> Result<(), ProxyError>
         session_table: ctx.stream_context.session_table.clone(),
         destination: Some(destination),
     };
+    let method = ctx.method.clone();
+    let uri = ctx.uri.clone();
     let io_copy = CopyBidirectional {
         downstream: TokioIo::new(upgraded),
         upstream: upstream.stream,
@@ -267,9 +302,14 @@ async fn proxy(ctx: &ProxyContext, upgraded: Upgraded) -> Result<(), ProxyError>
         speed_limiter: ctx.speed_limiter.clone(),
         conn_context,
     }
-    .serve_as_access_server("HTTP CONNECT");
+    .serve_as_access_server();
     tokio::spawn(async move {
-        let _ = io_copy.await;
+        let (io, res) = io_copy.await;
+        let log = HttpTunnelLog { io, method, uri };
+        match &res {
+            Ok(()) => info!(e = %log, "HTTP CONNECT: Finished"),
+            Err(err) => info!(e = %log, ?err, "HTTP CONNECT: Error"),
+        }
     });
     Ok(())
 }

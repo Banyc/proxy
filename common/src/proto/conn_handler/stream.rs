@@ -1,4 +1,4 @@
-use std::{io, net::SocketAddr, sync::Arc, time::Duration};
+use std::{fmt, io, net::SocketAddr, sync::Arc, time::Duration};
 
 use crate::{
     addr::ParseInternetAddrError,
@@ -8,6 +8,7 @@ use crate::{
         conn::stream::ConnAndAddr,
         context::StreamContext,
         io_copy::stream::{ConnContext, CopyBidirectional},
+        log::stream::IoCopyFinished,
         steer::stream::{SteerError, steer},
     },
     stream::{
@@ -19,6 +20,19 @@ use async_speed_limit::Limiter;
 use serde::Deserialize;
 use thiserror::Error;
 use tracing::{info, instrument, warn};
+
+pub struct StreamProxyFinished {
+    pub io: IoCopyFinished,
+    pub up: StreamAddr,
+}
+
+impl fmt::Display for StreamProxyFinished {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.io)?;
+        write!(f, ",upstream:{}", self.up)?;
+        Ok(())
+    }
+}
 
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -123,6 +137,7 @@ impl StreamProxyConnHandler {
         };
 
         // Copy data
+        let up = upstream.addr.clone();
         let conn_context = ConnContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
             upstream_remote: upstream.addr,
@@ -140,9 +155,14 @@ impl StreamProxyConnHandler {
             speed_limiter: Limiter::new(f64::INFINITY),
             conn_context,
         }
-        .serve_as_proxy_server("Stream");
+        .serve_as_proxy_server();
         tokio::spawn(async move {
-            let _ = io_copy.await;
+            let (io, res) = io_copy.await;
+            let log = StreamProxyFinished { io, up };
+            match &res {
+                Ok(()) => info!(e = %log, "Stream: Finished"),
+                Err(err) => info!(e = %log, ?err, "Stream: Error"),
+            }
         });
         Ok(ProxyResult::IoCopy)
     }

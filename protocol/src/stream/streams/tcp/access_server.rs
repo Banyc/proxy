@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, sync::Arc};
+use std::{collections::HashMap, fmt, io, sync::Arc};
 
 use async_speed_limit::Limiter;
 use common::{
@@ -9,6 +9,7 @@ use common::{
         client::stream::{StreamEstablishError, establish},
         context::StreamContext,
         io_copy::stream::{ConnContext, CopyBidirectional},
+        log::stream::IoCopyFinished,
         route::{StreamConnSelectorBuildContext, StreamConnSelectorBuilder, StreamRouteGroup},
     },
     route::ConnSelectorBuildError,
@@ -16,7 +17,20 @@ use common::{
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{instrument, warn};
+use tracing::{info, instrument, warn};
+
+pub struct TcpAccessLog {
+    pub io: IoCopyFinished,
+    pub dst: StreamAddr,
+}
+
+impl fmt::Display for TcpAccessLog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.io)?;
+        write!(f, ",dst:{}", self.dst)?;
+        Ok(())
+    }
+}
 
 use super::proxy_server::TcpServer;
 
@@ -147,6 +161,7 @@ impl TcpAccessConnHandler {
             session_table: self.stream_context.session_table.clone(),
             destination: Some(self.destination.clone()),
         };
+        let dst = self.destination.clone();
         let io_copy = CopyBidirectional {
             downstream,
             upstream: upstream.stream,
@@ -154,9 +169,14 @@ impl TcpAccessConnHandler {
             speed_limiter: self.speed_limiter.clone(),
             conn_context,
         }
-        .serve_as_access_server("TCP");
+        .serve_as_access_server();
         tokio::spawn(async move {
-            let _ = io_copy.await;
+            let (io, res) = io_copy.await;
+            let log = TcpAccessLog { io, dst };
+            match &res {
+                Ok(()) => info!(e = %log, "TCP: Finished"),
+                Err(err) => info!(e = %log, ?err, "TCP: Error"),
+            }
         });
         Ok(())
     }

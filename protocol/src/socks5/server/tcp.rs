@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, net::SocketAddr, num::NonZeroU8, sync::Arc};
+use std::{collections::HashMap, fmt, io, net::SocketAddr, num::NonZeroU8, sync::Arc};
 
 use crate::stream::{
     addr::ConcreteStreamType,
@@ -15,6 +15,7 @@ use common::{
         conn::stream::ConnAndAddr,
         context::StreamContext,
         io_copy::stream::{ConnContext, CopyBidirectional},
+        log::stream::IoCopyFinished,
         route::{
             StreamRouteGroup, StreamRouteTable, StreamRouteTableBuildContext,
             StreamRouteTableBuilder,
@@ -27,13 +28,27 @@ use common::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 
 use crate::socks5::messages::{
     Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,
     RelayResponse, Reply,
     sub_negotiations::{UsernamePasswordRequest, UsernamePasswordResponse, UsernamePasswordStatus},
 };
+
+pub struct Socks5TcpLog {
+    pub io: IoCopyFinished,
+    pub cmd: String,
+    pub dst: InternetAddr,
+}
+
+impl fmt::Display for Socks5TcpLog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.io)?;
+        write!(f, ",cmd:{}", self.cmd)?;
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -189,9 +204,11 @@ impl Socks5ServerTcpAccessConnHandler {
                 upstream_addr,
                 upstream_sock_addr,
             } => {
+                let cmd = "CONNECT".to_string();
+                let dst = upstream_addr.clone();
                 let upstream_addr = StreamAddr {
                     stream_type: ConcreteStreamType::Tcp.to_string().into(),
-                    address: upstream_addr.clone(),
+                    address: upstream_addr,
                 };
                 let conn_context = ConnContext {
                     start: (std::time::Instant::now(), std::time::SystemTime::now()),
@@ -210,9 +227,14 @@ impl Socks5ServerTcpAccessConnHandler {
                     speed_limiter: self.speed_limiter.clone(),
                     conn_context,
                 }
-                .serve_as_access_server("SOCKS5 TCP direct");
+                .serve_as_access_server();
                 tokio::spawn(async move {
-                    let _ = io_copy.await;
+                    let (io, res) = io_copy.await;
+                    let log = Socks5TcpLog { io, cmd, dst };
+                    match &res {
+                        Ok(()) => info!(e = %log, "SOCKS5 TCP direct: Finished"),
+                        Err(err) => info!(e = %log, ?err, "SOCKS5 TCP direct: Error"),
+                    }
                 });
                 return Ok(ProxyResult::IoCopy);
             }
@@ -232,6 +254,8 @@ impl Socks5ServerTcpAccessConnHandler {
             } => (destination, downstream, upstream, payload_crypto),
         };
 
+        let cmd = "CONNECT".to_string();
+        let dst = destination.clone();
         let conn_context = ConnContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
             upstream_remote: upstream.addr,
@@ -242,7 +266,7 @@ impl Socks5ServerTcpAccessConnHandler {
             session_table: self.stream_context.session_table.clone(),
             destination: Some(StreamAddr {
                 stream_type: ConcreteStreamType::Tcp.to_string().into(),
-                address: destination.clone(),
+                address: destination,
             }),
         };
         let io_copy = CopyBidirectional {
@@ -252,9 +276,14 @@ impl Socks5ServerTcpAccessConnHandler {
             speed_limiter: self.speed_limiter.clone(),
             conn_context,
         }
-        .serve_as_access_server("SOCKS5 TCP");
+        .serve_as_access_server();
         tokio::spawn(async move {
-            let _ = io_copy.await;
+            let (io, res) = io_copy.await;
+            let log = Socks5TcpLog { io, cmd, dst };
+            match &res {
+                Ok(()) => info!(e = %log, "SOCKS5 TCP: Finished"),
+                Err(err) => info!(e = %log, ?err, "SOCKS5 TCP: Error"),
+            }
         });
         Ok(ProxyResult::IoCopy)
     }
