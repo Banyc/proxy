@@ -48,7 +48,7 @@ where
         let destination = self.conn_context.destination.clone();
 
         let (metrics, res) = self
-            .serve(session, EncryptionDirection::Decrypt, log_prefix)
+            .serve(session, EncryptionDirection::Decrypt, log_prefix, destination.clone())
             .await;
         log(metrics, destination);
 
@@ -63,7 +63,7 @@ where
         let destination = self.conn_context.destination.clone();
 
         let (metrics, res) = self
-            .serve(session, EncryptionDirection::Encrypt, log_prefix)
+            .serve(session, EncryptionDirection::Encrypt, log_prefix, destination.clone())
             .await;
         log(metrics, destination);
 
@@ -102,6 +102,7 @@ where
         )>,
         en_dir: EncryptionDirection,
         log_prefix: &str,
+        destination: Option<StreamAddr>,
     ) -> (StreamLog, Result<(), tokio_io::CopyBiError>) {
         let res = match session {
             Some((session, r, w)) => {
@@ -135,12 +136,14 @@ where
             }
         };
         let (log, res) = get_log_from_copy_result(self.conn_context, res);
+        let dst = destination.as_ref().map(StreamAddr::to_string);
         match &res {
             Ok(()) => {
                 info!(
                     dn = ?log.downstream_addr,
                     up = %log.upstream_addr,
                     up_sock = ?log.upstream_sock_addr,
+                    ?dst,
                     %log,
                     "{log_prefix}: I/O copy finished"
                 );
@@ -152,6 +155,7 @@ where
                     dn = ?log.downstream_addr,
                     up = %log.upstream_addr,
                     up_sock = ?log.upstream_sock_addr,
+                    ?dst,
                     %log,
                     "{log_prefix}: I/O copy timed out"
                 );
@@ -162,6 +166,7 @@ where
                     dn = ?log.downstream_addr,
                     up = %log.upstream_addr,
                     up_sock = ?log.upstream_sock_addr,
+                    ?dst,
                     %log,
                     "{log_prefix}: I/O copy error"
                 );
