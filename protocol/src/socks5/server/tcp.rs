@@ -28,7 +28,7 @@ use common::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
-use tracing::{info, trace, warn};
+use tracing::{trace, warn};
 
 use crate::socks5::messages::{
     Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,
@@ -232,8 +232,8 @@ impl Socks5ServerTcpAccessConnHandler {
                     let (io, res) = io_copy.await;
                     let log = Socks5TcpLog { io, cmd, dst };
                     match &res {
-                        Ok(()) => info!(e = %log, "SOCKS5 TCP direct: Finished"),
-                        Err(err) => info!(e = %log, ?err, "SOCKS5 TCP direct: Error"),
+                        Ok(()) => common::info_println!("SOCKS5 TCP direct: Finished {log}"),
+                        Err(err) => common::info_println!("SOCKS5 TCP direct: Error {log}: {err}"),
                     }
                 });
                 return Ok(ProxyResult::IoCopy);
@@ -281,8 +281,8 @@ impl Socks5ServerTcpAccessConnHandler {
             let (io, res) = io_copy.await;
             let log = Socks5TcpLog { io, cmd, dst };
             match &res {
-                Ok(()) => info!(e = %log, "SOCKS5 TCP: Finished"),
-                Err(err) => info!(e = %log, ?err, "SOCKS5 TCP: Error"),
+                Ok(()) => common::info_println!("SOCKS5 TCP: Finished {log}"),
+                Err(err) => common::info_println!("SOCKS5 TCP: Error {log}: {err}"),
             }
         });
         Ok(ProxyResult::IoCopy)

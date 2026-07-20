@@ -31,7 +31,7 @@ use http_body_util::{BodyExt, Empty, combinators::BoxBody};
 use hyper::{Request, Response, body::Incoming, upgrade::Upgraded};
 use hyper_util::rt::TokioIo;
 use thiserror::Error;
-use tracing::{info, instrument, trace, warn};
+use tracing::{instrument, trace, warn};
 
 use super::TunnelError;
 
@@ -246,8 +246,8 @@ async fn direct(ctx: DirectContext, upgraded: Upgraded) -> Result<(), ConnectFai
     .await;
     let log = HttpTunnelLog { io, method: ctx.method, uri: ctx.uri };
     match &res {
-        Ok(()) => info!(e = %log, "HTTP CONNECT direct: Finished"),
-        Err(err) => info!(e = %log, ?err, "HTTP CONNECT direct: Error"),
+        Ok(()) => common::info_println!("HTTP CONNECT direct: Finished {log}"),
+        Err(err) => common::info_println!("HTTP CONNECT direct: Error {log}: {err}"),
     }
     Ok(())
 }
@@ -307,8 +307,8 @@ async fn proxy(ctx: &ProxyContext, upgraded: Upgraded) -> Result<(), ProxyError>
         let (io, res) = io_copy.await;
         let log = HttpTunnelLog { io, method, uri };
         match &res {
-            Ok(()) => info!(e = %log, "HTTP CONNECT: Finished"),
-            Err(err) => info!(e = %log, ?err, "HTTP CONNECT: Error"),
+            Ok(()) => common::info_println!("HTTP CONNECT: Finished {log}"),
+            Err(err) => common::info_println!("HTTP CONNECT: Error {log}: {err}"),
         }
     });
     Ok(())

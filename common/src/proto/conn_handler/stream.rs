@@ -160,8 +160,8 @@ impl StreamProxyConnHandler {
             let (io, res) = io_copy.await;
             let log = StreamProxyFinished { io, up };
             match &res {
-                Ok(()) => info!(e = %log, "Stream: Finished"),
-                Err(err) => info!(e = %log, ?err, "Stream: Error"),
+                Ok(()) => crate::info_println!("Stream: Finished {log}"),
+                Err(err) => crate::info_println!("Stream: Error {log}: {err}"),
             }
         });
         Ok(ProxyResult::IoCopy)

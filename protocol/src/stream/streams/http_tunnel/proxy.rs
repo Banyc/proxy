@@ -28,7 +28,7 @@ use hyper::{Request, body::Incoming, http::uri::Authority};
 use hyper_util::rt::TokioIo;
 use monitor_table::table::RowOwnedGuard;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tracing::{info, instrument, trace};
+use tracing::{instrument, trace};
 
 const DEFAULT_PORT_HTTP: u16 = 80;
 const DEFAULT_PORT_HTTPS: u16 = 443;
@@ -172,7 +172,7 @@ async fn direct(
         })
     });
     let res = tls_http(upstream, req, session_guard, &reporter).await;
-    info!("Direct finished");
+    common::info_println!("HTTP direct: Finished");
     res
 }
 
@@ -242,7 +242,7 @@ async fn proxy(
         },
         destination: dst_addr.address,
     };
-    info!(%log, "Finished");
+    common::info_println!("HTTP proxy: Finished {log}");
 
     let record = (&log).into();
     if let Some(x) = LOGGER.lock().unwrap().as_ref() {

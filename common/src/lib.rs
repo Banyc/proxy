@@ -2,6 +2,17 @@
 #[cfg(feature = "nightly")]
 extern crate test;
 
+/// Print a line to stdout when the INFO log level is enabled.
+/// Replaces noisy `info!()` for user-facing terminal output.
+#[macro_export]
+macro_rules! info_println {
+    ($($arg:tt)*) => {
+        if tracing::level_enabled!(tracing::Level::INFO) {
+            println!($($arg)*);
+        }
+    }
+}
+
 pub mod addr;
 pub mod anti_replay;
 pub mod config;
