@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::SystemTime};
+use std::{fmt, sync::Arc, time::SystemTime};
 
 use crate::stream::{
     addr::ConcreteStreamType,
@@ -17,7 +17,7 @@ use common::{
         addr::StreamAddr,
         client::stream::establish,
         io_copy::{same_key_nonce_ciphertext, stream::DEAD_SESSION_RETENTION_DURATION},
-        log::stream::{LOGGER, SimplifiedStreamLog, SimplifiedStreamProxyLog},
+        log::stream::{IoCopyFinished, LOGGER, SimplifiedStreamLog, SimplifiedStreamProxyLog},
         metrics::stream::Session,
     },
     route::{ConnSelector, RouteAction},
@@ -29,6 +29,21 @@ use hyper_util::rt::TokioIo;
 use monitor_table::table::RowOwnedGuard;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{instrument, trace};
+
+struct HttpProxyLog {
+    io: IoCopyFinished,
+    method: String,
+    uri: String,
+}
+
+impl fmt::Display for HttpProxyLog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.io)?;
+        write!(f, ",method:{}", self.method)?;
+        write!(f, ",uri:{}", self.uri)?;
+        Ok(())
+    }
+}
 
 const DEFAULT_PORT_HTTP: u16 = 80;
 const DEFAULT_PORT_HTTPS: u16 = 443;
@@ -98,6 +113,8 @@ pub async fn run_proxy_mode(
     req: Request<hyper::body::Incoming>,
     reporter: HttpFailureReporter,
 ) -> ReturnType {
+    let method = req.method().to_string();
+    let uri = req.uri().to_string();
     let dst_addr = match get_authority_from_req(&req) {
         Ok(addr) => addr,
         Err(e) => {
@@ -111,26 +128,28 @@ pub async fn run_proxy_mode(
         stream_type: ConcreteStreamType::Tcp.to_string().into(),
     };
     let req = req_modify_path(req);
-    dispatch(dst_addr_stream, req, ctx, reporter).await
+    dispatch(dst_addr_stream, req, method, uri, ctx, reporter).await
 }
 
 #[instrument(skip_all, fields(addr = ?dst_addr))]
 async fn dispatch(
     dst_addr: StreamAddr,
     req: Request<Incoming>,
+    method: String,
+    uri: String,
     ctx: &HttpAccessConnContext,
     reporter: HttpFailureReporter,
 ) -> ReturnType {
     let action = ctx.route_table.action(&dst_addr.address);
     match action {
         RouteAction::ConnSelector(conn_selector) => {
-            proxy(conn_selector, dst_addr, req, ctx, reporter).await
+            proxy(conn_selector, dst_addr, req, method, uri, ctx, reporter).await
         }
         RouteAction::Block => {
             trace!("Blocked");
             Ok(respond_with_rejection())
         }
-        RouteAction::Direct => direct(dst_addr, req, ctx, reporter).await,
+        RouteAction::Direct => direct(dst_addr, req, method, uri, ctx, reporter).await,
     }
 }
 
@@ -138,16 +157,19 @@ async fn dispatch(
 async fn direct(
     dst_addr: StreamAddr,
     req: Request<Incoming>,
+    method: String,
+    uri: String,
     ctx: &HttpAccessConnContext,
     reporter: HttpFailureReporter,
 ) -> ReturnType {
+    let start = (std::time::Instant::now(), std::time::SystemTime::now());
     let destination = dst_addr.address.to_string();
     let sock_addrs = dst_addr.address.to_socket_addrs().await.map_err(|e| {
         let err = TunnelError::Direct(e);
         reporter.report(&err, Some(&destination));
         err
     })?;
-    let (upstream, _upstream_sock) = ctx
+    let (upstream, upstream_sock_addr) = ctx
         .stream_context
         .connector_table
         .timed_connect_2(TCP_STREAM_TYPE, sock_addrs, TIMEOUT)
@@ -172,7 +194,23 @@ async fn direct(
         })
     });
     let res = tls_http(upstream, req, session_guard, &reporter).await;
-    common::info_println!("HTTP direct: Finished");
+    let end = std::time::Instant::now();
+    let timing = Timing { start, end };
+    let log = HttpProxyLog {
+        io: IoCopyFinished {
+            timing,
+            upstream_addr: StreamAddr {
+                address: dst_addr.address.clone(),
+                stream_type: ConcreteStreamType::Tcp.to_string().into(),
+            },
+            upstream_sock_addr,
+            downstream_addr: dn_remote,
+            destination: Some(dst_addr.address),
+        },
+        method,
+        uri,
+    };
+    common::info_println!("HTTP direct: Finished {log}");
     res
 }
 
@@ -181,6 +219,8 @@ async fn proxy(
     conn_selector: &ConnSelector<StreamAddr>,
     dst_addr: StreamAddr,
     req: Request<Incoming>,
+    method: String,
+    uri: String,
     ctx: &HttpAccessConnContext,
     reporter: HttpFailureReporter,
 ) -> ReturnType {
@@ -233,18 +273,29 @@ async fn proxy(
 
     let end = std::time::Instant::now();
     let timing = Timing { start, end };
-    let log = SimplifiedStreamProxyLog {
+    let log = HttpProxyLog {
+        io: IoCopyFinished {
+            timing: timing.clone(),
+            upstream_addr: upstream_addr.clone(),
+            upstream_sock_addr: upstream.sock_addr,
+            downstream_addr: reporter.downstream.remote,
+            destination: Some(dst_addr.address.clone()),
+        },
+        method,
+        uri,
+    };
+    common::info_println!("HTTP proxy: Finished {log}");
+
+    let record = (&SimplifiedStreamProxyLog {
         stream: SimplifiedStreamLog {
-            timing,
+            timing: timing.clone(),
             upstream_addr,
             upstream_sock_addr: upstream.sock_addr,
             downstream_addr: reporter.downstream.remote,
         },
         destination: dst_addr.address,
-    };
-    common::info_println!("HTTP proxy: Finished {log}");
-
-    let record = (&log).into();
+    })
+        .into();
     if let Some(x) = LOGGER.lock().unwrap().as_ref() {
         x.write(&record);
     }
