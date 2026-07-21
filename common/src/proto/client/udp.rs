@@ -177,6 +177,33 @@ impl UdpSend for UdpProxyClientWriteHalf {
     async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
         Self::send(self, buf).await.map_err(|e| e.into())
     }
+
+    async fn trait_send_vectored(&mut self, bufs: &[std::io::IoSlice<'_>]) -> Result<usize, AnyError> {
+        if bufs.is_empty() {
+            return Ok(0);
+        }
+        let total_payload: usize = bufs.iter().map(|b| b.len()).sum();
+        self.write_buf.clear();
+        if let Some(request_header) = &self.request_header {
+            let hdr = match self.request_header_ttl.get() {
+                Some(hdr) => hdr,
+                None => self.request_header_ttl.set(request_header()),
+            };
+            self.write_buf.extend_from_slice(&hdr);
+        }
+        self.write_buf.reserve(total_payload);
+        for b in bufs {
+            self.write_buf.extend_from_slice(b);
+        }
+        self.upstream.send(&self.write_buf).await.map_err(|e| {
+            let peer_addr = self.upstream.peer_addr().ok();
+            AnyError::from(SendError {
+                source: e,
+                sock_addr: peer_addr,
+            })
+        })?;
+        Ok(total_payload)
+    }
 }
 impl UdpProxyClientWriteHalf {
     pub fn new(

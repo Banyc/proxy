@@ -48,6 +48,11 @@ pub trait UdpRecv {
 
 pub trait UdpSend {
     fn trait_send(&mut self, buf: &[u8]) -> impl Future<Output = Result<usize, AnyError>> + Send;
+
+    fn trait_send_vectored(
+        &mut self,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> impl Future<Output = Result<usize, AnyError>> + Send;
 }
 
 pub struct UpstreamParts<R, W> {
@@ -443,6 +448,24 @@ pub enum CopyBiError {
 impl UdpSend for Arc<UdpSocket> {
     async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
         UdpSocket::send(self, buf).await.map_err(|e| e.into())
+    }
+
+    async fn trait_send_vectored(&mut self, bufs: &[std::io::IoSlice<'_>]) -> Result<usize, AnyError> {
+        match bufs.len() {
+            0 => Ok(0),
+            1 => {
+                let slice: &[u8] = bufs[0].as_ref();
+                UdpSocket::send(self, slice).await.map_err(|e| e.into())
+            }
+            _ => {
+                let total: usize = bufs.iter().map(|b| b.len()).sum();
+                let mut buf = Vec::with_capacity(total);
+                for b in bufs {
+                    buf.extend_from_slice(b);
+                }
+                UdpSocket::send(self, &buf).await.map_err(|e| e.into())
+            }
+        }
     }
 }
 
