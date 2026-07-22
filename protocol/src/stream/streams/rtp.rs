@@ -209,18 +209,6 @@ impl AsyncWrite for AddressedRtpStream {
         Pin::new(&mut self.write).poll_write(cx, buf)
     }
 
-    fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        bufs: &[std::io::IoSlice<'_>],
-    ) -> std::task::Poll<Result<usize, io::Error>> {
-        Pin::new(&mut self.write).poll_write_vectored(cx, bufs)
-    }
-
-    fn is_write_vectored(&self) -> bool {
-        self.write.is_write_vectored()
-    }
-
     fn poll_flush(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,

@@ -55,6 +55,7 @@ tokio_chacha20 = { git = "https://github.com/Banyc/tokio_chacha20.git", tag = "v
 tokio_conn_pool = { git = "https://github.com/Banyc/tokio_conn_pool.git", rev = "8454496666bc1960223ca2eb78535fe2fd30cfbe" }
 tokio_kcp = "0.9"
 tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", tag = "v0.0.4" }
+tokio_udp = { git = "https://github.com/Banyc/tokio_udp.git", tag = "v0.0.1" }
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
@@ -73,3 +74,7 @@ rtp = { path = "../rtp" }
 mux = { path = "../mux" }
 [patch."https://github.com/Banyc/rtp_mux.git"]
 rtp_mux = { path = "../rtp_mux" }
+[patch."https://github.com/Banyc/udp_listener.git"]
+udp_listener = { path = "../udp_listener" }
+[patch."https://github.com/Banyc/tokio_udp.git"]
+tokio_udp = { path = "../tokio_udp" }

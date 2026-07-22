@@ -4341,8 +4341,8 @@ dependencies = [
 [[package]]
 name = "tokio_udp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/tokio_udp.git?tag=v0.0.1#c4f0c28a4021ecaa4bef4f5c8d2ce2411985e453"
 dependencies = [
+ "bytes",
  "socket2 0.5.10",
  "tokio",
 ]
@@ -4503,11 +4503,11 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "udp_listener"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.13#076920b9a83f9472e7d6209502f1fecb58f7d665"
 dependencies = [
  "bytes",
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.55)",
  "tokio",
+ "tokio_udp",
 ]
 
 [[package]]

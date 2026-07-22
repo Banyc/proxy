@@ -1,5 +1,5 @@
 use std::{
-    io::{self, IoSlice},
+    io,
     net::SocketAddr,
     pin::Pin,
     sync::{
@@ -49,10 +49,6 @@ pub trait UdpRecv {
 pub trait UdpSend {
     fn trait_send(&mut self, buf: &[u8]) -> impl Future<Output = Result<usize, AnyError>> + Send;
 
-    fn trait_send_vectored(
-        &mut self,
-        bufs: &[std::io::IoSlice<'_>],
-    ) -> impl Future<Output = Result<usize, AnyError>> + Send;
 }
 
 pub struct UpstreamParts<R, W> {
@@ -302,6 +298,7 @@ where
         let packets_downlink = Arc::clone(&packets_downlink);
         let payload_crypto = payload_crypto.clone();
         let mut downlink_buf = [0; PACKET_BUFFER_LENGTH];
+        let mut downlink_protocol_buf = vec![];
         let mut response_header_ttl =
             TtlCell::new(response_header.as_ref().map(|f| f()), VALIDATOR_UDP_HDR_TTL);
         async move {
@@ -344,10 +341,12 @@ where
                         Some(hdr) => hdr,
                         None => response_header_ttl.set(response_header()),
                     };
-                    let iov = [IoSlice::new(&hdr), IoSlice::new(pkt)];
+                    downlink_protocol_buf.clear();
+                    downlink_protocol_buf.extend_from_slice(&hdr);
+                    downlink_protocol_buf.extend_from_slice(pkt);
                     downstream
                         .write
-                        .send_vectored(&iov)
+                        .send(&downlink_protocol_buf)
                         .await
                         .map_err(|e| CopyBiError::SendDownstream {
                             source: e,
@@ -442,24 +441,6 @@ pub enum CopyBiError {
 impl UdpSend for Arc<UdpSocket> {
     async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
         UdpSocket::send(self, buf).await.map_err(|e| e.into())
-    }
-
-    async fn trait_send_vectored(&mut self, bufs: &[std::io::IoSlice<'_>]) -> Result<usize, AnyError> {
-        match bufs.len() {
-            0 => Ok(0),
-            1 => {
-                let slice: &[u8] = bufs[0].as_ref();
-                UdpSocket::send(self, slice).await.map_err(|e| e.into())
-            }
-            _ => {
-                let total: usize = bufs.iter().map(|b| b.len()).sum();
-                let mut buf = Vec::with_capacity(total);
-                for b in bufs {
-                    buf.extend_from_slice(b);
-                }
-                UdpSocket::send(self, &buf).await.map_err(|e| e.into())
-            }
-        }
     }
 }
 
