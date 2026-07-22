@@ -1,5 +1,5 @@
 use std::{
-    io::{self, Write},
+    io::{self, IoSlice},
     net::SocketAddr,
     pin::Pin,
     sync::{
@@ -302,7 +302,6 @@ where
         let packets_downlink = Arc::clone(&packets_downlink);
         let payload_crypto = payload_crypto.clone();
         let mut downlink_buf = [0; PACKET_BUFFER_LENGTH];
-        let mut downlink_protocol_buf = Vec::new();
         let mut response_header_ttl =
             TtlCell::new(response_header.as_ref().map(|f| f()), VALIDATOR_UDP_HDR_TTL);
         async move {
@@ -340,37 +339,32 @@ where
                     pkt
                 };
 
-                let pkt = if let Some(response_header) = &response_header {
-                    // Set up protocol buffer writer
-                    downlink_protocol_buf.clear();
-
+                let downlink_n = if let Some(response_header) = &response_header {
                     let hdr = match response_header_ttl.get() {
                         Some(hdr) => hdr,
                         None => response_header_ttl.set(response_header()),
                     };
-
-                    // Write header
-                    downlink_protocol_buf.write_all(hdr.as_ref()).unwrap();
-
-                    // Write payload
-                    downlink_protocol_buf.write_all(pkt).unwrap();
-
-                    downlink_protocol_buf.as_slice()
+                    let iov = [IoSlice::new(&hdr), IoSlice::new(pkt)];
+                    downstream
+                        .write
+                        .send_vectored(&iov)
+                        .await
+                        .map_err(|e| CopyBiError::SendDownstream {
+                            source: e,
+                            downstream: downstream.write.clone(),
+                        })?
                 } else {
-                    pkt
+                    downstream
+                        .write
+                        .send(pkt)
+                        .await
+                        .map_err(|e| CopyBiError::SendDownstream {
+                            source: e,
+                            downstream: downstream.write.clone(),
+                        })?
                 };
 
-                // Send packet to downstream
-                downstream
-                    .write
-                    .send(pkt)
-                    .await
-                    .map_err(|e| CopyBiError::SendDownstream {
-                        source: e,
-                        downstream: downstream.write.clone(),
-                    })?;
-
-                bytes_downlink.fetch_add(pkt.len() as u64, Ordering::Relaxed);
+                bytes_downlink.fetch_add(downlink_n as u64, Ordering::Relaxed);
                 packets_downlink.fetch_add(1, Ordering::Relaxed);
                 *last_downlink_packet.write().unwrap() = std::time::Instant::now();
             }
