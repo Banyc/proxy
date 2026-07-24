@@ -182,6 +182,8 @@ impl Display for SimplifiedStreamProxyLog {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IoCopyFinished {
     pub timing: Timing,
+    pub bytes_uplink: u64,
+    pub bytes_downlink: u64,
     pub upstream_addr: StreamAddr,
     pub upstream_sock_addr: SocketAddr,
     pub downstream_addr: Option<SocketAddr>,
@@ -191,13 +193,23 @@ pub struct IoCopyFinished {
 impl Display for IoCopyFinished {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let duration = self.timing.duration().as_secs_f64();
+        let uplink_speed = self.bytes_uplink as f64 / duration;
+        let downlink_speed = self.bytes_downlink as f64 / duration;
         let upstream_addrs = match self.upstream_addr.address.deref() {
             InternetAddrKind::SocketAddr(_) => self.upstream_addr.to_string(),
             InternetAddrKind::DomainName { .. } => {
                 format!("{},{}", self.upstream_addr, self.upstream_sock_addr.ip())
             }
         };
-        write!(f, "{duration:.1}s,up{{{upstream_addrs}}}")?;
+        write!(
+            f,
+            "{:.1}s,up{{{:.1},{:.1}/s}},dn{{{:.1},{:.1}/s}},up{{{upstream_addrs}}}",
+            duration,
+            HumanBytes(self.bytes_uplink),
+            HumanBytes(uplink_speed as u64),
+            HumanBytes(self.bytes_downlink),
+            HumanBytes(downlink_speed as u64),
+        )?;
         if let Some(downstream_addr) = self.downstream_addr {
             write!(f, ",dn:{downstream_addr}")?;
         }

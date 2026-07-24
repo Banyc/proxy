@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc, time::SystemTime};
+use std::{fmt, net::SocketAddr, ops::Deref, sync::Arc, time::SystemTime};
 
 use crate::stream::{
     addr::ConcreteStreamType,
@@ -11,13 +11,13 @@ use crate::stream::{
     },
 };
 use common::{
-    addr::InternetAddr,
+    addr::{InternetAddr, InternetAddrKind},
     log::Timing,
     proto::{
         addr::StreamAddr,
         client::stream::establish,
         io_copy::{same_key_nonce_ciphertext, stream::DEAD_SESSION_RETENTION_DURATION},
-        log::stream::{IoCopyFinished, LOGGER, SimplifiedStreamLog, SimplifiedStreamProxyLog},
+        log::stream::{LOGGER, SimplifiedStreamLog, SimplifiedStreamProxyLog},
         metrics::stream::Session,
     },
     route::{ConnSelector, RouteAction},
@@ -31,14 +31,31 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{instrument, trace};
 
 struct HttpProxyLog {
-    io: IoCopyFinished,
+    timing: Timing,
+    upstream_addr: StreamAddr,
+    upstream_sock_addr: SocketAddr,
+    downstream_addr: Option<SocketAddr>,
+    destination: Option<InternetAddr>,
     method: String,
     uri: String,
 }
 
 impl fmt::Display for HttpProxyLog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.io)?;
+        let duration = self.timing.duration().as_secs_f64();
+        let upstream_addrs = match self.upstream_addr.address.deref() {
+            InternetAddrKind::SocketAddr(_) => self.upstream_addr.to_string(),
+            InternetAddrKind::DomainName { .. } => {
+                format!("{},{}", self.upstream_addr, self.upstream_sock_addr.ip())
+            }
+        };
+        write!(f, "{duration:.1}s,up{{{upstream_addrs}}}")?;
+        if let Some(downstream_addr) = self.downstream_addr {
+            write!(f, ",dn:{downstream_addr}")?;
+        }
+        if let Some(destination) = &self.destination {
+            write!(f, ",dt:{destination}")?;
+        }
         write!(f, ",method:{}", self.method)?;
         write!(f, ",uri:{}", self.uri)?;
         Ok(())
@@ -197,16 +214,14 @@ async fn direct(
     let end = std::time::Instant::now();
     let timing = Timing { start, end };
     let log = HttpProxyLog {
-        io: IoCopyFinished {
-            timing,
-            upstream_addr: StreamAddr {
-                address: dst_addr.address.clone(),
-                stream_type: ConcreteStreamType::Tcp.to_string().into(),
-            },
-            upstream_sock_addr,
-            downstream_addr: dn_remote,
-            destination: Some(dst_addr.address),
+        timing,
+        upstream_addr: StreamAddr {
+            address: dst_addr.address.clone(),
+            stream_type: ConcreteStreamType::Tcp.to_string().into(),
         },
+        upstream_sock_addr,
+        downstream_addr: dn_remote,
+        destination: Some(dst_addr.address),
         method,
         uri,
     };
@@ -274,13 +289,11 @@ async fn proxy(
     let end = std::time::Instant::now();
     let timing = Timing { start, end };
     let log = HttpProxyLog {
-        io: IoCopyFinished {
-            timing: timing.clone(),
-            upstream_addr: upstream_addr.clone(),
-            upstream_sock_addr: upstream.sock_addr,
-            downstream_addr: reporter.downstream.remote,
-            destination: Some(dst_addr.address.clone()),
-        },
+        timing: timing.clone(),
+        upstream_addr: upstream_addr.clone(),
+        upstream_sock_addr: upstream.sock_addr,
+        downstream_addr: reporter.downstream.remote,
+        destination: Some(dst_addr.address.clone()),
         method,
         uri,
     };

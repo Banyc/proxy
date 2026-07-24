@@ -136,6 +136,8 @@ where
         let (log, res) = get_log_from_copy_result(self.conn_context, res);
         let finished = IoCopyFinished {
             timing: log.timing.clone(),
+            bytes_uplink: log.bytes_uplink,
+            bytes_downlink: log.bytes_downlink,
             upstream_addr: log.upstream_addr.clone(),
             upstream_sock_addr: log.upstream_sock_addr,
             downstream_addr: log.downstream_addr,
