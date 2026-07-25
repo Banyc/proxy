@@ -3,6 +3,7 @@ use std::{
     fmt,
     num::NonZeroUsize,
     sync::{Arc, RwLock},
+    time::Duration,
 };
 
 use rand::RngExt;
@@ -14,9 +15,21 @@ use tracing::info;
 use crate::ttl_cell::TtlCell;
 
 use super::{
-    ConnConfig, GaugedConnChain, IntoAddr, TRACE_INTERVAL, TraceRtt, WeightedConnChain,
-    WeightedConnChainBuildError, WeightedConnChainBuilder,
+    ConnConfig, GaugedConnChain, IntoAddr, TraceRtt, WeightedConnChain,
+    WeightedConnChainBuildError, WeightedConnChainBuilder, TRACE_INTERVAL,
 };
+
+const RTT_REF: Duration = Duration::from_millis(100);
+const LOSS_EXP: i32 = 3;
+const RTT_EXP: i32 = 1;
+fn chain_score(weight: f64, loss: Option<f64>, rtt: Option<Duration>) -> f64 {
+    let r0 = RTT_REF.as_secs_f64();
+    let loss = loss.unwrap_or(0.).clamp(0., 1.);
+    let rtt = rtt.map(|r| r.as_secs_f64()).unwrap_or(r0);
+    let loss_factor = (1. - loss).powi(LOSS_EXP);
+    let rtt_factor = (1. / (1. + rtt / r0)).powi(RTT_EXP);
+    weight * loss_factor * rtt_factor
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -185,40 +198,25 @@ where
             let i = rng.random_range(0..self.chains.len());
             return self.chains[i].weighted();
         }
-        let mut rand_score = rng.random_range(0. ..scores.sum);
-        for &(i, score) in scores.scores.iter() {
-            if rand_score < score {
-                return self.chains[i].weighted();
-            }
-            rand_score -= score;
-        }
-        unreachable!();
+        let r = rng.random_range(0. ..scores.sum);
+        let i = pick_weighted(&scores.scores, r);
+        self.chains[i].weighted()
     }
 
     fn scores(&self) -> Vec<(usize, f64)> {
-        let weights_hat = self
+        let cum_weight = self.cum_weight.get() as f64;
+        let mut scores = self
             .chains
             .iter()
-            .map(|c| c.weighted().weight as f64 / self.cum_weight.get() as f64)
-            .collect::<Vec<_>>();
-
-        let rtt = self
-            .chains
-            .iter()
-            .map(|c| c.rtt().map(|r| r.as_secs_f64()))
-            .collect::<Vec<_>>();
-        let rtt_hat = normalize(&rtt);
-
-        let losses = self.chains.iter().map(|c| c.loss()).collect::<Vec<_>>();
-        let losses_hat = normalize(&losses);
-
-        let mut scores = (0..self.chains.len())
-            .map(|i| (1. - losses_hat[i]).powi(3) * (1. - rtt_hat[i]).powi(2) * weights_hat[i])
             .enumerate()
+            .map(|(i, c)| {
+                let weight = c.weighted().weight as f64 / cum_weight;
+                (i, chain_score(weight, c.loss(), c.rtt()))
+            })
             .collect::<Vec<_>>();
-
-        scores.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap());
-        scores[..self.active_chains.get()].to_vec()
+        scores.sort_by(|(_, a), (_, b)| b.total_cmp(a));
+        scores.truncate(self.active_chains.get());
+        scores
     }
 }
 #[derive(Debug, Error, Clone)]
@@ -236,27 +234,74 @@ struct Scores {
     sum: f64,
 }
 
-fn normalize(list: &[Option<f64>]) -> Vec<f64> {
-    let sum_some: f64 = list.iter().map(|x| x.unwrap_or(0.)).sum();
-    let count_some = list.iter().map(|x| x.map(|_| 1).unwrap_or(0)).sum();
-    let hat = match count_some {
-        0 => {
-            let hat_mean = 1. / list.len() as f64;
-            (0..list.len()).map(|_| hat_mean).collect::<Vec<_>>()
+fn pick_weighted(scores: &[(usize, f64)], mut r: f64) -> usize {
+    for &(i, score) in scores {
+        if r < score {
+            return i;
         }
-        _ => {
-            let mean = sum_some / count_some as f64;
-            let sum: f64 = list.iter().map(|x| x.unwrap_or(mean)).sum();
-            if sum == 0. {
-                (0..list.len()).map(|_| 0.).collect::<Vec<_>>()
-            } else {
-                let hat_mean = mean / sum;
-                list.iter()
-                    .map(|x| x.map(|x| x / sum).unwrap_or(hat_mean))
-                    .collect::<Vec<_>>()
-            }
-        }
-    };
-    #[allow(clippy::let_and_return)]
-    hat
+        r -= score;
+    }
+    scores
+        .last()
+        .map(|&(i, _)| i)
+        .expect("pick_weighted called with no scores")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn ms(n: u64) -> Option<Duration> {
+        Some(Duration::from_millis(n))
+    }
+    #[test]
+    fn lower_loss_scores_higher() {
+        assert!(chain_score(1., Some(0.0), ms(50)) > chain_score(1., Some(0.10), ms(50)));
+    }
+    #[test]
+    fn lower_rtt_scores_higher() {
+        assert!(chain_score(1., Some(0.0), ms(10)) > chain_score(1., Some(0.0), ms(300)));
+    }
+    #[test]
+    fn a_lossy_chain_is_de_preferred_but_never_excluded() {
+        let lossy = chain_score(1., Some(0.10), ms(50));
+        assert!(lossy > 0.);
+        assert!(lossy > chain_score(1., Some(0.0), ms(50)) * 0.5);
+    }
+    #[test]
+    fn latency_factor_is_one_half_at_the_reference() {
+        assert!((chain_score(1., Some(0.0), Some(RTT_REF)) - 0.5).abs() < 1e-9);
+    }
+    #[test]
+    fn small_latency_differences_barely_matter() {
+        let a = chain_score(1., Some(0.0), ms(10));
+        let b = chain_score(1., Some(0.0), ms(20));
+        assert!(b / a > 0.85, "ratio was {}", b / a);
+    }
+    #[test]
+    fn unknown_metrics_are_neutral() {
+        assert!((chain_score(1., None, None) - 0.5).abs() < 1e-9);
+    }
+    #[test]
+    fn pick_weighted_selects_the_bucket_containing_r() {
+        let s = [(0usize, 0.7_f64), (1, 0.3)];
+        assert_eq!(pick_weighted(&s, 0.0), 0);
+        assert_eq!(pick_weighted(&s, 0.69), 0);
+        assert_eq!(pick_weighted(&s, 0.70), 1);
+        assert_eq!(pick_weighted(&s, 0.99), 1);
+    }
+    #[test]
+    fn pick_weighted_returns_the_chain_index_not_the_position() {
+        let s = [(3usize, 0.5_f64), (1, 0.5)];
+        assert_eq!(pick_weighted(&s, 0.2), 3);
+        assert_eq!(pick_weighted(&s, 0.7), 1);
+    }
+    #[test]
+    fn pick_weighted_single_bucket_always_wins() {
+        assert_eq!(pick_weighted(&[(5usize, 1.0_f64)], 0.0), 5);
+        assert_eq!(pick_weighted(&[(5usize, 1.0_f64)], 0.999), 5);
+    }
+    #[test]
+    fn pick_weighted_overshoot_falls_back_to_last_instead_of_panicking() {
+        assert_eq!(pick_weighted(&[(0usize, 0.3_f64), (1, 0.3)], 0.6), 1);
+    }
 }

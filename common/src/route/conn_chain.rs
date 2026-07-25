@@ -16,9 +16,32 @@ use super::{ConnConfig, ConnConfigBuildError, ConnConfigBuilder, IntoAddr};
 
 pub const TRACE_INTERVAL: Duration = Duration::from_secs(30);
 const TRACE_DEAD_INTERVAL: Duration = Duration::from_secs(60 * 2);
-const TRACES_PER_WAVE: usize = 60;
-const TRACE_BURST_GAP: Duration = Duration::from_millis(10);
-const RTT_TIMEOUT: Duration = Duration::from_secs(60);
+const TRACES_PER_WAVE: usize = 5;
+const INTRA_WAVE_GAP: Duration = Duration::from_millis(200);
+const RTT_TIMEOUT: Duration = Duration::from_secs(5);
+const METRIC_EWMA_ALPHA: f64 = 0.3;
+
+fn median_duration(rtts: &mut [Duration]) -> Option<Duration> {
+    if rtts.is_empty() { return None; }
+    rtts.sort_unstable();
+    let mid = rtts.len() / 2;
+    Some(if rtts.len() % 2 == 1 { rtts[mid] } else { (rtts[mid - 1] + rtts[mid]) / 2 })
+}
+
+fn ewma_duration(prev: Option<Duration>, sample: Option<Duration>, alpha: f64) -> Option<Duration> {
+    match (prev, sample) {
+        (_, None) => prev,
+        (None, Some(s)) => Some(s),
+        (Some(p), Some(s)) => {
+            let blended = p.as_secs_f64() * (1. - alpha) + s.as_secs_f64() * alpha;
+            Some(Duration::from_secs_f64(blended))
+        }
+    }
+}
+
+fn ewma_loss(prev: Option<f64>, sample: f64, alpha: f64) -> f64 {
+    match prev { None => sample, Some(p) => p * (1. - alpha) + sample * alpha }
+}
 
 pub type ConnChain<Addr> = [ConnConfig<Addr>];
 
@@ -179,63 +202,53 @@ where
     Addr: fmt::Display + Send + Sync + 'static,
 {
     tokio::task::spawn(async move {
-        let mut wave = tokio::task::JoinSet::new();
+        let mut ping: tokio::task::JoinSet<Option<Duration>> = tokio::task::JoinSet::new();
         while !cancellation.is_cancelled() {
-            // Spawn tracing tasks
-            for _ in 0..TRACES_PER_WAVE {
+            let mut rtts = Vec::with_capacity(TRACES_PER_WAVE);
+            for i in 0..TRACES_PER_WAVE {
+                if cancellation.is_cancelled() { break; }
                 let chain = chain.clone();
                 let tracer = tracer.clone();
-                wave.spawn(async move {
-                    tokio::time::timeout(RTT_TIMEOUT, tracer.trace_rtt(&chain)).await
+                ping.spawn(async move {
+                    match tokio::time::timeout(RTT_TIMEOUT, tracer.trace_rtt(&chain)).await {
+                        Ok(Ok(rtt)) => Some(rtt),
+                        Ok(Err(e)) => { trace!("trace error: {e:?}"); None }
+                        Err(_) => { trace!("trace timeout"); None }
+                    }
                 });
-                tokio::time::sleep(TRACE_BURST_GAP).await;
-            }
-
-            // Collect RTT
-            let mut rtt_sum = Duration::from_secs(0);
-            let mut rtt_count: usize = 0;
-            while let Some(res) = wave.join_next().await {
-                let res = match res.unwrap() {
-                    Ok(res) => res,
-                    Err(_) => {
-                        trace!("Trace timeout");
-                        continue;
-                    }
-                };
-                match res {
-                    Ok(rtt) => {
-                        rtt_sum += rtt;
-                        rtt_count += 1;
-                    }
-                    Err(e) => {
-                        trace!("{:?}", e);
+                match ping.join_next().await {
+                    Some(Ok(Some(rtt))) => rtts.push(rtt),
+                    Some(Ok(None)) => {}
+                    Some(Err(e)) => trace!("ping task join error: {e:?}"),
+                    None => {}
+                }
+                if i + 1 < TRACES_PER_WAVE {
+                    tokio::select! {
+                        () = tokio::time::sleep(INTRA_WAVE_GAP) => {}
+                        () = cancellation.cancelled() => break
                     }
                 }
             }
-            let rtt = if rtt_count == 0 {
-                None
-            } else {
-                Some(rtt_sum / (rtt_count as u32))
+            if cancellation.is_cancelled() { break; }
+            let ok = rtts.len();
+            let wave_rtt = median_duration(&mut rtts);
+            let wave_loss = (TRACES_PER_WAVE - ok) as f64 / TRACES_PER_WAVE as f64;
+            let rtt = {
+                let mut store = rtt_store.write().unwrap();
+                *store = ewma_duration(*store, wave_rtt, METRIC_EWMA_ALPHA);
+                *store
             };
-            let loss = (TRACES_PER_WAVE - rtt_count) as f64 / TRACES_PER_WAVE as f64;
-
-            // Store RTT
+            let loss = {
+                let mut store = loss_store.write().unwrap();
+                *store = Some(ewma_loss(*store, wave_loss, METRIC_EWMA_ALPHA));
+                *store
+            };
             let addresses = DisplayChain(&chain);
-            info!(%addresses, ?rtt, ?loss, "Traced RTT");
-            {
-                let mut rtt_store = rtt_store.write().unwrap();
-                *rtt_store = rtt;
-            }
-            {
-                let mut loss_store = loss_store.write().unwrap();
-                *loss_store = Some(loss);
-            }
-
-            // Sleep
-            if rtt_count == 0 {
-                tokio::time::sleep(TRACE_DEAD_INTERVAL).await;
-            } else {
-                tokio::time::sleep(TRACE_INTERVAL).await;
+            info!(%addresses, wave_rtt = ?wave_rtt, wave_loss, rtt = ?rtt, ?loss, "Traced RTT");
+            let idle = if ok == 0 { TRACE_DEAD_INTERVAL } else { TRACE_INTERVAL };
+            tokio::select! {
+                () = tokio::time::sleep(idle) => {}
+                () = cancellation.cancelled() => {}
             }
         }
     })
@@ -265,4 +278,43 @@ pub trait TraceRtt {
         &self,
         chain: &ConnChain<Self::Addr>,
     ) -> impl Future<Output = Result<Duration, AnyError>> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn ms(n: u64) -> Duration { Duration::from_millis(n) }
+    #[test]
+    fn median_is_outlier_robust() {
+        assert_eq!(median_duration(&mut [ms(10), ms(20), ms(5000)]), Some(ms(20)));
+    }
+    #[test]
+    fn median_even_count_averages_the_two_middles() {
+        assert_eq!(median_duration(&mut [ms(40), ms(10), ms(30), ms(20)]), Some(ms(25)));
+    }
+    #[test]
+    fn median_of_empty_wave_is_none() {
+        assert_eq!(median_duration(&mut []), None);
+    }
+    #[test]
+    fn ewma_duration_first_sample_seeds_the_estimate() {
+        assert_eq!(ewma_duration(None, Some(ms(100)), 0.3), Some(ms(100)));
+    }
+    #[test]
+    fn ewma_duration_dead_wave_keeps_previous_estimate() {
+        assert_eq!(ewma_duration(Some(ms(100)), None, 0.3), Some(ms(100)));
+        assert_eq!(ewma_duration(None, None, 0.3), None);
+    }
+    #[test]
+    fn ewma_duration_blends_toward_the_new_sample() {
+        let blended = ewma_duration(Some(ms(100)), Some(ms(200)), 0.3).unwrap();
+        assert!((blended.as_secs_f64() - 0.130).abs() < 1e-9);
+    }
+    #[test]
+    fn ewma_loss_seeds_then_blends_and_stays_bounded() {
+        assert!((ewma_loss(None, 0.4, 0.3) - 0.4).abs() < f64::EPSILON);
+        let blended = ewma_loss(Some(0.2), 1.0, 0.3);
+        assert!((blended - 0.44).abs() < 1e-9);
+        assert!((0. ..=1.).contains(&blended));
+    }
 }
