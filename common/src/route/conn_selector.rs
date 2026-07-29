@@ -31,6 +31,36 @@ fn chain_score(weight: f64, loss: Option<f64>, rtt: Option<Duration>) -> f64 {
     weight * loss_factor * rtt_factor
 }
 
+const ELIGIBILITY_FRACTION: f64 = 0.8;
+
+struct ScoredChain {
+    index: usize,
+    score: f64,
+    measured: bool,
+}
+
+struct EligibilityGate {
+    fraction: f64,
+}
+
+impl EligibilityGate {
+    fn new(fraction: f64) -> Self {
+        Self { fraction }
+    }
+
+    fn retain_eligible(&self, chains: &mut Vec<ScoredChain>) {
+        let best = chains
+            .iter()
+            .filter(|c| c.measured)
+            .map(|c| c.score)
+            .fold(f64::NEG_INFINITY, f64::max);
+        if best.is_finite() {
+            let floor = best * self.fraction;
+            chains.retain(|c| !c.measured || c.score >= floor);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnSelectorBuilder<AddrStr> {
@@ -205,15 +235,26 @@ where
 
     fn scores(&self) -> Vec<(usize, f64)> {
         let cum_weight = self.cum_weight.get() as f64;
-        let mut scores = self
+        let mut scored: Vec<ScoredChain> = self
             .chains
             .iter()
             .enumerate()
-            .map(|(i, c)| {
+            .map(|(index, c)| {
                 let weight = c.weighted().weight as f64 / cum_weight;
-                (i, chain_score(weight, c.loss(), c.rtt()))
+                let rtt = c.rtt();
+                let loss = c.loss();
+                ScoredChain {
+                    index,
+                    score: chain_score(weight, loss, rtt),
+                    measured: rtt.is_some() || loss.is_some(),
+                }
             })
-            .collect::<Vec<_>>();
+            .collect();
+        EligibilityGate::new(ELIGIBILITY_FRACTION).retain_eligible(&mut scored);
+        let mut scores: Vec<(usize, f64)> = scored
+            .into_iter()
+            .map(|c| (c.index, c.score))
+            .collect();
         scores.sort_by(|(_, a), (_, b)| b.total_cmp(a));
         scores.truncate(self.active_chains.get());
         scores
@@ -303,5 +344,59 @@ mod tests {
     #[test]
     fn pick_weighted_overshoot_falls_back_to_last_instead_of_panicking() {
         assert_eq!(pick_weighted(&[(0usize, 0.3_f64), (1, 0.3)], 0.6), 1);
+    }
+
+    fn measured(index: usize, score: f64) -> ScoredChain {
+        ScoredChain { index, score, measured: true }
+    }
+
+    fn unmeasured(index: usize, score: f64) -> ScoredChain {
+        ScoredChain { index, score, measured: false }
+    }
+
+    fn survivors(mut chains: Vec<ScoredChain>, fraction: f64) -> Vec<usize> {
+        EligibilityGate::new(fraction).retain_eligible(&mut chains);
+        let mut ids: Vec<usize> = chains.into_iter().map(|c| c.index).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    #[test]
+    fn gate_keeps_the_fast_tier_and_drops_the_slow_one() {
+        let s = |rtt| chain_score(1.0 / 6.0, Some(0.0), rtt);
+        let chains = vec![
+            measured(0, s(ms(150))),
+            measured(1, s(ms(150))),
+            measured(2, s(ms(150))),
+            measured(3, s(ms(150))),
+            measured(4, s(ms(250))),
+            measured(5, s(ms(250))),
+        ];
+        assert_eq!(survivors(chains, ELIGIBILITY_FRACTION), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn gate_is_a_no_op_until_something_is_measured() {
+        let chains = vec![unmeasured(0, 0.9), unmeasured(1, 0.1)];
+        assert_eq!(survivors(chains, 0.8), vec![0, 1]);
+    }
+
+    #[test]
+    fn gate_never_excludes_an_unmeasured_chain() {
+        let chains = vec![measured(0, 1.0), unmeasured(1, 0.1)];
+        assert_eq!(survivors(chains, 0.8), vec![0, 1]);
+    }
+
+    #[test]
+    fn gate_bar_ignores_optimistic_unmeasured_scores() {
+        let chains = vec![measured(0, 0.40), measured(1, 0.30), unmeasured(2, 0.90)];
+        assert_eq!(survivors(chains, 0.8), vec![0, 2]);
+    }
+
+    #[test]
+    fn gate_excludes_a_dead_from_start_chain() {
+        let dead = ScoredChain { index: 1, score: 0.0, measured: true };
+        let chains = vec![measured(0, 0.4), dead];
+        assert_eq!(survivors(chains, 0.8), vec![0]);
     }
 }
