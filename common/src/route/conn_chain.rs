@@ -19,7 +19,9 @@ const TRACE_DEAD_INTERVAL: Duration = Duration::from_secs(60 * 2);
 const TRACES_PER_WAVE: usize = 5;
 const INTRA_WAVE_GAP: Duration = Duration::from_millis(200);
 const RTT_TIMEOUT: Duration = Duration::from_secs(5);
-const METRIC_EWMA_ALPHA: f64 = 0.3;
+const RTT_EWMA_ALPHA: f64 = 0.3;
+const LOSS_EWMA_ALPHA_UP: f64 = 0.7;
+const LOSS_EWMA_ALPHA_DOWN: f64 = 0.3;
 
 fn median_duration(rtts: &mut [Duration]) -> Option<Duration> {
     if rtts.is_empty() { return None; }
@@ -39,8 +41,14 @@ fn ewma_duration(prev: Option<Duration>, sample: Option<Duration>, alpha: f64) -
     }
 }
 
-fn ewma_loss(prev: Option<f64>, sample: f64, alpha: f64) -> f64 {
-    match prev { None => sample, Some(p) => p * (1. - alpha) + sample * alpha }
+fn ewma_loss(prev: Option<f64>, sample: f64) -> f64 {
+    match prev {
+        None => sample,
+        Some(p) => {
+            let alpha = if sample > p { LOSS_EWMA_ALPHA_UP } else { LOSS_EWMA_ALPHA_DOWN };
+            p * (1. - alpha) + sample * alpha
+        }
+    }
 }
 
 pub type ConnChain<Addr> = [ConnConfig<Addr>];
@@ -235,12 +243,12 @@ where
             let wave_loss = (TRACES_PER_WAVE - ok) as f64 / TRACES_PER_WAVE as f64;
             let rtt = {
                 let mut store = rtt_store.write().unwrap();
-                *store = ewma_duration(*store, wave_rtt, METRIC_EWMA_ALPHA);
+                *store = ewma_duration(*store, wave_rtt, RTT_EWMA_ALPHA);
                 *store
             };
             let loss = {
                 let mut store = loss_store.write().unwrap();
-                *store = Some(ewma_loss(*store, wave_loss, METRIC_EWMA_ALPHA));
+                *store = Some(ewma_loss(*store, wave_loss));
                 *store
             };
             let addresses = DisplayChain(&chain);
@@ -311,10 +319,15 @@ mod tests {
         assert!((blended.as_secs_f64() - 0.130).abs() < 1e-9);
     }
     #[test]
-    fn ewma_loss_seeds_then_blends_and_stays_bounded() {
-        assert!((ewma_loss(None, 0.4, 0.3) - 0.4).abs() < f64::EPSILON);
-        let blended = ewma_loss(Some(0.2), 1.0, 0.3);
-        assert!((blended - 0.44).abs() < 1e-9);
-        assert!((0. ..=1.).contains(&blended));
+    fn ewma_loss_is_fast_to_distrust_slow_to_trust() {
+        assert!((ewma_loss(None, 0.4) - 0.4).abs() < f64::EPSILON);
+        let up = ewma_loss(Some(0.2), 1.0);
+        assert!((up - 0.76).abs() < 1e-9);
+        let down = ewma_loss(Some(0.8), 0.0);
+        assert!((down - 0.56).abs() < 1e-9);
+        let up_move = ewma_loss(Some(0.5), 1.0) - 0.5;
+        let down_move = 0.5 - ewma_loss(Some(0.5), 0.0);
+        assert!(up_move > down_move);
+        assert!((0.0..=1.0).contains(&up) && (0.0..=1.0).contains(&down));
     }
 }
