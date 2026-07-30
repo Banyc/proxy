@@ -33,14 +33,14 @@ metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.0.16" }
 mptcp = { git = "https://github.com/Banyc/mptcp.git", tag = "v0.0.2" }
-mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.23" }
+mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.24" }
 pin-project-lite = "0.2"
 postcard = "1"
 primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.59" }
 rand = "0.10"
 regex = "1"
-rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.80" }
-rtp_mux = { git = "https://github.com/Banyc/rtp_mux.git", tag = "v0.0.4" }
+rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.81" }
+rtp_mux = { git = "https://github.com/Banyc/rtp_mux.git", tag = "v0.0.5" }
 scopeguard = "1"
 serde = "1"
 serde_json = "1"
@@ -68,17 +68,17 @@ protocol = { path = "protocol" }
 inherits = "release"
 debug = true
 
-[patch."https://github.com/Banyc/rtp.git"]
-rtp = { path = "../rtp" }
-[patch."https://github.com/Banyc/mux.git"]
-mux = { path = "../mux" }
-[patch."https://github.com/Banyc/rtp_mux.git"]
-rtp_mux = { path = "../rtp_mux" }
-[patch."https://github.com/Banyc/udp_listener.git"]
-udp_listener = { path = "../udp_listener" }
-[patch."https://github.com/Banyc/tokio_udp.git"]
-tokio_udp = { path = "../tokio_udp" }
-[patch."https://github.com/Banyc/monitor_table.git"]
-monitor_table = { path = "../monitor_table" }
-[patch."https://github.com/Banyc/dfsql.git"]
-dfsql = { path = "../dfsql" }
+# [patch."https://github.com/Banyc/rtp.git"]
+# rtp = { path = "../rtp" }
+# [patch."https://github.com/Banyc/mux.git"]
+# mux = { path = "../mux" }
+# [patch."https://github.com/Banyc/rtp_mux.git"]
+# rtp_mux = { path = "../rtp_mux" }
+# [patch."https://github.com/Banyc/udp_listener.git"]
+# udp_listener = { path = "../udp_listener" }
+# [patch."https://github.com/Banyc/tokio_udp.git"]
+# tokio_udp = { path = "../tokio_udp" }
+# [patch."https://github.com/Banyc/monitor_table.git"]
+# monitor_table = { path = "../monitor_table" }
+# [patch."https://github.com/Banyc/dfsql.git"]
+# dfsql = { path = "../dfsql" }
