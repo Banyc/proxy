@@ -16,7 +16,7 @@ pub trait HasIoAddr {
     fn local_addr(&self) -> io::Result<SocketAddr>;
 }
 
-pub trait AsConn: OwnIoStream + HasIoAddr {}
+pub trait AsConn: OwnIoStream + HasIoAddr { fn set_stream_name(&self, _name: &str) {} }
 
 pub trait StreamServerHandleConn: loading::HandleConn {
     fn handle_stream<Stream>(&self, stream: Stream) -> impl Future<Output = ()> + Send

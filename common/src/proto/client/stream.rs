@@ -32,6 +32,7 @@ pub async fn establish(
                 source,
                 upstream_addr: destination.clone(),
             })?;
+        stream.set_stream_name(&destination.address.to_string());
         return Ok(ConnAndAddr {
             stream,
             addr: destination,
@@ -50,6 +51,8 @@ pub async fn establish(
             })?;
         (stream, proxy_addr.clone(), sock_addr)
     };
+
+    stream.set_stream_name(&destination.address.to_string());
 
     // Convert addresses to headers
     let pairs = convert_proxies_to_header_crypto_pairs(proxies, Some(destination));

@@ -28,6 +28,11 @@ pool = ["tcp1", "mptcp1"]
     { weight = 1, chain = ["rtp1"] },
     { weight = 1, chain = ["rtpmux1"] },
 ], trace_rtt = false, active_chains = 6 }
+# Optional: only route over chains within N x the fastest route's RTT, so slower
+# routes are excluded automatically (needs trace_rtt = true). e.g. with fast
+# ~150ms routes and slow ~250ms routes, max_rtt_ratio = 1.5 (cutoff 225ms)
+# routes only over the fast ones; if they all degrade, the slow ones
+# come back. Unset = disabled. Must be >= 1.0 (1.0 = only the single fastest tier).
 
 [access_server.stream.route_table]
 "default" = [

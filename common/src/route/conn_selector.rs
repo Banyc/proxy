@@ -3,7 +3,6 @@ use std::{
     fmt,
     num::NonZeroUsize,
     sync::{Arc, RwLock},
-    time::Duration,
 };
 
 use rand::RngExt;
@@ -15,51 +14,10 @@ use tracing::info;
 use crate::ttl_cell::TtlCell;
 
 use super::{
+    score::{EligibilityGate, ScoredChain, chain_score, pick_weighted},
     ConnConfig, GaugedConnChain, IntoAddr, TraceRtt, WeightedConnChain,
     WeightedConnChainBuildError, WeightedConnChainBuilder, TRACE_INTERVAL,
 };
-
-const RTT_REF: Duration = Duration::from_millis(100);
-const LOSS_EXP: i32 = 3;
-const RTT_EXP: i32 = 1;
-fn chain_score(weight: f64, loss: Option<f64>, rtt: Option<Duration>) -> f64 {
-    let r0 = RTT_REF.as_secs_f64();
-    let loss = loss.unwrap_or(0.).clamp(0., 1.);
-    let rtt = rtt.map(|r| r.as_secs_f64()).unwrap_or(r0);
-    let loss_factor = (1. - loss).powi(LOSS_EXP);
-    let rtt_factor = (1. / (1. + rtt / r0)).powi(RTT_EXP);
-    weight * loss_factor * rtt_factor
-}
-
-const ELIGIBILITY_FRACTION: f64 = 0.8;
-
-struct ScoredChain {
-    index: usize,
-    score: f64,
-    measured: bool,
-}
-
-struct EligibilityGate {
-    fraction: f64,
-}
-
-impl EligibilityGate {
-    fn new(fraction: f64) -> Self {
-        Self { fraction }
-    }
-
-    fn retain_eligible(&self, chains: &mut Vec<ScoredChain>) {
-        let best = chains
-            .iter()
-            .filter(|c| c.measured)
-            .map(|c| c.score)
-            .fold(f64::NEG_INFINITY, f64::max);
-        if best.is_finite() {
-            let floor = best * self.fraction;
-            chains.retain(|c| !c.measured || c.score >= floor);
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -67,6 +25,8 @@ pub struct ConnSelectorBuilder<AddrStr> {
     pub chains: Vec<WeightedConnChainBuilder<AddrStr>>,
     pub trace_rtt: bool,
     pub active_chains: Option<NonZeroUsize>,
+    #[serde(default)]
+    pub max_rtt_ratio: Option<f64>,
 }
 impl<AddrStr> ConnSelectorBuilder<AddrStr> {
     pub fn build<Addr, TracerBuilder, Tracer>(
@@ -93,6 +53,7 @@ impl<AddrStr> ConnSelectorBuilder<AddrStr> {
             chains,
             tracer,
             self.active_chains,
+            self.max_rtt_ratio,
             cx.cancellation,
         )?)
     }
@@ -138,6 +99,7 @@ where
         chains: Vec<WeightedConnChain<Addr>>,
         tracer: Option<T>,
         active_chains: Option<NonZeroUsize>,
+        max_rtt_ratio: Option<f64>,
         cancellation: CancellationToken,
     ) -> Result<Self, ConnSelectorError>
     where
@@ -150,6 +112,7 @@ where
             chains,
             tracer,
             active_chains,
+            max_rtt_ratio,
             cancellation,
         )?))
     }
@@ -161,6 +124,7 @@ pub struct ConnSelector1<Addr> {
     cum_weight: NonZeroUsize,
     score_store: Arc<RwLock<ScoreStore>>,
     active_chains: NonZeroUsize,
+    gate: Option<EligibilityGate>,
 }
 impl<Addr> ConnSelector1<Addr>
 where
@@ -170,6 +134,7 @@ where
         chains: Vec<WeightedConnChain<Addr>>,
         tracer: Option<T>,
         active_chains: Option<NonZeroUsize>,
+        max_rtt_ratio: Option<f64>,
         cancellation: CancellationToken,
     ) -> Result<Self, ConnSelectorError>
     where
@@ -180,6 +145,11 @@ where
             return Err(ConnSelectorError::ZeroAccumulatedWeight);
         }
         let cum_weight = NonZeroUsize::new(cum_weight).unwrap();
+        let gate = match max_rtt_ratio {
+            Some(r) if r.is_finite() && r >= 1.0 => Some(EligibilityGate::new(r)),
+            Some(r) => return Err(ConnSelectorError::InvalidMaxRttRatio(r)),
+            None => None,
+        };
 
         let active_chains = match active_chains {
             Some(active_chains) => {
@@ -202,6 +172,7 @@ where
             cum_weight,
             score_store,
             active_chains,
+            gate,
         })
     }
 
@@ -240,17 +211,21 @@ where
             .iter()
             .enumerate()
             .map(|(index, c)| {
+                let rtt = c.rtt_eff();
                 let weight = c.weighted().weight as f64 / cum_weight;
-                let rtt = c.rtt();
-                let loss = c.loss();
                 ScoredChain {
                     index,
-                    score: chain_score(weight, loss, rtt),
-                    measured: rtt.is_some() || loss.is_some(),
+                    score: chain_score(weight, c.loss(), rtt),
+                    rtt,
                 }
             })
             .collect();
-        EligibilityGate::new(ELIGIBILITY_FRACTION).retain_eligible(&mut scored);
+        if let Some(gate) = &self.gate {
+            let dropped = gate.retain_eligible(&mut scored);
+            if dropped > 0 {
+                info!(dropped, eligible = scored.len(), max_rtt_ratio = gate.max_ratio, "RTT eligibility gate excluded slower routes");
+            }
+        }
         let mut scores: Vec<(usize, f64)> = scored
             .into_iter()
             .map(|c| (c.index, c.score))
@@ -266,6 +241,8 @@ pub enum ConnSelectorError {
     ZeroAccumulatedWeight,
     #[error("The number of active chains is more than the number of chains")]
     TooManyActiveChains,
+    #[error("max_rtt_ratio must be finite and >= 1.0, got {0}")]
+    InvalidMaxRttRatio(f64),
 }
 
 type ScoreStore = TtlCell<Scores>;
@@ -275,128 +252,4 @@ struct Scores {
     sum: f64,
 }
 
-fn pick_weighted(scores: &[(usize, f64)], mut r: f64) -> usize {
-    for &(i, score) in scores {
-        if r < score {
-            return i;
-        }
-        r -= score;
-    }
-    scores
-        .last()
-        .map(|&(i, _)| i)
-        .expect("pick_weighted called with no scores")
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn ms(n: u64) -> Option<Duration> {
-        Some(Duration::from_millis(n))
-    }
-    #[test]
-    fn lower_loss_scores_higher() {
-        assert!(chain_score(1., Some(0.0), ms(50)) > chain_score(1., Some(0.10), ms(50)));
-    }
-    #[test]
-    fn lower_rtt_scores_higher() {
-        assert!(chain_score(1., Some(0.0), ms(10)) > chain_score(1., Some(0.0), ms(300)));
-    }
-    #[test]
-    fn a_lossy_chain_is_de_preferred_but_never_excluded() {
-        let lossy = chain_score(1., Some(0.10), ms(50));
-        assert!(lossy > 0.);
-        assert!(lossy > chain_score(1., Some(0.0), ms(50)) * 0.5);
-    }
-    #[test]
-    fn latency_factor_is_one_half_at_the_reference() {
-        assert!((chain_score(1., Some(0.0), Some(RTT_REF)) - 0.5).abs() < 1e-9);
-    }
-    #[test]
-    fn small_latency_differences_barely_matter() {
-        let a = chain_score(1., Some(0.0), ms(10));
-        let b = chain_score(1., Some(0.0), ms(20));
-        assert!(b / a > 0.85, "ratio was {}", b / a);
-    }
-    #[test]
-    fn unknown_metrics_are_neutral() {
-        assert!((chain_score(1., None, None) - 0.5).abs() < 1e-9);
-    }
-    #[test]
-    fn pick_weighted_selects_the_bucket_containing_r() {
-        let s = [(0usize, 0.7_f64), (1, 0.3)];
-        assert_eq!(pick_weighted(&s, 0.0), 0);
-        assert_eq!(pick_weighted(&s, 0.69), 0);
-        assert_eq!(pick_weighted(&s, 0.70), 1);
-        assert_eq!(pick_weighted(&s, 0.99), 1);
-    }
-    #[test]
-    fn pick_weighted_returns_the_chain_index_not_the_position() {
-        let s = [(3usize, 0.5_f64), (1, 0.5)];
-        assert_eq!(pick_weighted(&s, 0.2), 3);
-        assert_eq!(pick_weighted(&s, 0.7), 1);
-    }
-    #[test]
-    fn pick_weighted_single_bucket_always_wins() {
-        assert_eq!(pick_weighted(&[(5usize, 1.0_f64)], 0.0), 5);
-        assert_eq!(pick_weighted(&[(5usize, 1.0_f64)], 0.999), 5);
-    }
-    #[test]
-    fn pick_weighted_overshoot_falls_back_to_last_instead_of_panicking() {
-        assert_eq!(pick_weighted(&[(0usize, 0.3_f64), (1, 0.3)], 0.6), 1);
-    }
-
-    fn measured(index: usize, score: f64) -> ScoredChain {
-        ScoredChain { index, score, measured: true }
-    }
-
-    fn unmeasured(index: usize, score: f64) -> ScoredChain {
-        ScoredChain { index, score, measured: false }
-    }
-
-    fn survivors(mut chains: Vec<ScoredChain>, fraction: f64) -> Vec<usize> {
-        EligibilityGate::new(fraction).retain_eligible(&mut chains);
-        let mut ids: Vec<usize> = chains.into_iter().map(|c| c.index).collect();
-        ids.sort_unstable();
-        ids
-    }
-
-    #[test]
-    fn gate_keeps_the_fast_tier_and_drops_the_slow_one() {
-        let s = |rtt| chain_score(1.0 / 6.0, Some(0.0), rtt);
-        let chains = vec![
-            measured(0, s(ms(150))),
-            measured(1, s(ms(150))),
-            measured(2, s(ms(150))),
-            measured(3, s(ms(150))),
-            measured(4, s(ms(250))),
-            measured(5, s(ms(250))),
-        ];
-        assert_eq!(survivors(chains, ELIGIBILITY_FRACTION), vec![0, 1, 2, 3]);
-    }
-
-    #[test]
-    fn gate_is_a_no_op_until_something_is_measured() {
-        let chains = vec![unmeasured(0, 0.9), unmeasured(1, 0.1)];
-        assert_eq!(survivors(chains, 0.8), vec![0, 1]);
-    }
-
-    #[test]
-    fn gate_never_excludes_an_unmeasured_chain() {
-        let chains = vec![measured(0, 1.0), unmeasured(1, 0.1)];
-        assert_eq!(survivors(chains, 0.8), vec![0, 1]);
-    }
-
-    #[test]
-    fn gate_bar_ignores_optimistic_unmeasured_scores() {
-        let chains = vec![measured(0, 0.40), measured(1, 0.30), unmeasured(2, 0.90)];
-        assert_eq!(survivors(chains, 0.8), vec![0, 2]);
-    }
-
-    #[test]
-    fn gate_excludes_a_dead_from_start_chain() {
-        let dead = ScoredChain { index: 1, score: 0.0, measured: true };
-        let chains = vec![measured(0, 0.4), dead];
-        assert_eq!(survivors(chains, 0.8), vec![0]);
-    }
-}

@@ -101,7 +101,7 @@ impl AsyncWrite for ProxyRtpMuxClientStream {
     }
 }
 impl OwnIoStream for ProxyRtpMuxClientStream {}
-impl AsConn for ProxyRtpMuxClientStream {}
+impl AsConn for ProxyRtpMuxClientStream { fn set_stream_name(&self, name: &str) { self.0.set_name(name); } }
 impl HasIoAddr for ProxyRtpMuxClientStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.0.addr().peer_addr)
