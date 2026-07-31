@@ -17,6 +17,8 @@ pub struct UdpProxyServerConfig {
     pub listen_addr: Arc<str>,
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
+    #[serde(default)]
+    pub allow_loopback: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -41,12 +43,12 @@ impl loading::Build for UdpProxyServerBuilder {
             .config
             .header_key
             .build()
-            .map_err(UdpProxyBuildError::HeaderCrypto)?;
+            .map_err(|e| UdpProxyBuildError::HeaderCrypto(e.source.to_string()))?;
         let payload_crypto = match self.config.payload_key {
             Some(payload_crypto) => Some(
                 payload_crypto
                     .build()
-                    .map_err(UdpProxyBuildError::HeaderCrypto)?,
+                    .map_err(|e| UdpProxyBuildError::PayloadCrypto(e.source.to_string()))?,
             ),
             None => None,
         };
@@ -54,6 +56,7 @@ impl loading::Build for UdpProxyServerBuilder {
             header_crypto,
             payload_crypto,
             self.udp_context,
+            self.config.allow_loopback,
         ))
     }
 
@@ -71,7 +74,45 @@ pub enum UdpProxyServerBuildError {
 #[derive(Debug, Error)]
 pub enum UdpProxyBuildError {
     #[error("HeaderCrypto: {0}")]
-    HeaderCrypto(#[source] tokio_chacha20::config::ConfigBuildError),
+    HeaderCrypto(String),
     #[error("PayloadCrypto: {0}")]
-    PayloadCrypto(#[source] tokio_chacha20::config::ConfigBuildError),
+    PayloadCrypto(String),
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ae::anti_replay::TimeValidator;
+    use common::{connect::ConnectorConfig, proto::connect::udp::UdpConnector};
+    use std::{sync::RwLock, time::Duration};
+
+    #[test]
+    fn a_bad_payload_key_is_not_reported_as_a_bad_header_key() {
+        let builder = UdpProxyServerBuilder {
+            config: UdpProxyServerConfig {
+                listen_addr: "127.0.0.1:0".into(),
+                header_key: tokio_chacha20::config::ConfigBuilder("aGVsbG8".to_owned()),
+                payload_key: Some(tokio_chacha20::config::ConfigBuilder(
+                    "c2VjcmV0LXByb3h5LWtleQ!!".to_owned(),
+                )),
+                allow_loopback: false,
+            },
+            udp_context: UdpContext {
+                session_table: None,
+                time_validator: Arc::new(TimeValidator::new(Duration::from_secs(1))),
+                connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
+                    ConnectorConfig::default(),
+                )))),
+            },
+        };
+        let e = loading::Build::build_conn_handler(builder).unwrap_err();
+        assert!(
+            matches!(
+                e,
+                UdpProxyServerBuildError::Hook(UdpProxyBuildError::PayloadCrypto(_))
+            ),
+            "a bad payload key must be reported as a payload-key error"
+        );
+        assert!(!format!("{e}").contains("c2VjcmV0"), "{e}");
+        assert!(!format!("{e:?}").contains("c2VjcmV0"), "{e:?}");
+    }
 }

@@ -267,8 +267,6 @@ impl UdpProxyClientReadHalf {
     pub async fn recv(&mut self, buf: &mut [u8]) -> Result<usize, RecvError> {
         let cap = self.max_response_header_size + buf.len();
         self.read_buf.resize(cap, 0);
-
-        // Read data
         let n = self.upstream.recv(&mut self.read_buf).await.map_err(|e| {
             let peer_addr = self.upstream.peer_addr().ok();
             RecvError::RecvUpstream {
@@ -277,8 +275,6 @@ impl UdpProxyClientReadHalf {
             }
         })?;
         let mut reader = io::Cursor::new(&self.read_buf[..n]);
-
-        // Decode and check headers
         for node in self.proxies.iter() {
             trace!(?node.address, "Reading response");
             let validator = ValidatorRef::Time(&self.time_validator);
@@ -292,11 +288,9 @@ impl UdpProxyClientReadHalf {
                 });
             }
         }
-
-        // Read payload
-        let payload_size = reader.get_ref().len() - reader.position() as usize;
-        buf[..payload_size].copy_from_slice(&reader.get_ref()[reader.position() as usize..]);
-
+        let payload = &reader.get_ref()[reader.position() as usize..];
+        let payload_size = payload.len().min(buf.len());
+        buf[..payload_size].copy_from_slice(&payload[..payload_size]);
         Ok(payload_size)
     }
 
@@ -422,4 +416,23 @@ pub enum TraceError {
     Header(#[from] CodecError),
     #[error("Upstream responded with an error: {err}, {addr}")]
     Response { err: RouteError, addr: InternetAddr },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_response_longer_than_the_callers_buffer_is_capped_not_a_panic() {
+        let peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client.connect(peer.local_addr().unwrap()).await.unwrap();
+        peer.connect(client.local_addr().unwrap()).await.unwrap();
+        let mut read = UdpProxyClientReadHalf::new(Arc::new(client), MAX_HEADER_LEN, [].into());
+        let mut buf = [0u8; 64];
+        peer.send(&vec![0xab; buf.len() + 1]).await.unwrap();
+        let n = read.recv(&mut buf).await.unwrap();
+        assert_eq!(n, buf.len(), "a payload that does not fit must be capped");
+        assert_eq!(buf, [0xab; 64]);
+    }
 }

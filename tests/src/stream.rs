@@ -64,8 +64,13 @@ mod tests {
         ty: ConcreteStreamType,
     ) -> StreamConnConfig {
         let crypto = create_random_crypto();
-        let proxy =
-            StreamProxyConnHandler::new(crypto.clone(), None, stream_context(), Arc::clone(addr));
+        let proxy = StreamProxyConnHandler::new(
+            crypto.clone(),
+            None,
+            stream_context(),
+            Arc::clone(addr),
+            true,
+        );
         let (set_conn_handler_tx, set_conn_handler_rx) = loading::replace_conn_handler_channel();
         let proxy_addr = match ty {
             ConcreteStreamType::Tcp => {

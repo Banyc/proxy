@@ -11,10 +11,16 @@ const LOSS_EXP: i32 = 3;
 const RTT_EXP: i32 = 1;
 
 fn median_duration(rtts: &mut [Duration]) -> Option<Duration> {
-    if rtts.is_empty() { return None; }
+    if rtts.is_empty() {
+        return None;
+    }
     rtts.sort_unstable();
     let mid = rtts.len() / 2;
-    Some(if rtts.len() % 2 == 1 { rtts[mid] } else { (rtts[mid - 1] + rtts[mid]) / 2 })
+    Some(if rtts.len() % 2 == 1 {
+        rtts[mid]
+    } else {
+        (rtts[mid - 1] + rtts[mid]) / 2
+    })
 }
 
 fn ewma_duration(prev: Option<Duration>, sample: Option<Duration>, alpha: f64) -> Option<Duration> {
@@ -32,7 +38,11 @@ pub(crate) fn ewma_loss(prev: Option<f64>, sample: f64) -> f64 {
     match prev {
         None => sample,
         Some(p) => {
-            let alpha = if sample > p { LOSS_EWMA_ALPHA_UP } else { LOSS_EWMA_ALPHA_DOWN };
+            let alpha = if sample > p {
+                LOSS_EWMA_ALPHA_UP
+            } else {
+                LOSS_EWMA_ALPHA_DOWN
+            };
             p * (1. - alpha) + sample * alpha
         }
     }
@@ -47,22 +57,30 @@ pub struct RttStats {
 
 impl RttStats {
     pub(crate) fn apply_sample(&mut self, sample: Duration) {
-        if self.recent.len() >= RTT_MEDIAN_WINDOW { self.recent.remove(0); }
+        if self.recent.len() >= RTT_MEDIAN_WINDOW {
+            self.recent.remove(0);
+        }
         self.recent.push(sample);
         let mut window = self.recent.clone();
         let rolling_median = median_duration(&mut window).expect("window is non-empty");
         match self.srtt {
-            None => { self.srtt = Some(sample); self.rttvar = Some(sample / 2); }
+            None => {
+                self.srtt = Some(sample);
+                self.rttvar = Some(sample / 2);
+            }
             Some(srtt) => {
                 let dev = sample.abs_diff(srtt).as_secs_f64();
                 let prev = self.rttvar.unwrap_or(Duration::ZERO).as_secs_f64();
-                self.rttvar = Some(Duration::from_secs_f64(prev * (1. - RTTVAR_EWMA_BETA) + dev * RTTVAR_EWMA_BETA));
+                self.rttvar = Some(Duration::from_secs_f64(
+                    prev * (1. - RTTVAR_EWMA_BETA) + dev * RTTVAR_EWMA_BETA,
+                ));
                 self.srtt = ewma_duration(self.srtt, Some(rolling_median), RTT_EWMA_ALPHA);
             }
         }
     }
     pub fn effective(&self) -> Option<Duration> {
-        self.srtt.map(|s| s + self.rttvar.unwrap_or(Duration::ZERO) * RTT_EFF_VAR_FACTOR)
+        self.srtt
+            .map(|s| s + self.rttvar.unwrap_or(Duration::ZERO) * RTT_EFF_VAR_FACTOR)
     }
 }
 
@@ -78,10 +96,15 @@ pub(crate) struct EligibilityGate {
 }
 
 impl EligibilityGate {
-    pub(crate) fn new(max_ratio: f64) -> Self { Self { max_ratio } }
+    pub(crate) fn new(max_ratio: f64) -> Self {
+        Self { max_ratio }
+    }
     pub(crate) fn retain_eligible(&self, chains: &mut Vec<ScoredChain>) -> usize {
-        let Some(best) = chains.iter().filter_map(|c| c.rtt).min() else { return 0; };
-        let cutoff = best.mul_f64(self.max_ratio);
+        let Some(best) = chains.iter().filter_map(|c| c.rtt).min() else {
+            return 0;
+        };
+        let cutoff = Duration::try_from_secs_f64(best.as_secs_f64() * self.max_ratio)
+            .unwrap_or(Duration::MAX);
         let before = chains.len();
         chains.retain(|c| c.rtt.is_none_or(|rtt| rtt <= cutoff));
         before - chains.len()
@@ -90,7 +113,12 @@ impl EligibilityGate {
 
 pub(crate) fn pick_weighted(scores: &[(usize, f64)], r: f64) -> usize {
     let mut cum = 0.;
-    for (index, score) in scores { cum += score; if r < cum { return *index; } }
+    for (index, score) in scores {
+        cum += score;
+        if r < cum {
+            return *index;
+        }
+    }
     scores.last().map(|(i, _)| *i).unwrap_or(0)
 }
 
@@ -106,15 +134,23 @@ pub(crate) fn chain_score(weight: f64, loss: Option<f64>, rtt: Option<Duration>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn ms(n: u64) -> Duration { Duration::from_millis(n) }
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
 
     #[test]
     fn median_is_outlier_robust() {
-        assert_eq!(median_duration(&mut [ms(10), ms(20), ms(5000)]), Some(ms(20)));
+        assert_eq!(
+            median_duration(&mut [ms(10), ms(20), ms(5000)]),
+            Some(ms(20))
+        );
     }
     #[test]
     fn median_even_count_averages_the_two_middles() {
-        assert_eq!(median_duration(&mut [ms(40), ms(10), ms(30), ms(20)]), Some(ms(25)));
+        assert_eq!(
+            median_duration(&mut [ms(40), ms(10), ms(30), ms(20)]),
+            Some(ms(25))
+        );
     }
     #[test]
     fn median_of_empty_wave_is_none() {
@@ -149,11 +185,15 @@ mod tests {
 
     #[test]
     fn lower_loss_scores_higher() {
-        assert!(chain_score(1., Some(0.0), Some(ms(50))) > chain_score(1., Some(0.10), Some(ms(50))));
+        assert!(
+            chain_score(1., Some(0.0), Some(ms(50))) > chain_score(1., Some(0.10), Some(ms(50)))
+        );
     }
     #[test]
     fn lower_rtt_scores_higher() {
-        assert!(chain_score(1., Some(0.0), Some(ms(10))) > chain_score(1., Some(0.0), Some(ms(300))));
+        assert!(
+            chain_score(1., Some(0.0), Some(ms(10))) > chain_score(1., Some(0.0), Some(ms(300)))
+        );
     }
     #[test]
     fn a_lossy_chain_is_de_preferred_but_never_excluded() {
@@ -201,11 +241,19 @@ mod tests {
     }
 
     fn measured(index: usize, score: f64, rtt: Duration) -> ScoredChain {
-        ScoredChain { index, score, rtt: Some(rtt) }
+        ScoredChain {
+            index,
+            score,
+            rtt: Some(rtt),
+        }
     }
 
     fn unmeasured(index: usize, score: f64) -> ScoredChain {
-        ScoredChain { index, score, rtt: None }
+        ScoredChain {
+            index,
+            score,
+            rtt: None,
+        }
     }
 
     fn survivors(mut chains: Vec<ScoredChain>, fraction: f64) -> Vec<usize> {
@@ -242,14 +290,30 @@ mod tests {
     }
 
     #[test]
+    fn an_enormous_ratio_admits_everything_instead_of_panicking() {
+        let chains = vec![measured(0, 1.0, ms(1)), measured(1, 0.5, ms(5000))];
+        assert_eq!(survivors(chains, 1e30), vec![0, 1]);
+        let chains = vec![measured(0, 1.0, ms(1)), measured(1, 0.5, ms(5000))];
+        assert_eq!(survivors(chains, f64::MAX), vec![0, 1]);
+    }
+
+    #[test]
     fn gate_bar_ignores_optimistic_unmeasured_scores() {
-        let chains = vec![measured(0, 0.40, ms(50)), measured(1, 0.30, ms(200)), unmeasured(2, 0.90)];
+        let chains = vec![
+            measured(0, 0.40, ms(50)),
+            measured(1, 0.30, ms(200)),
+            unmeasured(2, 0.90),
+        ];
         assert_eq!(survivors(chains, 1.5), vec![0, 2]);
     }
 
     #[test]
     fn gate_excludes_a_dead_from_start_chain() {
-        let dead = ScoredChain { index: 1, score: 0.0, rtt: Some(ms(5000)) };
+        let dead = ScoredChain {
+            index: 1,
+            score: 0.0,
+            rtt: Some(ms(5000)),
+        };
         let chains = vec![measured(0, 0.4, ms(100)), dead];
         assert_eq!(survivors(chains, 1.5), vec![0]);
     }
@@ -274,7 +338,12 @@ mod tests {
         }
         let s = steady.effective().unwrap();
         let j = jittery.effective().unwrap();
-        assert!(s + ms(100) < j, "steady {} vs jittery {}", s.as_millis(), j.as_millis());
+        assert!(
+            s + ms(100) < j,
+            "steady {} vs jittery {}",
+            s.as_millis(),
+            j.as_millis()
+        );
     }
 
     #[test]
@@ -290,8 +359,12 @@ mod tests {
         }
         let calm_rttvar = stats.rttvar;
         assert!(calm_rttvar.is_some() && noisy_rttvar.is_some());
-        assert!(calm_rttvar.unwrap() < noisy_rttvar.unwrap() / 4,
-            "calm {:?} not below quarter of noisy {:?}", calm_rttvar, noisy_rttvar);
+        assert!(
+            calm_rttvar.unwrap() < noisy_rttvar.unwrap() / 4,
+            "calm {:?} not below quarter of noisy {:?}",
+            calm_rttvar,
+            noisy_rttvar
+        );
     }
 
     #[test]
@@ -306,6 +379,99 @@ mod tests {
         assert!(after.is_some() && before.is_some());
         let drift = after.unwrap().abs_diff(before.unwrap());
         assert!(drift < ms(2), "srtt drifted by {:?}", drift);
-        assert!(stats.rttvar.unwrap() > ms(1000), "rttvar {:?} not above 1s", stats.rttvar);
+        assert!(
+            stats.rttvar.unwrap() > ms(1000),
+            "rttvar {:?} not above 1s",
+            stats.rttvar
+        );
+    }
+
+    #[test]
+    fn pacer_suppresses_early_and_frequent_recycles() {
+        let t0 = std::time::Instant::now();
+        let mut p = RecyclePacer::new(t0);
+        assert!(!p.allow(t0 + Duration::from_secs(30)));
+        assert!(!p.allow(t0 + Duration::from_secs(599)));
+        assert!(p.allow(t0 + Duration::from_secs(600)));
+        assert!(!p.allow(t0 + Duration::from_secs(900)));
+        assert!(p.allow(t0 + Duration::from_secs(1300)));
+    }
+    #[test]
+    fn degradation_fires_after_sustained_regression_then_rebases() {
+        let mut d = RttDegradation::default();
+        for _ in 0..10 {
+            assert!(!d.observe(ms(50)));
+        }
+        for _ in 0..4 {
+            assert!(!d.observe(ms(200)));
+        }
+        assert!(d.observe(ms(200)));
+        for _ in 0..10 {
+            assert!(!d.observe(ms(200)));
+        }
+        assert!(!d.observe(ms(50)));
+        for _ in 0..4 {
+            assert!(!d.observe(ms(200)));
+        }
+        assert!(d.observe(ms(200)));
+    }
+    #[test]
+    fn degradation_streak_resets_when_rtt_recovers() {
+        let mut d = RttDegradation::default();
+        assert!(!d.observe(ms(50)));
+        for _ in 0..4 {
+            assert!(!d.observe(ms(200)));
+        }
+        assert!(!d.observe(ms(60)));
+        for _ in 0..4 {
+            assert!(!d.observe(ms(200)));
+        }
+        assert!(d.observe(ms(200)));
+    }
+}
+const DEGRADED_RTT_RATIO: f64 = 3.0;
+const DEGRADED_PROBE_STREAK: u32 = 5;
+const MIN_RECYCLE_INTERVAL: Duration = Duration::from_secs(600);
+#[derive(Debug)]
+pub(crate) struct RecyclePacer {
+    last: std::time::Instant,
+}
+impl RecyclePacer {
+    pub(crate) fn new(now: std::time::Instant) -> Self {
+        Self { last: now }
+    }
+    pub(crate) fn allow(&mut self, now: std::time::Instant) -> bool {
+        if now.duration_since(self.last) < MIN_RECYCLE_INTERVAL {
+            return false;
+        }
+        self.last = now;
+        true
+    }
+}
+#[derive(Debug, Default)]
+pub(crate) struct RttDegradation {
+    best: Option<Duration>,
+    streak: u32,
+}
+impl RttDegradation {
+    pub(crate) fn observe(&mut self, srtt: Duration) -> bool {
+        let best = match self.best {
+            Some(best) if best <= srtt => best,
+            _ => {
+                self.best = Some(srtt);
+                srtt
+            }
+        };
+        if srtt.as_secs_f64() < best.as_secs_f64() * DEGRADED_RTT_RATIO {
+            self.streak = 0;
+            return false;
+        }
+        self.streak += 1;
+        if self.streak < DEGRADED_PROBE_STREAK {
+            return false;
+        }
+        self.streak = 0;
+        self.best = Some(srtt);
+        true
     }
 }

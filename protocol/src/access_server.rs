@@ -23,7 +23,7 @@ use common::{
             StreamConnConfig, StreamConnSelectorBuildContext, StreamConnSelectorBuilder,
             StreamRouteGroup, StreamRouteTable, StreamRouteTableBuildContext,
             StreamRouteTableBuilder, UdpConnConfig, UdpConnSelector, UdpConnSelectorBuildContext,
-            UdpConnSelectorBuilder, UdpRouteTable, UdpRouteTableBuildContext, UdpRouteTableBuilder,
+            UdpConnSelectorBuilder, UdpRouteTableBuilder,
         },
     },
 };
@@ -174,8 +174,6 @@ pub async fn spawn_and_clean(
     udp_conn: &HashMap<Arc<str>, UdpConnConfig>,
 ) -> AnyResult {
     let matcher = Arc::new(matcher(config.matcher)?);
-
-    // Stream
     let stream_trace_builder = StreamTracerBuilder::new(context.stream.clone());
     let stream_conn_selector_cx = StreamConnSelectorBuildContext {
         conn: stream_conn,
@@ -191,8 +189,6 @@ pub async fn spawn_and_clean(
     };
     let stream_route_tables =
         stream_route_tables(&stream_route_table_cx, config.stream.route_table)?;
-
-    // UDP
     let udp_trace_builder = UdpTracerBuilder::new(context.udp.clone());
     let udp_conn_selector_cx = UdpConnSelectorBuildContext {
         conn: udp_conn,
@@ -200,19 +196,21 @@ pub async fn spawn_and_clean(
         cancellation: cancellation.clone(),
     };
     let udp_conn_selector = udp_conn_selector(&udp_conn_selector_cx, config.udp.conn_selector)?;
-    let udp_route_table_cx = UdpRouteTableBuildContext {
-        matcher: &matcher,
-        conn_selector: &udp_conn_selector,
-        conn_selector_cx: udp_conn_selector_cx.clone(),
-    };
-    let _udp_route_tables = udp_route_tables(&udp_route_table_cx, config.udp.route_table)?;
-
+    reject_unhonored_udp_route_tables(&config.udp.route_table)?;
     #[rustfmt::skip] tcp_spawn_and_clean(config.tcp_server, &stream_conn_selector, &stream_conn_selector_cx, &context, loader, join_set).await?;
     #[rustfmt::skip] udp_spawn_and_clean(config.udp_server, &udp_conn_selector, &udp_conn_selector_cx, &context, loader, join_set).await?;
     #[rustfmt::skip] http_spawn_and_clean(config.http_server, &stream_route_tables, &stream_route_table_cx, &context, loader, join_set).await?;
-    #[rustfmt::skip] socks5_tcp_spawn_and_clean(config.socks5_tcp_server, &stream_route_tables, &stream_route_table_cx, &context, loader, join_set) .await?;
-    #[rustfmt::skip] socks5_udp_spawn_and_clean(config.socks5_udp_server, &udp_conn_selector, &udp_conn_selector_cx, &context, loader, join_set) .await?;
+    #[rustfmt::skip] socks5_tcp_spawn_and_clean(config.socks5_tcp_server, &stream_route_tables, &stream_route_table_cx, &context, loader, join_set).await?;
+    #[rustfmt::skip] socks5_udp_spawn_and_clean(config.socks5_udp_server, &udp_conn_selector, &udp_conn_selector_cx, &context, loader, join_set).await?;
     Ok(())
+}
+fn reject_unhonored_udp_route_tables<T>(config: &HashMap<Arc<str>, T>) -> Result<(), AnyError> {
+    if config.is_empty() {
+        return Ok(());
+    }
+    let mut names = config.keys().map(|k| k.as_ref()).collect::<Vec<&str>>();
+    names.sort_unstable();
+    Err(format!("'access_server.udp.route_table' is not honored by any UDP access server: udp_server and socks5_udp_server select a chain through conn_selector only, so these tables would silently not apply: {}. Move the rules into a conn_selector, or remove them.", names.join(", ")).into())
 }
 fn matcher(
     config: HashMap<Arc<str>, MatcherBuilder>,
@@ -264,19 +262,6 @@ fn stream_route_tables(
         })
         .collect::<Result<HashMap<_, _>, _>>()?;
     Ok(stream_route_tables)
-}
-fn udp_route_tables(
-    udp_route_table_cx: &UdpRouteTableBuildContext<'_>,
-    config: HashMap<Arc<str>, UdpRouteTableBuilder>,
-) -> Result<HashMap<Arc<str>, UdpRouteTable>, AnyError> {
-    let udp_route_tables = config
-        .into_iter()
-        .map(|(k, v)| match v.build(udp_route_table_cx.clone()) {
-            Ok(v) => Ok((k, v)),
-            Err(e) => Err(e),
-        })
-        .collect::<Result<HashMap<_, _>, _>>()?;
-    Ok(udp_route_tables)
 }
 async fn tcp_spawn_and_clean(
     config: Vec<TcpAccessServerConfig>,
@@ -397,4 +382,23 @@ async fn socks5_udp_spawn_and_clean(
         .spawn_and_clean(join_set, socks5_udp_server)
         .await?;
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_udp_route_table_is_nothing_to_complain_about() {
+        let config: AccessServerUdp = serde_json::from_str("{}").unwrap();
+        reject_unhonored_udp_route_tables(&config.route_table).unwrap();
+    }
+
+    #[test]
+    fn a_udp_route_table_that_cannot_apply_is_rejected() {
+        let config: AccessServerUdp = serde_json::from_str("{\"route_table\": {\n\"lan\": [{\"matcher\": {}, \"action\": \"block\"}],\n\"default\": [{\"matcher\": {}, \"action\": \"block\"}]\n}}",).unwrap();
+        let err = reject_unhonored_udp_route_tables(&config.route_table)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("default, lan"), "{err}");
+    }
 }

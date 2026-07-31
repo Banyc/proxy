@@ -33,20 +33,20 @@ where
         Server: Serve<ConnHandler = ConnHandler> + Send + 'static,
         Builder: Build<ConnHandler = ConnHandler, Server = Server>,
     {
-        // Spawn servers
         let mut keys = HashSet::new();
         for server in builders {
-            keys.insert(server.key().to_owned());
-
-            // Hot reloading
-            if let Some(handle) = self.handles.get(server.key()) {
+            let key = server.key().to_owned();
+            keys.insert(key.clone());
+            if self.handles.get(&key).is_some_and(|h| h.0.is_closed()) {
+                self.handles.remove(&key);
+            }
+            if let Some(handle) = self.handles.get(&key) {
                 let conn_handler = server.build_conn_handler()?;
-                handle.0.send(conn_handler).await.unwrap();
+                if handle.0.send(conn_handler).await.is_err() {
+                    self.handles.remove(&key);
+                }
                 continue;
             }
-
-            // Spawn server
-            let key = server.key().to_owned();
             let (set_conn_handler_tx, set_conn_handler_rx) = replace_conn_handler_channel();
             let server = server.build_server().await?;
             self.handles.insert(key, set_conn_handler_tx);
@@ -55,8 +55,6 @@ where
                 Ok(())
             });
         }
-
-        // Remove servers
         self.handles.retain(|cur_key, _| keys.contains(cur_key));
         Ok(())
     }
@@ -105,4 +103,63 @@ pub fn replace_conn_handler_channel<ConnHandler>() -> (
 ) {
     let (tx, rx) = tokio::sync::mpsc::channel(64);
     (ReplaceConnHandlerTx(tx), ReplaceConnHandlerRx(rx))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct NoopConnHandler;
+    impl std::fmt::Debug for NoopConnHandler {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "NoopConnHandler")
+        }
+    }
+    impl HandleConn for NoopConnHandler {}
+    struct DiesImmediately;
+    impl Serve for DiesImmediately {
+        type ConnHandler = NoopConnHandler;
+        async fn serve(self, _rx: ReplaceConnHandlerRx<Self::ConnHandler>) -> AnyResult {
+            Ok(())
+        }
+    }
+    struct DiesImmediatelyBuilder {
+        key: Arc<str>,
+        spawns: Arc<AtomicUsize>,
+    }
+    impl Build for DiesImmediatelyBuilder {
+        type ConnHandler = NoopConnHandler;
+        type Server = DiesImmediately;
+        type Err = std::io::Error;
+        async fn build_server(self) -> Result<Self::Server, Self::Err> {
+            self.spawns.fetch_add(1, Ordering::SeqCst);
+            Ok(DiesImmediately)
+        }
+        fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
+            Ok(NoopConnHandler)
+        }
+        fn key(&self) -> &Arc<str> {
+            &self.key
+        }
+    }
+    #[tokio::test]
+    async fn a_reload_respawns_a_listener_that_already_died() {
+        let spawns = Arc::new(AtomicUsize::new(0));
+        let mut loader = Loader::new();
+        let mut join_set = tokio::task::JoinSet::new();
+        let builder = || DiesImmediatelyBuilder {
+            key: "listener".into(),
+            spawns: Arc::clone(&spawns),
+        };
+        loader
+            .spawn_and_clean(&mut join_set, vec![builder()])
+            .await
+            .unwrap();
+        join_set.join_next().await.unwrap().unwrap().unwrap();
+        loader
+            .spawn_and_clean(&mut join_set, vec![builder()])
+            .await
+            .unwrap();
+        assert_eq!(spawns.load(Ordering::SeqCst), 2);
+    }
 }

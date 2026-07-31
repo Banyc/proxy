@@ -131,7 +131,15 @@ impl LeafMatcher {
         if !self.port_matcher.is_match(addr.port()) {
             return false;
         }
-        self.addr_matcher.is_match_ip(addr.ip())
+        if self.addr_matcher.is_match_ip(addr.ip()) {
+            return true;
+        }
+        match addr.ip() {
+            IpAddr::V4(_) => false,
+            IpAddr::V6(ip) => ip
+                .to_ipv4_mapped()
+                .is_some_and(|ip| self.addr_matcher.is_match_ip(ip.into())),
+        }
     }
 }
 
@@ -196,10 +204,18 @@ impl AddrMatcherBuilder {
     pub fn build(self) -> Result<AddrMatcher, regex::Error> {
         Ok(match self {
             Self::Ipv4(addr) => AddrMatcher::Ipv4(addr..=addr),
-            Self::Ipv6(addr) => AddrMatcher::Ipv6(addr..=addr),
+            Self::Ipv6(addr) => match addr.to_ipv4_mapped() {
+                Some(addr) => AddrMatcher::Ipv4(addr..=addr),
+                None => AddrMatcher::Ipv6(addr..=addr),
+            },
             Self::DomainName(domain_name) => AddrMatcher::DomainName(Regex::new(&domain_name)?),
             Self::Ipv4Range(range) => AddrMatcher::Ipv4(range),
-            Self::Ipv6Range(range) => AddrMatcher::Ipv6(range),
+            Self::Ipv6Range(range) => {
+                match (range.start().to_ipv4_mapped(), range.end().to_ipv4_mapped()) {
+                    (Some(start), Some(end)) => AddrMatcher::Ipv4(start..=end),
+                    _ => AddrMatcher::Ipv6(range),
+                }
+            }
         })
     }
 }
@@ -297,4 +313,57 @@ pub enum Action {
     Proxy,
     Block,
     Direct,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn matcher(json: &str) -> Matcher {
+        let builder: MatcherBuilder = serde_json::from_str(json).unwrap();
+        builder.build().unwrap()
+    }
+
+    fn matches(m: &Matcher, s: &str) -> bool {
+        let addr: InternetAddr = s.parse().unwrap();
+        m.matches(&addr, &HashMap::new(), &mut HashSet::new())
+    }
+
+    #[test]
+    fn a_rule_on_an_ipv4_range_still_catches_the_ipv6_spelling() {
+        let m = matcher(r#"{"addr": {"start": "10.0.0.0", "end": "10.255.255.255"}}"#);
+        assert!(matches(&m, "10.0.0.1:80"));
+        assert!(matches(&m, "[::ffff:10.0.0.1]:80"));
+        assert!(!matches(&m, "1.1.1.1:80"));
+        assert!(!matches(&m, "[::ffff:1.1.1.1]:80"));
+    }
+    #[test]
+    fn a_rule_written_in_ipv6_keeps_matching() {
+        let m = matcher(r#"{"addr": "::ffff:10.0.0.1"}"#);
+        assert!(matches(&m, "[::ffff:10.0.0.1]:80"));
+        assert!(!matches(&m, "[::ffff:10.0.0.2]:80"));
+    }
+    #[test]
+    fn the_port_still_has_to_match() {
+        let m = matcher(r#"{"addr": {"start": "10.0.0.0", "end": "10.255.255.255"}, "port": 80}"#);
+        assert!(matches(&m, "[::ffff:10.0.0.1]:80"));
+        assert!(!matches(&m, "[::ffff:10.0.0.1]:443"));
+    }
+    #[test]
+    fn a_rule_spelled_in_the_mapped_form_catches_plain_ipv4() {
+        let m = matcher(r#"{"addr": "::ffff:10.0.0.1"}"#);
+        assert!(matches(&m, "10.0.0.1:80"));
+        assert!(!matches(&m, "10.0.0.2:80"));
+        let m =
+            matcher(r#"{"addr": {"start": "::ffff:10.0.0.0", "end": "::ffff:10.255.255.255"}}"#);
+        assert!(matches(&m, "10.0.0.1:80"));
+        assert!(matches(&m, "[::ffff:10.0.0.1]:80"));
+        assert!(!matches(&m, "1.1.1.1:80"));
+    }
+    #[test]
+    fn a_range_that_only_straddles_the_mapped_block() {
+        let m = matcher(r#"{"addr": {"start": "::", "end": "ffff::"}}"#);
+        assert!(matches(&m, "[::ffff:10.0.0.1]:80"));
+        assert!(!matches(&m, "10.0.0.1:80"));
+    }
 }

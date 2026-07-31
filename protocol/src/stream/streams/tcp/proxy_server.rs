@@ -297,8 +297,6 @@ mod tests {
     async fn test_proxy() {
         let crypto = tokio_chacha20::config::Config::new(vec![].into());
         let connector_reset = ConnectorReset(Notify::new());
-
-        // Start proxy server
         let proxy_addr = {
             let listen_addr = Arc::from("localhost:0");
             let connector_config = ConnectorConfig {
@@ -320,8 +318,8 @@ mod tests {
                     )),
                 },
                 Arc::clone(&listen_addr),
+                true,
             );
-
             let server = build_tcp_proxy_server(listen_addr.as_ref(), proxy)
                 .await
                 .unwrap();
@@ -333,12 +331,8 @@ mod tests {
             });
             proxy_addr
         };
-
-        // Message to send
         let req_msg = b"hello world";
         let resp_msg = b"goodbye world";
-
-        // Start origin server
         let origin_addr = {
             let listener = TcpListener::bind("[::]:0").await.unwrap();
             let origin_addr = listener.local_addr().unwrap();
@@ -352,16 +346,11 @@ mod tests {
             });
             origin_addr
         };
-
-        // Connect to proxy server
         let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
-
-        // Establish connection to origin server
         {
             heartbeat::send_upgrade(&mut stream, Duration::from_secs(1), &crypto)
                 .await
                 .unwrap();
-            // Encode header
             let header = StreamRequestHeader {
                 upstream: Some(StreamAddr {
                     address: origin_addr.into(),
@@ -372,11 +361,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-
-        // Write message
         stream.write_all(req_msg).await.unwrap();
-
-        // Read response
         {
             let mut buf = [0; 1024];
             let msg_buf = &mut buf[..resp_msg.len()];

@@ -63,6 +63,21 @@ impl StreamConnect for RtpMuxConnector {
             .map(ProxyRtpMuxClientStream)
             .map(|stream| Box::new(stream) as Box<dyn AsConn>)
     }
+    fn reset_addr(&self, addr: SocketAddr) {
+        self.inner.reset_addr(addr);
+    }
+    fn reoptimize(&self, addr: SocketAddr) {
+        self.inner.reoptimize(addr);
+    }
+    fn session_stats(&self, addr: SocketAddr) -> Option<String> {
+        self.inner
+            .probe_session(addr)
+            .and_then(|session| session.stats())
+            .map(|stats| stats.to_string())
+    }
+    fn reports_session_stats(&self) -> bool {
+        true
+    }
 }
 #[derive(Debug)]
 struct ProxyRtpMuxClientStream(::rtp_mux::ClientStream);
@@ -101,7 +116,11 @@ impl AsyncWrite for ProxyRtpMuxClientStream {
     }
 }
 impl OwnIoStream for ProxyRtpMuxClientStream {}
-impl AsConn for ProxyRtpMuxClientStream { fn set_stream_name(&self, name: &str) { self.0.set_name(name); } }
+impl AsConn for ProxyRtpMuxClientStream {
+    fn set_stream_name(&self, name: &str) {
+        self.0.set_name(name);
+    }
+}
 impl HasIoAddr for ProxyRtpMuxClientStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.0.addr().peer_addr)

@@ -156,9 +156,9 @@ impl StreamConnect for KcpConnector {
             .map(|ip| SocketAddr::new(ip, 0))
             .unwrap_or_else(|| any_addr(&addr.ip()));
         let socket = UdpSocket::bind(bind).await?;
+        let local_addr = socket.local_addr()?;
         let config = fast_kcp_config();
         let stream = KcpStream::connect_with_socket(&config, socket, addr).await?;
-        let local_addr = any_addr(&addr.ip());
         let stream = AddressedKcpStream {
             stream,
             local_addr,
@@ -287,4 +287,27 @@ pub async fn build_kcp_proxy_server(
         .map_err(|e| ListenerBindError(e.into()))?;
     let server = KcpServer::new(listener, stream_proxy);
     Ok(server)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::addr::BothVerIp;
+
+    #[tokio::test]
+    async fn a_connected_stream_reports_the_address_the_kernel_assigned() {
+        let listener = KcpListener::bind(fast_kcp_config(), "127.0.0.1:0")
+            .await
+            .unwrap();
+        let listen_addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut listener = listener;
+            let _ = listener.accept().await;
+        });
+        let connector = KcpConnector::new(Arc::new(RwLock::new(ConnectorConfig {
+            bind: BothVerIp { v4: None, v6: None },
+        })));
+        let stream = connector.connect(listen_addr).await.unwrap();
+        let local_addr = stream.local_addr().unwrap();
+        assert_ne!(local_addr.port(), 0, "{local_addr}");
+    }
 }

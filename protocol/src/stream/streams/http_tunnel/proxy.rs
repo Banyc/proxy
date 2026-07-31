@@ -4,8 +4,8 @@ use crate::stream::{
     addr::ConcreteStreamType,
     streams::{
         http_tunnel::{
-            HttpAccessConnContext, HttpFailureReporter, ReturnType, TunnelError,
-            respond_with_rejection,
+            HttpAccessConnContext, HttpFailureReporter, ReturnType, TunnelError, host_and_port,
+            redacted_uri, respond_with_rejection,
         },
         tcp::proxy_server::TCP_STREAM_TYPE,
     },
@@ -85,7 +85,7 @@ fn get_authority_from_req<T>(req: &Request<T>) -> Result<InternetAddr, TunnelErr
 }
 
 fn authority_has_explicit_port(authority: &Authority) -> bool {
-    let authority = authority.as_str();
+    let authority = host_and_port(authority);
     if authority.starts_with('[') {
         return authority
             .find(']')
@@ -106,7 +106,9 @@ fn authority_to_internet_addr(
     let port = match authority.port_u16() {
         Some(port) => port,
         None if authority_has_explicit_port(authority) => {
-            return Err(TunnelError::HttpInvalidPort(authority.to_string()));
+            return Err(TunnelError::HttpInvalidPort(
+                host_and_port(authority).to_owned(),
+            ));
         }
         None => match scheme {
             Some("https") => DEFAULT_PORT_HTTPS,
@@ -131,7 +133,7 @@ pub async fn run_proxy_mode(
     reporter: HttpFailureReporter,
 ) -> ReturnType {
     let method = req.method().to_string();
-    let uri = req.uri().to_string();
+    let uri = redacted_uri(req.uri());
     let dst_addr = match get_authority_from_req(&req) {
         Ok(addr) => addr,
         Err(e) => {

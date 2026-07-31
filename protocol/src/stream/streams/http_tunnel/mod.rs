@@ -115,10 +115,34 @@ fn retain_failed_request_context(
     result
 }
 
+fn host_and_port(authority: &hyper::http::uri::Authority) -> &str {
+    let authority = authority.as_str();
+    match authority.rfind('@') {
+        Some(at) => &authority[at + 1..],
+        None => authority,
+    }
+}
+
+fn redacted_uri(uri: &hyper::Uri) -> String {
+    let Some(authority) = uri.authority() else {
+        return uri.to_string();
+    };
+    let host_and_port = host_and_port(authority);
+    if host_and_port.len() == authority.as_str().len() {
+        return uri.to_string();
+    }
+    let scheme = match uri.scheme_str() {
+        Some(scheme) => format!("{scheme}://"),
+        None => String::new(),
+    };
+    let path_and_query = uri.path_and_query().map(|p| p.as_str()).unwrap_or("");
+    format!("{scheme}{host_and_port}{path_and_query}")
+}
+
 #[derive(Debug, Clone)]
 struct HttpRequestContext {
     method: Method,
-    uri: hyper::Uri,
+    uri: String,
     host: Option<String>,
     #[allow(dead_code)]
     authority: Option<String>,
@@ -134,11 +158,11 @@ impl HttpRequestContext {
         let authority = req
             .uri()
             .authority()
-            .map(|a| a.as_str().to_owned())
+            .map(|a| host_and_port(a).to_owned())
             .or_else(|| host.clone());
         Self {
             method: req.method().clone(),
-            uri: req.uri().clone(),
+            uri: redacted_uri(req.uri()),
             host,
             authority,
         }
@@ -557,6 +581,50 @@ mod tests {
             .unwrap();
         let result = proxy::get_authority_from_req_for_test(&req);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn a_password_in_the_request_target_is_not_read_as_a_port() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://user:pw@example.com/path")
+            .body(())
+            .unwrap();
+        let addr = proxy::get_authority_from_req_for_test(&req).unwrap();
+        assert_eq!(addr.to_string(), "example.com:80");
+    }
+
+    #[test]
+    fn a_password_in_the_request_target_never_reaches_the_error() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://user:pw@example.com:99999/path")
+            .body(())
+            .unwrap();
+        let e = proxy::get_authority_from_req_for_test(&req).unwrap_err();
+        assert!(matches!(e, TunnelError::HttpInvalidPort(_)), "{e:?}");
+        assert!(!format!("{e}").contains("pw"), "{e}");
+        assert!(!format!("{e:?}").contains("pw"), "{e:?}");
+    }
+
+    #[test]
+    fn the_logged_uri_leaves_the_userinfo_out() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://user:pw@example.com/path?q=1")
+            .body(())
+            .unwrap();
+        let context = HttpRequestContext::from_request(&req);
+        assert_eq!(context.uri, "http://example.com/path?q=1");
+        assert_eq!(context.authority.as_deref(), Some("example.com"));
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com:8080/path")
+            .body(())
+            .unwrap();
+        let context = HttpRequestContext::from_request(&req);
+        assert_eq!(context.uri, "http://example.com:8080/path");
+        assert_eq!(context.authority.as_deref(), Some("example.com:8080"));
     }
 
     #[test]

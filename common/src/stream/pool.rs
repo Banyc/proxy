@@ -153,7 +153,6 @@ pub async fn connect_with_pool(
     if let (Some(stream), Some(sock_addr)) = (stream, sock_addr) {
         return Ok((stream, sock_addr));
     }
-
     let sock_addrs =
         addr.address
             .to_socket_addrs()
@@ -162,8 +161,11 @@ pub async fn connect_with_pool(
                 source: e,
                 addr: addr.clone(),
             })?;
-    if !allow_loopback && sock_addrs.iter().any(|addr| addr.ip().is_loopback()) {
-        // Prevent connections to localhost
+    if !allow_loopback
+        && sock_addrs
+            .iter()
+            .any(|addr| crate::addr::reaches_loopback(&addr.ip()))
+    {
         return Err(ConnectError::Loopback {
             addr: addr.clone(),
             sock_addrs: sock_addrs.into(),

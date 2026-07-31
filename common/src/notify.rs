@@ -147,11 +147,11 @@ struct NotifyTargets {
 impl NotifyTargets {
     pub fn notify_waiters(&self) {
         self.waiters.values_mut(|waiter| {
-            assert!(!waiter.0.is_closed());
             let _ = waiter.0.try_send(());
         });
-        self.child_notifies
-            .values_mut(|notify| notify.notify_waiters());
+        self.child_notifies.values_mut(|notify| {
+            notify.notify_waiters();
+        });
     }
     pub fn waiter(&self) -> Waiter {
         let (tx, rx) = binary_event_channel();
@@ -251,5 +251,21 @@ mod tests {
 
         drop(n2);
         assert_eq!(n.targets.child_notifies.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_half_dropped_waiter_does_not_panic_the_notifier() {
+        let n = Notify::new();
+        let live = n.waiter();
+        let Waiter {
+            event,
+            _parent_guard,
+        } = n.waiter();
+        drop(event);
+        assert_eq!(n.targets.waiters.len(), 2);
+        n.notify_waiters();
+        assert!(live.has_notified());
+        drop(_parent_guard);
+        assert_eq!(n.targets.waiters.len(), 1);
     }
 }

@@ -35,6 +35,17 @@ impl BothVerIp {
         })
     }
 }
+pub fn reaches_loopback(ip: &IpAddr) -> bool {
+    if ip.is_loopback() || ip.is_unspecified() {
+        return true;
+    }
+    match ip {
+        IpAddr::V4(_) => false,
+        IpAddr::V6(ip) => ip
+            .to_ipv4()
+            .is_some_and(|ip| ip.is_loopback() || ip.is_unspecified()),
+    }
+}
 
 pub fn any_addr(ip_version: &IpAddr) -> SocketAddr {
     let any_ip = match ip_version {
@@ -229,6 +240,27 @@ impl Visitor<'_> for InternetAddrStrVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_loopback_address_spelled_as_ipv6_still_reaches_loopback() {
+        for ip in [
+            "127.0.0.1",
+            "127.1.2.3",
+            "::1",
+            "::ffff:127.0.0.1",
+            "::127.0.0.1",
+            "0.0.0.0",
+            "::",
+            "::ffff:0.0.0.0",
+        ] {
+            let ip: IpAddr = ip.parse().unwrap();
+            assert!(reaches_loopback(&ip), "{ip}");
+        }
+        for ip in ["1.1.1.1", "::ffff:1.1.1.1", "2606:4700:4700::1111"] {
+            let ip: IpAddr = ip.parse().unwrap();
+            assert!(!reaches_loopback(&ip), "{ip}");
+        }
+    }
 
     #[test]
     fn serde_socket_address() {

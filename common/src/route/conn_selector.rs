@@ -14,9 +14,9 @@ use tracing::info;
 use crate::ttl_cell::TtlCell;
 
 use super::{
+    ConnConfig, GaugedConnChain, IntoAddr, TRACE_INTERVAL, TraceRtt, WeightedConnChain,
+    WeightedConnChainBuildError, WeightedConnChainBuilder,
     score::{EligibilityGate, ScoredChain, chain_score, pick_weighted},
-    ConnConfig, GaugedConnChain, IntoAddr, TraceRtt, WeightedConnChain,
-    WeightedConnChainBuildError, WeightedConnChainBuilder, TRACE_INTERVAL,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,7 +180,6 @@ where
         if self.chains.len() == 1 {
             return self.chains[0].weighted();
         }
-
         let scores = self.score_store.read().unwrap().get().cloned();
         let scores = match scores {
             Some(scores) => scores,
@@ -193,11 +192,10 @@ where
                 scores
             }
         };
-
         let mut rng = rand::rng();
         if scores.sum == 0. {
-            let i = rng.random_range(0..self.chains.len());
-            return self.chains[i].weighted();
+            let i = rng.random_range(0..scores.scores.len());
+            return self.chains[scores.scores[i].0].weighted();
         }
         let r = rng.random_range(0. ..scores.sum);
         let i = pick_weighted(&scores.scores, r);
@@ -223,13 +221,16 @@ where
         if let Some(gate) = &self.gate {
             let dropped = gate.retain_eligible(&mut scored);
             if dropped > 0 {
-                info!(dropped, eligible = scored.len(), max_rtt_ratio = gate.max_ratio, "RTT eligibility gate excluded slower routes");
+                info!(
+                    dropped,
+                    eligible = scored.len(),
+                    max_rtt_ratio = gate.max_ratio,
+                    "RTT eligibility gate excluded slower routes"
+                );
             }
         }
-        let mut scores: Vec<(usize, f64)> = scored
-            .into_iter()
-            .map(|c| (c.index, c.score))
-            .collect();
+        let mut scores: Vec<(usize, f64)> =
+            scored.into_iter().map(|c| (c.index, c.score)).collect();
         scores.sort_by(|(_, a), (_, b)| b.total_cmp(a));
         scores.truncate(self.active_chains.get());
         scores
@@ -252,4 +253,44 @@ struct Scores {
     sum: f64,
 }
 
-
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{error::AnyError, route::ConnChain};
+    use std::net::SocketAddr;
+    use std::time::Duration;
+    struct NoTracer;
+    impl TraceRtt for NoTracer {
+        type Addr = SocketAddr;
+        async fn trace_rtt(&self, _chain: &ConnChain<SocketAddr>) -> Result<Duration, AnyError> {
+            unreachable!("the gauges are set directly")
+        }
+    }
+    fn chain(weight: usize) -> WeightedConnChain<SocketAddr> {
+        WeightedConnChain {
+            weight,
+            chain: Arc::from(Vec::<ConnConfig<SocketAddr>>::new()),
+            payload_crypto: None,
+        }
+    }
+    #[test]
+    fn a_zero_sum_falls_back_within_the_eligible_set() {
+        let selector = ConnSelector1::new(
+            vec![chain(0), chain(5)],
+            None::<NoTracer>,
+            None,
+            Some(1.5),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        selector.chains[0].set_gauges_for_test(Some(Duration::from_millis(10)), Some(0.));
+        selector.chains[1].set_gauges_for_test(Some(Duration::from_millis(5000)), Some(0.));
+        for _ in 0..200 {
+            assert_eq!(
+                selector.choose_chain().weight,
+                0,
+                "the gate excluded the slow chain; the fallback must not reinstate it"
+            );
+        }
+    }
+}

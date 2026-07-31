@@ -94,6 +94,7 @@ where
                     let e = res.unwrap();
                     warn!(?e, ?addr, "MUX error");
                 }
+                Some(_) = accepting.join_next() => {}
                 res = accept_after_retry(accept_backoff.retry_delay(), || self.listener.accept()) => {
                     let (stream, _) = match res {
                         Ok(res) => {
@@ -106,13 +107,7 @@ where
                         }
                     };
                     counter!("stream.tcp_mux.tcp.accepts").increment(1);
-                    let addr = || -> io::Result<SocketAddrPair> {
-                        Ok(SocketAddrPair {
-                            local_addr: stream.local_addr()?,
-                            peer_addr: stream.peer_addr()?,
-                        })
-                    };
-                    let addr = match addr() {
+                    let addr = match socket_addr_pair(&stream) {
                         Ok(addr) => addr,
                         Err(_) => {
                             continue;
@@ -125,7 +120,6 @@ where
                         run_mux_accepter(accepter, addr, |stream| {
                             counter!("stream.tcp_mux.mux.accepts").increment(1);
                             let conn_handler = Arc::clone(&conn_handler);
-                            // Arc conn_handler
                             tokio::spawn(async move {
                                 conn_handler.handle_stream(stream).await;
                             });
@@ -157,6 +151,13 @@ pub enum ServeError {
     },
 }
 
+fn socket_addr_pair(stream: &tokio::net::TcpStream) -> io::Result<SocketAddrPair> {
+    Ok(SocketAddrPair {
+        local_addr: stream.local_addr()?,
+        peer_addr: stream.peer_addr()?,
+    })
+}
+
 #[derive(Debug)]
 pub struct TcpMuxConnector {
     connect_request_tx: ConnectRequestTx,
@@ -183,10 +184,7 @@ impl TcpMuxConnector {
                     };
                     socket.bind(bind)?;
                     let stream = socket.connect(addr).await?;
-                    let addr = SocketAddrPair {
-                        local_addr: stream.local_addr().unwrap(),
-                        peer_addr: stream.peer_addr().unwrap(),
-                    };
+                    let addr = socket_addr_pair(&stream)?;
                     counter!("stream.tcp_mux.tcp.connects").increment(1);
                     let (r, w) = stream.into_split();
                     Ok(((r, w), addr))
@@ -270,4 +268,20 @@ pub async fn build_tcp_mux_proxy_server(
         .map_err(ListenerBindError)?;
     let server = TcpMuxServer::new(listener, stream_proxy);
     Ok(server)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpStream;
+
+    #[tokio::test]
+    async fn a_reset_connection_is_an_error_not_a_panic() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        drop(listener);
+        let _ = stream.try_write(b"x");
+        assert!(socket_addr_pair(&stream).is_err());
+    }
 }

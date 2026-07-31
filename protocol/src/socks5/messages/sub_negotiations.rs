@@ -207,7 +207,7 @@ mod tests {
     #[tokio::test]
     async fn username_password_response_failure() {
         let expected = UsernamePasswordResponse {
-            status: UsernamePasswordStatus::Failure(NonZeroU8::new(1).unwrap()),
+            status: UsernamePasswordStatus::Failure(NonZeroU8::MIN),
         };
         let mut wtr = io::Cursor::new(Vec::new());
         expected.encode(&mut wtr).await.unwrap();
@@ -215,7 +215,7 @@ mod tests {
             wtr.get_ref(),
             &[
                 USERNAME_PASSWORD_VERSION,
-                UsernamePasswordStatus::Failure(NonZeroU8::new(1).unwrap()).into(),
+                UsernamePasswordStatus::Failure(NonZeroU8::MIN).into(),
             ]
         );
         let mut rdr = io::Cursor::new(wtr.into_inner());

@@ -45,7 +45,8 @@ where
         if self.data_points.is_empty() {
             return None;
         }
-        let nth = (self.data_points.len() as f64 * percentile) as usize;
+        let nth =
+            ((self.data_points.len() as f64 * percentile) as usize).min(self.data_points.len() - 1);
         Some(&self.data_points[nth].value)
     }
 }
@@ -64,7 +65,7 @@ impl<T> DataPoint<T> {
     }
 
     pub fn is_fresh(&self) -> bool {
-        Instant::now() > self.fresh_until
+        Instant::now() < self.fresh_until
     }
 }
 impl<T> PartialEq for DataPoint<T>
@@ -90,5 +91,23 @@ where
 {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.value.cmp(&other.value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_data_point_is_fresh_until_its_freshness_runs_out() {
+        assert!(DataPoint::new((), Duration::from_secs(60)).is_fresh());
+        assert!(!DataPoint::new((), Duration::ZERO).is_fresh());
+    }
+    #[test]
+    fn the_top_of_the_range_is_the_last_point() {
+        let mut sample = TopSample::new(4, Duration::from_secs(60));
+        sample.insert(1_u64);
+        sample.insert(2);
+        assert_eq!(sample.get_percentile(1.0), Some(&2));
+        assert_eq!(sample.get_percentile(0.0), Some(&1));
     }
 }

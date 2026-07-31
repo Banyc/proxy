@@ -41,6 +41,8 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct StreamProxyConnHandlerConfig {
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
+    #[serde(default)]
+    pub allow_loopback: bool,
 }
 
 impl StreamProxyConnHandlerConfig {
@@ -52,6 +54,7 @@ impl StreamProxyConnHandlerConfig {
         StreamProxyConnHandlerBuilder {
             header_key: self.header_key,
             payload_key: self.payload_key,
+            allow_loopback: self.allow_loopback,
             stream_context,
             listen_addr,
         }
@@ -62,6 +65,7 @@ impl StreamProxyConnHandlerConfig {
 pub struct StreamProxyConnHandlerBuilder {
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
+    pub allow_loopback: bool,
     pub stream_context: StreamContext,
     pub listen_addr: Arc<str>,
 }
@@ -70,28 +74,29 @@ impl StreamProxyConnHandlerBuilder {
         let header_crypto = self
             .header_key
             .build()
-            .map_err(StreamProxyServerBuildError::HeaderCrypto)?;
-        let payload_crypto = match self.payload_key {
-            Some(key) => Some(
-                key.build()
-                    .map_err(StreamProxyServerBuildError::PayloadCrypto)?,
-            ),
-            None => None,
-        };
+            .map_err(|e| StreamProxyServerBuildError::HeaderCrypto(e.source.to_string()))?;
+        let payload_crypto =
+            match self.payload_key {
+                Some(key) => Some(key.build().map_err(|e| {
+                    StreamProxyServerBuildError::PayloadCrypto(e.source.to_string())
+                })?),
+                None => None,
+            };
         Ok(StreamProxyConnHandler::new(
             header_crypto,
             payload_crypto,
             self.stream_context,
             Arc::clone(&self.listen_addr),
+            self.allow_loopback,
         ))
     }
 }
 #[derive(Debug, Error)]
 pub enum StreamProxyServerBuildError {
     #[error("HeaderCrypto: {0}")]
-    HeaderCrypto(#[source] tokio_chacha20::config::ConfigBuildError),
+    HeaderCrypto(String),
     #[error("PayloadCrypto: {0}")]
-    PayloadCrypto(#[source] tokio_chacha20::config::ConfigBuildError),
+    PayloadCrypto(String),
     #[error("Stream pool: {0}")]
     StreamPool(#[from] ParseInternetAddrError),
 }
@@ -109,9 +114,14 @@ impl StreamProxyConnHandler {
         payload_crypto: Option<tokio_chacha20::config::Config>,
         stream_context: StreamContext,
         listen_addr: Arc<str>,
+        allow_loopback: bool,
     ) -> Self {
         Self {
-            acceptor: StreamProxyAcceptor::new(header_crypto, stream_context.clone()),
+            acceptor: StreamProxyAcceptor::new(
+                header_crypto,
+                stream_context.clone(),
+                allow_loopback,
+            ),
             payload_crypto,
             stream_context,
             listen_addr,
@@ -204,12 +214,18 @@ pub enum ProxyResult {
 pub struct StreamProxyAcceptor {
     crypto: tokio_chacha20::config::Config,
     stream_context: StreamContext,
+    allow_loopback: bool,
 }
 impl StreamProxyAcceptor {
-    pub fn new(crypto: tokio_chacha20::config::Config, stream_context: StreamContext) -> Self {
+    pub fn new(
+        crypto: tokio_chacha20::config::Config,
+        stream_context: StreamContext,
+        allow_loopback: bool,
+    ) -> Self {
         Self {
             crypto,
             stream_context,
+            allow_loopback,
         }
     }
 
@@ -232,7 +248,7 @@ impl StreamProxyAcceptor {
             None => return Ok(None),
         };
         let (upstream, sock_addr) =
-            connect_with_pool(&addr, &self.stream_context, false, IO_TIMEOUT)
+            connect_with_pool(&addr, &self.stream_context, self.allow_loopback, IO_TIMEOUT)
                 .await
                 .map_err(|e| {
                     let downstream_addr = downstream.peer_addr().ok();

@@ -4,8 +4,8 @@ use crate::stream::{
     addr::ConcreteStreamType,
     streams::{
         http_tunnel::{
-            HttpAccessConnContext, HttpFailureReporter, HttpRequestFailure, ReturnType, full,
-            respond_with_rejection,
+            HttpAccessConnContext, HttpFailureReporter, HttpRequestFailure, ReturnType,
+            TunnelError, full, host_and_port, redacted_uri, respond_with_rejection,
         },
         tcp::proxy_server::TCP_STREAM_TYPE,
     },
@@ -32,8 +32,6 @@ use hyper::{Request, Response, body::Incoming, upgrade::Upgraded};
 use hyper_util::rt::TokioIo;
 use thiserror::Error;
 use tracing::{instrument, trace, warn};
-
-use super::TunnelError;
 
 pub struct HttpTunnelLog {
     pub io: IoCopyFinished,
@@ -69,7 +67,7 @@ pub async fn run_tunnel_mode(
     let addr = match host_addr(req.uri()) {
         Some(addr) => addr,
         None => {
-            let uri = req.uri();
+            let uri = redacted_uri(req.uri());
             warn!(%uri, "CONNECT host is not socket addr");
             let mut resp = Response::new(full("CONNECT must be to a socket address"));
             *resp.status_mut() = hyper::http::StatusCode::BAD_REQUEST;
@@ -95,7 +93,7 @@ async fn dispatch(
     reporter: HttpFailureReporter,
 ) -> ReturnType {
     let method = req.method().to_string();
-    let uri = req.uri().to_string();
+    let uri = redacted_uri(req.uri());
     let action = ctx.route_table.action(&dst_addr);
     let action = match &action {
         RouteAction::ConnSelector(conn_selector) => {
@@ -244,7 +242,11 @@ async fn direct(ctx: DirectContext, upgraded: Upgraded) -> Result<(), ConnectFai
     }
     .serve_as_access_server()
     .await;
-    let log = HttpTunnelLog { io, method: ctx.method, uri: ctx.uri };
+    let log = HttpTunnelLog {
+        io,
+        method: ctx.method,
+        uri: ctx.uri,
+    };
     match &res {
         Ok(()) => common::info_println!("HTTP CONNECT direct: Finished {log}"),
         Err(err) => common::info_println!("HTTP CONNECT direct: Error {log}: {err}"),
@@ -320,7 +322,7 @@ enum ProxyError {
 }
 
 fn host_addr(uri: &hyper::http::Uri) -> Option<String> {
-    uri.authority().map(|auth| auth.to_string())
+    uri.authority().map(|auth| host_and_port(auth).to_owned())
 }
 
 fn empty() -> BoxBody<Bytes, hyper::Error> {

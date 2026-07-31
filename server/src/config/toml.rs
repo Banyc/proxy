@@ -2,34 +2,45 @@ pub fn human_toml_error(file_path: &str, src: &str, e: toml::de::Error) -> Strin
     let Some(span) = e.span() else {
         return format!("{e}");
     };
-    let affected = src
-        .chars()
-        .skip(span.start)
-        .take(span.end - span.start)
-        .collect::<String>();
-    let (line, col) = {
-        let mut line = 1;
-        let mut col = 1;
-
-        for (i, char) in src.chars().enumerate() {
-            if i == span.start {
-                break;
-            }
-            if char == '\n' {
-                line += 1;
-                col = 1;
-            }
-            col += 1;
-        }
-
-        (line, col)
-    };
+    let affected = src.get(span.clone()).unwrap_or_default();
+    let before = src.get(..span.start).unwrap_or_default();
+    let line = 1 + before.matches('\n').count();
+    let col = 1 + before.chars().rev().take_while(|&c| c != '\n').count();
     let msg = e.message();
-    let e = format!(
+    format!(
         "{msg}
 File `{file_path}`
 Line {line}, Column {col}
 Affected: #'{affected}'#"
-    );
-    e
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, serde::Deserialize)]
+    struct Config {
+        #[allow(dead_code)]
+        pub listen_addr: String,
+    }
+
+    fn error_for(src: &str) -> String {
+        let e = toml::from_str::<Config>(src).unwrap_err();
+        human_toml_error("config.toml", src, e)
+    }
+
+    #[test]
+    fn a_non_ascii_character_does_not_move_the_reported_location() {
+        let msg = error_for("# 配置文件\nlisten_addr = 1\n");
+        assert!(msg.contains("Line 2,"), "{msg}");
+        assert!(msg.contains("Affected: #'1'#"), "{msg}");
+    }
+    #[test]
+    fn a_column_is_one_based_on_every_line() {
+        let msg = error_for("listen_addr = 1\n");
+        assert!(msg.contains("Line 1, Column 15"), "{msg}");
+        let msg = error_for("\nlisten_addr = 1\n");
+        assert!(msg.contains("Line 2, Column 15"), "{msg}");
+    }
 }

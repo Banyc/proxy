@@ -32,17 +32,20 @@ pub struct UdpProxyConnHandler {
     header_crypto: tokio_chacha20::config::Config,
     payload_crypto: Option<tokio_chacha20::config::Config>,
     udp_context: UdpContext,
+    allow_loopback: bool,
 }
 impl UdpProxyConnHandler {
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
         payload_crypto: Option<tokio_chacha20::config::Config>,
         udp_context: UdpContext,
+        allow_loopback: bool,
     ) -> Self {
         Self {
             header_crypto,
             payload_crypto,
             udp_context,
+            allow_loopback,
         }
     }
 
@@ -59,15 +62,11 @@ impl UdpProxyConnHandler {
     #[instrument(skip(self, conn))]
     async fn proxy(&self, mut conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), ProxyError> {
         let flow = conn.conn_key().clone();
-
-        // Echo
         if flow.upstream.is_none() {
             let pkt = conn.read().recv().try_recv().unwrap();
             echo(pkt.slice(), conn.write(), &self.header_crypto).await;
             return Ok(());
         }
-
-        // Prevent connections to localhost
         let resolved_upstream = *flow
             .upstream
             .as_ref()
@@ -80,13 +79,12 @@ impl UdpProxyConnHandler {
                 addr: flow.upstream.as_ref().unwrap().0.clone(),
             })?
             .first();
-        if resolved_upstream.ip().is_loopback() {
+        if !self.allow_loopback && crate::addr::reaches_loopback(&resolved_upstream.ip()) {
             return Err(ProxyError::Loopback {
                 addr: flow.upstream.as_ref().unwrap().0.clone(),
                 sock_addr: resolved_upstream,
             });
         }
-        // Connect to upstream
         let upstream = self
             .udp_context
             .connector
@@ -98,16 +96,13 @@ impl UdpProxyConnHandler {
                 sock_addr: resolved_upstream,
             })?;
         let upstream = Arc::new(upstream);
-
         let header_crypto = self.header_crypto.clone();
         let response_header = move || {
-            // Write header
             let mut wtr = Vec::new();
             let header = RouteResponse { result: Ok(()) };
             write_header(&mut wtr, &header, *header_crypto.key()).unwrap();
             wtr.into()
         };
-
         let header_crypto = self.header_crypto.clone();
         let payload_crypto = self.payload_crypto.clone();
         let session_table = self.udp_context.session_table.clone();

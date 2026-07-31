@@ -38,8 +38,10 @@ impl AcceptErrorBackoff {
         let error_msg = format!("{error}");
         self.record(error_msg);
         if !fatal {
-            let wait_ms = INITIAL_BACKOFF_MS * 2u64.saturating_pow((self.error_count - 1) as u32);
-            let wait_ms = wait_ms.min(MAX_BACKOFF_MS);
+            let shifts = u32::try_from(self.error_count - 1).unwrap_or(u32::MAX);
+            let wait_ms = INITIAL_BACKOFF_MS
+                .saturating_mul(2u64.saturating_pow(shifts))
+                .min(MAX_BACKOFF_MS);
             self.retry_at = Some(now + std::time::Duration::from_millis(wait_ms));
         } else {
             self.retry_at = None;
@@ -195,6 +197,19 @@ mod tests {
         let now = Instant::now();
         let delay = backoff.retry_at().unwrap().duration_since(now);
         assert!(delay.as_millis() <= 1000);
+    }
+
+    #[test]
+    fn backoff_never_overflows_the_backoff() {
+        let mut backoff = AcceptErrorBackoff::default();
+        let addr = "127.0.0.1:1234".parse().unwrap();
+        for _ in 0..200 {
+            let err = io::Error::new(io::ErrorKind::WouldBlock, "test");
+            let _ = backoff.failed("tcp", addr, err);
+        }
+        let now = Instant::now();
+        let delay = backoff.retry_at().unwrap().duration_since(now);
+        assert!(delay.as_millis() <= u128::from(MAX_BACKOFF_MS), "{delay:?}");
     }
 
     #[test]

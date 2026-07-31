@@ -49,8 +49,23 @@ mod tests {
     }
 
     async fn spawn_proxy(join_set: &mut tokio::task::JoinSet<()>, addr: &str) -> UdpConnConfig {
+        spawn_proxy_(join_set, addr, true).await
+    }
+
+    async fn spawn_guarded_proxy(
+        join_set: &mut tokio::task::JoinSet<()>,
+        addr: &str,
+    ) -> UdpConnConfig {
+        spawn_proxy_(join_set, addr, false).await
+    }
+
+    async fn spawn_proxy_(
+        join_set: &mut tokio::task::JoinSet<()>,
+        addr: &str,
+        allow_loopback: bool,
+    ) -> UdpConnConfig {
         let crypto = create_random_crypto();
-        let proxy = UdpProxyConnHandler::new(crypto.clone(), None, udp_context());
+        let proxy = UdpProxyConnHandler::new(crypto.clone(), None, udp_context(), allow_loopback);
         let server = proxy.build(addr).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         join_set.spawn(async move {
@@ -239,22 +254,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_bad_proxy() {
         let context = udp_context();
-
         let mut join_set = tokio::task::JoinSet::new();
-
-        // Start proxy servers
-        let proxy_1_config = spawn_proxy(&mut join_set, "localhost:0").await;
-        let proxy_2_config = spawn_proxy(&mut join_set, "localhost:0").await;
-        let proxy_3_config = spawn_proxy(&mut join_set, "localhost:0").await;
-
-        // Message to send
+        let proxy_1_config = spawn_guarded_proxy(&mut join_set, "localhost:0").await;
+        let proxy_2_config = spawn_guarded_proxy(&mut join_set, "localhost:0").await;
+        let proxy_3_config = spawn_guarded_proxy(&mut join_set, "localhost:0").await;
         let req_msg = b"hello world";
         let resp_msg = b"goodbye world";
-
-        // Start greet server
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
-
-        // Connect to proxy server
         let client = UdpProxyClient::establish(
             vec![proxy_1_config.clone(), proxy_2_config, proxy_3_config].into(),
             greet_addr,
@@ -263,13 +269,8 @@ mod tests {
         .await
         .unwrap();
         let (mut client_read, mut client_write) = client.into_split();
-
-        // Send message
         client_write.send(req_msg).await.unwrap();
-
-        // Read response
         let err = read_response(&mut client_read, resp_msg).await.unwrap_err();
-
         match err {
             client::udp::RecvError::Response { err, addr } => {
                 match err.kind {
@@ -279,6 +280,77 @@ mod tests {
                 assert_eq!(addr, proxy_1_config.address);
             }
             _ => panic!("Unexpected error: {err:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn loopback_spelled_as_ipv6_is_still_refused() {
+        let context = udp_context();
+        let mut join_set = tokio::task::JoinSet::new();
+        let proxy_config = spawn_guarded_proxy(&mut join_set, "0.0.0.0:0").await;
+        let req_msg = b"hello world";
+        let resp_msg = b"goodbye world";
+        let greet_addr = spawn_greet(&mut join_set, "127.0.0.1:0", req_msg, resp_msg, 1).await;
+        let greet_port = match *greet_addr {
+            common::addr::InternetAddrKind::SocketAddr(addr) => addr.port(),
+            ref other => panic!("{other:?}"),
+        };
+        let mapped: InternetAddr = std::net::SocketAddr::new(
+            std::net::Ipv4Addr::new(127, 0, 0, 1)
+                .to_ipv6_mapped()
+                .into(),
+            greet_port,
+        )
+        .into();
+        let client = UdpProxyClient::establish(vec![proxy_config.clone()].into(), mapped, &context)
+            .await
+            .unwrap();
+        let (mut client_read, mut client_write) = client.into_split();
+        client_write.send(req_msg).await.unwrap();
+        let err = read_response(&mut client_read, resp_msg)
+            .await
+            .expect_err("the proxy relayed to a loopback service");
+        match err {
+            client::udp::RecvError::Response { err, addr } => {
+                assert!(
+                    matches!(err.kind, RouteErrorKind::Loopback),
+                    "unexpected error: {err:?}"
+                );
+                assert_eq!(addr, proxy_config.address);
+            }
+            _ => panic!("unexpected error: {err:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unspecified_destination_is_still_refused() {
+        let context = udp_context();
+        let mut join_set = tokio::task::JoinSet::new();
+        let proxy_config = spawn_guarded_proxy(&mut join_set, "0.0.0.0:0").await;
+        let req_msg = b"hello world";
+        let resp_msg = b"goodbye world";
+        let greet_addr = spawn_greet(&mut join_set, "0.0.0.0:0", req_msg, resp_msg, 1).await;
+        let unspecified: InternetAddr =
+            std::net::SocketAddr::new(std::net::Ipv4Addr::UNSPECIFIED.into(), greet_addr.port())
+                .into();
+        let client =
+            UdpProxyClient::establish(vec![proxy_config.clone()].into(), unspecified, &context)
+                .await
+                .unwrap();
+        let (mut client_read, mut client_write) = client.into_split();
+        client_write.send(req_msg).await.unwrap();
+        let err = read_response(&mut client_read, resp_msg)
+            .await
+            .expect_err("the proxy relayed to a service on its own host");
+        match err {
+            client::udp::RecvError::Response { err, addr } => {
+                assert!(
+                    matches!(err.kind, RouteErrorKind::Loopback),
+                    "unexpected error: {err:?}"
+                );
+                assert_eq!(addr, proxy_config.address);
+            }
+            _ => panic!("unexpected error: {err:?}"),
         }
     }
 

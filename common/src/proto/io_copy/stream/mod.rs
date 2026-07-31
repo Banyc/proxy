@@ -47,9 +47,7 @@ where
         let session = self.session();
         let destination = self.conn_context.destination.clone();
 
-        let (finished, metrics, res) = self
-            .serve(session, EncryptionDirection::Decrypt)
-            .await;
+        let (finished, metrics, res) = self.serve(session, EncryptionDirection::Decrypt).await;
         log(metrics, destination);
 
         (finished, res)
@@ -61,9 +59,7 @@ where
         let session = self.session();
         let destination = self.conn_context.destination.clone();
 
-        let (finished, metrics, res) = self
-            .serve(session, EncryptionDirection::Encrypt)
-            .await;
+        let (finished, metrics, res) = self.serve(session, EncryptionDirection::Encrypt).await;
         log(metrics, destination);
 
         (finished, res)

@@ -17,6 +17,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     net::UdpSocket,
 };
+use tokio_chacha20::X_NONCE_BYTES;
 use tokio_throughput::{ReadGauge, WriteGauge};
 use tracing::{info, trace, warn};
 use udp_listener::{ConnRead, ConnWrite};
@@ -48,7 +49,6 @@ pub trait UdpRecv {
 
 pub trait UdpSend {
     fn trait_send(&mut self, buf: &[u8]) -> impl Future<Output = Result<usize, AnyError>> + Send;
-
 }
 
 pub struct UpstreamParts<R, W> {
@@ -336,32 +336,31 @@ where
                     pkt
                 };
 
-                let downlink_n = if let Some(response_header) = &response_header {
-                    let hdr = match response_header_ttl.get() {
-                        Some(hdr) => hdr,
-                        None => response_header_ttl.set(response_header()),
+                let downlink_n =
+                    if let Some(response_header) = &response_header {
+                        let hdr = match response_header_ttl.get() {
+                            Some(hdr) => hdr,
+                            None => response_header_ttl.set(response_header()),
+                        };
+                        downlink_protocol_buf.clear();
+                        downlink_protocol_buf.extend_from_slice(hdr);
+                        downlink_protocol_buf.extend_from_slice(pkt);
+                        downstream
+                            .write
+                            .send(&downlink_protocol_buf)
+                            .await
+                            .map_err(|e| CopyBiError::SendDownstream {
+                                source: e,
+                                downstream: downstream.write.clone(),
+                            })?
+                    } else {
+                        downstream.write.send(pkt).await.map_err(|e| {
+                            CopyBiError::SendDownstream {
+                                source: e,
+                                downstream: downstream.write.clone(),
+                            }
+                        })?
                     };
-                    downlink_protocol_buf.clear();
-                    downlink_protocol_buf.extend_from_slice(&hdr);
-                    downlink_protocol_buf.extend_from_slice(pkt);
-                    downstream
-                        .write
-                        .send(&downlink_protocol_buf)
-                        .await
-                        .map_err(|e| CopyBiError::SendDownstream {
-                            source: e,
-                            downstream: downstream.write.clone(),
-                        })?
-                } else {
-                    downstream
-                        .write
-                        .send(pkt)
-                        .await
-                        .map_err(|e| CopyBiError::SendDownstream {
-                            source: e,
-                            downstream: downstream.write.clone(),
-                        })?
-                };
 
                 bytes_downlink.fetch_add(downlink_n as u64, Ordering::Relaxed);
                 packets_downlink.fetch_add(1, Ordering::Relaxed);
@@ -472,9 +471,15 @@ fn en_dec<'buf>(
 ) -> Option<&'buf [u8]> {
     Some(match en_dir {
         EncryptionDirection::Encrypt => {
+            if pkt.len().checked_add(X_NONCE_BYTES)? > buf.len() {
+                return None;
+            }
             let mut buf_wtr = io::Cursor::new(&mut *buf);
             let mut w = nonce_ciphertext_writer(config.key(), &mut buf_wtr);
-            unwrap_ready(Pin::new(&mut w).poll_write(&mut noop_context(), pkt)).ok()?;
+            let n = unwrap_ready(Pin::new(&mut w).poll_write(&mut noop_context(), pkt)).ok()?;
+            if n != pkt.len() {
+                return None;
+            }
             let pos = usize::try_from(buf_wtr.position()).unwrap();
             &buf[..pos]
         }
@@ -486,4 +491,68 @@ fn en_dec<'buf>(
             &buf[..pos]
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn config() -> tokio_chacha20::config::Config {
+        tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into())
+    }
+    #[test]
+    fn a_packet_too_big_to_encrypt_is_dropped_not_spun_on() {
+        let config = config();
+        let mut buf = vec![0; PACKET_BUFFER_LENGTH];
+        for len in [
+            PACKET_BUFFER_LENGTH - X_NONCE_BYTES + 1,
+            PACKET_BUFFER_LENGTH - 1,
+            PACKET_BUFFER_LENGTH,
+        ] {
+            let mut pkt = vec![0xab; len];
+            assert!(
+                en_dec(&mut pkt, &mut buf, &config, EncryptionDirection::Encrypt).is_none(),
+                "a {len}-byte packet must be dropped, not encrypted into a {} byte buffer",
+                buf.len(),
+            );
+        }
+    }
+    #[test]
+    fn a_packet_that_fits_round_trips() {
+        let config = config();
+        let mut en_buf = vec![0; PACKET_BUFFER_LENGTH];
+        let mut de_buf = vec![0; PACKET_BUFFER_LENGTH];
+        for len in [
+            0,
+            1,
+            23,
+            24,
+            25,
+            1400,
+            8192,
+            PACKET_BUFFER_LENGTH - X_NONCE_BYTES,
+        ] {
+            let plain: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+            let mut pkt = plain.clone();
+            let ct = en_dec(&mut pkt, &mut en_buf, &config, EncryptionDirection::Encrypt)
+                .unwrap_or_else(|| panic!("a {len}-byte packet fits and must encrypt"))
+                .to_vec();
+            assert_eq!(ct.len(), len + X_NONCE_BYTES);
+            let mut ct = ct;
+            let pt = en_dec(&mut ct, &mut de_buf, &config, EncryptionDirection::Decrypt)
+                .unwrap_or_else(|| panic!("a {len}-byte packet must decrypt"));
+            assert_eq!(pt, &plain[..], "a {len}-byte packet did not round-trip");
+        }
+    }
+    #[test]
+    fn a_packet_shorter_than_the_nonce_is_dropped() {
+        let config = config();
+        let mut buf = vec![0; PACKET_BUFFER_LENGTH];
+        for len in 0..X_NONCE_BYTES {
+            let mut pkt = vec![0xab; len];
+            assert!(
+                en_dec(&mut pkt, &mut buf, &config, EncryptionDirection::Decrypt).is_none(),
+                "a {len}-byte ciphertext is shorter than the {X_NONCE_BYTES}-byte nonce",
+            );
+        }
+    }
 }

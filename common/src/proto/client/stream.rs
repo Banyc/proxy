@@ -144,6 +144,49 @@ impl TraceRtt for StreamTracer {
             .await
             .map_err(|e| e.into())
     }
+    async fn recycle(&self, chain: &ConnChain<StreamAddr>) {
+        let Some(first) = chain.first() else {
+            return;
+        };
+        let Ok(sock_addrs) = first.address.address.to_socket_addrs().await else {
+            return;
+        };
+        for addr in sock_addrs.iter() {
+            self.stream_context
+                .connector_table
+                .reset_addr(first.address.stream_type.as_ref(), *addr);
+        }
+    }
+    async fn reoptimize(&self, chain: &ConnChain<StreamAddr>) {
+        let Some(first) = chain.first() else {
+            return;
+        };
+        let Ok(sock_addrs) = first.address.address.to_socket_addrs().await else {
+            return;
+        };
+        for addr in sock_addrs.iter() {
+            self.stream_context
+                .connector_table
+                .reoptimize(first.address.stream_type.as_ref(), *addr);
+        }
+    }
+    async fn session_stats(&self, chain: &ConnChain<StreamAddr>) -> Option<String> {
+        let first = chain.first()?;
+        let stream_type = first.address.stream_type.as_ref();
+        if !self
+            .stream_context
+            .connector_table
+            .reports_session_stats(stream_type)
+        {
+            return None;
+        }
+        let sock_addrs = first.address.address.to_socket_addrs().await.ok()?;
+        sock_addrs.iter().find_map(|addr| {
+            self.stream_context
+                .connector_table
+                .session_stats(stream_type, *addr)
+        })
+    }
 }
 pub async fn trace_rtt(
     proxies: &ConnChain<StreamAddr>,

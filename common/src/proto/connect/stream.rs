@@ -14,6 +14,14 @@ use crate::{connect::ConnectorConfig, stream::AsConn};
 #[async_trait]
 pub trait StreamConnect: std::fmt::Debug + Sync + Send + 'static {
     async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>>;
+    fn reset_addr(&self, _addr: SocketAddr) {}
+    fn reoptimize(&self, _addr: SocketAddr) {}
+    fn session_stats(&self, _addr: SocketAddr) -> Option<String> {
+        None
+    }
+    fn reports_session_stats(&self) -> bool {
+        false
+    }
 }
 pub trait StreamConnectExt: StreamConnect {
     fn timed_connect(
@@ -85,6 +93,24 @@ impl StreamConnectorTable {
             ));
         };
         StreamConnectExt::timed_connect(connector.deref(), addr, timeout).await
+    }
+    pub fn reset_addr(&self, stream_type: &str, addr: SocketAddr) {
+        if let Some(connector) = self.connectors.get(stream_type) {
+            connector.reset_addr(addr);
+        }
+    }
+    pub fn reoptimize(&self, stream_type: &str, addr: SocketAddr) {
+        if let Some(connector) = self.connectors.get(stream_type) {
+            connector.reoptimize(addr);
+        }
+    }
+    pub fn session_stats(&self, stream_type: &str, addr: SocketAddr) -> Option<String> {
+        self.connectors.get(stream_type)?.session_stats(addr)
+    }
+    pub fn reports_session_stats(&self, stream_type: &str) -> bool {
+        self.connectors
+            .get(stream_type)
+            .is_some_and(|connector| connector.reports_session_stats())
     }
 }
 

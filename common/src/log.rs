@@ -41,8 +41,9 @@ where
 
     pub fn write(&self, record: &T) {
         let mut rotator = self.rotator.lock().unwrap();
-        rotator.writer().writer().write(record).unwrap();
-        rotator.incr_record_count();
+        if rotator.writer().write_or_warn(record) {
+            rotator.incr_record_count();
+        }
     }
 
     pub fn flush(&self) {
@@ -51,12 +52,41 @@ where
 }
 
 #[derive(Debug)]
-struct HdvLogWriter<T> {
-    writer: HdvTextWriter<std::fs::File, T>,
+struct HdvLogWriter<T, W = std::fs::File> {
+    writer: HdvTextWriter<W, T>,
+    warned: bool,
 }
-impl<T> HdvLogWriter<T> {
-    pub fn writer(&mut self) -> &mut HdvTextWriter<std::fs::File, T> {
-        &mut self.writer
+impl<T, W> HdvLogWriter<T, W>
+where
+    W: std::io::Write,
+{
+    fn write_or_warn(&mut self, record: &T) -> bool
+    where
+        T: HdvScheme + HdvSerialize,
+    {
+        match self.writer.write(record) {
+            Ok(()) => {
+                self.warned = false;
+                true
+            }
+            Err(e) => {
+                if !std::mem::replace(&mut self.warned, true) {
+                    tracing::warn!(?e, "Failed to write a log record");
+                }
+                false
+            }
+        }
+    }
+
+    fn flush_or_warn(&mut self)
+    where
+        T: HdvScheme + HdvSerialize,
+    {
+        if let Err(e) = self.writer.flush()
+            && !std::mem::replace(&mut self.warned, true)
+        {
+            tracing::warn!(?e, "Failed to flush the log file");
+        }
     }
 }
 impl<T> LogWriter for HdvLogWriter<T>
@@ -64,7 +94,7 @@ where
     T: HdvScheme + HdvSerialize,
 {
     fn flush(&mut self) {
-        self.writer.flush().unwrap();
+        self.flush_or_warn();
     }
 
     fn open(path: impl AsRef<Path>) -> Self {
@@ -78,7 +108,10 @@ where
             is_csv_header: true,
         };
         let writer = HdvTextWriter::new(file, options);
-        Self { writer }
+        Self {
+            writer,
+            warned: false,
+        }
     }
 
     fn file_extension() -> &'static str {
@@ -115,5 +148,38 @@ impl From<&Timing> for TimingHdv {
             start_ms,
             duration_ms,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[derive(Debug, HdvSerde)]
+    struct Record {
+        pub n: u64,
+    }
+    struct NoRoomLeft;
+    impl std::io::Write for NoRoomLeft {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("no space left on device"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("no space left on device"))
+        }
+    }
+    fn no_room_left() -> HdvLogWriter<Record, NoRoomLeft> {
+        let options = HdvTextWriterOptions {
+            is_csv_header: true,
+        };
+        HdvLogWriter {
+            writer: HdvTextWriter::new(NoRoomLeft, options),
+            warned: false,
+        }
+    }
+    #[test]
+    fn a_log_file_that_cannot_be_written_does_not_panic_the_caller() {
+        let mut writer = no_room_left();
+        assert!(!writer.write_or_warn(&Record { n: 1 }));
+        writer.flush_or_warn();
     }
 }
