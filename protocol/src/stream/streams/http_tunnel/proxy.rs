@@ -4,19 +4,20 @@ use crate::stream::{
     addr::ConcreteStreamType,
     streams::{
         http_tunnel::{
-            HttpAccessConnContext, HttpFailureReporter, ReturnType, TunnelError, host_and_port,
-            redacted_uri, respond_with_rejection,
+            HttpAccessConnContext, HttpFailureReporter, ReturnType, TunnelError, redacted_uri,
+            respond_with_rejection,
         },
         tcp::proxy_server::TCP_STREAM_TYPE,
     },
 };
+use super::authority::get_authority_from_req;
 use common::{
     addr::{InternetAddr, InternetAddrKind},
     log::Timing,
     proto::{
         addr::StreamAddr,
         client::stream::establish,
-        io_copy::{same_key_nonce_ciphertext, stream::DEAD_SESSION_RETENTION_DURATION},
+        io_copy::{DEAD_SESSION_RETENTION_DURATION, same_key_nonce_ciphertext},
         log::stream::{LOGGER, SimplifiedStreamLog, SimplifiedStreamProxyLog},
         metrics::stream::Session,
     },
@@ -24,7 +25,7 @@ use common::{
     udp::TIMEOUT,
 };
 use http_body_util::BodyExt;
-use hyper::{Request, body::Incoming, http::uri::Authority};
+use hyper::{Request, body::Incoming};
 use hyper_util::rt::TokioIo;
 use monitor_table::table::RowOwnedGuard;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -60,70 +61,6 @@ impl fmt::Display for HttpProxyLog {
         write!(f, ",uri:{}", self.uri)?;
         Ok(())
     }
-}
-
-const DEFAULT_PORT_HTTP: u16 = 80;
-const DEFAULT_PORT_HTTPS: u16 = 443;
-
-fn get_authority_from_req<T>(req: &Request<T>) -> Result<InternetAddr, TunnelError> {
-    let scheme = req.uri().scheme_str();
-
-    if let Some(authority) = req.uri().authority() {
-        return authority_to_internet_addr(authority, scheme);
-    }
-
-    let host = req
-        .headers()
-        .get(hyper::header::HOST)
-        .ok_or(TunnelError::HttpNoHost)?
-        .to_str()
-        .map_err(|_| TunnelError::HttpInvalidHost("non-ascii host header".into()))?;
-    let authority = Authority::try_from(host)
-        .map_err(|error| TunnelError::HttpInvalidHost(error.to_string()))?;
-
-    authority_to_internet_addr(&authority, scheme)
-}
-
-fn authority_has_explicit_port(authority: &Authority) -> bool {
-    let authority = host_and_port(authority);
-    if authority.starts_with('[') {
-        return authority
-            .find(']')
-            .is_some_and(|closing_bracket| closing_bracket + 1 < authority.len());
-    }
-    authority.contains(':')
-}
-
-fn authority_to_internet_addr(
-    authority: &Authority,
-    scheme: Option<&str>,
-) -> Result<InternetAddr, TunnelError> {
-    let host = authority.host();
-    let host = host
-        .strip_prefix('[')
-        .and_then(|host| host.strip_suffix(']'))
-        .unwrap_or(host);
-    let port = match authority.port_u16() {
-        Some(port) => port,
-        None if authority_has_explicit_port(authority) => {
-            return Err(TunnelError::HttpInvalidPort(
-                host_and_port(authority).to_owned(),
-            ));
-        }
-        None => match scheme {
-            Some("https") => DEFAULT_PORT_HTTPS,
-            Some("http") | None => DEFAULT_PORT_HTTP,
-            _ => return Err(TunnelError::HttpNoPort),
-        },
-    };
-    Ok(InternetAddr::from_host_and_port(host, port)?)
-}
-
-#[cfg(test)]
-pub(crate) fn get_authority_from_req_for_test<T>(
-    req: &Request<T>,
-) -> Result<InternetAddr, TunnelError> {
-    get_authority_from_req(req)
 }
 
 #[instrument(skip_all, fields(method = %req.method()))]

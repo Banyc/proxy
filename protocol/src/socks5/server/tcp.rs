@@ -1,5 +1,6 @@
-use std::{collections::HashMap, fmt, io, net::SocketAddr, num::NonZeroU8, sync::Arc};
+use std::{collections::HashMap, fmt, io, net::SocketAddr, sync::Arc};
 
+use super::auth::Users;
 use crate::stream::{
     addr::ConcreteStreamType,
     streams::tcp::proxy_server::{TCP_STREAM_TYPE, TcpServer},
@@ -30,13 +31,7 @@ use thiserror::Error;
 use tokio::io::AsyncReadExt;
 use tracing::{trace, warn};
 
-use crate::socks5::messages::{
-    Command, MethodIdentifier, NegotiationRequest, NegotiationResponse, RelayRequest,
-    RelayResponse, Reply,
-    sub_negotiations::{UsernamePasswordRequest, UsernamePasswordResponse, UsernamePasswordStatus},
-};
-
-const AUTH_FAILURE: NonZeroU8 = NonZeroU8::MIN;
+use crate::socks5::messages::{Command, RelayRequest, RelayResponse, Reply};
 
 pub struct Socks5TcpLog {
     pub io: IoCopyFinished,
@@ -152,7 +147,7 @@ pub struct Socks5ServerTcpAccessConnHandler {
     route_table: StreamRouteTable,
     speed_limiter: Limiter,
     udp_listen_addr: Option<InternetAddr>,
-    users: HashMap<Arc<[u8]>, Arc<[u8]>>,
+    users: Users,
     stream_context: StreamContext,
     listen_addr: Arc<str>,
 }
@@ -184,7 +179,7 @@ impl Socks5ServerTcpAccessConnHandler {
             route_table,
             speed_limiter: Limiter::new(speed_limit),
             udp_listen_addr,
-            users,
+            users: Users::new(users),
             stream_context,
             listen_addr,
         }
@@ -460,100 +455,11 @@ impl Socks5ServerTcpAccessConnHandler {
     where
         Stream: OwnIoStream + HasIoAddr + std::fmt::Debug,
     {
-        let mut stream = self.negotiate(stream).await?;
+        let mut stream = self.users.negotiate(stream).await?;
 
         let relay_request = RelayRequest::decode(&mut stream).await?;
 
         Ok((stream, relay_request))
-    }
-
-    async fn negotiate<Stream>(&self, mut stream: Stream) -> io::Result<Stream>
-    where
-        Stream: OwnIoStream + HasIoAddr + std::fmt::Debug,
-    {
-        let negotiation_request = NegotiationRequest::decode(&mut stream).await?;
-
-        // Username/password authentication
-        if !self.users.is_empty()
-            && negotiation_request
-                .methods
-                .contains(&MethodIdentifier::UsernamePassword)
-        {
-            let negotiation_response = NegotiationResponse {
-                method: Some(MethodIdentifier::UsernamePassword),
-            };
-            negotiation_response.encode(&mut stream).await?;
-
-            let stream = self.username_password(stream).await?;
-            return Ok(stream);
-        }
-
-        // No authentication
-        let allow_no_auth = self.users.is_empty();
-        if !allow_no_auth
-            || !negotiation_request
-                .methods
-                .contains(&MethodIdentifier::NoAuth)
-        {
-            let negotiation_response = NegotiationResponse { method: None };
-            negotiation_response.encode(&mut stream).await?;
-            return Err(io::Error::other("No auth method supported"));
-        }
-        let negotiation_response = NegotiationResponse {
-            method: Some(MethodIdentifier::NoAuth),
-        };
-        negotiation_response.encode(&mut stream).await?;
-
-        Ok(stream)
-    }
-
-    async fn username_password<Stream>(&self, mut stream: Stream) -> io::Result<Stream>
-    where
-        Stream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-    {
-        let request = UsernamePasswordRequest::decode(&mut stream).await?;
-        if let Err(e) = self.authenticate(&request) {
-            let response = UsernamePasswordResponse {
-                status: UsernamePasswordStatus::Failure(AUTH_FAILURE),
-            };
-            response.encode(&mut stream).await?;
-            return Err(e);
-        }
-        let response = UsernamePasswordResponse {
-            status: UsernamePasswordStatus::Success,
-        };
-        response.encode(&mut stream).await?;
-        Ok(stream)
-    }
-
-    fn authenticate(&self, request: &UsernamePasswordRequest) -> io::Result<()> {
-        let expected = self.users.get(request.username());
-        let filler = vec![0; request.password().len()];
-        let matches = Self::password_matches(
-            request.password(),
-            expected.map_or(filler.as_slice(), |password| password),
-        );
-        if expected.is_none() {
-            return Err(io::Error::other(format!(
-                "Username not found: {}",
-                String::from_utf8_lossy(request.username())
-            )));
-        }
-        if !matches {
-            return Err(Self::password_incorrect_error(request));
-        }
-        Ok(())
-    }
-
-    fn password_matches(offered: &[u8], expected: &[u8]) -> bool {
-        constant_time_eq::constant_time_eq(offered, expected)
-    }
-
-    fn password_incorrect_error(request: &UsernamePasswordRequest) -> io::Error {
-        io::Error::other(format!(
-            "Password incorrect: {{ username: {} }}",
-            String::from_utf8_lossy(request.username())
-        ))
     }
 
     async fn establish_proxy_chain(
@@ -657,111 +563,4 @@ pub enum EstablishError {
     CmdBindNotSupported,
     #[error("No UDP server available")]
     NoUdpServerAvailable,
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::socks5::messages::sub_negotiations::USERNAME_PASSWORD_VERSION;
-    use crate::stream::connect::build_concrete_stream_connector_table;
-    use ae::anti_replay::ReplayValidator;
-    use common::{
-        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
-        connect::{ConnectorConfig, ConnectorReset},
-        notify::Notify,
-        route::RouteTable,
-        stream::pool::StreamConnPool,
-    };
-    use swap::Swap;
-    use tokio::io::AsyncWriteExt;
-
-    fn handler(users: &[(&[u8], &[u8])]) -> Socks5ServerTcpAccessConnHandler {
-        let stream_context = StreamContext {
-            session_table: None,
-            pool: Swap::new(StreamConnPool::empty()),
-            connector_table: Arc::new(build_concrete_stream_connector_table(
-                ConnectorConfig {
-                    bind: common::addr::BothVerIp { v4: None, v6: None },
-                },
-                ConnectorReset(Notify::new()),
-            )),
-            replay_validator: Arc::new(ReplayValidator::new(
-                VALIDATOR_TIME_FRAME,
-                VALIDATOR_CAPACITY,
-            )),
-        };
-        Socks5ServerTcpAccessConnHandler::new(
-            RouteTable::new(vec![], Arc::new(HashMap::new())),
-            f64::INFINITY,
-            None,
-            users
-                .iter()
-                .map(|(u, p)| ((*u).into(), (*p).into()))
-                .collect(),
-            stream_context,
-            "127.0.0.1:0".into(),
-        )
-    }
-
-    async fn login(
-        handler: &Socks5ServerTcpAccessConnHandler,
-        username: &[u8],
-        password: &[u8],
-    ) -> Vec<u8> {
-        let (server, mut client) = tokio::io::duplex(1024);
-        let request = UsernamePasswordRequest::new(username, password).unwrap();
-        request.encode(&mut client).await.unwrap();
-        let _ = handler.username_password(server).await;
-        client.shutdown().await.unwrap();
-        let mut reply = Vec::new();
-        client.read_to_end(&mut reply).await.unwrap();
-        reply
-    }
-
-    #[tokio::test]
-    async fn a_rejected_login_never_says_whether_the_username_exists() {
-        let handler = handler(&[(b"alice", b"hunter2")]);
-        let no_such_user = login(&handler, b"bob", b"hunter2").await;
-        let wrong_password = login(&handler, b"alice", b"hunter3").await;
-        assert_eq!(
-            no_such_user, wrong_password,
-            "the reply tells the two failures apart"
-        );
-        let ok = login(&handler, b"alice", b"hunter2").await;
-        assert_ne!(ok, no_such_user);
-        assert_eq!(
-            ok,
-            vec![
-                USERNAME_PASSWORD_VERSION,
-                UsernamePasswordStatus::Success.into()
-            ]
-        );
-    }
-
-    #[test]
-    fn only_the_exact_password_matches() {
-        let matches = Socks5ServerTcpAccessConnHandler::password_matches;
-        assert!(matches(b"hunter2", b"hunter2"));
-        assert!(!matches(b"hunter3", b"hunter2"));
-        assert!(!matches(b"Hunter2", b"hunter2"));
-        assert!(!matches(b"hunter", b"hunter2"));
-        assert!(!matches(b"hunter22", b"hunter2"));
-        assert!(!matches(b"", b"hunter2"));
-        assert!(matches(b"", b""));
-    }
-
-    #[test]
-    fn a_rejected_login_never_logs_the_password() {
-        let request = UsernamePasswordRequest::new(b"alice", b"hunter2").unwrap();
-        let err = Socks5ServerTcpAccessConnHandler::password_incorrect_error(&request);
-        for rendered in [format!("{err}"), format!("{err:?}")] {
-            assert!(
-                !rendered.contains("hunter2"),
-                "the password reached the log: {rendered}"
-            );
-            assert!(
-                rendered.contains("alice"),
-                "the username is what makes the log useful: {rendered}"
-            );
-        }
-    }
 }

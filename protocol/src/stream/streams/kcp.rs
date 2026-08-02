@@ -14,9 +14,7 @@ use tokio::{
     net::{ToSocketAddrs, UdpSocket},
 };
 use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
-use tracing::{info, instrument, trace};
-
-use crate::stream::streams::accept_error::{AcceptErrorBackoff, accept_after_retry};
+use tracing::instrument;
 
 use common::{
     addr::any_addr,
@@ -77,63 +75,44 @@ where
 {
     #[instrument(skip_all)]
     async fn serve_(
-        mut self,
-        mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
+        self,
+        set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
     ) -> Result<(), ServeError> {
         let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
-        info!(?addr, "Listening");
-        let mut conn_handler = Arc::new(self.conn_handler);
-        let mut accept_backoff = AcceptErrorBackoff::default();
-        loop {
-            trace!("Waiting for connection");
-            tokio::select! {
-                res = accept_after_retry(accept_backoff.retry_delay(), || self.listener.accept()) => {
-                    let (stream, peer_addr) = match res {
-                        Ok(res) => {
-                            accept_backoff.accepted("kcp", addr);
-                            res
-                        }
-                        Err(e) => {
-                            accept_backoff.failed("kcp", addr, e.into()).map_err(|e| ServeError::Accept { source: e, addr })?;
-                            continue;
-                        }
-                    };
-                    let stream = AddressedKcpStream {
-                        stream,
-                        local_addr: addr,
-                        peer_addr,
-                    };
-                    counter!("stream.kcp.accepts").increment(1);
-                    // Arc conn_handler
-                    let conn_handler = Arc::clone(&conn_handler);
-                    tokio::spawn(async move {
-                        conn_handler.handle_stream(stream).await;
-                    });
+        let listener = Arc::new(tokio::sync::Mutex::new(self.listener));
+        let accept_listener = Arc::clone(&listener);
+        let mut state = ();
+        common::serve_loop::serve_loop(
+            "kcp",
+            Some("stream.kcp.accepts"),
+            false,
+            addr,
+            Arc::new(self.conn_handler),
+            set_conn_handler_rx,
+            |_| {},
+            || {
+                let accept_listener = Arc::clone(&accept_listener);
+                async move {
+                    accept_listener.lock().await.accept().await.map_err(Into::into)
                 }
-                res = set_conn_handler_rx.0.recv() => {
-                    let new_conn_handler = match res {
-                        Some(new_conn_handler) => new_conn_handler,
-                        None => break,
-                    };
-                    info!(?addr, "Connection handler set");
-                    conn_handler = Arc::new(new_conn_handler);
-                }
-            }
-        }
-        Ok(())
+            },
+            |_, (stream, peer_addr): (KcpStream, SocketAddr), conn_handler: Arc<ConnHandler>| {
+                let stream = AddressedKcpStream {
+                    stream,
+                    local_addr: addr,
+                    peer_addr,
+                };
+                tokio::spawn(async move {
+                    conn_handler.handle_stream(stream).await;
+                });
+            },
+            &mut state,
+            |_| std::future::pending::<()>(),
+        )
+        .await
     }
 }
-#[derive(Debug, Error)]
-pub enum ServeError {
-    #[error("Failed to get local address: {0}")]
-    LocalAddr(#[source] io::Error),
-    #[error("Failed to accept connection: {source}, {addr}")]
-    Accept {
-        #[source]
-        source: io::Error,
-        addr: SocketAddr,
-    },
-}
+pub use common::serve_loop::ServeError;
 
 #[derive(Debug, Clone)]
 pub struct KcpConnector {

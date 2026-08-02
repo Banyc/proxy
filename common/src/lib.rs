@@ -26,7 +26,7 @@ pub mod metrics;
 pub mod notify;
 pub mod proto;
 pub mod route;
-pub mod sampling;
+pub mod serve_loop;
 pub mod stream;
 pub mod suspend;
 pub mod ttl_cell;

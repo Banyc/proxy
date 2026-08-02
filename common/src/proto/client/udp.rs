@@ -20,7 +20,7 @@ use crate::{
         route::UdpConnChain,
     },
     route::{BuildTracer, TraceRtt, convert_proxies_to_header_crypto_pairs},
-    ttl_cell::TtlCell,
+    ttl_cell::RegeneratingHeader,
     udp::PACKET_BUFFER_LENGTH,
 };
 use ae::anti_replay::{TimeValidator, ValidatorRef};
@@ -161,8 +161,7 @@ pub enum EstablishError {
 
 pub struct UdpProxyClientWriteHalf {
     upstream: Arc<UdpSocket>,
-    request_header: Option<Box<dyn Fn() -> Arc<[u8]> + Send>>,
-    request_header_ttl: TtlCell<Arc<[u8]>>,
+    request_header: Option<RegeneratingHeader>,
     write_buf: Vec<u8>,
 }
 impl core::fmt::Debug for UdpProxyClientWriteHalf {
@@ -185,9 +184,8 @@ impl UdpProxyClientWriteHalf {
     ) -> Self {
         Self {
             upstream,
-            request_header,
+            request_header: request_header.map(|f| RegeneratingHeader::new(f, VALIDATOR_UDP_HDR_TTL)),
             write_buf: vec![],
-            request_header_ttl: TtlCell::new(None, VALIDATOR_UDP_HDR_TTL),
         }
     }
 
@@ -195,11 +193,8 @@ impl UdpProxyClientWriteHalf {
     pub async fn send(&mut self, buf: &[u8]) -> Result<usize, SendError> {
         self.write_buf.clear();
 
-        if let Some(request_header) = &self.request_header {
-            let hdr = match self.request_header_ttl.get() {
-                Some(hdr) => hdr,
-                None => self.request_header_ttl.set(request_header()),
-            };
+        if let Some(request_header) = &mut self.request_header {
+            let hdr = request_header.get();
             // Write header
             self.write_buf.write_all(hdr).unwrap();
         }

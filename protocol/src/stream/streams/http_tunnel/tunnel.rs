@@ -4,7 +4,7 @@ use crate::stream::{
     addr::ConcreteStreamType,
     streams::{
         http_tunnel::{
-            HttpAccessConnContext, HttpFailureReporter, HttpRequestFailure, ReturnType,
+            HttpAccessConnContext, HttpFailureReporter, ReturnType,
             TunnelError, full, host_and_port, redacted_uri, respond_with_rejection,
         },
         tcp::proxy_server::TCP_STREAM_TYPE,
@@ -103,9 +103,7 @@ async fn dispatch(
                 stream_context: ctx.stream_context.clone(),
                 listen_addr: Arc::clone(&ctx.listen_addr),
                 dst_addr: dst_addr.clone(),
-                failure: reporter.failure.clone(),
                 downstream: reporter.downstream.clone(),
-                listener: Arc::clone(&reporter.listener),
                 method: method.clone(),
                 uri: uri.clone(),
             };
@@ -122,30 +120,14 @@ async fn dispatch(
                 listen_addr: Arc::clone(&ctx.listen_addr),
                 connector_table: ctx.stream_context.connector_table.clone(),
                 dst_addr: dst_addr.clone(),
-                failure: reporter.failure.clone(),
                 downstream: reporter.downstream.clone(),
-                listener: Arc::clone(&reporter.listener),
                 method: method.clone(),
                 uri: uri.clone(),
             };
             UpgradeAction::Direct(direct_ctx)
         }
     };
-    let (reporter_failure, reporter_downstream, reporter_listener, reporter_dst_addr) =
-        match &action {
-            UpgradeAction::Proxy(ctx) => (
-                ctx.failure.clone(),
-                ctx.downstream.clone(),
-                Arc::clone(&ctx.listener),
-                dst_addr.clone(),
-            ),
-            UpgradeAction::Direct(ctx) => (
-                ctx.failure.clone(),
-                ctx.downstream.clone(),
-                Arc::clone(&ctx.listener),
-                dst_addr.clone(),
-            ),
-        };
+    let reporter_dst_addr = dst_addr.clone();
     tokio::task::spawn(async move {
         if let Err(failure) = upgrade(req, action).await {
             let tunnel_err: TunnelError = match failure {
@@ -156,11 +138,6 @@ async fn dispatch(
                 ConnectFailure::EstablishProxyChain(e) => {
                     TunnelError::EstablishProxyChain(Box::new(e))
                 }
-            };
-            let reporter = HttpFailureReporter {
-                failure: reporter_failure,
-                downstream: reporter_downstream,
-                listener: reporter_listener,
             };
             reporter.report(&tunnel_err, Some(&reporter_dst_addr.to_string()));
         }
@@ -201,9 +178,7 @@ struct DirectContext {
     pub listen_addr: Arc<str>,
     pub connector_table: Arc<StreamConnectorTable>,
     pub dst_addr: InternetAddr,
-    pub failure: Arc<HttpRequestFailure>,
     pub downstream: super::HttpDownstreamContext,
-    pub listener: Arc<str>,
     pub method: String,
     pub uri: String,
 }
@@ -261,9 +236,7 @@ struct ProxyContext {
     pub stream_context: StreamContext,
     pub listen_addr: Arc<str>,
     pub dst_addr: InternetAddr,
-    pub failure: Arc<HttpRequestFailure>,
     pub downstream: super::HttpDownstreamContext,
-    pub listener: Arc<str>,
     pub method: String,
     pub uri: String,
 }

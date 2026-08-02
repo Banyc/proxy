@@ -7,7 +7,7 @@ use std::{
 
 use thiserror::Error;
 use tokio::net::UdpSocket;
-use tracing::{info, instrument, trace, warn};
+use tracing::instrument;
 use udp_listener::{Conn, UtpListener};
 
 use crate::{
@@ -58,7 +58,7 @@ where
     #[instrument(skip_all)]
     async fn serve_(
         self,
-        mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
+        set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
     ) -> Result<(), ServeError> {
         let conn_handler = Arc::new(RwLock::new(Arc::new(self.conn_handler)));
         let dispatch = {
@@ -81,39 +81,35 @@ where
         let dispatcher_buffer_size = NonZeroUsize::new(64).unwrap();
         let downstream_listener =
             UtpListener::new(self.listener, dispatcher_buffer_size, Arc::new(dispatch));
-        info!(?addr, "Listening");
-        let mut warned = false;
-        loop {
-            trace!("Waiting for packet");
-            tokio::select! {
-                res = downstream_listener.accept() => {
-                    let flow = match res {
-                        Ok(x) => x,
-                        Err(e) => {
-                            if !warned {
-                                warn!(?e, ?addr, "Failed to receive packet");
-                            }
-                            warned = true;
-                            continue;
-                        }
-                    };
-                    warned = false;
-                    let conn_handler = Arc::clone(&conn_handler.read().unwrap());
-                    tokio::spawn(async move {
-                        conn_handler.handle_flow(flow).await;
-                    });
-                }
-                res = set_conn_handler_rx.0.recv() => {
-                    let new_hook = match res {
-                        Some(new_hook) => new_hook,
-                        None => break,
-                    };
-                    info!(?addr, "Connection handler set");
-                    *conn_handler.write().unwrap() = Arc::new(new_hook);
-                }
+        let initial = Arc::clone(&conn_handler.read().unwrap());
+        let swap = |new: Arc<ConnHandler>| {
+            *conn_handler.write().unwrap() = new;
+        };
+        let mut state = ();
+        crate::serve_loop::serve_loop(
+            "udp",
+            None,
+            false,
+            addr,
+            initial,
+            set_conn_handler_rx,
+            swap,
+            || downstream_listener.accept(),
+            |_, flow: Conn<UdpSocket, Flow, Packet>, current: Arc<ConnHandler>| {
+                tokio::spawn(async move {
+                    current.handle_flow(flow).await;
+                });
+            },
+            &mut state,
+            |_| std::future::pending::<()>(),
+        )
+        .await
+        .map_err(|e| match e {
+            crate::serve_loop::ServeError::LocalAddr(e) => ServeError::LocalAddr(e),
+            crate::serve_loop::ServeError::Accept { source, addr } => {
+                ServeError::RecvFrom { source, addr }
             }
-        }
-        Ok(())
+        })
     }
 }
 #[derive(Debug, Error)]

@@ -10,12 +10,10 @@ use mux::{MuxError, spawn_mux_no_reconnection};
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::{
-    net::{TcpListener, TcpSocket, ToSocketAddrs},
+    net::{TcpListener, TcpSocket, TcpStream, ToSocketAddrs},
     task::JoinSet,
 };
-use tracing::{info, instrument, trace, warn};
-
-use crate::stream::streams::accept_error::{AcceptErrorBackoff, accept_after_retry};
+use tracing::{instrument, warn};
 
 use common::{
     addr::any_addr,
@@ -41,6 +39,11 @@ use crate::stream::streams::mux::{run_mux_accepter, server_mux_config};
 use super::mux::{
     ConnectRequestTx, IoMuxStream, SocketAddrPair, connect_request_channel, run_mux_connector,
 };
+
+struct MuxState {
+    mux: Arc<tokio::sync::Mutex<JoinSet<MuxError>>>,
+    accepting: Arc<tokio::sync::Mutex<JoinSet<()>>>,
+}
 
 #[derive(Debug)]
 pub struct TcpMuxServer<ConnHandler> {
@@ -79,77 +82,74 @@ where
 {
     #[instrument(skip_all)]
     async fn serve_(
-        mut self,
-        mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
+        self,
+        set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
     ) -> Result<(), ServeError> {
         let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
-        info!(?addr, "Listening");
-        let mut conn_handler = Arc::new(self.conn_handler);
-        let mut accepting = JoinSet::new();
-        let mut accept_backoff = AcceptErrorBackoff::default();
-        loop {
-            trace!("Waiting for connection");
-            tokio::select! {
-                Some(res) = self.mux.join_next() => {
-                    let e = res.unwrap();
-                    warn!(?e, ?addr, "MUX error");
-                }
-                Some(_) = accepting.join_next() => {}
-                res = accept_after_retry(accept_backoff.retry_delay(), || self.listener.accept()) => {
-                    let (stream, _) = match res {
-                        Ok(res) => {
-                            accept_backoff.accepted("tcp_mux", addr);
-                            res
-                        }
-                        Err(e) => {
-                            accept_backoff.failed("tcp_mux", addr, e).map_err(|e| ServeError::Accept { source: e, addr })?;
-                            continue;
-                        }
-                    };
-                    counter!("stream.tcp_mux.tcp.accepts").increment(1);
-                    let addr = match socket_addr_pair(&stream) {
-                        Ok(addr) => addr,
-                        Err(_) => {
-                            continue;
-                        }
-                    };
-                    let (r, w) = stream.into_split();
-                    let (_, accepter) = spawn_mux_no_reconnection(r, w, server_mux_config(), &mut self.mux);
-                    let conn_handler = Arc::clone(&conn_handler);
-                    accepting.spawn(async move {
+        let mux = Arc::new(tokio::sync::Mutex::new(self.mux));
+        let accepting = Arc::new(tokio::sync::Mutex::new(JoinSet::new()));
+        let mut state = MuxState { mux, accepting };
+        let listener = &self.listener;
+        common::serve_loop::serve_loop(
+            "tcp_mux",
+            Some("stream.tcp_mux.tcp.accepts"),
+            false,
+            addr,
+            Arc::new(self.conn_handler),
+            set_conn_handler_rx,
+            |_| {},
+            || listener.accept(),
+            |state: &mut MuxState,
+             (stream, _): (TcpStream, SocketAddr),
+             conn_handler: Arc<ConnHandler>| {
+                let addr = match socket_addr_pair(&stream) {
+                    Ok(addr) => addr,
+                    Err(_) => return,
+                };
+                let (r, w) = stream.into_split();
+                let (_, accepter) = spawn_mux_no_reconnection(
+                    r,
+                    w,
+                    server_mux_config(),
+                    &mut *state.mux.try_lock().expect("mux spawner lock"),
+                );
+                state
+                    .accepting
+                    .try_lock()
+                    .expect("accepting spawner lock")
+                    .spawn(async move {
                         run_mux_accepter(accepter, addr, |stream| {
                             counter!("stream.tcp_mux.mux.accepts").increment(1);
                             let conn_handler = Arc::clone(&conn_handler);
                             tokio::spawn(async move {
                                 conn_handler.handle_stream(stream).await;
                             });
-                        }).await;
+                        })
+                        .await;
                     });
+            },
+            &mut state,
+            |state: &mut MuxState| {
+                let mux = Arc::clone(&state.mux);
+                let accepting = Arc::clone(&state.accepting);
+                async move {
+                    let mut mux_guard = mux.lock().await;
+                    let mut accepting_guard = accepting.lock().await;
+                    tokio::select! {
+                        Some(res) = mux_guard.join_next() => {
+                            let e = res.unwrap();
+                            warn!(?e, ?addr, "MUX error");
+                        }
+                        Some(_) = accepting_guard.join_next() => {}
+                        _ = std::future::pending::<()>() => {}
+                    }
                 }
-                res = set_conn_handler_rx.0.recv() => {
-                    let new_conn_handler = match res {
-                        Some(new_conn_handler) => new_conn_handler,
-                        None => break,
-                    };
-                    info!(?addr, "Connection handler set");
-                    conn_handler = Arc::new(new_conn_handler);
-                }
-            }
-        }
-        Ok(())
+            },
+        )
+        .await
     }
 }
-#[derive(Debug, Error)]
-pub enum ServeError {
-    #[error("Failed to get local address: {0}")]
-    LocalAddr(#[source] io::Error),
-    #[error("Failed to accept connection: {source}, {addr}")]
-    Accept {
-        #[source]
-        source: io::Error,
-        addr: SocketAddr,
-    },
-}
+pub use common::serve_loop::ServeError;
 
 fn socket_addr_pair(stream: &tokio::net::TcpStream) -> io::Result<SocketAddrPair> {
     Ok(SocketAddrPair {

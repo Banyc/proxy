@@ -1,9 +1,13 @@
+mod chain_selection;
 mod conn;
 mod conn_chain;
 mod conn_selector;
+mod prober;
+mod recycle;
 mod route_table;
-mod score;
+mod rtt_stats;
 pub use conn::*;
 pub use conn_chain::*;
 pub use conn_selector::*;
+pub use prober::{DisplayChain, TraceRtt};
 pub use route_table::*;

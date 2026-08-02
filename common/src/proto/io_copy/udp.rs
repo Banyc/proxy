@@ -29,16 +29,18 @@ use crate::{
     log::Timing,
     proto::{
         conn::udp::Flow,
-        io_copy::{nonce_ciphertext_reader, nonce_ciphertext_writer, noop_context, unwrap_ready},
+        io_copy::{
+            EncryptionDirection, nonce_ciphertext_reader, nonce_ciphertext_writer, noop_context,
+            retain_dead_session, unwrap_ready,
+        },
         log::udp::{FlowLog, LOGGER, TrafficLog},
         metrics::udp::{Session, UdpSessionTable},
     },
-    ttl_cell::TtlCell,
+    ttl_cell::RegeneratingHeader,
     udp::{PACKET_BUFFER_LENGTH, Packet, TIMEOUT},
 };
 
 const ACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
-const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
 
 pub trait UdpRecv {
     fn trait_recv(
@@ -162,10 +164,7 @@ where
                 session.inspect_mut(|session| {
                     session.end = Some(SystemTime::now());
                 });
-                tokio::spawn(async move {
-                    let _session = session;
-                    tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
-                });
+                retain_dead_session(session);
 
                 res
             }
@@ -300,7 +299,7 @@ where
         let mut downlink_buf = [0; PACKET_BUFFER_LENGTH];
         let mut downlink_protocol_buf = vec![];
         let mut response_header_ttl =
-            TtlCell::new(response_header.as_ref().map(|f| f()), VALIDATOR_UDP_HDR_TTL);
+            response_header.map(|f| RegeneratingHeader::new(f, VALIDATOR_UDP_HDR_TTL));
         async move {
             loop {
                 let res = upstream.read.trait_recv(&mut downlink_buf).await;
@@ -337,11 +336,8 @@ where
                 };
 
                 let downlink_n =
-                    if let Some(response_header) = &response_header {
-                        let hdr = match response_header_ttl.get() {
-                            Some(hdr) => hdr,
-                            None => response_header_ttl.set(response_header()),
-                        };
+                    if let Some(response_header) = &mut response_header_ttl {
+                        let hdr = response_header.get();
                         downlink_protocol_buf.clear();
                         downlink_protocol_buf.extend_from_slice(hdr);
                         downlink_protocol_buf.extend_from_slice(pkt);
@@ -446,20 +442,6 @@ impl UdpSend for Arc<UdpSocket> {
 impl UdpRecv for Arc<UdpSocket> {
     async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
         UdpSocket::recv(self, buf).await.map_err(|e| e.into())
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum EncryptionDirection {
-    Encrypt,
-    Decrypt,
-}
-impl EncryptionDirection {
-    pub fn flip(&self) -> Self {
-        match self {
-            Self::Encrypt => Self::Decrypt,
-            Self::Decrypt => Self::Encrypt,
-        }
     }
 }
 

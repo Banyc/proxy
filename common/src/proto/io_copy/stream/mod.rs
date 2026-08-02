@@ -1,7 +1,7 @@
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
-    time::{Duration, Instant, SystemTime},
+    time::{Instant, SystemTime},
 };
 
 use async_speed_limit::Limiter;
@@ -18,15 +18,13 @@ use crate::{
     log::Timing,
     proto::{
         addr::StreamAddr,
-        io_copy::same_key_nonce_ciphertext,
+        io_copy::{EncryptionDirection, retain_dead_session, same_key_nonce_ciphertext},
         log::stream::{LOGGER, StreamLog, StreamProxyLog},
         metrics::stream::{Session, StreamSessionTable},
     },
 };
 
 pub mod tokio_io;
-
-pub const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
 
 pub struct CopyBidirectional<Downstream, Upstream> {
     pub downstream: Downstream,
@@ -112,10 +110,7 @@ where
                 session.inspect_mut(|session| {
                     session.end = Some(SystemTime::now());
                 });
-                tokio::spawn(async move {
-                    let _session = session;
-                    tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
-                });
+                retain_dead_session(session);
                 res
             }
             None => {
@@ -175,13 +170,7 @@ fn log(log: StreamLog, destination: Option<StreamAddr>) {
     }
 }
 
-pub enum EncryptionDirection {
-    Encrypt,
-    Decrypt,
-}
-
-pub async fn copy_bidirectional_with_payload_crypto<Downstream, Upstream>(
-    downstream: Downstream,
+pub async fn copy_bidirectional_with_payload_crypto<Downstream, Upstream>(    downstream: Downstream,
     upstream: Upstream,
     payload_crypto: Option<&tokio_chacha20::config::Config>,
     speed_limiter: Limiter,

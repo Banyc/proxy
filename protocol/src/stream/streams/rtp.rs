@@ -13,9 +13,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::ToSocketAddrs,
 };
-use tracing::{info, instrument, trace};
-
-use crate::stream::streams::accept_error::AcceptErrorBackoff;
+use tracing::instrument;
 
 use common::{
     addr::any_addr,
@@ -79,67 +77,39 @@ where
     #[instrument(skip_all)]
     async fn serve_(
         self,
-        mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
+        set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
     ) -> Result<(), ServeError> {
         let addr = self.listener.local_addr();
-        info!(?addr, "Listening");
-        // Arc conn_handler
-        let mut conn_handler = Arc::new(self.conn_handler);
-        let mut accept_backoff = AcceptErrorBackoff::default();
-        loop {
-            trace!("Waiting for connection");
-            tokio::select! {
-                res = self.listener.accept_without_handshake(self.fec) => {
-                    let stream = match res {
-                        Ok(res) => {
-                            accept_backoff.accepted("rtp", addr);
-                            res
-                        }
-                        Err(e) => {
-                            match accept_backoff.failed_dispatching("rtp", addr, e) {
-                                Ok(()) => {
-                                    tokio::task::yield_now().await;
-                                    continue;
-                                }
-                                Err(fatal) => return Err(ServeError::Accept { source: fatal, addr }),
-                            }
-                        }
-                    };
-                    let stream = AddressedRtpStream {
-                        read: stream.read.into_async_read(),
-                        write: stream.write.into_async_write(),
-                        local_addr: self.listener.local_addr(),
-                        peer_addr: stream.peer_addr,
-                    };
-                    counter!("stream.rtp.accepts").increment(1);
-                    // Arc conn_handler
-                    let conn_handler = Arc::clone(&conn_handler);
-                    tokio::spawn(async move {
-                        conn_handler.handle_stream(stream).await;
-                    });
-                }
-                res = set_conn_handler_rx.0.recv() => {
-                    let new_conn_handler = match res {
-                        Some(new_conn_handler) => new_conn_handler,
-                        None => break,
-                    };
-                    info!(?addr, "Connection handler set");
-                    conn_handler = Arc::new(new_conn_handler);
-                }
-            }
-        }
-        Ok(())
+        let listener = &self.listener;
+        let fec = self.fec;
+        let mut state = ();
+        common::serve_loop::serve_loop(
+            "rtp",
+            Some("stream.rtp.accepts"),
+            true,
+            addr,
+            Arc::new(self.conn_handler),
+            set_conn_handler_rx,
+            |_| {},
+            || listener.accept_without_handshake(fec),
+            |_, stream: rtp::udp::Accepted, conn_handler: Arc<ConnHandler>| {
+                let stream = AddressedRtpStream {
+                    read: stream.read.into_async_read(),
+                    write: stream.write.into_async_write(),
+                    local_addr: listener.local_addr(),
+                    peer_addr: stream.peer_addr,
+                };
+                tokio::spawn(async move {
+                    conn_handler.handle_stream(stream).await;
+                });
+            },
+            &mut state,
+            |_| std::future::pending::<()>(),
+        )
+        .await
     }
 }
-#[derive(Debug, Error)]
-pub enum ServeError {
-    #[error("Failed to accept connection: {source}, {addr}")]
-    Accept {
-        #[source]
-        source: io::Error,
-        addr: SocketAddr,
-    },
-}
+pub use common::serve_loop::ServeError;
 
 #[derive(Debug, Clone)]
 pub struct RtpConnector {

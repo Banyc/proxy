@@ -9,9 +9,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::ToSocketAddrs,
 };
-use tracing::{info, instrument, trace};
-
-use crate::stream::streams::accept_error::{AcceptErrorBackoff, accept_after_retry};
+use tracing::instrument;
 
 use common::{
     error::AnyResult,
@@ -72,8 +70,8 @@ where
 {
     #[instrument(skip_all)]
     async fn serve_(
-        mut self,
-        mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
+        self,
+        set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
     ) -> Result<(), ServeError> {
         let addr = self
             .listener
@@ -81,54 +79,33 @@ where
             .next()
             .unwrap()
             .map_err(ServeError::LocalAddr)?;
-        info!(?addr, "Listening");
-        let mut conn_handler = Arc::new(self.conn_handler);
-        let mut accept_backoff = AcceptErrorBackoff::default();
-        loop {
-            trace!("Waiting for connection");
-            tokio::select! {
-                res = accept_after_retry(accept_backoff.retry_delay(), || self.listener.accept()) => {
-                    let stream = match res {
-                        Ok(res) => {
-                            accept_backoff.accepted("mptcp", addr);
-                            res
-                        }
-                        Err(e) => {
-                            accept_backoff.failed("mptcp", addr, e).map_err(|e| ServeError::Accept { source: e, addr })?;
-                            continue;
-                        }
-                    };
-                    counter!("stream.mptcp.accepts").increment(1);
-                    // Arc conn_handler
-                    let conn_handler = Arc::clone(&conn_handler);
-                    tokio::spawn(async move {
-                        conn_handler.handle_stream(IoMptcpStream(stream)).await;
-                    });
-                }
-                res = set_conn_handler_rx.0.recv() => {
-                    let new_conn_handler = match res {
-                        Some(new_conn_handler) => new_conn_handler,
-                        None => break,
-                    };
-                    info!(?addr, "Connection handler set");
-                    conn_handler = Arc::new(new_conn_handler);
-                }
-            }
-        }
-        Ok(())
+        let listener = Arc::new(tokio::sync::Mutex::new(self.listener));
+        let accept_listener = Arc::clone(&listener);
+        let mut state = ();
+        common::serve_loop::serve_loop(
+            "mptcp",
+            Some("stream.mptcp.accepts"),
+            false,
+            addr,
+            Arc::new(self.conn_handler),
+            set_conn_handler_rx,
+            |_| {},
+            || {
+                let accept_listener = Arc::clone(&accept_listener);
+                async move { accept_listener.lock().await.accept().await }
+            },
+            |_, stream: MptcpStream, conn_handler: Arc<ConnHandler>| {
+                tokio::spawn(async move {
+                    conn_handler.handle_stream(IoMptcpStream(stream)).await;
+                });
+            },
+            &mut state,
+            |_| std::future::pending::<()>(),
+        )
+        .await
     }
 }
-#[derive(Debug, Error)]
-pub enum ServeError {
-    #[error("Failed to get local address: {0}")]
-    LocalAddr(#[source] io::Error),
-    #[error("Failed to accept connection: {source}, {addr}")]
-    Accept {
-        #[source]
-        source: io::Error,
-        addr: SocketAddr,
-    },
-}
+pub use common::serve_loop::ServeError;
 
 #[derive(Debug, Clone, Copy)]
 pub struct MptcpConnector;

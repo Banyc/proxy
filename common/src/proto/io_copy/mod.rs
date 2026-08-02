@@ -1,5 +1,9 @@
-use std::task::{Context, Poll, Waker};
+use std::{
+    task::{Context, Poll, Waker},
+    time::Duration,
+};
 
+use monitor_table::table::RowOwnedGuard;
 use tokio_chacha20::{
     KEY_BYTES, X_NONCE_BYTES,
     stream::{
@@ -10,6 +14,29 @@ use tokio_chacha20::{
 
 pub mod stream;
 pub mod udp;
+
+pub const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
+
+pub fn retain_dead_session<Session: Send + Sync + 'static>(session: RowOwnedGuard<Session>) {
+    tokio::spawn(async move {
+        let _session = session;
+        tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
+    });
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum EncryptionDirection {
+    Encrypt,
+    Decrypt,
+}
+impl EncryptionDirection {
+    pub fn flip(&self) -> Self {
+        match self {
+            Self::Encrypt => Self::Decrypt,
+            Self::Decrypt => Self::Encrypt,
+        }
+    }
+}
 
 pub fn same_key_nonce_ciphertext<R, W>(
     key: &[u8; KEY_BYTES],

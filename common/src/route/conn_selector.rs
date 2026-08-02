@@ -16,7 +16,7 @@ use crate::ttl_cell::TtlCell;
 use super::{
     ConnConfig, GaugedConnChain, IntoAddr, TRACE_INTERVAL, TraceRtt, WeightedConnChain,
     WeightedConnChainBuildError, WeightedConnChainBuilder,
-    score::{EligibilityGate, ScoredChain, chain_score, pick_weighted},
+    chain_selection::{EligibilityGate, ScoredChain, chain_score, pick_weighted},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

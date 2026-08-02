@@ -13,9 +13,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpSocket, TcpStream, ToSocketAddrs},
 };
-use tracing::{info, instrument, trace};
-
-use crate::stream::streams::accept_error::{AcceptErrorBackoff, accept_after_retry};
+use tracing::instrument;
 
 use common::{
     addr::any_addr,
@@ -79,57 +77,32 @@ where
     #[instrument(skip_all)]
     async fn serve_(
         self,
-        mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
+        set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
     ) -> Result<(), ServeError> {
         let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
-        info!(?addr, "Listening");
-        let mut conn_handler = Arc::new(self.conn_handler);
-        let mut accept_backoff = AcceptErrorBackoff::default();
-        loop {
-            trace!("Waiting for connection");
-            tokio::select! {
-                res = accept_after_retry(accept_backoff.retry_delay(), || self.listener.accept()) => {
-                    let (stream, _) = match res {
-                        Ok(res) => {
-                            accept_backoff.accepted("tcp", addr);
-                            res
-                        }
-                        Err(e) => {
-                            accept_backoff.failed("tcp", addr, e).map_err(|e| ServeError::Accept { source: e, addr })?;
-                            continue;
-                        }
-                    };
-                    counter!("stream.tcp.accepts").increment(1);
-                    // Arc conn_handler
-                    let conn_handler = Arc::clone(&conn_handler);
-                    tokio::spawn(async move {
-                        conn_handler.handle_stream(IoTcpStream(stream)).await;
-                    });
-                }
-                res = set_conn_handler_rx.0.recv() => {
-                    let new_conn_handler = match res {
-                        Some(new_conn_handler) => new_conn_handler,
-                        None => break,
-                    };
-                    info!(?addr, "Connection handler set");
-                    conn_handler = Arc::new(new_conn_handler);
-                }
-            }
-        }
-        Ok(())
+        let listener = &self.listener;
+        let mut state = ();
+        common::serve_loop::serve_loop(
+            "tcp",
+            Some("stream.tcp.accepts"),
+            false,
+            addr,
+            Arc::new(self.conn_handler),
+            set_conn_handler_rx,
+            |_| {},
+            || listener.accept(),
+            |_, (stream, _): (TcpStream, SocketAddr), conn_handler: Arc<ConnHandler>| {
+                tokio::spawn(async move {
+                    conn_handler.handle_stream(IoTcpStream(stream)).await;
+                });
+            },
+            &mut state,
+            |_| std::future::pending::<()>(),
+        )
+        .await
     }
 }
-#[derive(Debug, Error)]
-pub enum ServeError {
-    #[error("Failed to get local address: {0}")]
-    LocalAddr(#[source] io::Error),
-    #[error("Failed to accept connection: {source}, {addr}")]
-    Accept {
-        #[source]
-        source: io::Error,
-        addr: SocketAddr,
-    },
-}
+pub use common::serve_loop::ServeError;
 
 #[derive(Debug, Clone)]
 pub struct TcpConnector {
