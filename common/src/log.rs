@@ -71,7 +71,7 @@ where
             }
             Err(e) => {
                 if !std::mem::replace(&mut self.warned, true) {
-                    tracing::warn!(?e, "Failed to write a log record");
+                    tracing::error!(?e, "Failed to write a log record");
                 }
                 false
             }
@@ -85,7 +85,7 @@ where
         if let Err(e) = self.writer.flush()
             && !std::mem::replace(&mut self.warned, true)
         {
-            tracing::warn!(?e, "Failed to flush the log file");
+            tracing::error!(?e, "Failed to flush the log file");
         }
     }
 }
