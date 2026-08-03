@@ -31,4 +31,3 @@ pub mod stream;
 pub mod suspend;
 pub mod ttl_cell;
 pub mod udp;
-pub mod xor;
