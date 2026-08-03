@@ -14,11 +14,8 @@ use super::{
 
 pub type StreamConnConfigBuilder = ConnConfigBuilder<StreamAddrStr>;
 pub type StreamConnConfig = ConnConfig<StreamAddr>;
-pub type StreamProxyChain = [StreamConnConfig];
-pub type StreamWeightedConnChain = WeightedConnChain<StreamAddr>;
 pub type StreamRouteTable = RouteTable<StreamAddr>;
 pub type StreamRouteTableEntry = RouteTableEntry<StreamAddr>;
-pub type StreamRouteTableEntryAction = RouteAction<StreamAddr>;
 pub type StreamRouteGroup = ConnSelector<StreamAddr>;
 pub type StreamRouteTableBuilder = RouteTableBuilder<StreamAddrStr>;
 pub type StreamConnSelectorBuilder = ConnSelectorBuilder<StreamAddrStr>;
