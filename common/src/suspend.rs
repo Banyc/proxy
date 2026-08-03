@@ -1,4 +1,4 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::notify::Notify;
 
@@ -16,18 +16,12 @@ pub fn spawn_check_system_suspend() -> Suspended {
     tokio::spawn({
         let suspended = suspended.clone();
         async move {
-            let mut prev = SystemTime::now();
+            let mut prev = (Instant::now(), SystemTime::now());
             loop {
                 tokio::time::sleep(SUSPEND_CHECK_INTERVAL).await;
-                let now = SystemTime::now();
+                let now = (Instant::now(), SystemTime::now());
                 let prev = scopeguard::guard(&mut prev, |prev| *prev = now);
-                let elapsed = now
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .checked_sub(prev.duration_since(UNIX_EPOCH).unwrap());
-                let Some(elapsed) = elapsed else {
-                    continue;
-                };
+                let elapsed = now.0.duration_since(prev.0);
                 if suspend_toleration() < elapsed {
                     suspended.0.notify_waiters();
                 }
