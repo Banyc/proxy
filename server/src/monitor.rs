@@ -45,7 +45,7 @@ pub fn monitor_router() -> (SessionTables, Router) {
         Ok(text)
     }
     let router = Router::new()
-        .route("/", get(metrics))
+        .route("/metrics", get(metrics))
         .with_state(metrics_handle)
         .route(
             "/sessions",
