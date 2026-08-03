@@ -222,3 +222,165 @@ pub enum RouteTableBuildError {
     #[error("{0}")]
     ConnSelector(#[from] ConnSelectorBuildError),
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{net::SocketAddr, time::Duration};
+
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+    use crate::{
+        error::AnyError,
+        route::{ConnChain, ConnConfig, TraceRtt, WeightedConnChain},
+    };
+
+    fn matcher(json: &str) -> Matcher {
+        let builder: MatcherBuilder = serde_json::from_str(json).unwrap();
+        builder.build().unwrap()
+    }
+
+    fn addr(s: &str) -> InternetAddr {
+        s.parse().unwrap()
+    }
+
+    fn entry(matcher: Matcher, action: RouteAction<SocketAddr>) -> RouteTableEntry<SocketAddr> {
+        RouteTableEntry::new(None, matcher, action)
+    }
+
+    struct NoTracer;
+    impl TraceRtt for NoTracer {
+        type Addr = SocketAddr;
+        async fn trace_rtt(&self, _chain: &ConnChain<SocketAddr>) -> Result<Duration, AnyError> {
+            unreachable!("no tracer in these tests")
+        }
+    }
+
+    fn chain(weight: usize) -> WeightedConnChain<SocketAddr> {
+        WeightedConnChain {
+            weight,
+            chain: Arc::from(Vec::<ConnConfig<SocketAddr>>::new()),
+            payload_crypto: None,
+        }
+    }
+
+    #[test]
+    fn an_empty_table_blocks_everything() {
+        let table = RouteTable::<SocketAddr>::new(vec![], Arc::new(HashMap::new()));
+        assert!(matches!(table.action(&addr("1.2.3.4:80")), RouteAction::Block));
+        assert!(matches!(
+            table.action(&addr("[2001:db8::1]:443")),
+            RouteAction::Block
+        ));
+        assert!(matches!(table.action(&addr("example.com:443")), RouteAction::Block));
+    }
+
+    #[test]
+    fn the_first_matching_entry_wins() {
+        let table = RouteTable::new(
+            vec![
+                entry(matcher("{}"), RouteAction::Direct),
+                entry(matcher(r#"{"addr": "10.0.0.5"}"#), RouteAction::Block),
+            ],
+            Arc::new(HashMap::new()),
+        );
+        // 10.0.0.5 matches both entries; the earlier Direct action wins.
+        assert!(matches!(table.action(&addr("10.0.0.5:80")), RouteAction::Direct));
+        // 9.9.9.9 only matches the catch-all; still Direct.
+        assert!(matches!(table.action(&addr("9.9.9.9:80")), RouteAction::Direct));
+    }
+
+    #[test]
+    fn a_non_matching_entry_falls_through_to_a_later_one() {
+        let table = RouteTable::new(
+            vec![
+                entry(matcher(r#"{"port": 80}"#), RouteAction::Block),
+                entry(matcher("{}"), RouteAction::Direct),
+            ],
+            Arc::new(HashMap::new()),
+        );
+        assert!(matches!(table.action(&addr("1.2.3.4:80")), RouteAction::Block));
+        assert!(matches!(table.action(&addr("1.2.3.4:443")), RouteAction::Direct));
+    }
+
+    #[test]
+    fn unmatched_traffic_is_blocked() {
+        let table = RouteTable::new(
+            vec![entry(matcher(r#"{"addr": "10.0.0.5"}"#), RouteAction::Direct)],
+            Arc::new(HashMap::new()),
+        );
+        assert!(matches!(table.action(&addr("10.0.0.6:80")), RouteAction::Block));
+    }
+
+    #[test]
+    fn an_entry_can_reference_a_shared_matcher_by_name() {
+        let matchers = Arc::new(HashMap::from([(
+            Arc::from("lan"),
+            matcher(r#"{"addr": {"start": "192.168.0.0", "end": "192.168.255.255"}}"#),
+        )]));
+        let table = RouteTable::new(
+            vec![RouteTableEntry::new(
+                None,
+                matcher(r#""lan""#),
+                RouteAction::<SocketAddr>::Direct,
+            )],
+            matchers,
+        );
+        assert!(matches!(
+            table.action(&addr("192.168.1.10:80")),
+            RouteAction::Direct
+        ));
+        assert!(matches!(table.action(&addr("8.8.8.8:80")), RouteAction::Block));
+    }
+
+    #[test]
+    fn a_shared_matcher_name_is_only_consulted_once() {
+        let matchers = Arc::new(HashMap::from([(Arc::from("direct"), matcher("{}"))]));
+        let table = RouteTable::new(
+            vec![
+                RouteTableEntry::new(Some("direct".into()), matcher("{}"), RouteAction::<SocketAddr>::Direct),
+                RouteTableEntry::new(Some("direct".into()), matcher("{}"), RouteAction::<SocketAddr>::Block),
+            ],
+            matchers,
+        );
+        // Both entries carry the same shared matcher name, so the second is skipped
+        // entirely and the first entry's Direct action wins over the later Block.
+        assert!(matches!(table.action(&addr("1.2.3.4:80")), RouteAction::Direct));
+    }
+
+    #[test]
+    fn a_matcher_referencing_itself_terminates() {
+        let self_ref = matcher(r#""recur""#);
+        let matchers = Arc::new(HashMap::from([(Arc::from("recur"), self_ref.clone())]));
+        let table = RouteTable::new(
+            vec![RouteTableEntry::new(None, self_ref, RouteAction::<SocketAddr>::Direct)],
+            matchers,
+        );
+        // The self reference is stopped by the visited set and cannot match.
+        assert!(matches!(table.action(&addr("1.2.3.4:80")), RouteAction::Block));
+    }
+
+    #[test]
+    fn a_conn_selector_action_is_preserved_when_selected() {
+        let selector = ConnSelector::new(
+            vec![chain(1)],
+            None::<NoTracer>,
+            None,
+            None,
+            CancellationToken::new(),
+        )
+        .unwrap();
+        let table = RouteTable::new(
+            vec![RouteTableEntry::new(
+                None,
+                matcher("{}"),
+                RouteAction::ConnSelector(Arc::new(selector)),
+            )],
+            Arc::new(HashMap::new()),
+        );
+        assert!(matches!(
+            table.action(&addr("1.2.3.4:80")),
+            RouteAction::ConnSelector(_)
+        ));
+    }
+}
