@@ -29,7 +29,7 @@ use serde::Deserialize;
 use swap::Swap;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::config::ConfigChanged;
 
@@ -125,7 +125,7 @@ where
                     cancellation.clone(),
                     context.clone(),
                 ).await {
-                    warn!(?e, "Failed to read and execute config");
+                    error!(?e, "Failed to read and execute config");
                     continue;
                 }
 
