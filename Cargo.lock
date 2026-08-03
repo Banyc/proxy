@@ -2757,6 +2757,7 @@ dependencies = [
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
  "tokio",
  "tokio_udp",
+ "tracing",
 ]
 
 [[package]]

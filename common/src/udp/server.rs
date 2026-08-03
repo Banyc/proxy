@@ -7,6 +7,7 @@ use std::{
 
 use thiserror::Error;
 use tokio::net::UdpSocket;
+use tokio::task::JoinSet;
 use tracing::instrument;
 use udp_listener::{Conn, UtpListener};
 
@@ -21,12 +22,14 @@ use crate::{
 pub struct UdpServer<ConnHandler> {
     listener: UdpSocket,
     conn_handler: ConnHandler,
+    flows: JoinSet<()>,
 }
 impl<ConnHandler> UdpServer<ConnHandler> {
     pub fn new(listener: UdpSocket, conn_handler: ConnHandler) -> Self {
         Self {
             listener,
             conn_handler,
+            flows: JoinSet::new(),
         }
     }
 
@@ -73,7 +76,7 @@ where
                 };
                 let read = buf_reader.position() as usize;
                 let mut packet = Packet::new(packet);
-                packet.advance(read).unwrap();
+                packet.advance(read).ok()?;
                 Some((flow, packet))
             }
         };
@@ -85,7 +88,7 @@ where
         let swap = |new: Arc<ConnHandler>| {
             *conn_handler.write().unwrap() = new;
         };
-        let mut state = ();
+        let mut state = self.flows;
         crate::serve_loop::serve_loop(
             "udp",
             None,
@@ -95,8 +98,10 @@ where
             set_conn_handler_rx,
             swap,
             || downstream_listener.accept(),
-            |_, flow: Conn<UdpSocket, Flow, Packet>, current: Arc<ConnHandler>| {
-                tokio::spawn(async move {
+            |state: &mut JoinSet<()>,
+             flow: Conn<UdpSocket, Flow, Packet>,
+             current: Arc<ConnHandler>| {
+                state.spawn(async move {
                     current.handle_flow(flow).await;
                 });
             },
