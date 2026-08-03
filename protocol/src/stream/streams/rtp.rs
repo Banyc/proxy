@@ -91,7 +91,10 @@ where
             Arc::new(self.conn_handler),
             set_conn_handler_rx,
             |_| {},
-            || listener.accept_without_handshake(fec),
+            || listener.accept_without_handshake_with(rtp::udp::AcceptConfig {
+                fec,
+                ..rtp::udp::AcceptConfig::default()
+            }),
             |_, stream: rtp::udp::Accepted, conn_handler: Arc<ConnHandler>| {
                 let stream = AddressedRtpStream {
                     read: stream.read.into_async_read(),
@@ -132,7 +135,16 @@ impl StreamConnect for RtpConnector {
             .get_matched(&addr.ip())
             .map(|ip| SocketAddr::new(ip, 0))
             .unwrap_or_else(|| any_addr(&addr.ip()));
-        let connected = rtp::udp::connect_without_handshake(bind, addr, None, self.fec).await?;
+        let connected = rtp::udp::connect_with(
+            bind,
+            addr,
+            rtp::udp::ConnectConfig {
+                handshake: false,
+                fec: self.fec,
+                ..rtp::udp::ConnectConfig::default()
+            },
+        )
+        .await?;
         let stream = AddressedRtpStream {
             read: connected.read.into_async_read(),
             write: connected.write.into_async_write(),
