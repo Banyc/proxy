@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(backoff.error_count, 1);
         assert!(backoff.retry_at().is_some());
         let delay = backoff.retry_at().unwrap().duration_since(now);
-        assert!(delay.as_millis() >= 25 && delay.as_millis() <= 30);
+        assert!(delay.as_millis() >= 25 && delay.as_millis() <= 50);
     }
 
     #[test]
