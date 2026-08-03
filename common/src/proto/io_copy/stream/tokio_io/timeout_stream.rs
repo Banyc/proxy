@@ -330,14 +330,21 @@ mod test {
     #[expect(clippy::unused_io_amount)]
     #[tokio::test]
     async fn tcp_read() {
+        use tokio::sync::mpsc;
+
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
 
+        // The first byte is written immediately on accept and confirmed through a
+        // channel, so the first read can never race the 100ms timeout. The second
+        // byte is delayed a full second, far past the timeout, so the second read
+        // deterministically times out.
+        let (first_write_tx, mut first_write_rx) = mpsc::channel(1);
         thread::spawn(move || {
             let mut socket = listener.accept().unwrap().0;
-            thread::sleep(Duration::from_millis(10));
             socket.write_all(b"f").unwrap();
-            thread::sleep(Duration::from_millis(500));
+            first_write_tx.blocking_send(()).unwrap();
+            thread::sleep(Duration::from_secs(1));
             let _ = socket.write_all(b"f"); // this may hit an eof
         });
 
@@ -345,6 +352,8 @@ mod test {
         let mut s = TimeoutStreamShared::new(s);
         s.set_timeout(Some(Duration::from_millis(100)));
         pin!(s);
+
+        first_write_rx.recv().await.unwrap();
         s.read(&mut [0]).await.unwrap();
         let r = s.read(&mut [0]).await;
 
