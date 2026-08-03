@@ -29,7 +29,7 @@ use serde::Deserialize;
 use swap::Swap;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::config::ConfigChanged;
 
@@ -98,7 +98,17 @@ where
     loop {
         tokio::select! {
             Some(res) = server_tasks.join_next() => {
-                let res = res.unwrap();
+                let res = match res {
+                    Ok(res) => res,
+                    Err(error) if error.is_panic() => {
+                        error!(?error, "Server task panicked");
+                        std::panic::resume_unwind(error.into_panic());
+                    }
+                    Err(error) => {
+                        error!(?error, "Server task failed to join");
+                        continue;
+                    }
+                };
                 res.map_err(ServeError::ServerTask)?;
             }
             _ = config_changed.notified() => {
