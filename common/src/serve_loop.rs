@@ -92,16 +92,28 @@ impl AcceptErrorBackoff {
                 .started_at
                 .map(|start| std::time::Instant::now().duration_since(start))
                 .unwrap_or_default();
-            tracing::warn!(
-                error_count = self.error_count,
-                first_error = %self.first_error.as_deref().unwrap_or("?"),
-                last_error = %self.last_error.as_deref().unwrap_or("?"),
-                elapsed_ms = elapsed.as_millis(),
-                fatal,
-                listener,
-                %addr,
-                "Listener accept errors"
-            );
+            if fatal {
+                tracing::error!(
+                    error_count = self.error_count,
+                    first_error = %self.first_error.as_deref().unwrap_or("?"),
+                    last_error = %self.last_error.as_deref().unwrap_or("?"),
+                    elapsed_ms = elapsed.as_millis(),
+                    fatal,
+                    listener,
+                    %addr,
+                    "Listener accept errors"
+                );
+            } else {
+                tracing::warn!(
+                    error_count = self.error_count,
+                    first_error = %self.first_error.as_deref().unwrap_or("?"),
+                    last_error = %self.last_error.as_deref().unwrap_or("?"),
+                    elapsed_ms = elapsed.as_millis(),
+                    listener,
+                    %addr,
+                    "Listener accept errors"
+                );
+            }
         }
     }
 
