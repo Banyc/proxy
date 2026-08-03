@@ -13,7 +13,7 @@ use tokio::{
     net::{TcpListener, TcpSocket, TcpStream, ToSocketAddrs},
     task::JoinSet,
 };
-use tracing::{instrument, warn};
+use tracing::{error, instrument, trace, warn};
 
 use common::{
     addr::any_addr,
@@ -137,8 +137,13 @@ where
                     let mut accepting_guard = accepting.lock().await;
                     tokio::select! {
                         Some(res) = mux_guard.join_next() => {
-                            let e = res.unwrap();
-                            warn!(?e, ?addr, "MUX error");
+                            match res {
+                                Ok(e) => warn!(?e, ?addr, "MUX error"),
+                                Err(error) if error.is_cancelled() => {
+                                    trace!(?error, "MUX task cancelled (normal shutdown/reset)");
+                                }
+                                Err(error) => error!(?error, ?addr, "MUX supervision task failed to join"),
+                            }
                         }
                         Some(_) = accepting_guard.join_next() => {}
                         _ = std::future::pending::<()>() => {}
