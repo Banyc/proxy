@@ -379,6 +379,8 @@ impl RelayResponse {
     where
         W: AsyncWrite + Unpin,
     {
+        // VERSION + reply + RSV + ATYP + addr(0xff) + BND.PORT
+        const _: () = assert!(1 + 1 + 1 + 1 + 1 + 0xff + 2 == 262);
         let mut buf = [0u8; 1 + 1 + 1 + 1 + 1 + 0xff + 2];
         let mut internal_writer = io::Cursor::new(buf.as_mut_slice());
         internal_writer.write_u8(VERSION).await.unwrap();
