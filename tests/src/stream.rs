@@ -295,7 +295,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
-    #[ignore]
+    #[ignore = "kcp stress is flaky in CI; run manually on demand"]
     async fn stress_test_kcp() {
         stress_test(ConcreteStreamType::Kcp).await
     }
@@ -377,7 +377,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
-    #[ignore]
+    #[ignore = "performance benchmark; not part of the default test run"]
     async fn perf_bulk_rtp_mux_fec() {
         use std::time::Instant;
 

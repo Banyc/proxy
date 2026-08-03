@@ -36,7 +36,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires an actual system suspend to trigger the notification"]
     async fn basics() {
         let suspended = spawn_check_system_suspend();
         let mut suspended = suspended.0.waiter();
