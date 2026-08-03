@@ -1,4 +1,5 @@
 use std::{
+    io,
     task::{Context, Poll, Waker},
     time::Duration,
 };
@@ -65,9 +66,9 @@ fn nonce_ciphertext_writer<W>(key: &[u8; KEY_BYTES], w: W) -> NonceCiphertextWri
 fn noop_context() -> Context<'static> {
     Context::from_waker(Waker::noop())
 }
-fn unwrap_ready<T>(poll: Poll<T>) -> T {
+fn unwrap_ready<T>(poll: Poll<io::Result<T>>) -> io::Result<T> {
     match poll {
         Poll::Ready(x) => x,
-        Poll::Pending => panic!(),
+        Poll::Pending => Err(io::Error::from(io::ErrorKind::WouldBlock)),
     }
 }

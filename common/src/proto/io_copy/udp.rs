@@ -41,6 +41,7 @@ use crate::{
 };
 
 const ACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+const CRYPTO_FAIL_WARN_INTERVAL: Duration = Duration::from_secs(1);
 
 pub trait UdpRecv {
     fn trait_recv(
@@ -225,6 +226,7 @@ where
     let mut activity_check = tokio::time::interval(ACTIVITY_CHECK_INTERVAL);
     let last_uplink_packet = Arc::new(RwLock::new(std::time::Instant::now()));
     let last_downlink_packet = Arc::new(RwLock::new(std::time::Instant::now()));
+    let last_crypto_fail_warn = Arc::new(RwLock::new(std::time::Instant::now()));
 
     let bytes_uplink = Arc::new(AtomicU64::new(0));
     let bytes_downlink = Arc::new(AtomicU64::new(0));
@@ -239,9 +241,11 @@ where
 
     let mut io_copy_tasks = tokio::task::JoinSet::<Result<(), CopyBiError>>::new();
     io_copy_tasks.spawn({
+        let flow = flow.clone();
         let last_uplink_packet = Arc::clone(&last_uplink_packet);
         let bytes_uplink = Arc::clone(&bytes_uplink);
         let packets_uplink = Arc::clone(&packets_uplink);
+        let last_crypto_fail_warn = Arc::clone(&last_crypto_fail_warn);
         let speed_limiter = speed_limiter.clone();
         let payload_crypto = payload_crypto.clone();
         async move {
@@ -269,6 +273,7 @@ where
                     let Some(pkt) =
                         en_dec(packet.slice_mut(), &mut en_dec_buf, payload_crypto, en_dir)
                     else {
+                        log_crypto_drop(&flow, &last_crypto_fail_warn);
                         continue;
                     };
                     pkt
@@ -295,6 +300,7 @@ where
         let last_downlink_packet = Arc::clone(&last_downlink_packet);
         let bytes_downlink = Arc::clone(&bytes_downlink);
         let packets_downlink = Arc::clone(&packets_downlink);
+        let last_crypto_fail_warn = Arc::clone(&last_crypto_fail_warn);
         let payload_crypto = payload_crypto.clone();
         let mut downlink_buf = [0; PACKET_BUFFER_LENGTH];
         let mut downlink_protocol_buf = vec![];
@@ -328,6 +334,7 @@ where
                 let pkt = if let Some(payload_crypto) = &payload_crypto {
                     let Some(pkt) = en_dec(pkt, &mut en_dec_buf, payload_crypto, en_dir.flip())
                     else {
+                        log_crypto_drop(&flow, &last_crypto_fail_warn);
                         continue;
                     };
                     pkt
@@ -371,7 +378,17 @@ where
         tokio::select! {
             res = io_copy_tasks.join_next() => {
                 let res = match res {
-                    Some(res) => res.unwrap(),
+                    Some(res) => match res {
+                        Ok(res) => res,
+                        Err(error) if error.is_panic() => {
+                            warn!(?error, "I/O copy task panicked");
+                            std::panic::resume_unwind(error.into_panic());
+                        }
+                        Err(error) => {
+                            warn!(?error, "I/O copy task failed to join");
+                            break;
+                        }
+                    },
                     None => break,
                 };
                 res?;
@@ -442,6 +459,16 @@ impl UdpSend for Arc<UdpSocket> {
 impl UdpRecv for Arc<UdpSocket> {
     async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
         UdpSocket::recv(self, buf).await.map_err(|e| e.into())
+    }
+}
+
+fn log_crypto_drop(flow: &Flow, last_warn: &RwLock<std::time::Instant>) {
+    counter!("udp.io_copy.crypto_drops").increment(1);
+    let now = std::time::Instant::now();
+    let mut last_warn = last_warn.write().unwrap();
+    if now.duration_since(*last_warn) > CRYPTO_FAIL_WARN_INTERVAL {
+        *last_warn = now;
+        warn!(?flow, "Dropped packet due to crypto failure");
     }
 }
 
