@@ -7,7 +7,6 @@ edition = "2024"
 
 [dependencies]
 ae = { workspace = true }
-ahash = { workspace = true }
 async-speed-limit = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
@@ -28,11 +27,9 @@ rand = { workspace = true }
 regex = { workspace = true }
 scopeguard = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }
-slotmap = { workspace = true }
 swap = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-tokio-io-timeout = { workspace = true }
 tokio-util = { workspace = true }
 tokio_chacha20 = { workspace = true }
 tokio_conn_pool = { workspace = true }

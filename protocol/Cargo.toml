@@ -14,7 +14,6 @@ constant_time_eq = { workspace = true }
 metrics = { workspace = true }
 mptcp = { workspace = true }
 mux = { workspace = true }
-rand = { workspace = true }
 rtp = { workspace = true }
 rtp_mux = { workspace = true }
 serde = { workspace = true }
@@ -22,7 +21,6 @@ swap = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio_chacha20 = { workspace = true }
-tokio_conn_pool = { workspace = true }
 tokio_kcp = { workspace = true }
 tracing = { workspace = true }
 udp_listener = { workspace = true }
@@ -33,10 +31,7 @@ http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["full"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 monitor_table = { workspace = true }
-pin-project-lite = { workspace = true }
-regex = { workspace = true }
 tokio-util = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
