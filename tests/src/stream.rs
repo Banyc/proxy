@@ -375,39 +375,6 @@ mod tests {
         }
     }
 
-    // async fn test_bad_proxy() {
-    //     // Start proxy servers
-    //     let proxy_1_config = spawn_proxy("localhost:0").await;
-    //     let proxy_2_config = spawn_proxy("localhost:0").await;
-    //     let proxy_3_config = spawn_proxy("localhost:0").await;
-
-    //     // Message to send
-    //     let req_msg = b"hello world";
-    //     let resp_msg = b"goodbye world";
-
-    //     // Start greet server
-    //     let greet_addr = spawn_greet("[::]:0", req_msg, resp_msg, 1).await;
-
-    //     // Connect to proxy server
-    //     let err = establish(
-    //         &[proxy_1_config.clone(), proxy_2_config, proxy_3_config],
-    //         greet_addr,
-    //         &ConcreteConnPool::empty(),
-    //     )
-    //     .await
-    //     .unwrap_err();
-    //     match err {
-    //         ProxyProtocolError::Response(err) => {
-    //             match err.kind {
-    //                 ResponseErrorKind::Loopback => {}
-    //                 _ => panic!("Unexpected error: {:?}", err),
-    //             }
-    //             assert_eq!(err.source, proxy_1_config.address.address);
-    //         }
-    //         _ => panic!("Unexpected error: {:?}", err),
-    //     }
-    // }
-
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     #[ignore]
