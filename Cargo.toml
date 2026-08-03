@@ -79,3 +79,6 @@ tokio_udp = { path = "../tokio_udp" }
 monitor_table = { path = "../monitor_table" }
 [patch."https://github.com/Banyc/dfsql.git"]
 dfsql = { path = "../dfsql" }
+
+[profile.release]
+lto = "thin"
