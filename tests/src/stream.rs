@@ -63,13 +63,30 @@ mod tests {
         addr: &Arc<str>,
         ty: ConcreteStreamType,
     ) -> StreamConnConfig {
+        spawn_proxy_(join_set, addr, ty, true).await
+    }
+
+    async fn spawn_guarded_proxy(
+        join_set: &mut tokio::task::JoinSet<()>,
+        addr: &Arc<str>,
+        ty: ConcreteStreamType,
+    ) -> StreamConnConfig {
+        spawn_proxy_(join_set, addr, ty, false).await
+    }
+
+    async fn spawn_proxy_(
+        join_set: &mut tokio::task::JoinSet<()>,
+        addr: &Arc<str>,
+        ty: ConcreteStreamType,
+        allow_loopback: bool,
+    ) -> StreamConnConfig {
         let crypto = create_random_crypto();
         let proxy = StreamProxyConnHandler::new(
             crypto.clone(),
             None,
             stream_context(),
             Arc::clone(addr),
-            true,
+            allow_loopback,
         );
         let (set_conn_handler_tx, set_conn_handler_rx) = loading::replace_conn_handler_channel();
         let proxy_addr = match ty {
@@ -461,6 +478,86 @@ mod tests {
 
         stream.write_all(req_msg).await.unwrap();
         read_response(&mut stream, resp_msg).await.unwrap();
+    }
+
+    async fn assert_refused(proxies: &[StreamConnConfig], greet_addr: StreamAddr) {
+        let mut stream = match establish(proxies, greet_addr, &stream_context()).await {
+            Ok(ConnAndAddr { stream, .. }) => stream,
+            Err(_) => {
+                // The guarded proxy dropped the connection during the
+                // handshake; the loopback destination was never reached.
+                return;
+            }
+        };
+        let _ = stream.write_all(b"hello world").await;
+        let mut buf = [0u8; 1024];
+        match stream.read(&mut buf).await {
+            Ok(0) => {}
+            Ok(_) => panic!("the guarded proxy relayed to a loopback/unspecified service"),
+            Err(_) => {
+                // Connection reset / broken pipe: the guarded proxy dropped us
+                // before relaying to the loopback destination.
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_bad_proxy() {
+        let mut join_set = tokio::task::JoinSet::new();
+        let addr = Arc::from("0.0.0.0:0");
+        let proxy_1_config = spawn_guarded_proxy(&mut join_set, &addr, ConcreteStreamType::Tcp).await;
+        let proxy_2_config = spawn_guarded_proxy(&mut join_set, &addr, ConcreteStreamType::Tcp).await;
+        let proxy_3_config = spawn_guarded_proxy(&mut join_set, &addr, ConcreteStreamType::Tcp).await;
+        let req_msg = b"hello world";
+        let resp_msg = b"goodbye world";
+        let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
+        assert_refused(
+            &[proxy_1_config, proxy_2_config, proxy_3_config],
+            greet_addr,
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn loopback_spelled_as_ipv6_is_still_refused() {
+        let mut join_set = tokio::task::JoinSet::new();
+        let addr = Arc::from("0.0.0.0:0");
+        let proxy_config = spawn_guarded_proxy(&mut join_set, &addr, ConcreteStreamType::Tcp).await;
+        let req_msg = b"hello world";
+        let resp_msg = b"goodbye world";
+        let greet_addr = spawn_greet(&mut join_set, "127.0.0.1:0", req_msg, resp_msg, 1).await;
+        let greet_port = greet_addr.address.port();
+        let mapped: StreamAddr = StreamAddr {
+            address: std::net::SocketAddr::new(
+                std::net::Ipv4Addr::new(127, 0, 0, 1)
+                    .to_ipv6_mapped()
+                    .into(),
+                greet_port,
+            )
+            .into(),
+            stream_type: ConcreteStreamType::Tcp.to_string().into(),
+        };
+        assert_refused(&[proxy_config], mapped).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unspecified_destination_is_still_refused() {
+        let mut join_set = tokio::task::JoinSet::new();
+        let addr = Arc::from("0.0.0.0:0");
+        let proxy_config = spawn_guarded_proxy(&mut join_set, &addr, ConcreteStreamType::Tcp).await;
+        let req_msg = b"hello world";
+        let resp_msg = b"goodbye world";
+        let greet_addr = spawn_greet(&mut join_set, "0.0.0.0:0", req_msg, resp_msg, 1).await;
+        let greet_port = greet_addr.address.port();
+        let unspecified: StreamAddr = StreamAddr {
+            address: std::net::SocketAddr::new(
+                std::net::Ipv4Addr::UNSPECIFIED.into(),
+                greet_port,
+            )
+            .into(),
+            stream_type: ConcreteStreamType::Tcp.to_string().into(),
+        };
+        assert_refused(&[proxy_config], unspecified).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
