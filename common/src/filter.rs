@@ -307,14 +307,6 @@ impl PortMatcher {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Action {
-    Proxy,
-    Block,
-    Direct,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
