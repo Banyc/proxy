@@ -42,23 +42,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "ahash"
-version = "0.8.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
-dependencies = [
- "cfg-if",
- "getrandom 0.3.4",
- "once_cell",
- "version_check",
- "zerocopy",
-]
-
-[[package]]
 name = "aho-corasick"
-version = "1.1.4"
+version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"
+checksum = "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"
 dependencies = [
  "memchr",
 ]
@@ -474,7 +461,6 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "ae",
- "ahash 0.8.12",
  "async-speed-limit",
  "async-trait",
  "base64 0.23.0",
@@ -496,11 +482,9 @@ dependencies = [
  "scopeguard",
  "serde",
  "serde_json",
- "slotmap",
  "swap",
  "thiserror 2.0.19",
  "tokio",
- "tokio-io-timeout",
  "tokio-util",
  "tokio_chacha20",
  "tokio_conn_pool",
@@ -644,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "dfsql"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "regex",
  "thiserror 2.0.19",
@@ -982,7 +966,7 @@ version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 dependencies = [
- "ahash 0.7.8",
+ "ahash",
 ]
 
 [[package]]
@@ -1750,9 +1734,6 @@ dependencies = [
  "monitor_table",
  "mptcp",
  "mux",
- "pin-project-lite",
- "rand 0.10.2",
- "regex",
  "rtp",
  "rtp_mux",
  "serde",
@@ -1762,10 +1743,8 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tokio_chacha20",
- "tokio_conn_pool",
  "tokio_kcp",
  "tracing",
- "tracing-subscriber",
  "udp_listener",
 ]
 
@@ -2037,7 +2016,6 @@ dependencies = [
  "csv",
  "dre",
  "fec",
- "libc",
  "mpudp",
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
  "rand 0.10.2",
@@ -2515,16 +2493,6 @@ dependencies = [
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "tokio-io-timeout"
-version = "1.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bd86198d9ee903fedd2f9a2e72014287c0d9167e4ae43b5853007205dda1b76"
-dependencies = [
- "pin-project-lite",
- "tokio",
 ]
 
 [[package]]
