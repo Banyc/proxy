@@ -8,17 +8,6 @@ use crate::{
     route::IntoAddr,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(transparent)]
-pub struct StreamAddrBuilder {
-    pub address: Arc<str>,
-}
-impl StreamAddrBuilder {
-    pub fn build(self) -> Result<StreamAddr, ParseInternetAddrError> {
-        self.address.as_ref().parse()
-    }
-}
-
 /// A stream address
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct StreamAddr {

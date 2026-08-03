@@ -121,7 +121,7 @@ impl<AddrStr> RouteTableEntryBuilder<AddrStr> {
                 cx.matcher
                     .get(&k)
                     .cloned()
-                    .ok_or(RouteTableBuildError::ConnSelectorKeyNotFound(k))?,
+                    .ok_or(RouteTableBuildError::MatcherKeyNotFound(k))?,
             ),
             SharableConfig::Private(v) => (None, v.build().map_err(RouteTableBuildError::Matcher)?),
         };
@@ -213,8 +213,10 @@ pub enum RouteAction<Addr> {
 
 #[derive(Debug, Error)]
 pub enum RouteTableBuildError {
-    #[error("Proxy group key not found: `{0}`")]
+    #[error("Conn selector key not found: `{0}`")]
     ConnSelectorKeyNotFound(Arc<str>),
+    #[error("Matcher key not found: `{0}`")]
+    MatcherKeyNotFound(Arc<str>),
     #[error("Matcher: {0}")]
     Matcher(#[source] regex::Error),
     #[error("Chain config is invalid: {0}")]
