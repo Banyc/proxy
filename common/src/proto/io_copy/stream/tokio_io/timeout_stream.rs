@@ -294,7 +294,7 @@ mod test {
         assert_eq!(r.err().unwrap().kind(), io::ErrorKind::TimedOut);
     }
 
-    #[allow(clippy::unused_io_amount)]
+    #[expect(clippy::unused_io_amount)]
     #[tokio::test]
     async fn read_ok() {
         let reader = DelayStream::new(Instant::now() + Duration::from_millis(100));
@@ -316,7 +316,7 @@ mod test {
         assert_eq!(r.err().unwrap().kind(), io::ErrorKind::TimedOut);
     }
 
-    #[allow(clippy::unused_io_amount)]
+    #[expect(clippy::unused_io_amount)]
     #[tokio::test]
     async fn write_ok() {
         let writer = DelayStream::new(Instant::now() + Duration::from_millis(100));
@@ -327,7 +327,7 @@ mod test {
         writer.write(&[0]).await.unwrap();
     }
 
-    #[allow(clippy::unused_io_amount)]
+    #[expect(clippy::unused_io_amount)]
     #[tokio::test]
     async fn tcp_read() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

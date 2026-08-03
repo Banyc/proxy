@@ -60,7 +60,6 @@ struct HttpRequestContext {
     method: Method,
     uri: String,
     host: Option<String>,
-    #[allow(dead_code)]
     authority: Option<String>,
 }
 impl HttpRequestContext {

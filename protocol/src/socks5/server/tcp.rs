@@ -495,7 +495,6 @@ pub enum EstablishProxyChainError {
     #[error("{0}")]
     StreamEstablish(#[from] StreamEstablishError),
 }
-#[allow(clippy::large_enum_variant)]
 pub enum EstablishResult<S> {
     Blocked {
         destination: InternetAddr,
@@ -516,7 +515,6 @@ pub enum EstablishResult<S> {
         payload_crypto: Option<tokio_chacha20::config::Config>,
     },
 }
-#[allow(clippy::large_enum_variant)]
 enum RequestResult {
     Blocked {
         destination: InternetAddr,

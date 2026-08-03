@@ -21,7 +21,7 @@ mod tests {
 
     #[derive(Debug, serde::Deserialize)]
     struct Config {
-        #[allow(dead_code)]
+        #[expect(dead_code)]
         pub listen_addr: String,
     }
 

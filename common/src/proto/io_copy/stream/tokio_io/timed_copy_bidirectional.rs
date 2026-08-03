@@ -67,7 +67,6 @@ mod tests {
 
     use super::*;
 
-    #[allow(clippy::read_zero_byte_vec)]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_timed_copy_bidirectional() {
         let msg_list: Arc<[_]> = vec![

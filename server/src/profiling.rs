@@ -12,7 +12,7 @@ pub fn profiler_router(profiler: dhat::Profiler) -> Router {
                     let mut profiler = profiler.lock().unwrap();
                     drop(profiler.take().unwrap());
                     std::process::exit(0);
-                    #[allow(unreachable_code)]
+                    #[expect(unreachable_code)]
                     ()
                 },
             ),

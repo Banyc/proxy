@@ -61,6 +61,8 @@ impl<T> Default for GuardedIterSet<T> {
         Self { ptr }
     }
 }
+// `len` is only read by the notify tests; keep `allow` because `expect`
+// would go unfulfilled under `--all-targets`/test builds where it is used.
 #[allow(unused)]
 impl<T> GuardedIterSet<T> {
     #[must_use]
