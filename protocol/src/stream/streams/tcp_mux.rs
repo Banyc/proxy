@@ -41,8 +41,8 @@ use super::mux::{
 };
 
 struct MuxState {
-    mux: Arc<tokio::sync::Mutex<JoinSet<MuxError>>>,
-    accepting: Arc<tokio::sync::Mutex<JoinSet<()>>>,
+    mux: JoinSet<MuxError>,
+    accepting: JoinSet<()>,
 }
 
 #[derive(Debug)]
@@ -86,9 +86,10 @@ where
         set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
     ) -> Result<(), ServeError> {
         let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
-        let mux = Arc::new(tokio::sync::Mutex::new(self.mux));
-        let accepting = Arc::new(tokio::sync::Mutex::new(JoinSet::new()));
-        let mut state = MuxState { mux, accepting };
+        let mut state = MuxState {
+            mux: self.mux,
+            accepting: JoinSet::new(),
+        };
         let listener = &self.listener;
         common::serve_loop::serve_loop(
             "tcp_mux",
@@ -107,49 +108,35 @@ where
                     Err(_) => return,
                 };
                 let (r, w) = stream.into_split();
-                let (_, accepter) = spawn_mux_no_reconnection(
-                    r,
-                    w,
-                    server_mux_config(),
-                    &mut *state.mux.try_lock().expect("mux spawner lock"),
-                );
-                state
-                    .accepting
-                    .try_lock()
-                    .expect("accepting spawner lock")
-                    .spawn(async move {
-                        run_mux_accepter(accepter, addr, |stream| {
-                            counter!("stream.tcp_mux.mux.accepts").increment(1);
-                            let conn_handler = Arc::clone(&conn_handler);
-                            tokio::spawn(async move {
-                                conn_handler.handle_stream(stream).await;
-                            });
-                        })
-                        .await;
-                    });
+                let (_, accepter) =
+                    spawn_mux_no_reconnection(r, w, server_mux_config(), &mut state.mux);
+                state.accepting.spawn(async move {
+                    run_mux_accepter(accepter, addr, |stream| {
+                        counter!("stream.tcp_mux.mux.accepts").increment(1);
+                        let conn_handler = Arc::clone(&conn_handler);
+                        tokio::spawn(async move {
+                            conn_handler.handle_stream(stream).await;
+                        });
+                    })
+                    .await;
+                });
             },
             &mut state,
-            |state: &mut MuxState| {
-                let mux = Arc::clone(&state.mux);
-                let accepting = Arc::clone(&state.accepting);
-                async move {
-                    let mut mux_guard = mux.lock().await;
-                    let mut accepting_guard = accepting.lock().await;
-                    tokio::select! {
-                        Some(res) = mux_guard.join_next() => {
-                            match res {
-                                Ok(e) => warn!(?e, ?addr, "MUX error"),
-                                Err(error) if error.is_cancelled() => {
-                                    trace!(?error, "MUX task cancelled (normal shutdown/reset)");
-                                }
-                                Err(error) => error!(?error, ?addr, "MUX supervision task failed to join"),
+            |state: &mut MuxState| Box::pin(async move {
+                tokio::select! {
+                    Some(res) = state.mux.join_next() => {
+                        match res {
+                            Ok(e) => warn!(?e, ?addr, "MUX error"),
+                            Err(error) if error.is_cancelled() => {
+                                trace!(?error, "MUX task cancelled (normal shutdown/reset)");
                             }
+                            Err(error) => error!(?error, ?addr, "MUX supervision task failed to join"),
                         }
-                        Some(_) = accepting_guard.join_next() => {}
-                        _ = std::future::pending::<()>() => {}
                     }
+                    Some(_) = state.accepting.join_next() => {}
+                    _ = std::future::pending::<()>() => {}
                 }
-            },
+            }),
         )
         .await
     }

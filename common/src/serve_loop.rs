@@ -1,4 +1,4 @@
-use std::{future::Future, io, net::SocketAddr, sync::Arc, time::Duration};
+use std::{future::Future, io, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
 use metrics::counter;
 use thiserror::Error;
@@ -181,7 +181,7 @@ pub enum ServeError {
     },
 }
 
-pub async fn serve_loop<H, T, A, AF, W, S, X, E, XF>(
+pub async fn serve_loop<H, T, A, AF, W, S, X, E>(
     label: &'static str,
     counter_name: Option<&'static str>,
     dispatching: bool,
@@ -200,8 +200,7 @@ where
     AF: Future<Output = io::Result<T>> + Send,
     W: for<'a> FnMut(&'a mut X, T, Arc<H>),
     S: FnMut(Arc<H>),
-    E: FnMut(&mut X) -> XF,
-    XF: Future<Output = ()> + Send,
+    E: for<'a> FnMut(&'a mut X) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
 {
     info!(?addr, "Listening");
     let mut accept_backoff = AcceptErrorBackoff::default();

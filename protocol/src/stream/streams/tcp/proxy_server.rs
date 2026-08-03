@@ -97,7 +97,7 @@ where
                 });
             },
             &mut state,
-            |_| std::future::pending::<()>(),
+            |_| Box::pin(std::future::pending::<()>()),
         )
         .await
     }
