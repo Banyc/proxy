@@ -141,7 +141,7 @@ impl From<&Timing> for TimingHdv {
             .start
             .1
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as u64;
         let duration_ms = value.duration().as_millis() as u64;
         Self {

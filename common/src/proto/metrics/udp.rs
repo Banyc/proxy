@@ -59,13 +59,15 @@ struct SessionHdv {
 }
 impl SessionHdv {
     pub fn from_session(s: &Session) -> Self {
-        let start_unix = s.start.duration_since(UNIX_EPOCH).unwrap();
-        let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let start_unix = s.start.duration_since(UNIX_EPOCH).unwrap_or_default();
+        let now_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
 
         let duration = match s.end {
             Some(end) => end
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .saturating_sub(start_unix),
             None => now_unix.saturating_sub(start_unix),
         };
@@ -75,7 +77,7 @@ impl SessionHdv {
         let start_ms = start_unix.as_millis() as u64;
         let end_ms = s
             .end
-            .map(|e| e.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64);
+            .map(|e| e.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64);
         let upstream_local = s.upstream_local.map(|x| x.into());
         let upstream_remote = (&s.upstream_remote).into();
         let downstream_remote = s.downstream_remote.into();
