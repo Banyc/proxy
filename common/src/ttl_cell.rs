@@ -42,10 +42,6 @@ impl<T> TtlCell<T> {
         }
         self.item.as_ref().unwrap()
     }
-
-    pub fn set_lifetime(&mut self, lifetime: Duration) {
-        self.lifetime = lifetime;
-    }
 }
 
 pub struct RegeneratingHeader {
