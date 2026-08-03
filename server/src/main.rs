@@ -35,7 +35,7 @@ async fn main() -> AnyResult {
     let args = Args::parse();
     if args.config_file_paths.is_empty() {
         tracing::error!("No config files provided. Check --help for usage.");
-        std::process::abort();
+        std::process::exit(1);
     }
     if let Some(path) = args.csv_log_path {
         common::proto::log::stream::init_logger(path.clone());
