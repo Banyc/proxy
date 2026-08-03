@@ -19,7 +19,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     task::JoinSet,
 };
-use tracing::{debug, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 pub fn server_mux_config() -> MuxConfig {
     MuxConfig {
@@ -66,6 +66,7 @@ pub async fn run_mux_connector<R, W, Fut>(
     let mut reset_notified = reset.0.waiter();
     loop {
         tokio::select! {
+            // TCP conns don't survive suspend; abort, don't drain
             () = reset_notified.notified() => {
                 openers.clear();
                 mux_spawner = JoinSet::new();
@@ -77,7 +78,7 @@ pub async fn run_mux_connector<R, W, Fut>(
                         openers.remove(&addr);
                     }
                     Err(error) if error.is_cancelled() => trace!(?error, "MUX task cancelled (normal shutdown/reset)"),
-                    Err(error) => warn!(?error, "MUX supervision task failed to join"),
+                    Err(error) => error!(?error, "MUX supervision task failed to join"),
                 }
             }
             result = connect_request_rx.recv() => {
@@ -199,8 +200,13 @@ impl ConnectRequestTx {
                 stream: tx,
             })
             .await
-            .unwrap();
-        rx.await.unwrap()
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "MUX connector stopped"))?;
+        rx.await.map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "MUX connector dropped connect response",
+            )
+        })?
     }
 }
 
