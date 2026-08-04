@@ -5,11 +5,11 @@ use std::{
 };
 
 use async_speed_limit::Limiter;
+use copy::BytesCopied;
 use metrics::{counter, gauge};
 use monitor_table::table::RowOwnedGuard;
 use scopeguard::defer;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_io::BytesCopied;
 use tokio_throughput::{ReadGauge, WriteGauge};
 
 pub use crate::proto::log::stream::IoCopyFinished;
@@ -17,14 +17,14 @@ pub use crate::proto::log::stream::IoCopyFinished;
 use crate::{
     log::Timing,
     proto::{
-        addr::StreamAddr,
-        io_copy::{EncryptionDirection, retain_dead_session, same_key_nonce_ciphertext},
+        addr::RouteAddr,
         log::stream::{LOGGER, StreamLog, StreamProxyLog},
-        metrics::stream::{Session, StreamSessionTable},
+        metrics::stream::{StreamSession, StreamSessionTable},
+        relay::{EncryptionDirection, retain_dead_session, same_key_nonce_ciphertext},
     },
 };
 
-pub mod tokio_io;
+use super::copy;
 
 pub struct CopyBidirectional<Downstream, Upstream> {
     pub downstream: Downstream,
@@ -39,9 +39,7 @@ where
     Upstream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     Downstream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    pub async fn serve_as_proxy_server(
-        self,
-    ) -> (IoCopyFinished, Result<(), tokio_io::CopyBiError>) {
+    pub async fn serve_as_proxy_server(self) -> (IoCopyFinished, Result<(), copy::CopyBiError>) {
         let session = self.session();
         let destination = self.conn_context.destination.clone();
 
@@ -51,9 +49,7 @@ where
         (finished, res)
     }
 
-    pub async fn serve_as_access_server(
-        self,
-    ) -> (IoCopyFinished, Result<(), tokio_io::CopyBiError>) {
+    pub async fn serve_as_access_server(self) -> (IoCopyFinished, Result<(), copy::CopyBiError>) {
         let session = self.session();
         let destination = self.conn_context.destination.clone();
 
@@ -63,14 +59,14 @@ where
         (finished, res)
     }
 
-    fn session(&self) -> Option<(RowOwnedGuard<Session>, ReadGauge, WriteGauge)> {
+    fn session(&self) -> Option<(RowOwnedGuard<StreamSession>, ReadGauge, WriteGauge)> {
         self.conn_context.session_table.as_ref().map(|s| {
             let (up_handle, up) = tokio_throughput::gauge();
             let (dn_handle, dn) = tokio_throughput::gauge();
             let r = ReadGauge(up);
             let w = WriteGauge(dn);
 
-            let session = Session {
+            let session = StreamSession {
                 start: SystemTime::now(),
                 end: None,
                 destination: self.conn_context.destination.clone(),
@@ -89,12 +85,12 @@ where
     async fn serve(
         self,
         session: Option<(
-            monitor_table::table::RowOwnedGuard<Session>,
+            monitor_table::table::RowOwnedGuard<StreamSession>,
             ReadGauge,
             WriteGauge,
         )>,
         en_dir: EncryptionDirection,
-    ) -> (IoCopyFinished, StreamLog, Result<(), tokio_io::CopyBiError>) {
+    ) -> (IoCopyFinished, StreamLog, Result<(), copy::CopyBiError>) {
         let destination = self.conn_context.destination.clone();
         let res = match session {
             Some((session, r, w)) => {
@@ -140,16 +136,16 @@ where
 
 pub struct ConnContext {
     pub start: (Instant, SystemTime),
-    pub upstream_remote: StreamAddr,
+    pub upstream_remote: RouteAddr,
     pub upstream_remote_sock: SocketAddr,
     pub downstream_remote: Option<SocketAddr>,
     pub downstream_local: Arc<str>,
     pub upstream_local: Option<SocketAddr>,
     pub session_table: Option<StreamSessionTable>,
-    pub destination: Option<StreamAddr>,
+    pub destination: Option<RouteAddr>,
 }
 
-fn log(log: StreamLog, destination: Option<StreamAddr>) {
+fn log(log: StreamLog, destination: Option<RouteAddr>) {
     match destination {
         Some(d) => {
             let log = StreamProxyLog {
@@ -176,7 +172,7 @@ pub async fn copy_bidirectional_with_payload_crypto<Downstream, Upstream>(
     payload_crypto: Option<&tokio_chacha20::config::Config>,
     speed_limiter: Limiter,
     en_dir: EncryptionDirection,
-) -> tokio_io::TimedCopyBidirectionalResult
+) -> copy::TimedCopyBidirectionalResult
 where
     Upstream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     Downstream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -192,25 +188,25 @@ where
                     let (r, w) = tokio::io::split(upstream);
                     let (r, w) = same_key_nonce_ciphertext(crypto.key(), r, w);
                     let upstream = tokio_chacha20::stream::DuplexStream::new(r, w);
-                    tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await
+                    copy::timed_copy_bidirectional(downstream, upstream, speed_limiter).await
                 }
                 EncryptionDirection::Decrypt => {
                     // Establish encrypted stream
                     let (r, w) = tokio::io::split(downstream);
                     let (r, w) = same_key_nonce_ciphertext(crypto.key(), r, w);
                     let downstream = tokio_chacha20::stream::DuplexStream::new(r, w);
-                    tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await
+                    copy::timed_copy_bidirectional(downstream, upstream, speed_limiter).await
                 }
             }
         }
-        None => tokio_io::timed_copy_bidirectional(downstream, upstream, speed_limiter).await,
+        None => copy::timed_copy_bidirectional(downstream, upstream, speed_limiter).await,
     }
 }
 
 fn get_log_from_copy_result(
     conn_context: ConnContext,
-    result: tokio_io::TimedCopyBidirectionalResult,
-) -> (StreamLog, Result<(), tokio_io::CopyBiError>) {
+    result: copy::TimedCopyBidirectionalResult,
+) -> (StreamLog, Result<(), copy::CopyBiError>) {
     let BytesCopied {
         a_to_b: bytes_uplink,
         b_to_a: bytes_downlink,

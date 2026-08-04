@@ -9,11 +9,11 @@ use std::{
 
 use async_trait::async_trait;
 
-use crate::{connect::ConnectorConfig, stream::AsConn};
+use crate::{connect::ConnectorConfig, stream::ConnParts};
 
 #[async_trait]
 pub trait StreamConnect: std::fmt::Debug + Sync + Send + 'static {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>>;
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>>;
     fn reset_addr(&self, _addr: SocketAddr) {}
     fn reoptimize(&self, _addr: SocketAddr) {}
     fn session_stats(&self, _addr: SocketAddr) -> Option<String> {
@@ -28,7 +28,7 @@ pub trait StreamConnectExt: StreamConnect {
         &self,
         addr: SocketAddr,
         timeout: Duration,
-    ) -> impl Future<Output = io::Result<Box<dyn AsConn>>> + Send
+    ) -> impl Future<Output = io::Result<Box<dyn ConnParts>>> + Send
     where
         Self: Sync,
     {
@@ -60,12 +60,12 @@ impl StreamConnectorTable {
     }
 }
 impl StreamConnectorTable {
-    pub async fn timed_connect_2(
+    pub async fn timed_connect_any(
         &self,
         stream_type: &str,
         addrs: impl IntoIterator<Item = SocketAddr>,
         timeout: Duration,
-    ) -> io::Result<(Box<dyn AsConn>, SocketAddr)> {
+    ) -> io::Result<(Box<dyn ConnParts>, SocketAddr)> {
         let mut last_res = None;
         for addr in addrs {
             let res = self.timed_connect(stream_type, addr, timeout).await;
@@ -85,7 +85,7 @@ impl StreamConnectorTable {
         stream_type: &str,
         addr: SocketAddr,
         timeout: Duration,
-    ) -> io::Result<Box<dyn AsConn>> {
+    ) -> io::Result<Box<dyn ConnParts>> {
         let Some(connector) = self.connectors.get(stream_type) else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -166,7 +166,7 @@ mod tests {
     }
 
     impl OwnIoStream for TestConn {}
-    impl AsConn for TestConn {}
+    impl ConnParts for TestConn {}
 
     #[derive(Debug)]
     struct FallbackConnector {
@@ -176,7 +176,7 @@ mod tests {
 
     #[async_trait]
     impl StreamConnect for FallbackConnector {
-        async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>> {
+        async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
             self.attempted.lock().unwrap().push(addr);
             if addr != self.successful {
                 return Err(io::Error::from(io::ErrorKind::NetworkUnreachable));
@@ -202,7 +202,7 @@ mod tests {
             )]),
         );
         let (_, connected_addr) = table
-            .timed_connect_2(
+            .timed_connect_any(
                 STREAM_TYPE,
                 [unreachable, successful],
                 Duration::from_secs(1),

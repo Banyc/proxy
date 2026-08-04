@@ -5,14 +5,13 @@ use common::{
     config::SharableConfig,
     loading,
     proto::{
-        addr::{StreamAddr, StreamAddrStr},
+        addr::{RouteAddr, RouteAddrStr},
         client::stream::{StreamEstablishError, establish},
-        context::StreamContext,
-        io_copy::stream::{ConnContext, CopyBidirectional},
+        context::StreamRuntime,
         log::stream::IoCopyFinished,
-        route::{StreamConnSelectorBuildContext, StreamConnSelectorBuilder, StreamRouteGroup},
+        relay::stream::{ConnContext, CopyBidirectional},
     },
-    route::ConnSelectorBuildError,
+    route::{ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, Registries},
     stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 use serde::{Deserialize, Serialize};
@@ -21,7 +20,7 @@ use tracing::{instrument, warn};
 
 pub struct TcpAccessLog {
     pub io: IoCopyFinished,
-    pub dst: StreamAddr,
+    pub dst: RouteAddr,
 }
 
 impl fmt::Display for TcpAccessLog {
@@ -32,29 +31,29 @@ impl fmt::Display for TcpAccessLog {
     }
 }
 
-use super::proxy_server::TcpServer;
+use super::listener::TcpServer;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TcpAccessServerConfig {
     pub listen_addr: Arc<str>,
-    pub destination: StreamAddrStr,
-    pub conn_selector: SharableConfig<StreamConnSelectorBuilder>,
+    pub destination: RouteAddrStr,
+    pub conn_selector: SharableConfig<ConnSelectorBuilder>,
     pub speed_limit: Option<f64>,
 }
 impl TcpAccessServerConfig {
     pub fn into_builder(
         self,
-        conn_selector: &HashMap<Arc<str>, StreamRouteGroup>,
-        conn_selector_cx: StreamConnSelectorBuildContext<'_>,
-        stream_context: StreamContext,
-    ) -> Result<TcpAccessServerBuilder, BuildError> {
+        conn_selector: &HashMap<Arc<str>, ConnSelector>,
+        registries: &Registries<'_>,
+        stream_runtime: StreamRuntime,
+    ) -> Result<TcpAccessServerBuilder, TcpAccessBuildError> {
         let conn_selector = match self.conn_selector {
             SharableConfig::SharingKey(key) => conn_selector
                 .get(&key)
-                .ok_or_else(|| BuildError::ProxyGroupKeyNotFound(key.clone()))?
+                .ok_or_else(|| TcpAccessBuildError::ProxyGroupKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(conn_selector_cx.clone())?,
+            SharableConfig::Private(x) => x.resolve(registries)?,
         };
 
         Ok(TcpAccessServerBuilder {
@@ -62,12 +61,12 @@ impl TcpAccessServerConfig {
             destination: self.destination,
             conn_selector,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
-            stream_context,
+            stream_runtime,
         })
     }
 }
 #[derive(Debug, Error)]
-pub enum BuildError {
+pub enum TcpAccessBuildError {
     #[error("Proxy group key not found: {0}")]
     ProxyGroupKeyNotFound(Arc<str>),
     #[error("{0}")]
@@ -77,10 +76,10 @@ pub enum BuildError {
 #[derive(Debug, Clone)]
 pub struct TcpAccessServerBuilder {
     listen_addr: Arc<str>,
-    destination: StreamAddrStr,
-    conn_selector: StreamRouteGroup,
+    destination: RouteAddrStr,
+    conn_selector: ConnSelector,
     speed_limit: f64,
-    stream_context: StreamContext,
+    stream_runtime: StreamRuntime,
 }
 impl loading::Build for TcpAccessServerBuilder {
     type ConnHandler = TcpAccessConnHandler;
@@ -104,7 +103,7 @@ impl loading::Build for TcpAccessServerBuilder {
             self.conn_selector,
             self.destination.0,
             self.speed_limit,
-            self.stream_context,
+            self.stream_runtime,
             Arc::clone(&self.listen_addr),
         ))
     }
@@ -112,44 +111,44 @@ impl loading::Build for TcpAccessServerBuilder {
 
 #[derive(Debug)]
 pub struct TcpAccessConnHandler {
-    conn_selector: StreamRouteGroup,
-    destination: StreamAddr,
+    conn_selector: ConnSelector,
+    destination: RouteAddr,
     speed_limiter: Limiter,
-    stream_context: StreamContext,
+    stream_runtime: StreamRuntime,
     listen_addr: Arc<str>,
 }
 impl TcpAccessConnHandler {
     pub fn new(
-        conn_selector: StreamRouteGroup,
-        destination: StreamAddr,
+        conn_selector: ConnSelector,
+        destination: RouteAddr,
         speed_limit: f64,
-        stream_context: StreamContext,
+        stream_runtime: StreamRuntime,
         listen_addr: Arc<str>,
     ) -> Self {
         Self {
             conn_selector,
             destination,
             speed_limiter: Limiter::new(speed_limit),
-            stream_context,
+            stream_runtime,
             listen_addr,
         }
     }
 
-    async fn proxy<Downstream>(&self, downstream: Downstream) -> Result<(), ProxyError>
+    async fn proxy<Downstream>(&self, downstream: Downstream) -> Result<(), TcpAccessProxyError>
     where
         Downstream: OwnIoStream + HasIoAddr,
     {
         let (chain, payload_crypto) = match &self.conn_selector {
             common::route::ConnSelector::Empty => ([].into(), None),
-            common::route::ConnSelector::Some(conn_selector1) => {
-                let proxy_chain = conn_selector1.choose_chain();
+            common::route::ConnSelector::Some(non_empty_conn_selector) => {
+                let proxy_chain = non_empty_conn_selector.choose_chain();
                 (
                     proxy_chain.chain.clone(),
                     proxy_chain.payload_crypto.clone(),
                 )
             }
         };
-        let upstream = establish(&chain, self.destination.clone(), &self.stream_context).await?;
+        let upstream = establish(&chain, self.destination.clone(), &self.stream_runtime).await?;
 
         let conn_context = ConnContext {
             start: (std::time::Instant::now(), std::time::SystemTime::now()),
@@ -158,7 +157,7 @@ impl TcpAccessConnHandler {
             upstream_local: upstream.stream.local_addr().ok(),
             downstream_remote: downstream.peer_addr().ok(),
             downstream_local: Arc::clone(&self.listen_addr),
-            session_table: self.stream_context.session_table.clone(),
+            session_table: self.stream_runtime.session_table.clone(),
             destination: Some(self.destination.clone()),
         };
         let dst = self.destination.clone();
@@ -182,7 +181,7 @@ impl TcpAccessConnHandler {
     }
 }
 #[derive(Debug, Error)]
-pub enum ProxyError {
+pub enum TcpAccessProxyError {
     #[error("Failed to get downstream address: {0}")]
     DownstreamAddr(#[source] io::Error),
     #[error("Failed to establish proxy chain: {0}")]

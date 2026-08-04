@@ -2,23 +2,23 @@ use std::sync::{Arc, Mutex};
 
 use crate::notify::iter_set::{GuardedIterSet, IterSetEntryGuard};
 
-fn binary_event_channel() -> (BinaryEventTx, BinaryEventRx) {
+fn binary_event_channel() -> (EdgeSignalTx, EdgeSignalRx) {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
-    (BinaryEventTx(tx), BinaryEventRx(rx))
+    (EdgeSignalTx(tx), EdgeSignalRx(rx))
 }
 #[derive(Debug)]
-struct BinaryEventTx(pub tokio::sync::mpsc::Sender<()>);
+struct EdgeSignalTx(pub tokio::sync::mpsc::Sender<()>);
 #[derive(Debug)]
-struct BinaryEventRx(pub tokio::sync::mpsc::Receiver<()>);
+struct EdgeSignalRx(pub tokio::sync::mpsc::Receiver<()>);
 
 mod iter_set;
 
 #[derive(Debug)]
-pub struct Waiter {
-    event: BinaryEventRx,
-    _parent_guard: IterSetEntryGuard<BinaryEventTx>,
+pub struct Subscription {
+    event: EdgeSignalRx,
+    _parent_guard: IterSetEntryGuard<EdgeSignalTx>,
 }
-impl Waiter {
+impl Subscription {
     pub fn has_notified(&self) -> bool {
         !self.event.0.is_empty()
     }
@@ -32,11 +32,11 @@ impl Waiter {
 }
 
 #[derive(Debug, Clone, Default)]
-struct NotifyTargets {
-    waiters: GuardedIterSet<BinaryEventTx>,
+struct Subscribers {
+    waiters: GuardedIterSet<EdgeSignalTx>,
     child_notifies: GuardedIterSet<Self>,
 }
-impl NotifyTargets {
+impl Subscribers {
     pub fn notify_waiters(&self) {
         self.waiters.values_mut(|waiter| {
             let _ = waiter.0.try_send(());
@@ -45,10 +45,10 @@ impl NotifyTargets {
             notify.notify_waiters();
         });
     }
-    pub fn waiter(&self) -> Waiter {
+    pub fn subscription(&self) -> Subscription {
         let (tx, rx) = binary_event_channel();
         let guard = self.waiters.add(tx);
-        Waiter {
+        Subscription {
             event: rx,
             _parent_guard: guard,
         }
@@ -61,13 +61,13 @@ impl NotifyTargets {
 
 #[derive(Debug, Clone)]
 pub struct Notify {
-    parent_guard: Arc<Mutex<Vec<IterSetEntryGuard<NotifyTargets>>>>,
-    targets: NotifyTargets,
+    parent_guard: Arc<Mutex<Vec<IterSetEntryGuard<Subscribers>>>>,
+    targets: Subscribers,
 }
 impl Notify {
     pub fn new() -> Self {
         Self {
-            targets: NotifyTargets::default(),
+            targets: Subscribers::default(),
             parent_guard: Arc::new(Mutex::new(vec![])),
         }
     }
@@ -79,8 +79,8 @@ impl Notify {
         let child_guard = self.targets.add_child_targets(child.targets.clone());
         child.parent_guard.lock().unwrap().push(child_guard);
     }
-    pub fn waiter(&self) -> Waiter {
-        self.targets.waiter()
+    pub fn subscription(&self) -> Subscription {
+        self.targets.subscription()
     }
     pub fn notify_waiters(&self) {
         self.targets.notify_waiters();
@@ -99,11 +99,11 @@ mod tests {
     #[tokio::test]
     async fn test_notified() {
         let n = Notify::new();
-        let mut w1 = n.waiter();
+        let mut w1 = n.subscription();
         assert!(!w1.has_notified());
 
         n.notify_waiters();
-        let mut w2 = n.waiter();
+        let mut w2 = n.subscription();
         assert!(!w2.has_notified());
 
         w1.notified().await;
@@ -115,7 +115,7 @@ mod tests {
         n.strong_add_child_notify(&n3);
         assert_eq!(n.targets.child_notifies.len(), 2);
 
-        let mut w3 = n2.waiter();
+        let mut w3 = n2.subscription();
         assert!(!w3.has_notified());
 
         n.notify_waiters();
@@ -148,11 +148,11 @@ mod tests {
     #[tokio::test]
     async fn a_half_dropped_waiter_does_not_panic_the_notifier() {
         let n = Notify::new();
-        let live = n.waiter();
-        let Waiter {
+        let live = n.subscription();
+        let Subscription {
             event,
             _parent_guard,
-        } = n.waiter();
+        } = n.subscription();
         drop(event);
         assert_eq!(n.targets.waiters.len(), 2);
         n.notify_waiters();

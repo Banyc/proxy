@@ -7,31 +7,13 @@ use std::{
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 use crate::addr::{InternetAddr, InternetAddrKind};
-
-#[derive(Debug, Error)]
-pub enum FilterBuildError {
-    #[error("Regex error: {0}")]
-    Regex(#[from] regex::Error),
-    #[error("Key not found: {0}")]
-    KeyNotFound(Arc<str>),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MatcherBuilder(MatcherBuilderKind);
-impl MatcherBuilder {
-    pub fn build(self) -> Result<Matcher, regex::Error> {
-        self.0.build()
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
-enum MatcherBuilderKind {
+pub(crate) enum MatcherBuilderKind {
     Single {
         #[serde(rename = "addr")]
         #[serde(default)]
@@ -40,11 +22,11 @@ enum MatcherBuilderKind {
         #[serde(default)]
         port_matcher: PortListMatcherBuilder,
     },
-    OtherMatcher(String),
+    NamedRef(String),
     Many(Vec<MatcherBuilderKind>),
 }
 impl MatcherBuilderKind {
-    pub fn build(self) -> Result<Matcher, regex::Error> {
+    fn build(self) -> Result<Matcher, regex::Error> {
         Ok(match self {
             Self::Single {
                 addr_matcher,
@@ -53,7 +35,7 @@ impl MatcherBuilderKind {
                 addr_matcher: addr_matcher.build()?,
                 port_matcher: port_matcher.build(),
             })),
-            Self::OtherMatcher(matcher) => Matcher(MatcherKind::OtherMatcher(matcher.into())),
+            Self::NamedRef(matcher) => Matcher(MatcherKind::NamedRef(matcher.into())),
             Self::Many(matchers) => Matcher(MatcherKind::Many(
                 matchers
                     .into_iter()
@@ -63,48 +45,78 @@ impl MatcherBuilderKind {
         })
     }
 }
+impl From<&Matcher> for MatcherBuilderKind {
+    fn from(matcher: &Matcher) -> Self {
+        match &matcher.0 {
+            MatcherKind::Single(leaf) => MatcherBuilderKind::Single {
+                addr_matcher: (&leaf.addr_matcher).into(),
+                port_matcher: (&leaf.port_matcher).into(),
+            },
+            MatcherKind::NamedRef(name) => MatcherBuilderKind::NamedRef(name.to_string()),
+            MatcherKind::Many(kinds) => MatcherBuilderKind::Many(
+                kinds
+                    .iter()
+                    .map(|k| MatcherBuilderKind::from(&Matcher(k.clone())))
+                    .collect(),
+            ),
+        }
+    }
+}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "MatcherBuilderKind")]
+#[serde(into = "MatcherBuilderKind")]
 pub struct Matcher(MatcherKind);
 impl Matcher {
     pub fn matches(
         &self,
         addr: &InternetAddr,
-        others: &HashMap<Arc<str>, Matcher>,
-        visited: &mut HashSet<Arc<str>>,
+        registry: &HashMap<Arc<str>, Matcher>,
+        cycle_guard: &mut HashSet<Arc<str>>,
     ) -> bool {
-        self.0.matches(addr, others, visited)
+        self.0.matches(addr, registry, cycle_guard)
+    }
+}
+impl TryFrom<MatcherBuilderKind> for Matcher {
+    type Error = regex::Error;
+    fn try_from(kind: MatcherBuilderKind) -> Result<Self, Self::Error> {
+        kind.build()
+    }
+}
+impl From<Matcher> for MatcherBuilderKind {
+    fn from(matcher: Matcher) -> Self {
+        (&matcher).into()
     }
 }
 
 #[derive(Debug, Clone)]
 enum MatcherKind {
     Single(LeafMatcher),
-    OtherMatcher(Arc<str>),
+    NamedRef(Arc<str>),
     Many(Arc<[MatcherKind]>),
 }
 impl MatcherKind {
     pub fn matches(
         &self,
         addr: &InternetAddr,
-        others: &HashMap<Arc<str>, Matcher>,
-        visited: &mut HashSet<Arc<str>>,
+        registry: &HashMap<Arc<str>, Matcher>,
+        cycle_guard: &mut HashSet<Arc<str>>,
     ) -> bool {
         match self {
             MatcherKind::Single(leaf_matcher) => leaf_matcher.matches(addr),
-            MatcherKind::OtherMatcher(name) => {
-                let Some(other) = others.get(name) else {
+            MatcherKind::NamedRef(name) => {
+                let Some(other) = registry.get(name) else {
                     return false;
                 };
-                if visited.contains(name) {
+                if cycle_guard.contains(name) {
                     return false;
                 }
-                visited.insert(name.clone());
-                other.matches(addr, others, visited)
+                cycle_guard.insert(name.clone());
+                other.matches(addr, registry, cycle_guard)
             }
             MatcherKind::Many(matcher_kinds) => matcher_kinds
                 .iter()
-                .any(|x| x.matches(addr, others, visited)),
+                .any(|x| x.matches(addr, registry, cycle_guard)),
         }
     }
 }
@@ -146,7 +158,7 @@ impl LeafMatcher {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
-enum AddrListMatcherBuilder {
+pub(crate) enum AddrListMatcherBuilder {
     Many(Vec<AddrMatcherBuilder>),
     Single(AddrMatcherBuilder),
     #[default]
@@ -166,9 +178,34 @@ impl AddrListMatcherBuilder {
         })
     }
 }
+impl From<&AddrListMatcher> for AddrListMatcherBuilder {
+    fn from(matcher: &AddrListMatcher) -> Self {
+        match matcher {
+            AddrListMatcher::Some(matchers) => {
+                let mut iter = matchers.iter();
+                let first = iter.next();
+                let Some(first) = first else {
+                    return AddrListMatcherBuilder::Any;
+                };
+                let mut rest = Vec::new();
+                for m in iter {
+                    rest.push(AddrMatcherBuilder::from(m));
+                }
+                if rest.is_empty() {
+                    AddrListMatcherBuilder::Single(AddrMatcherBuilder::from(first))
+                } else {
+                    let mut out = vec![AddrMatcherBuilder::from(first)];
+                    out.extend(rest);
+                    AddrListMatcherBuilder::Many(out)
+                }
+            }
+            AddrListMatcher::Any => AddrListMatcherBuilder::Any,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
-enum AddrListMatcher {
+pub(crate) enum AddrListMatcher {
     Some(Arc<[AddrMatcher]>),
     Any,
 }
@@ -193,7 +230,7 @@ impl AddrListMatcher {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
-enum AddrMatcherBuilder {
+pub(crate) enum AddrMatcherBuilder {
     Ipv4(Ipv4Addr),
     Ipv6(Ipv6Addr),
     DomainName(String),
@@ -219,9 +256,20 @@ impl AddrMatcherBuilder {
         })
     }
 }
+impl From<&AddrMatcher> for AddrMatcherBuilder {
+    fn from(matcher: &AddrMatcher) -> Self {
+        match matcher {
+            AddrMatcher::DomainName(regex) => {
+                AddrMatcherBuilder::DomainName(regex.as_str().to_owned())
+            }
+            AddrMatcher::Ipv4(range) => AddrMatcherBuilder::Ipv4Range(range.clone()),
+            AddrMatcher::Ipv6(range) => AddrMatcherBuilder::Ipv6Range(range.clone()),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
-enum AddrMatcher {
+pub(crate) enum AddrMatcher {
     DomainName(Regex),
     Ipv4(RangeInclusive<Ipv4Addr>),
     Ipv6(RangeInclusive<Ipv6Addr>),
@@ -248,7 +296,7 @@ impl AddrMatcher {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
-enum PortListMatcherBuilder {
+pub(crate) enum PortListMatcherBuilder {
     Many(Vec<PortMatcherBuilder>),
     Single(PortMatcherBuilder),
     #[default]
@@ -268,11 +316,36 @@ impl PortListMatcherBuilder {
         }
     }
 }
+impl From<&PortListMatcher> for PortListMatcherBuilder {
+    fn from(matcher: &PortListMatcher) -> Self {
+        match matcher {
+            PortListMatcher::Some(matchers) => {
+                let mut iter = matchers.iter();
+                let first = iter.next();
+                let Some(first) = first else {
+                    return PortListMatcherBuilder::Any;
+                };
+                let mut rest = Vec::new();
+                for m in iter {
+                    rest.push(PortMatcherBuilder::from(m));
+                }
+                if rest.is_empty() {
+                    PortListMatcherBuilder::Single(PortMatcherBuilder::from(first))
+                } else {
+                    let mut out = vec![PortMatcherBuilder::from(first)];
+                    out.extend(rest);
+                    PortListMatcherBuilder::Many(out)
+                }
+            }
+            PortListMatcher::Any => PortListMatcherBuilder::Any,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
-enum PortMatcherBuilder {
+pub(crate) enum PortMatcherBuilder {
     Single(u16),
     Range(RangeInclusive<u16>),
 }
@@ -284,9 +357,14 @@ impl PortMatcherBuilder {
         }
     }
 }
+impl From<&PortMatcher> for PortMatcherBuilder {
+    fn from(matcher: &PortMatcher) -> Self {
+        PortMatcherBuilder::Range(matcher.0.clone())
+    }
+}
 
 #[derive(Debug, Clone)]
-enum PortListMatcher {
+pub(crate) enum PortListMatcher {
     Some(Arc<[PortMatcher]>),
     Any,
 }
@@ -300,7 +378,7 @@ impl PortListMatcher {
 }
 
 #[derive(Debug, Clone)]
-struct PortMatcher(RangeInclusive<u16>);
+pub(crate) struct PortMatcher(RangeInclusive<u16>);
 impl PortMatcher {
     pub fn is_match(&self, port: u16) -> bool {
         self.0.contains(&port)
@@ -312,8 +390,7 @@ mod tests {
     use super::*;
 
     fn matcher(json: &str) -> Matcher {
-        let builder: MatcherBuilder = serde_json::from_str(json).unwrap();
-        builder.build().unwrap()
+        serde_json::from_str(json).unwrap()
     }
 
     fn matches(m: &Matcher, s: &str) -> bool {
@@ -357,5 +434,14 @@ mod tests {
         let m = matcher(r#"{"addr": {"start": "::", "end": "ffff::"}}"#);
         assert!(matches(&m, "[::ffff:10.0.0.1]:80"));
         assert!(!matches(&m, "10.0.0.1:80"));
+    }
+
+    #[test]
+    fn a_matcher_round_trips_through_json() {
+        let m = matcher(r#"{"addr": {"start": "10.0.0.0", "end": "10.255.255.255"}, "port": 80}"#);
+        let json = serde_json::to_string(&m).unwrap();
+        let m2: Matcher = serde_json::from_str(&json).unwrap();
+        assert!(matches(&m2, "10.0.0.1:80"));
+        assert!(!matches(&m2, "10.0.0.1:443"));
     }
 }

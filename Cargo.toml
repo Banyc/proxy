@@ -16,7 +16,7 @@ axum = "0.8"
 base64 = "0.23"
 bytes = "1"
 clap = "4"
-constant_time_eq = "0.4"
+constant_time_eq = "0.5"
 derive_more = "2"
 dhat = "0.3"
 duplicate = "2"
@@ -31,16 +31,16 @@ hyper = "1"
 hyper-util = "0.1"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
-monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.0.17" }
+monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.0.18" }
 mptcp = { git = "https://github.com/Banyc/mptcp.git", tag = "v0.0.2" }
-mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.24" }
+mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.25" }
 pin-project-lite = "0.2"
 postcard = "1"
 primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.59" }
 rand = "0.10"
 regex = "1"
-rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.81" }
-rtp_mux = { git = "https://github.com/Banyc/rtp_mux.git", tag = "v0.0.5" }
+rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.82" }
+rtp_mux = { git = "https://github.com/Banyc/rtp_mux.git", tag = "v0.0.6" }
 scopeguard = "1"
 serde = "1"
 serde_json = "1"
@@ -56,7 +56,7 @@ tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", tag 
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.14" }
+udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.15" }
 common = { path = "common" }
 mitsein = "0.9.0"
 protocol = { path = "protocol" }
@@ -65,20 +65,20 @@ protocol = { path = "protocol" }
 inherits = "release"
 debug = true
 
-[patch."https://github.com/Banyc/rtp.git"]
-rtp = { path = "../rtp" }
-[patch."https://github.com/Banyc/mux.git"]
-mux = { path = "../mux" }
-[patch."https://github.com/Banyc/rtp_mux.git"]
-rtp_mux = { path = "../rtp_mux" }
-[patch."https://github.com/Banyc/udp_listener.git"]
-udp_listener = { path = "../udp_listener" }
-[patch."https://github.com/Banyc/tokio_udp.git"]
-tokio_udp = { path = "../tokio_udp" }
-[patch."https://github.com/Banyc/monitor_table.git"]
-monitor_table = { path = "../monitor_table" }
-[patch."https://github.com/Banyc/dfsql.git"]
-dfsql = { path = "../dfsql" }
+# [patch."https://github.com/Banyc/rtp.git"]
+# rtp = { path = "../rtp" }
+# [patch."https://github.com/Banyc/mux.git"]
+# mux = { path = "../mux" }
+# [patch."https://github.com/Banyc/rtp_mux.git"]
+# rtp_mux = { path = "../rtp_mux" }
+# [patch."https://github.com/Banyc/udp_listener.git"]
+# udp_listener = { path = "../udp_listener" }
+# [patch."https://github.com/Banyc/tokio_udp.git"]
+# tokio_udp = { path = "../tokio_udp" }
+# [patch."https://github.com/Banyc/monitor_table.git"]
+# monitor_table = { path = "../monitor_table" }
+# [patch."https://github.com/Banyc/dfsql.git"]
+# dfsql = { path = "../dfsql" }
 
 [profile.release]
 lto = "thin"

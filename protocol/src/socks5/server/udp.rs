@@ -7,11 +7,10 @@ use common::{
     proto::{
         client::{self, udp::UdpProxyClient},
         conn::udp::{Flow, UpstreamAddr},
-        context::UdpContext,
-        io_copy::udp::{CopyBidirectional, DownstreamParts, UpstreamParts},
-        route::{UdpConnSelector, UdpConnSelectorBuildContext, UdpConnSelectorBuilder},
+        context::UdpRuntime,
+        relay::udp::{CopyBidirectional, DownstreamParts, UpstreamParts},
     },
-    route::ConnSelectorBuildError,
+    route::{ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, Registries},
     udp::{
         Packet,
         server::{UdpServer, UdpServerHandleConn},
@@ -29,34 +28,34 @@ use crate::socks5::messages::UdpRequestHeader;
 #[serde(deny_unknown_fields)]
 pub struct Socks5ServerUdpAccessServerConfig {
     pub listen_addr: Arc<str>,
-    pub conn_selector: SharableConfig<UdpConnSelectorBuilder>,
+    pub conn_selector: SharableConfig<ConnSelectorBuilder>,
     pub speed_limit: Option<f64>,
 }
 impl Socks5ServerUdpAccessServerConfig {
     pub fn into_builder(
         self,
-        conn_selector: &HashMap<Arc<str>, UdpConnSelector>,
-        cx: UdpConnSelectorBuildContext<'_>,
-        udp_context: UdpContext,
-    ) -> Result<Socks5ServerUdpAccessServerBuilder, BuildError> {
+        conn_selector: &HashMap<Arc<str>, ConnSelector>,
+        registries: &Registries<'_>,
+        udp_runtime: UdpRuntime,
+    ) -> Result<Socks5ServerUdpAccessServerBuilder, Socks5UdpBuildError> {
         let conn_selector = match self.conn_selector {
             SharableConfig::SharingKey(key) => conn_selector
                 .get(&key)
-                .ok_or_else(|| BuildError::ProxyGroupKeyNotFound(key.clone()))?
+                .ok_or_else(|| Socks5UdpBuildError::ProxyGroupKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(cx)?,
+            SharableConfig::Private(x) => x.resolve(registries)?,
         };
 
         Ok(Socks5ServerUdpAccessServerBuilder {
             listen_addr: self.listen_addr,
             conn_selector,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
-            udp_context,
+            udp_runtime,
         })
     }
 }
 #[derive(Debug, Error)]
-pub enum BuildError {
+pub enum Socks5UdpBuildError {
     #[error("Proxy group key not found: {0}")]
     ProxyGroupKeyNotFound(Arc<str>),
     #[error("{0}")]
@@ -66,9 +65,9 @@ pub enum BuildError {
 #[derive(Debug, Clone)]
 pub struct Socks5ServerUdpAccessServerBuilder {
     listen_addr: Arc<str>,
-    conn_selector: UdpConnSelector,
+    conn_selector: ConnSelector,
     speed_limit: f64,
-    udp_context: UdpContext,
+    udp_runtime: UdpRuntime,
 }
 impl loading::Build for Socks5ServerUdpAccessServerBuilder {
     type ConnHandler = Socks5ServerUdpAccessConnHandler;
@@ -90,24 +89,24 @@ impl loading::Build for Socks5ServerUdpAccessServerBuilder {
         Ok(Socks5ServerUdpAccessConnHandler::new(
             self.conn_selector,
             self.speed_limit,
-            self.udp_context,
+            self.udp_runtime,
         ))
     }
 }
 
 #[derive(Debug)]
 pub struct Socks5ServerUdpAccessConnHandler {
-    conn_selector: UdpConnSelector,
+    conn_selector: ConnSelector,
     speed_limiter: Limiter,
-    udp_context: UdpContext,
+    udp_runtime: UdpRuntime,
 }
 impl loading::HandleConn for Socks5ServerUdpAccessConnHandler {}
 impl Socks5ServerUdpAccessConnHandler {
-    pub fn new(conn_selector: UdpConnSelector, speed_limit: f64, udp_context: UdpContext) -> Self {
+    pub fn new(conn_selector: ConnSelector, speed_limit: f64, udp_runtime: UdpRuntime) -> Self {
         Self {
             conn_selector,
             speed_limiter: Limiter::new(speed_limit),
-            udp_context,
+            udp_runtime,
         }
     }
 
@@ -132,7 +131,7 @@ impl Socks5ServerUdpAccessConnHandler {
         let upstream = UdpProxyClient::establish(
             chain,
             flow.upstream.as_ref().unwrap().0.clone(),
-            &self.udp_context,
+            &self.udp_runtime,
         )
         .await?;
         let upstream_remote = upstream.remote_addr().clone();
@@ -155,7 +154,7 @@ impl Socks5ServerUdpAccessConnHandler {
         };
 
         let speed_limiter = self.speed_limiter.clone();
-        let session_table = self.udp_context.session_table.clone();
+        let session_table = self.udp_runtime.session_table.clone();
         let upstream_local = upstream_read.inner().local_addr().ok();
         let (dn_read, dn_write) = conn.split();
         tokio::spawn(async move {

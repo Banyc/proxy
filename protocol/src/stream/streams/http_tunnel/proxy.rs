@@ -5,24 +5,24 @@ use crate::stream::{
     addr::ConcreteStreamType,
     streams::{
         http_tunnel::{
-            HttpAccessConnContext, HttpFailureReporter, ReturnType, TunnelError, redacted_uri,
+            HttpAccessConnContext, HttpFailureReporter, HttpResult, TunnelError, redacted_uri,
             respond_with_rejection,
         },
-        tcp::proxy_server::TCP_STREAM_TYPE,
+        tcp::listener::TCP_STREAM_TYPE,
     },
 };
 use common::{
     addr::{InternetAddr, InternetAddrKind},
     log::Timing,
     proto::{
-        addr::StreamAddr,
+        addr::RouteAddr,
         client::stream::establish,
-        io_copy::{DEAD_SESSION_RETENTION_DURATION, same_key_nonce_ciphertext},
-        log::stream::{LOGGER, SimplifiedStreamLog, SimplifiedStreamProxyLog},
-        metrics::stream::Session,
+        log::stream::{LOGGER, StreamLogWithoutByteCounts, StreamProxyLogWithoutByteCounts},
+        metrics::stream::StreamSession,
+        relay::{DEAD_SESSION_RETENTION_DURATION, same_key_nonce_ciphertext},
     },
     route::{ConnSelector, RouteAction},
-    udp::TIMEOUT,
+    udp::UDP_FLOW_TIMEOUT,
 };
 use http_body_util::BodyExt;
 use hyper::{Request, body::Incoming};
@@ -33,7 +33,7 @@ use tracing::{instrument, trace};
 
 struct HttpProxyLog {
     timing: Timing,
-    upstream_addr: StreamAddr,
+    upstream_addr: RouteAddr,
     upstream_sock_addr: SocketAddr,
     downstream_addr: Option<SocketAddr>,
     destination: Option<InternetAddr>,
@@ -64,11 +64,11 @@ impl fmt::Display for HttpProxyLog {
 }
 
 #[instrument(skip_all, fields(method = %req.method()))]
-pub async fn run_proxy_mode(
+pub async fn dispatch_proxy(
     ctx: &HttpAccessConnContext,
     req: Request<hyper::body::Incoming>,
     reporter: HttpFailureReporter,
-) -> ReturnType {
+) -> HttpResult {
     let method = req.method().to_string();
     let uri = redacted_uri(req.uri());
     let dst_addr = match get_authority_from_req(&req) {
@@ -79,9 +79,9 @@ pub async fn run_proxy_mode(
         }
     };
     reporter.set_destination(dst_addr.to_string());
-    let dst_addr_stream = StreamAddr {
+    let dst_addr_stream = RouteAddr {
         address: dst_addr,
-        stream_type: ConcreteStreamType::Tcp.to_string().into(),
+        protocol: ConcreteStreamType::Tcp.to_string().into(),
     };
     let req = req_modify_path(req);
     dispatch(dst_addr_stream, req, method, uri, ctx, reporter).await
@@ -89,13 +89,13 @@ pub async fn run_proxy_mode(
 
 #[instrument(skip_all, fields(addr = ?dst_addr))]
 async fn dispatch(
-    dst_addr: StreamAddr,
+    dst_addr: RouteAddr,
     req: Request<Incoming>,
     method: String,
     uri: String,
     ctx: &HttpAccessConnContext,
     reporter: HttpFailureReporter,
-) -> ReturnType {
+) -> HttpResult {
     let action = ctx.route_table.action(&dst_addr.address);
     match action {
         RouteAction::ConnSelector(conn_selector) => {
@@ -111,13 +111,13 @@ async fn dispatch(
 
 #[instrument(skip_all)]
 async fn direct(
-    dst_addr: StreamAddr,
+    dst_addr: RouteAddr,
     req: Request<Incoming>,
     method: String,
     uri: String,
     ctx: &HttpAccessConnContext,
     reporter: HttpFailureReporter,
-) -> ReturnType {
+) -> HttpResult {
     let start = (std::time::Instant::now(), std::time::SystemTime::now());
     let destination = dst_addr.address.to_string();
     let sock_addrs = dst_addr.address.to_socket_addrs().await.map_err(|e| {
@@ -128,7 +128,7 @@ async fn direct(
     let (upstream, upstream_sock_addr) = ctx
         .stream_context
         .connector_table
-        .timed_connect_2(TCP_STREAM_TYPE, sock_addrs, TIMEOUT)
+        .timed_connect_any(TCP_STREAM_TYPE, sock_addrs, UDP_FLOW_TIMEOUT)
         .await
         .map_err(|e| {
             let err = TunnelError::Direct(e);
@@ -137,7 +137,7 @@ async fn direct(
         })?;
     let dn_remote = reporter.downstream.remote;
     let session_guard = ctx.stream_context.session_table.as_ref().map(|s| {
-        s.set_scope_owned(Session {
+        s.set_scope_owned(StreamSession {
             start: SystemTime::now(),
             end: None,
             destination: Some(dst_addr.clone()),
@@ -154,9 +154,9 @@ async fn direct(
     let timing = Timing { start, end };
     let log = HttpProxyLog {
         timing,
-        upstream_addr: StreamAddr {
+        upstream_addr: RouteAddr {
             address: dst_addr.address.clone(),
-            stream_type: ConcreteStreamType::Tcp.to_string().into(),
+            protocol: ConcreteStreamType::Tcp.to_string().into(),
         },
         upstream_sock_addr,
         downstream_addr: dn_remote,
@@ -170,20 +170,20 @@ async fn direct(
 
 #[instrument(skip_all)]
 async fn proxy(
-    conn_selector: &ConnSelector<StreamAddr>,
-    dst_addr: StreamAddr,
+    conn_selector: &ConnSelector,
+    dst_addr: RouteAddr,
     req: Request<Incoming>,
     method: String,
     uri: String,
     ctx: &HttpAccessConnContext,
     reporter: HttpFailureReporter,
-) -> ReturnType {
+) -> HttpResult {
     let start = (std::time::Instant::now(), std::time::SystemTime::now());
 
     let (chain, payload_crypto) = match conn_selector {
         common::route::ConnSelector::Empty => ([].into(), None),
-        common::route::ConnSelector::Some(conn_selector1) => {
-            let proxy_chain = conn_selector1.choose_chain();
+        common::route::ConnSelector::Some(non_empty_conn_selector) => {
+            let proxy_chain = non_empty_conn_selector.choose_chain();
             (
                 proxy_chain.chain.clone(),
                 proxy_chain.payload_crypto.clone(),
@@ -203,7 +203,7 @@ async fn proxy(
 
     let dn_remote = reporter.downstream.remote;
     let session_guard = ctx.stream_context.session_table.as_ref().map(|s| {
-        s.set_scope_owned(Session {
+        s.set_scope_owned(StreamSession {
             start: SystemTime::now(),
             end: None,
             destination: Some(dst_addr.clone()),
@@ -238,8 +238,8 @@ async fn proxy(
     };
     common::info_println!("HTTP proxy: Finished {log}");
 
-    let record = (&SimplifiedStreamProxyLog {
-        stream: SimplifiedStreamLog {
+    let record = (&StreamProxyLogWithoutByteCounts {
+        stream: StreamLogWithoutByteCounts {
             timing: timing.clone(),
             upstream_addr,
             upstream_sock_addr: upstream.sock_addr,
@@ -259,9 +259,9 @@ async fn proxy(
 async fn tls_http<Upstream>(
     upstream: Upstream,
     req: Request<Incoming>,
-    session_guard: Option<RowOwnedGuard<Session>>,
+    session_guard: Option<RowOwnedGuard<StreamSession>>,
     reporter: &HttpFailureReporter,
-) -> ReturnType
+) -> HttpResult
 where
     Upstream: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {

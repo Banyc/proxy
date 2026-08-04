@@ -1,4 +1,4 @@
-[stream.conn]
+[stream.upstream]
 "tcp1" = { address = "tcp://proxy.example.org:80", header_key = "base64", payload_key = "base64" }
 "mptcp1" = { address = "mptcp://proxy.example.org:81", header_key = "base64", payload_key = "base64" }
 "tcpmux1" = { address = "tcpmux://proxy.example.org:82", header_key = "base64", payload_key = "base64" }
@@ -9,7 +9,7 @@
 [stream]
 pool = ["tcp1", "mptcp1"]
 
-[udp.conn]
+[udp.upstream]
 "udp1" = { address = "proxy.example.org:80", header_key = "base64", payload_key = "base64" }
 
 [access_server.matcher]
@@ -27,9 +27,9 @@ pool = ["tcp1", "mptcp1"]
     { weight = 1, chain = ["kcp1"] },
     { weight = 1, chain = ["rtp1"] },
     { weight = 1, chain = ["rtpmux1"] },
-], trace_rtt = false, active_chains = 6 }
+], probe_rtt = false, active_chains = 6 }
 # Optional: only route over chains within N x the fastest route's RTT, so slower
-# routes are excluded automatically (needs trace_rtt = true). e.g. with fast
+# routes are excluded automatically (needs probe_rtt = true). e.g. with fast
 # ~150ms routes and slow ~250ms routes, max_rtt_ratio = 1.5 (cutoff 225ms)
 # routes only over the fast ones; if they all degrade, the slow ones
 # come back. Unset = disabled. Must be >= 1.0 (1.0 = only the single fastest tier).
@@ -45,18 +45,18 @@ pool = ["tcp1", "mptcp1"]
 [access_server.udp.conn_selector]
 "default" = { chains = [
     { weight = 1, chain = ["udp1"] },
-], trace_rtt = false, active_chains = 1 }
+], probe_rtt = false, active_chains = 1 }
 
 [[access_server.tcp_server]]
 listen_addr = "0.0.0.0:80"
 destination = "tcp://www.example.org:80"
-conn_selector = "default"                  # Or, `conn_selector = { chains = ..., trace_rtt = ..., ... }`
+conn_selector = "default"                  # Or, `conn_selector = { chains = ..., probe_rtt = ..., ... }`
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[access_server.udp_server]]
 listen_addr = "0.0.0.0:80"
 destination = "www.example.org:80"
-conn_selector = "default"            # Or, `conn_selector = { chains = ..., trace_rtt = ..., ... }`
+conn_selector = "default"            # Or, `conn_selector = { chains = ..., probe_rtt = ..., ... }`
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[access_server.http_server]]
@@ -75,7 +75,7 @@ route_table = "default"        # Or, `route_table = [...]`
 
 [[access_server.socks5_udp_server]]
 listen_addr = "0.0.0.0:80"
-conn_selector = "default"    # Or, `conn_selector = { chains = ..., trace_rtt = ..., ... }`
+conn_selector = "default"    # Or, `conn_selector = { chains = ..., probe_rtt = ..., ... }`
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[proxy_server.tcp_server]]

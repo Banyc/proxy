@@ -5,16 +5,15 @@ mod tests {
     use ae::anti_replay::ReplayValidator;
     use common::{
         anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
-        connect::{ConnectorConfig, ConnectorReset},
+        connect::{ConnectorConfig, ConnectorResetSignal},
         loading::{self, Serve},
         notify::Notify,
         proto::{
-            addr::StreamAddr,
-            client::stream::{establish, trace_rtt},
+            addr::RouteAddr,
+            client::stream::{establish, probe_rtt},
             conn::stream::ConnAndAddr,
             conn_handler::stream::StreamProxyConnHandler,
-            context::StreamContext,
-            route::StreamConnConfig,
+            context::StreamRuntime,
         },
         route::ConnConfig,
         stream::pool::StreamConnPool,
@@ -42,9 +41,9 @@ mod tests {
         tokio_chacha20::config::Config::new(key.into())
     }
 
-    fn stream_context() -> StreamContext {
-        let connector_reset = ConnectorReset(Notify::new());
-        StreamContext {
+    fn stream_context() -> StreamRuntime {
+        let connector_reset = ConnectorResetSignal(Notify::new());
+        StreamRuntime {
             session_table: None,
             pool: Swap::new(StreamConnPool::empty()),
             connector_table: Arc::new(build_concrete_stream_connector_table(
@@ -62,7 +61,7 @@ mod tests {
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &Arc<str>,
         ty: ConcreteStreamType,
-    ) -> StreamConnConfig {
+    ) -> ConnConfig {
         spawn_proxy_(join_set, addr, ty, true).await
     }
 
@@ -70,7 +69,7 @@ mod tests {
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &Arc<str>,
         ty: ConcreteStreamType,
-    ) -> StreamConnConfig {
+    ) -> ConnConfig {
         spawn_proxy_(join_set, addr, ty, false).await
     }
 
@@ -79,7 +78,7 @@ mod tests {
         addr: &Arc<str>,
         ty: ConcreteStreamType,
         allow_loopback: bool,
-    ) -> StreamConnConfig {
+    ) -> ConnConfig {
         let crypto = create_random_crypto();
         let proxy = StreamProxyConnHandler::new(
             crypto.clone(),
@@ -165,9 +164,9 @@ mod tests {
             }
         };
         ConnConfig {
-            address: StreamAddr {
+            address: RouteAddr {
                 address: proxy_addr.into(),
-                stream_type: ty.to_string().into(),
+                protocol: ty.to_string().into(),
             },
             header_crypto: crypto,
             payload_crypto: None,
@@ -180,7 +179,7 @@ mod tests {
         req: &[u8],
         resp: &[u8],
         accepts: usize,
-    ) -> StreamAddr {
+    ) -> RouteAddr {
         let listener = TcpListener::bind(addr).await.unwrap();
         let greet_addr = listener.local_addr().unwrap();
         let req = req.to_vec();
@@ -203,9 +202,9 @@ mod tests {
                 res.unwrap();
             }
         });
-        StreamAddr {
+        RouteAddr {
             address: greet_addr.into(),
-            stream_type: ConcreteStreamType::Tcp.to_string().into(),
+            protocol: ConcreteStreamType::Tcp.to_string().into(),
         }
     }
 
@@ -252,7 +251,7 @@ mod tests {
         read_response(&mut stream, resp_msg).await.unwrap();
 
         // Trace
-        let rtt = trace_rtt(&proxies, &stream_context).await.unwrap();
+        let rtt = probe_rtt(&proxies, &stream_context).await.unwrap();
         assert!(rtt > Duration::from_secs(0));
         assert!(rtt < Duration::from_secs(1));
     }
@@ -419,9 +418,9 @@ mod tests {
 
         let listener = TcpListener::bind("[::]:0").await.unwrap();
         let receiver_addr = listener.local_addr().unwrap();
-        let receiver_greet_addr = StreamAddr {
+        let receiver_greet_addr = RouteAddr {
             address: receiver_addr.into(),
-            stream_type: ConcreteStreamType::Tcp.to_string().into(),
+            protocol: ConcreteStreamType::Tcp.to_string().into(),
         };
 
         join_set.spawn(async move {
@@ -480,7 +479,7 @@ mod tests {
         read_response(&mut stream, resp_msg).await.unwrap();
     }
 
-    async fn assert_refused(proxies: &[StreamConnConfig], greet_addr: StreamAddr) {
+    async fn assert_refused(proxies: &[ConnConfig], greet_addr: RouteAddr) {
         let mut stream = match establish(proxies, greet_addr, &stream_context()).await {
             Ok(ConnAndAddr { stream, .. }) => stream,
             Err(_) => {
@@ -530,7 +529,7 @@ mod tests {
         let resp_msg = b"goodbye world";
         let greet_addr = spawn_greet(&mut join_set, "127.0.0.1:0", req_msg, resp_msg, 1).await;
         let greet_port = greet_addr.address.port();
-        let mapped: StreamAddr = StreamAddr {
+        let mapped: RouteAddr = RouteAddr {
             address: std::net::SocketAddr::new(
                 std::net::Ipv4Addr::new(127, 0, 0, 1)
                     .to_ipv6_mapped()
@@ -538,7 +537,7 @@ mod tests {
                 greet_port,
             )
             .into(),
-            stream_type: ConcreteStreamType::Tcp.to_string().into(),
+            protocol: ConcreteStreamType::Tcp.to_string().into(),
         };
         assert_refused(&[proxy_config], mapped).await;
     }
@@ -552,10 +551,10 @@ mod tests {
         let resp_msg = b"goodbye world";
         let greet_addr = spawn_greet(&mut join_set, "0.0.0.0:0", req_msg, resp_msg, 1).await;
         let greet_port = greet_addr.address.port();
-        let unspecified: StreamAddr = StreamAddr {
+        let unspecified: RouteAddr = RouteAddr {
             address: std::net::SocketAddr::new(std::net::Ipv4Addr::UNSPECIFIED.into(), greet_port)
                 .into(),
-            stream_type: ConcreteStreamType::Tcp.to_string().into(),
+            protocol: ConcreteStreamType::Tcp.to_string().into(),
         };
         assert_refused(&[proxy_config], unspecified).await;
     }
@@ -579,9 +578,9 @@ mod tests {
         // independently.
         let listener = TcpListener::bind("[::]:0").await.unwrap();
         let echo_addr = listener.local_addr().unwrap();
-        let greet_addr = StreamAddr {
+        let greet_addr = RouteAddr {
             address: echo_addr.into(),
-            stream_type: ConcreteStreamType::Tcp.to_string().into(),
+            protocol: ConcreteStreamType::Tcp.to_string().into(),
         };
         join_set.spawn(async move {
             loop {

@@ -13,6 +13,7 @@ use tokio_chacha20::{
     },
 };
 
+pub mod copy;
 pub mod stream;
 pub mod udp;
 

@@ -40,4 +40,4 @@ fn option_merge<T>(a: Option<T>, b: Option<T>) -> Result<Option<T>, ()> {
 }
 
 #[derive(Debug, Clone)]
-pub struct ConnectorReset(pub Notify);
+pub struct ConnectorResetSignal(pub Notify);

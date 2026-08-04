@@ -14,7 +14,7 @@ use common::{
     loading,
     proto::{
         conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
-        context::Context,
+        context::Runtime,
     },
 };
 use serde::Deserialize;
@@ -109,7 +109,7 @@ pub async fn spawn_and_clean(
     config: ProxyServerConfig,
     join_set: &mut tokio::task::JoinSet<AnyResult>,
     loader: &mut ProxyServerLoader,
-    context: Context,
+    context: Runtime,
 ) -> AnyResult {
     tcp_spawn_and_clean(config.tcp_server, join_set, loader, &context).await?;
     tcp_mux_spawn_and_clean(config.tcp_mux_server, join_set, loader, &context).await?;
@@ -124,7 +124,7 @@ async fn tcp_spawn_and_clean(
     config: Vec<TcpProxyServerConfig>,
     join_set: &mut tokio::task::JoinSet<AnyResult>,
     loader: &mut ProxyServerLoader,
-    context: &Context,
+    context: &Runtime,
 ) -> AnyResult {
     loader
         .tcp_server
@@ -142,7 +142,7 @@ async fn tcp_mux_spawn_and_clean(
     config: Vec<TcpMuxProxyServerConfig>,
     join_set: &mut tokio::task::JoinSet<AnyResult>,
     loader: &mut ProxyServerLoader,
-    context: &Context,
+    context: &Runtime,
 ) -> AnyResult {
     loader
         .tcp_mux_server
@@ -160,7 +160,7 @@ async fn udp_spawn_and_clean(
     config: Vec<UdpProxyServerConfig>,
     join_set: &mut tokio::task::JoinSet<AnyResult>,
     loader: &mut ProxyServerLoader,
-    context: &Context,
+    context: &Runtime,
 ) -> AnyResult {
     loader
         .udp_server
@@ -181,7 +181,7 @@ async fn kcp_spawn_and_clean(
     config: Vec<KcpProxyServerConfig>,
     join_set: &mut tokio::task::JoinSet<AnyResult>,
     loader: &mut ProxyServerLoader,
-    context: &Context,
+    context: &Runtime,
 ) -> AnyResult {
     loader
         .kcp_server
@@ -199,7 +199,7 @@ async fn mptcp_spawn_and_clean(
     config: Vec<MptcpProxyServerConfig>,
     join_set: &mut tokio::task::JoinSet<AnyResult>,
     loader: &mut ProxyServerLoader,
-    context: &Context,
+    context: &Runtime,
 ) -> AnyResult {
     loader
         .mptcp_server
@@ -217,7 +217,7 @@ async fn rtp_spawn_and_clean(
     config: Vec<RtpProxyServerConfig>,
     join_set: &mut tokio::task::JoinSet<AnyResult>,
     loader: &mut ProxyServerLoader,
-    context: &Context,
+    context: &Runtime,
 ) -> AnyResult {
     loader
         .rtp_server
@@ -235,7 +235,7 @@ async fn rtp_mux_spawn_and_clean(
     config: Vec<RtpMuxProxyServerConfig>,
     join_set: &mut tokio::task::JoinSet<AnyResult>,
     loader: &mut ProxyServerLoader,
-    context: &Context,
+    context: &Runtime,
 ) -> AnyResult {
     loader
         .rtp_mux_server

@@ -12,16 +12,16 @@ pub trait ReadConfig {
 
 #[derive(Debug, Clone)]
 pub struct ConfigWatcher {
-    tx: ConfigChanged,
+    signal: ConfigChangeSignal,
 }
 impl ConfigWatcher {
     pub fn new() -> Self {
-        let tx = ConfigChanged(Notify::new());
-        Self { tx }
+        let signal = ConfigChangeSignal(Notify::new());
+        Self { signal }
     }
 
-    pub fn notify(&self) -> &ConfigChanged {
-        &self.tx
+    pub fn signal(&self) -> &ConfigChangeSignal {
+        &self.signal
     }
 }
 impl Default for ConfigWatcher {
@@ -36,20 +36,20 @@ impl file_watcher_tokio::HandleEvent for ConfigWatcher {
         if !may_changed {
             return;
         }
-        self.tx.0.notify_waiters();
+        self.signal.0.notify_waiters();
     }
 }
 
-pub fn spawn_watch_tasks(config_file_paths: &[Arc<str>]) -> ConfigChanged {
+pub fn spawn_watch_tasks(config_file_paths: &[Arc<str>]) -> ConfigChangeSignal {
     let watcher = ConfigWatcher::new();
-    let notify = watcher.notify().clone();
+    let signal = watcher.signal().clone();
     config_file_paths.iter().for_each(|path| {
         let watcher = watcher.clone();
         let path = path.clone();
         tokio::spawn(async move { file_watcher_tokio::watch_file(path.as_ref(), watcher).await });
     });
-    notify
+    signal
 }
 
 #[derive(Debug, Clone)]
-pub struct ConfigChanged(pub Notify);
+pub struct ConfigChangeSignal(pub Notify);

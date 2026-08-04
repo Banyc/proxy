@@ -17,7 +17,7 @@ use tracing::{error, instrument, trace, warn};
 
 use common::{
     addr::any_addr,
-    connect::{ConnectorConfig, ConnectorReset},
+    connect::{ConnectorConfig, ConnectorResetSignal},
     error::AnyResult,
     loading,
     proto::{
@@ -29,15 +29,16 @@ use common::{
             },
         },
         connect::stream::StreamConnect,
-        context::StreamContext,
+        context::StreamRuntime,
     },
-    stream::{AsConn, StreamServerHandleConn},
+    stream::{ConnParts, StreamServerHandleConn},
 };
 
 use crate::stream::streams::mux::{run_mux_accepter, server_mux_config};
 
 use super::mux::{
-    ConnectRequestTx, IoMuxStream, SocketAddrPair, connect_request_channel, run_mux_connector,
+    AddressedMuxStream, ConnectRequestTx, SocketAddrPair, connect_request_channel,
+    run_mux_connector,
 };
 
 struct MuxState {
@@ -84,8 +85,11 @@ where
     async fn serve_(
         self,
         set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
-    ) -> Result<(), ServeError> {
-        let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
+    ) -> Result<(), ServeLoopError> {
+        let addr = self
+            .listener
+            .local_addr()
+            .map_err(ServeLoopError::LocalAddr)?;
         let mut state = MuxState {
             mux: self.mux,
             accepting: JoinSet::new(),
@@ -141,7 +145,7 @@ where
         .await
     }
 }
-pub use common::serve_loop::ServeError;
+pub use common::serve_loop::ServeLoopError;
 
 fn socket_addr_pair(stream: &tokio::net::TcpStream) -> io::Result<SocketAddrPair> {
     Ok(SocketAddrPair {
@@ -156,7 +160,7 @@ pub struct TcpMuxConnector {
     _connector: JoinSet<()>,
 }
 impl TcpMuxConnector {
-    pub fn new(config: Arc<RwLock<ConnectorConfig>>, reset: ConnectorReset) -> Self {
+    pub fn new(config: Arc<RwLock<ConnectorConfig>>, reset: ConnectorResetSignal) -> Self {
         let (connect_request_tx, connect_request_rx) = connect_request_channel();
         let mut connector = JoinSet::new();
         connector.spawn(async move {
@@ -192,11 +196,11 @@ impl TcpMuxConnector {
 }
 #[async_trait]
 impl StreamConnect for TcpMuxConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
         let ((r, w), addr) = self.connect_request_tx.send(addr).await?;
         counter!("stream.tcp_mux.mux.connects").increment(1);
         let stream = tokio_chacha20::stream::DuplexStream::new(r, w);
-        Ok(Box::new(IoMuxStream::new(stream, addr)))
+        Ok(Box::new(AddressedMuxStream::new(stream, addr)))
     }
 }
 
@@ -208,7 +212,7 @@ pub struct TcpMuxProxyServerConfig {
     pub inner: StreamProxyConnHandlerConfig,
 }
 impl TcpMuxProxyServerConfig {
-    pub fn into_builder(self, stream_context: StreamContext) -> TcpMuxProxyServerBuilder {
+    pub fn into_builder(self, stream_context: StreamRuntime) -> TcpMuxProxyServerBuilder {
         let listen_addr = Arc::clone(&self.listen_addr);
         let inner = self.inner.into_builder(stream_context, listen_addr);
         TcpMuxProxyServerBuilder {

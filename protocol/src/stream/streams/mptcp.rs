@@ -23,9 +23,9 @@ use common::{
             },
         },
         connect::stream::StreamConnect,
-        context::StreamContext,
+        context::StreamRuntime,
     },
-    stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 
 const STREAMS: usize = 4;
@@ -72,13 +72,13 @@ where
     async fn serve_(
         self,
         set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
-    ) -> Result<(), ServeError> {
+    ) -> Result<(), ServeLoopError> {
         let addr = self
             .listener
             .local_addrs()
             .next()
             .unwrap()
-            .map_err(ServeError::LocalAddr)?;
+            .map_err(ServeLoopError::LocalAddr)?;
         let listener = Arc::new(tokio::sync::Mutex::new(self.listener));
         let accept_listener = Arc::clone(&listener);
         let mut state = ();
@@ -96,7 +96,9 @@ where
             },
             |_, stream: MptcpStream, conn_handler: Arc<ConnHandler>| {
                 tokio::spawn(async move {
-                    conn_handler.handle_stream(IoMptcpStream(stream)).await;
+                    conn_handler
+                        .handle_stream(AddressedMptcpStream(stream))
+                        .await;
                 });
             },
             &mut state,
@@ -105,23 +107,23 @@ where
         .await
     }
 }
-pub use common::serve_loop::ServeError;
+pub use common::serve_loop::ServeLoopError;
 
 #[derive(Debug, Clone, Copy)]
 pub struct MptcpConnector;
 #[async_trait]
 impl StreamConnect for MptcpConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
         let addrs = std::iter::repeat_n((), STREAMS).map(|()| addr);
         let stream = MptcpStream::connect(addrs).await?;
         counter!("stream.mptcp.connects").increment(1);
-        Ok(Box::new(IoMptcpStream(stream)))
+        Ok(Box::new(AddressedMptcpStream(stream)))
     }
 }
 
 #[derive(Debug)]
-pub struct IoMptcpStream(pub MptcpStream);
-impl AsyncWrite for IoMptcpStream {
+pub struct AddressedMptcpStream(pub MptcpStream);
+impl AsyncWrite for AddressedMptcpStream {
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -144,7 +146,7 @@ impl AsyncWrite for IoMptcpStream {
         std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
     }
 }
-impl AsyncRead for IoMptcpStream {
+impl AsyncRead for AddressedMptcpStream {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -153,9 +155,9 @@ impl AsyncRead for IoMptcpStream {
         std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
     }
 }
-impl AsConn for IoMptcpStream {}
-impl OwnIoStream for IoMptcpStream {}
-impl HasIoAddr for IoMptcpStream {
+impl ConnParts for AddressedMptcpStream {}
+impl OwnIoStream for AddressedMptcpStream {}
+impl HasIoAddr for AddressedMptcpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         self.0.peer_addr().ok_or_else(|| {
             io::Error::new(
@@ -184,7 +186,7 @@ pub struct MptcpProxyServerConfig {
     pub inner: StreamProxyConnHandlerConfig,
 }
 impl MptcpProxyServerConfig {
-    pub fn into_builder(self, stream_context: StreamContext) -> MptcpProxyServerBuilder {
+    pub fn into_builder(self, stream_context: StreamRuntime) -> MptcpProxyServerBuilder {
         let listen_addr = Arc::clone(&self.listen_addr);
         let inner = self.inner.into_builder(stream_context, listen_addr);
         MptcpProxyServerBuilder {

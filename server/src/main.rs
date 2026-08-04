@@ -5,7 +5,7 @@ use clap::Parser;
 use common::{error::AnyResult, suspend::spawn_check_system_suspend};
 use server::{
     ServeContext,
-    config::{multi_file_config::MultiConfigReader, spawn_watch_tasks},
+    config::{multi_file_config::MultiFileConfigReader, spawn_watch_tasks},
     monitor::monitor_router,
     serve,
 };
@@ -21,12 +21,12 @@ struct Args {
     config_file_paths: Vec<Arc<str>>,
 
     /// Listen address for monitoring
-    #[arg(short, long)]
-    monitor: Option<SocketAddr>,
+    #[arg(short, long, alias = "monitor")]
+    monitor_listen_addr: Option<SocketAddr>,
 
-    /// CSV log path
-    #[arg(short, long)]
-    csv_log_path: Option<PathBuf>,
+    /// Record directory for CSV logs
+    #[arg(short, long, alias = "csv-log-path")]
+    record_dir: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -37,7 +37,7 @@ async fn main() -> AnyResult {
         tracing::error!("No config files provided. Check --help for usage.");
         std::process::exit(1);
     }
-    if let Some(path) = args.csv_log_path {
+    if let Some(path) = args.record_dir {
         common::proto::log::stream::init_logger(path.clone());
         common::proto::log::udp::init_logger(path.clone());
     };
@@ -50,7 +50,7 @@ async fn main() -> AnyResult {
 
     // Monitoring
     let serve_context: ServeContext;
-    if let Some(monitor_addr) = args.monitor {
+    if let Some(monitor_addr) = args.monitor_listen_addr {
         let router = Router::new();
 
         let (session_tables, monitor_router) = monitor_router();
@@ -82,7 +82,7 @@ async fn main() -> AnyResult {
         };
     }
 
-    let config_reader = MultiConfigReader::new(args.config_file_paths.into());
+    let config_reader = MultiFileConfigReader::new(args.config_file_paths.into());
     serve(config_reader, serve_context)
         .await
         .map_err(Into::into)

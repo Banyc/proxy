@@ -170,7 +170,7 @@ where
 }
 
 #[derive(Debug, Error)]
-pub enum ServeError {
+pub enum ServeLoopError {
     #[error("Failed to get local address: {0}")]
     LocalAddr(#[source] io::Error),
     #[error("Failed to accept connection: {source}, {addr}")]
@@ -181,19 +181,20 @@ pub enum ServeError {
     },
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn serve_loop<H, T, A, AF, W, S, X, E>(
     label: &'static str,
     counter_name: Option<&'static str>,
-    dispatching: bool,
+    counts_dispatch_errors: bool,
     addr: SocketAddr,
     mut conn_handler: Arc<H>,
     mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<H>,
-    mut swap: S,
+    mut on_handler_replaced: S,
     mut accept: A,
-    mut wrap: W,
-    state: &mut X,
-    mut extra: E,
-) -> Result<(), ServeError>
+    mut wrap_conn: W,
+    loop_state: &mut X,
+    mut after_accept: E,
+) -> Result<(), ServeLoopError>
 where
     H: Send + Sync + 'static,
     A: FnMut() -> AF,
@@ -207,22 +208,22 @@ where
     loop {
         trace!("Waiting for connection");
         tokio::select! {
-            res = accept_after_retry(accept_backoff.retry_delay(), || accept()) => {
+            res = accept_after_retry(accept_backoff.retry_delay(), &mut accept) => {
                 let stream = match res {
                     Ok(res) => {
                         accept_backoff.accepted(label, addr);
                         res
                     }
                     Err(e) => {
-                        let result = if dispatching {
+                        let result = if counts_dispatch_errors {
                             accept_backoff.failed_dispatching(label, addr, e)
                         } else {
                             accept_backoff.failed(label, addr, e)
                         };
                         if let Err(source) = result {
-                            return Err(ServeError::Accept { source, addr });
+                            return Err(ServeLoopError::Accept { source, addr });
                         }
-                        if dispatching {
+                        if counts_dispatch_errors {
                             tokio::task::yield_now().await;
                         }
                         continue;
@@ -231,9 +232,9 @@ where
                 if let Some(counter_name) = counter_name {
                     counter!(counter_name).increment(1);
                 }
-                wrap(state, stream, Arc::clone(&conn_handler));
+                wrap_conn(loop_state, stream, Arc::clone(&conn_handler));
             }
-            _ = extra(state) => {}
+            _ = after_accept(loop_state) => {}
             res = set_conn_handler_rx.0.recv() => {
                 let new_conn_handler = match res {
                     Some(new_conn_handler) => new_conn_handler,
@@ -241,7 +242,7 @@ where
                 };
                 info!(?addr, "Connection handler set");
                 conn_handler = Arc::new(new_conn_handler);
-                swap(Arc::clone(&conn_handler));
+                on_handler_replaced(Arc::clone(&conn_handler));
             }
         }
     }
@@ -396,7 +397,7 @@ mod tests {
         });
         tokio::pin!(future);
         let waker = std::task::Waker::noop();
-        let mut cx = std::task::Context::from_waker(&waker);
+        let mut cx = std::task::Context::from_waker(waker);
         assert!(future.as_mut().poll(&mut cx).is_pending());
         assert!(!polled.load(Ordering::SeqCst));
     }

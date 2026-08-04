@@ -8,16 +8,18 @@ use ae::anti_replay::{ReplayValidator, TimeValidator};
 use common::{
     anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     config::{Merge, merge_map},
-    connect::{ConnectorConfig, ConnectorReset},
+    connect::{ConnectorConfig, ConnectorResetSignal},
     error::{AnyError, AnyResult},
+    matcher::Matcher,
     proto::{
+        client::stream::StreamTracer,
         connect::udp::UdpConnector,
-        context::{Context, StreamContext, UdpContext},
+        context::{Runtime, StreamRuntime, UdpRuntime},
         metrics::{stream::StreamSessionTable, udp::UdpSessionTable},
-        route::{StreamConnConfigBuilder, UdpConnConfigBuilder},
     },
+    route::{ConnConfig, ConnSelector, ProbeRtt, Registries},
     stream::pool::{StreamConnPool, StreamPoolBuilder},
-    suspend::Suspended,
+    suspend::SystemSuspendSignal,
 };
 use config::ReadConfig;
 use protocol::{
@@ -31,7 +33,7 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-use crate::config::ConfigChanged;
+use crate::config::ConfigChangeSignal;
 
 pub mod config;
 pub mod monitor;
@@ -40,11 +42,14 @@ pub mod profiling;
 pub struct ServeContext {
     pub stream_session_table: Option<StreamSessionTable>,
     pub udp_session_table: Option<UdpSessionTable>,
-    pub config_changed: ConfigChanged,
-    pub system_suspended: Suspended,
+    pub config_changed: ConfigChangeSignal,
+    pub system_suspended: SystemSuspendSignal,
 }
 
-pub async fn serve<CR>(config_reader: CR, serve_context: ServeContext) -> Result<(), ServeError>
+pub async fn serve<CR>(
+    config_reader: CR,
+    serve_context: ServeContext,
+) -> Result<(), ServerServeError>
 where
     CR: ReadConfig<Config = ServerConfig>,
 {
@@ -62,9 +67,9 @@ where
     let udp_validator = Arc::new(TimeValidator::new(
         VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
     ));
-    let connector_reset = ConnectorReset(serve_context.system_suspended.0);
-    let context = Context {
-        stream: StreamContext {
+    let connector_reset = ConnectorResetSignal(serve_context.system_suspended.0);
+    let runtime = Runtime {
+        stream: StreamRuntime {
             session_table: serve_context.stream_session_table,
             pool: stream_pool,
             connector_table: Arc::new(build_concrete_stream_connector_table(
@@ -73,7 +78,7 @@ where
             )),
             replay_validator: Arc::clone(&stream_validator),
         },
-        udp: UdpContext {
+        udp: UdpRuntime {
             session_table: serve_context.udp_session_table,
             time_validator: Arc::clone(&udp_validator),
             connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
@@ -88,12 +93,12 @@ where
         &mut server_tasks,
         &mut server_loader,
         cancellation.clone(),
-        context.clone(),
+        runtime.clone(),
     )
     .await?;
 
     let mut _cancellation_guard = cancellation.drop_guard();
-    let mut config_changed = serve_context.config_changed.0.waiter();
+    let mut config_changed = serve_context.config_changed.0.subscription();
 
     loop {
         tokio::select! {
@@ -109,7 +114,7 @@ where
                         continue;
                     }
                 };
-                res.map_err(ServeError::ServerTask)?;
+                res.map_err(ServerServeError::ServerTask)?;
             }
             _ = config_changed.notified() => {
                 info!("Config file changed");
@@ -123,7 +128,7 @@ where
                     &mut server_tasks,
                     &mut server_loader,
                     cancellation.clone(),
-                    context.clone(),
+                    runtime.clone(),
                 ).await {
                     error!(?e, "Failed to read and execute config");
                     continue;
@@ -146,23 +151,23 @@ async fn read_and_exec_config<CR>(
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
     cancellation: CancellationToken,
-    context: Context,
-) -> Result<(), ServeError>
+    runtime: Runtime,
+) -> Result<(), ServerServeError>
 where
     CR: ReadConfig<Config = ServerConfig>,
 {
     let config = config_reader
         .read_config()
         .await
-        .map_err(ServeError::Config)?;
-    spawn_and_clean(config, server_tasks, server_loader, cancellation, context)
+        .map_err(ServerServeError::Config)?;
+    spawn_and_clean(config, server_tasks, server_loader, cancellation, runtime)
         .await
-        .map_err(ServeError::Load)?;
+        .map_err(ServerServeError::Load)?;
     Ok(())
 }
 
 #[derive(Debug, Error)]
-pub enum ServeError {
+pub enum ServerServeError {
     #[error("Failed to read config file: {0}")]
     Config(#[source] AnyError),
     #[error("Failed to load config: {0}")]
@@ -176,38 +181,39 @@ pub async fn spawn_and_clean(
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
     cancellation: CancellationToken,
-    context: Context,
+    runtime: Runtime,
 ) -> AnyResult {
-    let mut stream_conn = HashMap::new();
-    for (k, v) in config.stream.conn {
-        let v = v.build()?;
-        stream_conn.insert(k, v);
-    }
+    let stream_conn = config.stream.upstream;
+    let udp_conn = config.udp.upstream;
 
-    let mut udp_conn = HashMap::new();
-    for (k, v) in config.udp.conn {
-        let v = v.build()?;
-        udp_conn.insert(k, v);
-    }
-
-    context.stream.pool.replaced_by(
-        config
-            .stream
-            .pool
-            .build(context.stream.connector_table.clone(), &stream_conn)?,
-    );
-    context
+    let stream_tracer: Arc<dyn ProbeRtt + Send + Sync> =
+        Arc::new(StreamTracer::new(runtime.stream.clone()));
+    let empty_matcher: Arc<HashMap<Arc<str>, Matcher>> = Arc::new(HashMap::new());
+    let empty_conn_selector: HashMap<Arc<str>, ConnSelector> = HashMap::new();
+    let stream_registries = Registries {
+        conn: &stream_conn,
+        matcher: &empty_matcher,
+        conn_selector: &empty_conn_selector,
+        tracer: &stream_tracer,
+        connector_table: &runtime.stream.connector_table,
+        cancellation: cancellation.clone(),
+    };
+    runtime
+        .stream
+        .pool
+        .replaced_by(config.stream.pool.resolve(&stream_registries)?);
+    runtime
         .stream
         .connector_table
         .replaced_by(config.connector.clone());
-    *context.udp.connector.config().write().unwrap() = config.connector.clone();
+    *runtime.udp.connector.config().write().unwrap() = config.connector.clone();
 
     access_server::spawn_and_clean(
         config.access_server,
         server_tasks,
         &mut server_loader.access_server,
         cancellation,
-        context.clone(),
+        runtime.clone(),
         &stream_conn,
         &udp_conn,
     )
@@ -216,7 +222,7 @@ pub async fn spawn_and_clean(
         config.proxy_server,
         server_tasks,
         &mut server_loader.proxy_server,
-        context.clone(),
+        runtime.clone(),
     )
     .await?;
     Ok(())
@@ -228,8 +234,8 @@ pub struct StreamConfig {
     #[serde(default)]
     pool: StreamPoolBuilder,
     #[serde(default)]
-    #[serde(alias = "proxy_server")]
-    conn: HashMap<Arc<str>, StreamConnConfigBuilder>,
+    #[serde(alias = "conn", alias = "proxy_server")]
+    upstream: HashMap<Arc<str>, ConnConfig>,
 }
 impl Merge for StreamConfig {
     type Error = AnyError;
@@ -239,8 +245,8 @@ impl Merge for StreamConfig {
         Self: Sized,
     {
         let pool = self.pool.merge(other.pool)?;
-        let conn = merge_map(self.conn, other.conn)?;
-        Ok(Self { pool, conn })
+        let upstream = merge_map(self.upstream, other.upstream)?;
+        Ok(Self { pool, upstream })
     }
 }
 
@@ -248,8 +254,8 @@ impl Merge for StreamConfig {
 #[serde(deny_unknown_fields)]
 pub struct UdpConfig {
     #[serde(default)]
-    #[serde(alias = "proxy_server")]
-    conn: HashMap<Arc<str>, UdpConnConfigBuilder>,
+    #[serde(alias = "conn", alias = "proxy_server")]
+    upstream: HashMap<Arc<str>, ConnConfig>,
 }
 impl Merge for UdpConfig {
     type Error = AnyError;
@@ -258,8 +264,8 @@ impl Merge for UdpConfig {
     where
         Self: Sized,
     {
-        let conn = merge_map(self.conn, other.conn)?;
-        Ok(Self { conn })
+        let upstream = merge_map(self.upstream, other.upstream)?;
+        Ok(Self { upstream })
     }
 }
 

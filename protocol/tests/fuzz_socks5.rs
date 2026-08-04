@@ -5,29 +5,13 @@ use protocol::socks5::messages::{
 };
 use std::io::Cursor;
 
+mod support;
+use support::SplitMix64;
+
 const ROUNDS: usize = 200_000;
 const VERSION: u8 = 5;
-struct Rng(u64);
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-    fn byte(&mut self) -> u8 {
-        self.next() as u8
-    }
-    fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
-    }
-    fn bytes(&mut self, n: usize) -> Vec<u8> {
-        (0..n).map(|_| self.byte()).collect()
-    }
-}
 const INTERESTING: &[u8] = &[0, 1, 2, 3, 4, 5, 0x7f, 0x80, 0xfe, 0xff];
-fn address(rng: &mut Rng) -> Vec<u8> {
+fn address(rng: &mut SplitMix64) -> Vec<u8> {
     let mut out = vec![];
     match rng.below(3) {
         0 => {
@@ -54,7 +38,7 @@ fn address(rng: &mut Rng) -> Vec<u8> {
     out.extend(rng.bytes(2));
     out
 }
-fn mutate(rng: &mut Rng, mut bytes: Vec<u8>) -> Vec<u8> {
+fn mutate(rng: &mut SplitMix64, mut bytes: Vec<u8>) -> Vec<u8> {
     for _ in 0..rng.below(3) {
         if bytes.is_empty() {
             break;
@@ -78,7 +62,7 @@ fn mutate(rng: &mut Rng, mut bytes: Vec<u8>) -> Vec<u8> {
 }
 #[tokio::test]
 async fn address_round_trip() {
-    let mut rng = Rng(0x5eed);
+    let mut rng = SplitMix64::new(0x5eed);
     let mut decoded_count = 0_usize;
     for _ in 0..ROUNDS {
         let seed = address(&mut rng);
@@ -110,7 +94,7 @@ macro_rules! round_trip {
     ($name:ident, $ty:ty, $seed:expr) => {
         #[tokio::test]
         async fn $name() {
-            let mut rng = Rng(0x5eed);
+            let mut rng = SplitMix64::new(0x5eed);
             let mut decoded_count = 0_usize;
             for _ in 0..ROUNDS {
                 let seed: Vec<u8> = $seed(&mut rng);
@@ -135,36 +119,44 @@ macro_rules! round_trip {
         }
     };
 }
-round_trip!(negotiation_request, NegotiationRequest, |rng: &mut Rng| {
-    let count = rng.below(256);
-    let mut out = vec![VERSION, count as u8];
-    out.extend(rng.bytes(count));
-    out
-});
+round_trip!(
+    negotiation_request,
+    NegotiationRequest,
+    |rng: &mut SplitMix64| {
+        let count = rng.below(256);
+        let mut out = vec![VERSION, count as u8];
+        out.extend(rng.bytes(count));
+        out
+    }
+);
 round_trip!(
     negotiation_response,
     NegotiationResponse,
-    |rng: &mut Rng| { vec![VERSION, rng.byte()] }
+    |rng: &mut SplitMix64| { vec![VERSION, rng.byte()] }
 );
-round_trip!(relay_request, RelayRequest, |rng: &mut Rng| {
+round_trip!(relay_request, RelayRequest, |rng: &mut SplitMix64| {
     let mut out = vec![VERSION, 1 + rng.below(3) as u8, 0];
     out.extend(address(rng));
     out
 });
-round_trip!(relay_response, RelayResponse, |rng: &mut Rng| {
+round_trip!(relay_response, RelayResponse, |rng: &mut SplitMix64| {
     let mut out = vec![VERSION, rng.byte(), 0];
     out.extend(address(rng));
     out
 });
-round_trip!(udp_request_header, UdpRequestHeader, |rng: &mut Rng| {
-    let mut out = vec![0, 0, rng.byte()];
-    out.extend(address(rng));
-    out
-});
+round_trip!(
+    udp_request_header,
+    UdpRequestHeader,
+    |rng: &mut SplitMix64| {
+        let mut out = vec![0, 0, rng.byte()];
+        out.extend(address(rng));
+        out
+    }
+);
 round_trip!(
     username_password_request,
     UsernamePasswordRequest,
-    |rng: &mut Rng| {
+    |rng: &mut SplitMix64| {
         let mut out = vec![0x1];
         for _ in 0..2 {
             let len = rng.below(256);
@@ -177,5 +169,5 @@ round_trip!(
 round_trip!(
     username_password_response,
     UsernamePasswordResponse,
-    |rng: &mut Rng| vec![0x1, rng.byte()]
+    |rng: &mut SplitMix64| vec![0x1, rng.byte()]
 );

@@ -1,86 +1,48 @@
 use std::{
     collections::{HashMap, HashSet},
-    fmt,
     sync::Arc,
 };
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{
-    addr::InternetAddr,
-    config::SharableConfig,
-    filter::{Matcher, MatcherBuilder},
-    route::ConnSelector,
-};
+use crate::{addr::InternetAddr, config::SharableConfig, matcher::Matcher};
 
 use super::{
-    BuildTracer, ConnConfigBuildError, ConnSelectorBuildContext, ConnSelectorBuildError,
-    ConnSelectorBuilder, IntoAddr, TraceRtt,
+    ConnConfigBuildError, ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, Registries,
 };
-
-#[derive(Debug)]
-pub struct RouteTableBuildContext<'caller, Addr, TracerBuilder> {
-    pub matcher: &'caller Arc<HashMap<Arc<str>, Matcher>>,
-    pub conn_selector: &'caller HashMap<Arc<str>, ConnSelector<Addr>>,
-    pub conn_selector_cx: ConnSelectorBuildContext<'caller, Addr, TracerBuilder>,
-}
-impl<Addr, TracerBuilder> Clone for RouteTableBuildContext<'_, Addr, TracerBuilder> {
-    fn clone(&self) -> Self {
-        Self {
-            matcher: self.matcher,
-            conn_selector: self.conn_selector,
-            conn_selector_cx: self.conn_selector_cx.clone(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(transparent)]
-pub struct RouteTableBuilder<AddrStr> {
+pub struct RouteTableBuilder {
     #[serde(flatten)]
-    pub entries: Vec<RouteTableEntryBuilder<AddrStr>>,
+    pub entries: Vec<RouteTableEntryBuilder>,
 }
-impl<AddrStr> RouteTableBuilder<AddrStr> {
-    pub fn build<Addr, TracerBuilder, Tracer>(
-        self,
-        cx: RouteTableBuildContext<'_, Addr, TracerBuilder>,
-    ) -> Result<RouteTable<Addr>, RouteTableBuildError>
-    where
-        Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
-        AddrStr: IntoAddr<Addr = Addr>,
-        TracerBuilder: BuildTracer<Tracer = Tracer>,
-        Tracer: TraceRtt<Addr = Addr> + Sync + Send + 'static,
-    {
+impl RouteTableBuilder {
+    pub fn resolve(self, registries: &Registries<'_>) -> Result<RouteTable, RouteTableBuildError> {
         let mut built = vec![];
         for entry in self.entries {
-            let e = entry.build(cx.clone())?;
+            let e = entry.resolve(registries)?;
             built.push(e);
         }
-        Ok(RouteTable::new(built, cx.matcher.clone()))
+        Ok(RouteTable::new(built, registries.matcher.clone()))
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct RouteTable<Addr> {
-    entries: Vec<RouteTableEntry<Addr>>,
+pub struct RouteTable {
+    entries: Vec<RouteTableEntry>,
     matchers: Arc<HashMap<Arc<str>, Matcher>>,
 }
-impl<Addr> RouteTable<Addr>
-where
-    Addr: fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
-{
-    const BLOCK_ACTION: RouteAction<Addr> = RouteAction::Block;
+impl RouteTable {
+    const BLOCK_ACTION: RouteAction = RouteAction::Block;
 
-    pub fn new(
-        entries: Vec<RouteTableEntry<Addr>>,
-        matchers: Arc<HashMap<Arc<str>, Matcher>>,
-    ) -> Self {
+    pub fn new(entries: Vec<RouteTableEntry>, matchers: Arc<HashMap<Arc<str>, Matcher>>) -> Self {
         Self { entries, matchers }
     }
 
-    pub fn action(&self, addr: &InternetAddr) -> &RouteAction<Addr> {
+    pub fn action(&self, addr: &InternetAddr) -> &RouteAction {
         let mut visited = HashSet::new();
         self.entries
             .iter()
@@ -100,51 +62,39 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RouteTableEntryBuilder<AddrStr> {
-    matcher: SharableConfig<MatcherBuilder>,
-    action: RouteActionBuilder<AddrStr>,
+pub struct RouteTableEntryBuilder {
+    matcher: SharableConfig<Matcher>,
+    action: RouteActionBuilder,
 }
-impl<AddrStr> RouteTableEntryBuilder<AddrStr> {
-    pub fn build<Addr, TracerBuilder, Tracer>(
+impl RouteTableEntryBuilder {
+    pub fn resolve(
         self,
-        cx: RouteTableBuildContext<'_, Addr, TracerBuilder>,
-    ) -> Result<RouteTableEntry<Addr>, RouteTableBuildError>
-    where
-        Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
-        AddrStr: IntoAddr<Addr = Addr>,
-        TracerBuilder: BuildTracer<Tracer = Tracer>,
-        Tracer: TraceRtt<Addr = Addr> + Sync + Send + 'static,
-    {
+        registries: &Registries<'_>,
+    ) -> Result<RouteTableEntry, RouteTableBuildError> {
         let (name, matcher) = match self.matcher {
             SharableConfig::SharingKey(k) => (
                 Some(k.clone()),
-                cx.matcher
+                registries
+                    .matcher
                     .get(&k)
                     .cloned()
                     .ok_or(RouteTableBuildError::MatcherKeyNotFound(k))?,
             ),
-            SharableConfig::Private(v) => (None, v.build().map_err(RouteTableBuildError::Matcher)?),
+            SharableConfig::Private(v) => (None, v),
         };
-        let action = self.action.build(cx.conn_selector, cx.conn_selector_cx)?;
+        let action = self.action.resolve(registries)?;
         Ok(RouteTableEntry::new(name, matcher, action))
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct RouteTableEntry<Addr> {
+pub struct RouteTableEntry {
     matcher_name: Option<Arc<str>>,
     matcher: Matcher,
-    action: RouteAction<Addr>,
+    action: RouteAction,
 }
-impl<Addr> RouteTableEntry<Addr>
-where
-    Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
-{
-    pub fn new(
-        matcher_name: Option<Arc<str>>,
-        matcher: Matcher,
-        action: RouteAction<Addr>,
-    ) -> Self {
+impl RouteTableEntry {
+    pub fn new(matcher_name: Option<Arc<str>>, matcher: Matcher, action: RouteAction) -> Self {
         Self {
             matcher_name,
             matcher,
@@ -158,7 +108,7 @@ where
     pub fn matcher(&self) -> &Matcher {
         &self.matcher
     }
-    pub fn action(&self) -> &RouteAction<Addr> {
+    pub fn action(&self) -> &RouteAction {
         &self.action
     }
 }
@@ -174,41 +124,64 @@ pub enum RouteActionTagBuilder {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(untagged)]
-pub enum RouteActionBuilder<AddrStr> {
-    Tagged(RouteActionTagBuilder),
-    ConnSelector(SharableConfig<ConnSelectorBuilder<AddrStr>>),
+pub(crate) enum RouteActionSelector {
+    Named { conn_selector: Arc<str> },
+    Sharable(SharableConfig<ConnSelectorBuilder>),
 }
-impl<AddrStr> RouteActionBuilder<AddrStr> {
-    pub fn build<Addr, TracerBuilder, Tracer>(
-        self,
-        conn_selector: &HashMap<Arc<str>, ConnSelector<Addr>>,
-        conn_selector_cx: ConnSelectorBuildContext<'_, Addr, TracerBuilder>,
-    ) -> Result<RouteAction<Addr>, RouteTableBuildError>
-    where
-        Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
-        AddrStr: IntoAddr<Addr = Addr>,
-        TracerBuilder: BuildTracer<Tracer = Tracer>,
-        Tracer: TraceRtt<Addr = Addr> + Sync + Send + 'static,
-    {
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(untagged)]
+pub(crate) enum RouteActionBuilder {
+    Tagged(RouteActionTagBuilder),
+    ConnSelector(RouteActionSelector),
+}
+impl RouteActionBuilder {
+    pub fn resolve(self, registries: &Registries<'_>) -> Result<RouteAction, RouteTableBuildError> {
         Ok(match self {
             RouteActionBuilder::Tagged(RouteActionTagBuilder::Direct) => RouteAction::Direct,
             RouteActionBuilder::Tagged(RouteActionTagBuilder::Block) => RouteAction::Block,
-            RouteActionBuilder::ConnSelector(p) => RouteAction::ConnSelector(Arc::new(match p {
-                SharableConfig::SharingKey(k) => conn_selector
-                    .get(&k)
-                    .cloned()
-                    .ok_or(RouteTableBuildError::ConnSelectorKeyNotFound(k))?,
-                SharableConfig::Private(p) => p.build(conn_selector_cx)?,
-            })),
+            RouteActionBuilder::ConnSelector(RouteActionSelector::Named { conn_selector }) => {
+                forbid_reserved_selector_name(&conn_selector)?;
+                RouteAction::ConnSelector(Arc::new(
+                    registries
+                        .conn_selector
+                        .get(&conn_selector)
+                        .cloned()
+                        .ok_or(RouteTableBuildError::ConnSelectorKeyNotFound(conn_selector))?,
+                ))
+            }
+            RouteActionBuilder::ConnSelector(RouteActionSelector::Sharable(
+                SharableConfig::SharingKey(k),
+            )) => {
+                forbid_reserved_selector_name(&k)?;
+                RouteAction::ConnSelector(Arc::new(
+                    registries
+                        .conn_selector
+                        .get(&k)
+                        .cloned()
+                        .ok_or(RouteTableBuildError::ConnSelectorKeyNotFound(k))?,
+                ))
+            }
+            RouteActionBuilder::ConnSelector(RouteActionSelector::Sharable(
+                SharableConfig::Private(p),
+            )) => RouteAction::ConnSelector(Arc::new(p.resolve(registries)?)),
         })
     }
 }
 
+fn forbid_reserved_selector_name(name: &Arc<str>) -> Result<(), RouteTableBuildError> {
+    if matches!(name.as_ref(), "direct" | "block") {
+        return Err(RouteTableBuildError::ReservedConnSelectorName(name.clone()));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
-pub enum RouteAction<Addr> {
+pub enum RouteAction {
     Direct,
     Block,
-    ConnSelector(Arc<ConnSelector<Addr>>),
+    ConnSelector(Arc<ConnSelector>),
 }
 
 #[derive(Debug, Error)]
@@ -223,52 +196,43 @@ pub enum RouteTableBuildError {
     ChainConfig(#[source] ConnConfigBuildError),
     #[error("{0}")]
     ConnSelector(#[from] ConnSelectorBuildError),
+    #[error("Conn selector name `{0}` is reserved (use the `direct`/`block` action instead)")]
+    ReservedConnSelectorName(Arc<str>),
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, time::Duration};
-
     use tokio_util::sync::CancellationToken;
 
     use super::*;
     use crate::{
-        error::AnyError,
-        route::{ConnChain, ConnConfig, TraceRtt, WeightedConnChain},
+        matcher::Matcher,
+        route::{ConnConfig, ConnSelector, ProbeRtt, WeightedConnChain},
     };
 
     fn matcher(json: &str) -> Matcher {
-        let builder: MatcherBuilder = serde_json::from_str(json).unwrap();
-        builder.build().unwrap()
+        serde_json::from_str(json).unwrap()
     }
 
     fn addr(s: &str) -> InternetAddr {
         s.parse().unwrap()
     }
 
-    fn entry(matcher: Matcher, action: RouteAction<SocketAddr>) -> RouteTableEntry<SocketAddr> {
+    fn entry(matcher: Matcher, action: RouteAction) -> RouteTableEntry {
         RouteTableEntry::new(None, matcher, action)
     }
 
-    struct NoTracer;
-    impl TraceRtt for NoTracer {
-        type Addr = SocketAddr;
-        async fn trace_rtt(&self, _chain: &ConnChain<SocketAddr>) -> Result<Duration, AnyError> {
-            unreachable!("no tracer in these tests")
-        }
-    }
-
-    fn chain(weight: usize) -> WeightedConnChain<SocketAddr> {
+    fn chain(weight: usize) -> WeightedConnChain {
         WeightedConnChain {
             weight,
-            chain: Arc::from(Vec::<ConnConfig<SocketAddr>>::new()),
+            chain: Arc::from(Vec::<ConnConfig>::new()),
             payload_crypto: None,
         }
     }
 
     #[test]
     fn an_empty_table_blocks_everything() {
-        let table = RouteTable::<SocketAddr>::new(vec![], Arc::new(HashMap::new()));
+        let table = RouteTable::new(vec![], Arc::new(HashMap::new()));
         assert!(matches!(
             table.action(&addr("1.2.3.4:80")),
             RouteAction::Block
@@ -348,7 +312,7 @@ mod tests {
             vec![RouteTableEntry::new(
                 None,
                 matcher(r#""lan""#),
-                RouteAction::<SocketAddr>::Direct,
+                RouteAction::Direct,
             )],
             matchers,
         );
@@ -367,16 +331,8 @@ mod tests {
         let matchers = Arc::new(HashMap::from([(Arc::from("direct"), matcher("{}"))]));
         let table = RouteTable::new(
             vec![
-                RouteTableEntry::new(
-                    Some("direct".into()),
-                    matcher("{}"),
-                    RouteAction::<SocketAddr>::Direct,
-                ),
-                RouteTableEntry::new(
-                    Some("direct".into()),
-                    matcher("{}"),
-                    RouteAction::<SocketAddr>::Block,
-                ),
+                RouteTableEntry::new(Some("direct".into()), matcher("{}"), RouteAction::Direct),
+                RouteTableEntry::new(Some("direct".into()), matcher("{}"), RouteAction::Block),
             ],
             matchers,
         );
@@ -393,11 +349,7 @@ mod tests {
         let self_ref = matcher(r#""recur""#);
         let matchers = Arc::new(HashMap::from([(Arc::from("recur"), self_ref.clone())]));
         let table = RouteTable::new(
-            vec![RouteTableEntry::new(
-                None,
-                self_ref,
-                RouteAction::<SocketAddr>::Direct,
-            )],
+            vec![RouteTableEntry::new(None, self_ref, RouteAction::Direct)],
             matchers,
         );
         // The self reference is stopped by the visited set and cannot match.
@@ -411,7 +363,7 @@ mod tests {
     fn a_conn_selector_action_is_preserved_when_selected() {
         let selector = ConnSelector::new(
             vec![chain(1)],
-            None::<NoTracer>,
+            None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,
             None,
             CancellationToken::new(),

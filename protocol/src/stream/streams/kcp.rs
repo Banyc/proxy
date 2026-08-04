@@ -30,9 +30,9 @@ use common::{
             },
         },
         connect::stream::StreamConnect,
-        context::StreamContext,
+        context::StreamRuntime,
     },
-    stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 
 #[derive(Debug)]
@@ -77,8 +77,11 @@ where
     async fn serve_(
         self,
         set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
-    ) -> Result<(), ServeError> {
-        let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
+    ) -> Result<(), ServeLoopError> {
+        let addr = self
+            .listener
+            .local_addr()
+            .map_err(ServeLoopError::LocalAddr)?;
         let listener = Arc::new(tokio::sync::Mutex::new(self.listener));
         let accept_listener = Arc::clone(&listener);
         let mut state = ();
@@ -117,7 +120,7 @@ where
         .await
     }
 }
-pub use common::serve_loop::ServeError;
+pub use common::serve_loop::ServeLoopError;
 
 #[derive(Debug, Clone)]
 pub struct KcpConnector {
@@ -130,7 +133,7 @@ impl KcpConnector {
 }
 #[async_trait]
 impl StreamConnect for KcpConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
         let bind = self
             .config
             .read()
@@ -167,7 +170,7 @@ pub struct AddressedKcpStream {
     local_addr: SocketAddr,
     peer_addr: SocketAddr,
 }
-impl AsConn for AddressedKcpStream {}
+impl ConnParts for AddressedKcpStream {}
 impl OwnIoStream for AddressedKcpStream {}
 impl HasIoAddr for AddressedKcpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
@@ -218,7 +221,7 @@ pub struct KcpProxyServerConfig {
     pub inner: StreamProxyConnHandlerConfig,
 }
 impl KcpProxyServerConfig {
-    pub fn into_builder(self, stream_context: StreamContext) -> KcpProxyServerBuilder {
+    pub fn into_builder(self, stream_context: StreamRuntime) -> KcpProxyServerBuilder {
         let listen_addr = Arc::clone(&self.listen_addr);
         let inner = self.inner.into_builder(stream_context, listen_addr);
         KcpProxyServerBuilder {

@@ -11,42 +11,61 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::ttl_cell::TtlCell;
+use crate::{proto::connect::stream::StreamConnectorTable, ttl_cell::TtlCell};
 
 use super::{
-    ConnConfig, GaugedConnChain, IntoAddr, TRACE_INTERVAL, TraceRtt, WeightedConnChain,
+    ConnConfig, GaugedConnChain, PROBE_ROUND_INTERVAL, ProbeRtt, WeightedConnChain,
     WeightedConnChainBuildError, WeightedConnChainBuilder,
     chain_selection::{EligibilityGate, ScoredChain, chain_score, pick_weighted},
 };
 
+/// The merged-config registries plus runtime handles the route builders resolve
+/// their names against.
+#[derive(Clone)]
+pub struct Registries<'caller> {
+    pub conn: &'caller HashMap<Arc<str>, ConnConfig>,
+    pub matcher: &'caller Arc<HashMap<Arc<str>, crate::matcher::Matcher>>,
+    pub conn_selector: &'caller HashMap<Arc<str>, ConnSelector>,
+    pub tracer: &'caller Arc<dyn ProbeRtt + Send + Sync>,
+    pub connector_table: &'caller Arc<StreamConnectorTable>,
+    pub cancellation: CancellationToken,
+}
+
+impl fmt::Debug for Registries<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Registries")
+            .field("conn", &self.conn)
+            .field("matcher", &self.matcher)
+            .field("conn_selector", &self.conn_selector)
+            .field("connector_table", &self.connector_table)
+            .field("cancellation", &self.cancellation)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConnSelectorBuilder<AddrStr> {
-    pub chains: Vec<WeightedConnChainBuilder<AddrStr>>,
-    pub trace_rtt: bool,
+pub struct ConnSelectorBuilder {
+    pub chains: Vec<WeightedConnChainBuilder>,
+    #[serde(default, alias = "trace_rtt")]
+    pub probe_rtt: bool,
     pub active_chains: Option<NonZeroUsize>,
     #[serde(default)]
     pub max_rtt_ratio: Option<f64>,
 }
-impl<AddrStr> ConnSelectorBuilder<AddrStr> {
-    pub fn build<Addr, TracerBuilder, Tracer>(
+impl ConnSelectorBuilder {
+    pub fn resolve(
         self,
-        cx: ConnSelectorBuildContext<'_, Addr, TracerBuilder>,
-    ) -> Result<ConnSelector<Addr>, ConnSelectorBuildError>
-    where
-        Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
-        AddrStr: IntoAddr<Addr = Addr>,
-        TracerBuilder: BuildTracer<Tracer = Tracer>,
-        Tracer: TraceRtt<Addr = Addr> + Sync + Send + 'static,
-    {
+        registries: &Registries<'_>,
+    ) -> Result<ConnSelector, ConnSelectorBuildError> {
         let chains = self
             .chains
             .into_iter()
-            .map(|c| c.build(cx.conn))
+            .map(|c| c.resolve(registries))
             .collect::<Result<_, _>>()
             .map_err(ConnSelectorBuildError::ChainConfig)?;
-        let tracer = match self.trace_rtt {
-            true => Some(cx.tracer_builder.build()),
+        let tracer = match self.probe_rtt {
+            true => Some(registries.tracer.clone()),
             false => None,
         };
         Ok(ConnSelector::new(
@@ -54,7 +73,7 @@ impl<AddrStr> ConnSelectorBuilder<AddrStr> {
             tracer,
             self.active_chains,
             self.max_rtt_ratio,
-            cx.cancellation,
+            registries.cancellation.clone(),
         )?)
     }
 }
@@ -65,50 +84,24 @@ pub enum ConnSelectorBuildError {
     #[error("{0}")]
     ConnSelector(#[from] ConnSelectorError),
 }
-#[derive(Debug)]
-pub struct ConnSelectorBuildContext<'caller, Addr, TracerBuilder> {
-    pub conn: &'caller HashMap<Arc<str>, ConnConfig<Addr>>,
-    pub tracer_builder: &'caller TracerBuilder,
-    pub cancellation: CancellationToken,
-}
-impl<Addr, TracerBuilder> Clone for ConnSelectorBuildContext<'_, Addr, TracerBuilder> {
-    fn clone(&self) -> Self {
-        Self {
-            conn: self.conn,
-            tracer_builder: self.tracer_builder,
-            cancellation: self.cancellation.clone(),
-        }
-    }
-}
-
-pub trait BuildTracer {
-    type Tracer: TraceRtt + Send + Sync + 'static;
-    fn build(&self) -> Self::Tracer;
-}
 
 #[derive(Debug, Clone)]
-pub enum ConnSelector<Addr> {
+pub enum ConnSelector {
     Empty,
-    Some(ConnSelector1<Addr>),
+    Some(NonEmptyConnSelector),
 }
-impl<Addr> ConnSelector<Addr>
-where
-    Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
-{
-    pub fn new<T>(
-        chains: Vec<WeightedConnChain<Addr>>,
-        tracer: Option<T>,
+impl ConnSelector {
+    pub fn new(
+        chains: Vec<WeightedConnChain>,
+        tracer: Option<Arc<dyn ProbeRtt + Send + Sync>>,
         active_chains: Option<NonZeroUsize>,
         max_rtt_ratio: Option<f64>,
         cancellation: CancellationToken,
-    ) -> Result<Self, ConnSelectorError>
-    where
-        T: TraceRtt<Addr = Addr> + Send + Sync + 'static,
-    {
+    ) -> Result<Self, ConnSelectorError> {
         if chains.is_empty() {
             return Ok(Self::Empty);
         }
-        Ok(Self::Some(ConnSelector1::new(
+        Ok(Self::Some(NonEmptyConnSelector::new(
             chains,
             tracer,
             active_chains,
@@ -119,27 +112,21 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct ConnSelector1<Addr> {
-    chains: Arc<[GaugedConnChain<Addr>]>,
+pub struct NonEmptyConnSelector {
+    chains: Arc<[GaugedConnChain]>,
     cum_weight: NonZeroUsize,
     score_store: Arc<RwLock<ScoreStore>>,
     active_chains: NonZeroUsize,
     gate: Option<EligibilityGate>,
 }
-impl<Addr> ConnSelector1<Addr>
-where
-    Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
-{
-    pub fn new<T>(
-        chains: Vec<WeightedConnChain<Addr>>,
-        tracer: Option<T>,
+impl NonEmptyConnSelector {
+    pub fn new(
+        chains: Vec<WeightedConnChain>,
+        tracer: Option<Arc<dyn ProbeRtt + Send + Sync>>,
         active_chains: Option<NonZeroUsize>,
         max_rtt_ratio: Option<f64>,
         cancellation: CancellationToken,
-    ) -> Result<Self, ConnSelectorError>
-    where
-        T: TraceRtt<Addr = Addr> + Send + Sync + 'static,
-    {
+    ) -> Result<Self, ConnSelectorError> {
         let cum_weight = chains.iter().map(|c| c.weight).sum();
         if cum_weight == 0 {
             return Err(ConnSelectorError::ZeroAccumulatedWeight);
@@ -161,12 +148,11 @@ where
             None => NonZeroUsize::new(chains.len()).unwrap(),
         };
 
-        let tracer = tracer.map(Arc::new);
         let chains = chains
             .into_iter()
             .map(|c| GaugedConnChain::new(c, tracer.clone(), cancellation.clone()))
             .collect::<Arc<[_]>>();
-        let score_store = Arc::new(RwLock::new(ScoreStore::new(None, TRACE_INTERVAL)));
+        let score_store = Arc::new(RwLock::new(ScoreStore::new(None, PROBE_ROUND_INTERVAL)));
         Ok(Self {
             chains,
             cum_weight,
@@ -176,7 +162,7 @@ where
         })
     }
 
-    pub fn choose_chain(&self) -> &WeightedConnChain<Addr> {
+    pub fn choose_chain(&self) -> &WeightedConnChain {
         if self.chains.len() == 1 {
             return self.chains[0].weighted();
         }
@@ -256,28 +242,19 @@ struct Scores {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{error::AnyError, route::ConnChain};
-    use std::net::SocketAddr;
     use std::time::Duration;
-    struct NoTracer;
-    impl TraceRtt for NoTracer {
-        type Addr = SocketAddr;
-        async fn trace_rtt(&self, _chain: &ConnChain<SocketAddr>) -> Result<Duration, AnyError> {
-            unreachable!("the gauges are set directly")
-        }
-    }
-    fn chain(weight: usize) -> WeightedConnChain<SocketAddr> {
+    fn chain(weight: usize) -> WeightedConnChain {
         WeightedConnChain {
             weight,
-            chain: Arc::from(Vec::<ConnConfig<SocketAddr>>::new()),
+            chain: Arc::from(Vec::<ConnConfig>::new()),
             payload_crypto: None,
         }
     }
     #[test]
     fn a_zero_sum_falls_back_within_the_eligible_set() {
-        let selector = ConnSelector1::new(
+        let selector = NonEmptyConnSelector::new(
             vec![chain(0), chain(5)],
-            None::<NoTracer>,
+            None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,
             Some(1.5),
             CancellationToken::new(),

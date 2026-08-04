@@ -1,18 +1,18 @@
-use std::{fmt, io, net::SocketAddr, sync::Arc, time::Duration};
+use std::{fmt, io, net::SocketAddr, sync::Arc};
 
 use crate::{
     addr::ParseInternetAddrError,
     loading,
     proto::{
-        addr::StreamAddr,
+        addr::RouteAddr,
         conn::stream::ConnAndAddr,
-        context::StreamContext,
-        io_copy::stream::{ConnContext, CopyBidirectional},
+        context::StreamRuntime,
         log::stream::IoCopyFinished,
-        steer::stream::{SteerError, steer},
+        relay::stream::{ConnContext, CopyBidirectional},
+        route_header::stream::{SteerError, read_route_header},
     },
     stream::{
-        AsConn, StreamServerHandleConn,
+        ConnParts, StreamServerHandleConn,
         pool::{ConnectError, connect_with_pool},
     },
 };
@@ -23,7 +23,7 @@ use tracing::{info, instrument, warn};
 
 pub struct StreamProxyFinished {
     pub io: IoCopyFinished,
-    pub up: StreamAddr,
+    pub up: RouteAddr,
 }
 
 impl fmt::Display for StreamProxyFinished {
@@ -33,8 +33,6 @@ impl fmt::Display for StreamProxyFinished {
         Ok(())
     }
 }
-
-const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,7 +46,7 @@ pub struct StreamProxyConnHandlerConfig {
 impl StreamProxyConnHandlerConfig {
     pub fn into_builder(
         self,
-        stream_context: StreamContext,
+        stream_context: StreamRuntime,
         listen_addr: Arc<str>,
     ) -> StreamProxyConnHandlerBuilder {
         StreamProxyConnHandlerBuilder {
@@ -66,7 +64,7 @@ pub struct StreamProxyConnHandlerBuilder {
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
     pub allow_loopback: bool,
-    pub stream_context: StreamContext,
+    pub stream_context: StreamRuntime,
     pub listen_addr: Arc<str>,
 }
 impl StreamProxyConnHandlerBuilder {
@@ -105,14 +103,14 @@ pub enum StreamProxyServerBuildError {
 pub struct StreamProxyConnHandler {
     acceptor: StreamProxyAcceptor,
     payload_crypto: Option<tokio_chacha20::config::Config>,
-    stream_context: StreamContext,
+    stream_context: StreamRuntime,
     listen_addr: Arc<str>,
 }
 impl StreamProxyConnHandler {
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
         payload_crypto: Option<tokio_chacha20::config::Config>,
-        stream_context: StreamContext,
+        stream_context: StreamRuntime,
         listen_addr: Arc<str>,
         allow_loopback: bool,
     ) -> Self {
@@ -134,7 +132,7 @@ impl StreamProxyConnHandler {
         mut downstream: Downstream,
     ) -> Result<ProxyResult, StreamProxyServerError>
     where
-        Downstream: AsConn + std::fmt::Debug,
+        Downstream: ConnParts + std::fmt::Debug,
     {
         // Establish proxy chain
         let upstream = match self.acceptor.establish(&mut downstream).await {
@@ -182,7 +180,7 @@ impl StreamServerHandleConn for StreamProxyConnHandler {
     #[instrument(skip_all)]
     async fn handle_stream<Stream>(&self, stream: Stream)
     where
-        Stream: AsConn + std::fmt::Debug,
+        Stream: ConnParts + std::fmt::Debug,
     {
         let local_addr = stream.local_addr().ok();
         let peer_addr = stream.peer_addr().ok();
@@ -213,13 +211,13 @@ pub enum ProxyResult {
 #[derive(Debug)]
 pub struct StreamProxyAcceptor {
     crypto: tokio_chacha20::config::Config,
-    stream_context: StreamContext,
+    stream_context: StreamRuntime,
     allow_loopback: bool,
 }
 impl StreamProxyAcceptor {
     pub fn new(
         crypto: tokio_chacha20::config::Config,
-        stream_context: StreamContext,
+        stream_context: StreamRuntime,
         allow_loopback: bool,
     ) -> Self {
         Self {
@@ -235,9 +233,9 @@ impl StreamProxyAcceptor {
         downstream: &mut Downstream,
     ) -> Result<Option<ConnAndAddr>, StreamProxyAcceptorError>
     where
-        Downstream: AsConn + std::fmt::Debug,
+        Downstream: ConnParts + std::fmt::Debug,
     {
-        let addr = match steer(
+        let addr = match read_route_header(
             downstream,
             &self.crypto,
             &self.stream_context.replay_validator,
@@ -247,17 +245,21 @@ impl StreamProxyAcceptor {
             Some(addr) => addr,
             None => return Ok(None),
         };
-        let (upstream, sock_addr) =
-            connect_with_pool(&addr, &self.stream_context, self.allow_loopback, IO_TIMEOUT)
-                .await
-                .map_err(|e| {
-                    let downstream_addr = downstream.peer_addr().ok();
-                    StreamProxyAcceptorError::ConnectUpstream {
-                        source: e,
-                        downstream_addr,
-                        upstream_addr: addr.clone(),
-                    }
-                })?;
+        let (upstream, sock_addr) = connect_with_pool(
+            &addr,
+            &self.stream_context,
+            self.allow_loopback,
+            crate::STREAM_IO_TIMEOUT,
+        )
+        .await
+        .map_err(|e| {
+            let downstream_addr = downstream.peer_addr().ok();
+            StreamProxyAcceptorError::ConnectUpstream {
+                source: e,
+                downstream_addr,
+                upstream_addr: addr.clone(),
+            }
+        })?;
         Ok(Some(ConnAndAddr {
             stream: upstream,
             addr,
@@ -274,7 +276,7 @@ pub enum StreamProxyServerError {
     EstablishProxyChain(#[from] StreamProxyAcceptorError),
 }
 impl StreamProxyServerError {
-    fn upstream_addr(&self) -> Option<&StreamAddr> {
+    fn upstream_addr(&self) -> Option<&RouteAddr> {
         match self {
             Self::EstablishProxyChain(error) => error.upstream_addr(),
             Self::DownstreamAddr(_) => None,
@@ -291,11 +293,11 @@ pub enum StreamProxyAcceptorError {
         #[source]
         source: ConnectError,
         downstream_addr: Option<SocketAddr>,
-        upstream_addr: StreamAddr,
+        upstream_addr: RouteAddr,
     },
 }
 impl StreamProxyAcceptorError {
-    fn upstream_addr(&self) -> Option<&StreamAddr> {
+    fn upstream_addr(&self) -> Option<&RouteAddr> {
         match self {
             Self::ConnectUpstream { upstream_addr, .. } => Some(upstream_addr),
             Self::Steer(_) => None,

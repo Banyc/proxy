@@ -1,7 +1,10 @@
 use std::time::Duration;
 
+/// Reference RTT used to normalise the RTT factor in [`chain_score`].
 const RTT_REF: Duration = Duration::from_millis(100);
+/// Loss exponent applied to `(1 - loss)` in [`chain_score`]; higher values de-prefer lossy chains more strongly.
 const LOSS_EXP: i32 = 3;
+/// RTT exponent applied to `1 / (1 + rtt / r0)` in [`chain_score`]; 1 means the latency factor is 1/2 at `RTT_REF`.
 const RTT_EXP: i32 = 1;
 
 pub(crate) struct ScoredChain {
@@ -10,6 +13,7 @@ pub(crate) struct ScoredChain {
     pub(crate) rtt: Option<Duration>,
 }
 
+/// Gate that retains only chains whose measured RTT is within `max_ratio` of the best one.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EligibilityGate {
     pub(crate) max_ratio: f64,

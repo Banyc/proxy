@@ -1,5 +1,6 @@
 use std::{
     fmt,
+    pin::Pin,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -9,16 +10,16 @@ use tracing::{info, trace};
 
 use crate::error::AnyError;
 
-use super::recycle::{RecyclePacer, RttDegradation};
+use super::degradation::{RecyclePacer, RttDegradation};
 use super::rtt_stats::{RttStats, ewma_loss};
-use super::{ConnChain, TRACE_INTERVAL};
+use super::{ConnChain, PROBE_ROUND_INTERVAL};
 
-pub const TRACE_DEAD_INTERVAL: Duration = Duration::from_secs(60 * 2);
+pub const PROBE_DEAD_INTERVAL: Duration = Duration::from_secs(60 * 2);
 const PROBES_PER_INTERVAL: u32 = 5;
 const PROBE_MEAN_INTERVAL: Duration =
-    Duration::from_millis(TRACE_INTERVAL.as_millis() as u64 / PROBES_PER_INTERVAL as u64);
+    Duration::from_millis(PROBE_ROUND_INTERVAL.as_millis() as u64 / PROBES_PER_INTERVAL as u64);
 const PROBE_MEAN_INTERVAL_DEAD: Duration =
-    Duration::from_millis(TRACE_DEAD_INTERVAL.as_millis() as u64 / PROBES_PER_INTERVAL as u64);
+    Duration::from_millis(PROBE_DEAD_INTERVAL.as_millis() as u64 / PROBES_PER_INTERVAL as u64);
 const PROBE_MIN_INTERVAL: Duration = Duration::from_millis(500);
 const PROBE_MAX_INTERVAL: Duration = Duration::from_secs(60);
 const DEAD_CONSECUTIVE_FAILURES: u32 = 5;
@@ -30,11 +31,8 @@ fn poisson_interval(mean: Duration) -> Duration {
     d.clamp(PROBE_MIN_INTERVAL, PROBE_MAX_INTERVAL)
 }
 
-pub struct DisplayChain<'chain, Addr>(&'chain ConnChain<Addr>);
-impl<Addr> fmt::Display for DisplayChain<'_, Addr>
-where
-    Addr: fmt::Display,
-{
+pub struct DisplayChain<'chain>(&'chain ConnChain);
+impl fmt::Display for DisplayChain<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[")?;
         for (i, c) in self.0.iter().enumerate() {
@@ -48,37 +46,32 @@ where
     }
 }
 
-pub trait TraceRtt {
-    type Addr;
-    fn trace_rtt(
+pub trait ProbeRtt {
+    fn probe_rtt(
         &self,
-        chain: &ConnChain<Self::Addr>,
-    ) -> impl Future<Output = Result<Duration, AnyError>> + Send;
-    fn recycle(&self, _chain: &ConnChain<Self::Addr>) -> impl Future<Output = ()> + Send {
-        async {}
+        chain: &ConnChain,
+    ) -> Pin<Box<dyn Future<Output = Result<Duration, AnyError>> + Send + '_>>;
+    fn recycle(&self, _chain: &ConnChain) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
     }
-    fn reoptimize(&self, _chain: &ConnChain<Self::Addr>) -> impl Future<Output = ()> + Send {
-        async {}
+    fn reoptimize(&self, _chain: &ConnChain) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
     }
     fn session_stats(
         &self,
-        _chain: &ConnChain<Self::Addr>,
-    ) -> impl Future<Output = Option<String>> + Send {
-        async { None }
+        _chain: &ConnChain,
+    ) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>> {
+        Box::pin(async { None })
     }
 }
 
-pub(crate) fn spawn_tracer<Tracer, Addr>(
-    tracer: Arc<Tracer>,
-    chain: Arc<ConnChain<Addr>>,
+pub(crate) fn spawn_tracer(
+    tracer: Arc<dyn ProbeRtt + Send + Sync>,
+    chain: Arc<ConnChain>,
     rtt_stats_store: Arc<RwLock<RttStats>>,
     loss_store: Arc<RwLock<Option<f64>>>,
     cancellation: CancellationToken,
-) -> tokio::task::JoinHandle<()>
-where
-    Tracer: TraceRtt<Addr = Addr> + Send + Sync + 'static,
-    Addr: fmt::Display + Send + Sync + 'static,
-{
+) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         let mut consecutive_failures: u32 = 0;
         let mut probes_since_log: u32 = 0;
@@ -86,14 +79,14 @@ where
         let mut pacer = RecyclePacer::new(std::time::Instant::now());
         let mut reoptimize_pacer = RecyclePacer::new(std::time::Instant::now());
         while !cancellation.is_cancelled() {
-            let sample = match tokio::time::timeout(RTT_TIMEOUT, tracer.trace_rtt(&chain)).await {
+            let sample = match tokio::time::timeout(RTT_TIMEOUT, tracer.probe_rtt(&chain)).await {
                 Ok(Ok(rtt)) => Some(rtt),
                 Ok(Err(e)) => {
-                    trace!("trace error: {e:?}");
+                    trace!("probe error: {e:?}");
                     None
                 }
                 Err(_) => {
-                    trace!("trace timeout");
+                    trace!("probe timeout");
                     None
                 }
             };
@@ -119,7 +112,7 @@ where
             };
             if reoptimize_pacer.allow(std::time::Instant::now()) {
                 let addresses = DisplayChain(&chain);
-                trace!(%addresses, "Timer reoptimize: offering a first-hop re-lay");
+                trace!(%addresses, "Timer reoptimize: reoptimizing first-hop relay");
                 let _ = tokio::time::timeout(RTT_TIMEOUT, tracer.reoptimize(&chain)).await;
             }
             if let (Some(_), Some(srtt)) = (sample, rtt)
@@ -139,7 +132,7 @@ where
                 probes_since_log = 0;
                 let mux = tracer.session_stats(&chain).await;
                 let addresses = DisplayChain(&chain);
-                info!(%addresses, sample = ?sample, rtt = ?rtt, rttvar = ?rttvar, rtt_eff = ?rtt_eff, ?loss, ?mux, "Traced RTT");
+                info!(%addresses, sample = ?sample, rtt = ?rtt, rttvar = ?rttvar, rtt_eff = ?rtt_eff, ?loss, ?mux, "Probed RTT");
             }
             let mean = if consecutive_failures >= DEAD_CONSECUTIVE_FAILURES {
                 PROBE_MEAN_INTERVAL_DEAD
@@ -157,7 +150,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::SocketAddr;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -174,11 +166,15 @@ mod tests {
     struct FakeTracer {
         calls: Arc<AtomicUsize>,
     }
-    impl TraceRtt for FakeTracer {
-        type Addr = SocketAddr;
-        async fn trace_rtt(&self, _chain: &ConnChain<SocketAddr>) -> Result<Duration, AnyError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(Duration::from_millis(10))
+    impl ProbeRtt for FakeTracer {
+        fn probe_rtt(
+            &self,
+            _chain: &ConnChain,
+        ) -> Pin<Box<dyn Future<Output = Result<Duration, AnyError>> + Send + '_>> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(Duration::from_millis(10))
+            })
         }
     }
 
@@ -187,7 +183,7 @@ mod tests {
         use crate::route::ConnConfig;
 
         let calls = Arc::new(AtomicUsize::new(0));
-        let chain: Arc<ConnChain<SocketAddr>> = Arc::from(Vec::<ConnConfig<SocketAddr>>::new());
+        let chain: Arc<ConnChain> = Arc::from(Vec::<ConnConfig>::new());
         let rtt_stats = Arc::new(RwLock::new(RttStats::default()));
         let loss = Arc::new(RwLock::new(None));
         let cancellation = CancellationToken::new();

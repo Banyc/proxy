@@ -266,9 +266,9 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "base64"
-version = "0.23.0"
+version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b25655df2c3cdd83c5e5b293b88acd880332b2ddadd7c30ac43144fdc0033da9"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bincode"
@@ -315,7 +315,7 @@ dependencies = [
  "arrayvec",
  "cc",
  "cfg-if",
- "constant_time_eq",
+ "constant_time_eq 0.4.2",
  "cpufeatures",
 ]
 
@@ -463,7 +463,7 @@ dependencies = [
  "ae",
  "async-speed-limit",
  "async-trait",
- "base64 0.23.0",
+ "base64 0.23.1",
  "bytes",
  "derive_more",
  "duplicate",
@@ -490,7 +490,7 @@ dependencies = [
  "tokio_conn_pool",
  "tokio_throughput",
  "tracing",
- "udp_listener",
+ "udp_listener 0.1.0 (git+https://github.com/Banyc/udp_listener.git?tag=v0.0.15)",
 ]
 
 [[package]]
@@ -498,6 +498,12 @@ name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
+
+[[package]]
+name = "constant_time_eq"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a1ec0cfec728a79a5109075543131387f911cb4d07716436d7ae20533657a96"
 
 [[package]]
 name = "convert_case"
@@ -628,7 +634,8 @@ dependencies = [
 
 [[package]]
 name = "dfsql"
-version = "0.17.0"
+version = "0.18.0"
+source = "git+https://github.com/Banyc/dfsql?tag=v0.18.0#b5dd0e3b3ab07b296c8fe2cd6b38ccdff0c546cd"
 dependencies = [
  "regex",
  "thiserror 2.0.19",
@@ -1236,9 +1243,9 @@ dependencies = [
 
 [[package]]
 name = "kqueue"
-version = "1.2.0"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "273c0752728918e0ac4976f2b275b6fefb9ecd400585dec929419f3844cd87b5"
+checksum = "8d763e5b24120b4ddf50de6c92308156765aabfbbccebf401da7cff2d70a41ea"
 dependencies = [
  "kqueue-sys",
  "libc",
@@ -1433,6 +1440,7 @@ dependencies = [
 [[package]]
 name = "monitor_table"
 version = "0.1.0"
+source = "git+https://github.com/Banyc/monitor_table.git?tag=v0.0.18#d02e9757a459d0c97b6a999da0bafff95c41c8e2"
 dependencies = [
  "anyhow",
  "dfsql",
@@ -1463,12 +1471,13 @@ dependencies = [
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.56)",
  "rand 0.8.7",
  "tokio",
- "udp_listener",
+ "udp_listener 0.1.0 (git+https://github.com/Banyc/udp_listener.git?tag=v0.0.13)",
 ]
 
 [[package]]
 name = "mux"
 version = "0.1.0"
+source = "git+https://github.com/Banyc/mux.git?tag=v0.0.25#c10313c7d0424ed6b1a41d89a234b804131ce0f3"
 dependencies = [
  "getrandom 0.4.3",
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
@@ -1676,6 +1685,16 @@ dependencies = [
 [[package]]
 name = "primitive"
 version = "0.1.0"
+source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.55#57489ef98acfcfb819e048964805ef16a386787f"
+dependencies = [
+ "anyhow",
+ "num-traits",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "primitive"
+version = "0.1.0"
 source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.56#3565e3dba8702f5baa3d80ce94780770b369cfc9"
 dependencies = [
  "anyhow",
@@ -1725,7 +1744,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "common",
- "constant_time_eq",
+ "constant_time_eq 0.5.0",
  "futures",
  "http-body-util",
  "hyper",
@@ -1745,7 +1764,7 @@ dependencies = [
  "tokio_chacha20",
  "tokio_kcp",
  "tracing",
- "udp_listener",
+ "udp_listener 0.1.0 (git+https://github.com/Banyc/udp_listener.git?tag=v0.0.15)",
 ]
 
 [[package]]
@@ -1972,9 +1991,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.16"
+version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fcfdb36bda0c880c5931cdc7a2bcdc8ba4556847b9d912bca70bc94708711ad"
+checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -2009,6 +2028,7 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.82#a04588da8f5ca323206774a826ce6a6ee5e24c4b"
 dependencies = [
  "async-trait",
  "async_async_io",
@@ -2026,12 +2046,13 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tokio_udp",
- "udp_listener",
+ "udp_listener 0.1.0 (git+https://github.com/Banyc/udp_listener.git?tag=v0.0.15)",
 ]
 
 [[package]]
 name = "rtp_mux"
 version = "0.1.0"
+source = "git+https://github.com/Banyc/rtp_mux.git?tag=v0.0.6#02b61cb284aa9619331f23fbcb4a294b8312167a"
 dependencies = [
  "futures",
  "metrics",
@@ -2576,6 +2597,7 @@ dependencies = [
 [[package]]
 name = "tokio_udp"
 version = "0.1.0"
+source = "git+https://github.com/Banyc/tokio_udp.git?tag=v0.0.3#b8f36184f041930551f6ea87bcb2156da91b2b68"
 dependencies = [
  "bytes",
  "socket2",
@@ -2720,6 +2742,17 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "udp_listener"
 version = "0.1.0"
+source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.13#076920b9a83f9472e7d6209502f1fecb58f7d665"
+dependencies = [
+ "bytes",
+ "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.55)",
+ "tokio",
+]
+
+[[package]]
+name = "udp_listener"
+version = "0.1.0"
+source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.15#d0e16f49886772cd98bb0edd6631a02465605223"
 dependencies = [
  "bytes",
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",

@@ -4,26 +4,10 @@ use common::proto::header::StreamRequestHeader;
 use std::io::Cursor;
 use std::time::Duration;
 
+mod support;
+use support::SplitMix64;
+
 const ROUNDS: usize = 20_000;
-struct Rng(u64);
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-    fn byte(&mut self) -> u8 {
-        self.next() as u8
-    }
-    fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
-    }
-    fn bytes(&mut self, n: usize) -> Vec<u8> {
-        (0..n).map(|_| self.byte()).collect()
-    }
-}
 fn key() -> [u8; tokio_chacha20::KEY_BYTES] {
     [0x42; tokio_chacha20::KEY_BYTES]
 }
@@ -32,7 +16,7 @@ fn validator() -> TimeValidator {
 }
 #[tokio::test]
 async fn framing_chosen_by_someone_without_the_key() {
-    let mut rng = Rng(0x5eed);
+    let mut rng = SplitMix64::new(0x5eed);
     let time_validator = validator();
     let validator = ValidatorRef::Time(&time_validator);
     for _ in 0..ROUNDS {
@@ -50,7 +34,7 @@ async fn framing_chosen_by_someone_without_the_key() {
 }
 #[tokio::test]
 async fn a_payload_chosen_by_a_client_that_has_the_key() {
-    let mut rng = Rng(0x5eed);
+    let mut rng = SplitMix64::new(0x5eed);
     let time_validator = validator();
     let validator = ValidatorRef::Time(&time_validator);
     let mut decoded_count = 0_usize;

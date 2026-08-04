@@ -93,6 +93,8 @@ pub struct IterSetEntryGuard<T> {
     leak: bool,
 }
 impl<T> IterSetEntryGuard<T> {
+    /// Detach the entry from the set so it survives this guard's drop (the
+    /// owner takes over its lifecycle).
     pub fn leak(mut self) {
         self.leak = true;
     }

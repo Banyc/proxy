@@ -13,12 +13,10 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpSocket, TcpStream, ToSocketAddrs},
 };
-use tracing::instrument;
 
 use common::{
     addr::any_addr,
     connect::ConnectorConfig,
-    error::AnyResult,
     loading,
     proto::{
         conn_handler::{
@@ -29,80 +27,12 @@ use common::{
             },
         },
         connect::stream::StreamConnect,
-        context::StreamContext,
+        context::StreamRuntime,
     },
-    stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    stream::{ConnParts, HasIoAddr, OwnIoStream},
 };
 
-pub const TCP_STREAM_TYPE: &str = "tcp";
-
-#[derive(Debug)]
-pub struct TcpServer<ConnHandler> {
-    listener: TcpListener,
-    conn_handler: ConnHandler,
-}
-impl<ConnHandler> TcpServer<ConnHandler> {
-    pub fn new(listener: TcpListener, conn_handler: ConnHandler) -> Self {
-        Self {
-            listener,
-            conn_handler,
-        }
-    }
-
-    pub fn listener(&self) -> &TcpListener {
-        &self.listener
-    }
-
-    pub fn listener_mut(&mut self) -> &mut TcpListener {
-        &mut self.listener
-    }
-}
-impl<ConnHandler> loading::Serve for TcpServer<ConnHandler>
-where
-    ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
-{
-    type ConnHandler = ConnHandler;
-
-    async fn serve(
-        self,
-        set_conn_handler_rx: loading::ReplaceConnHandlerRx<Self::ConnHandler>,
-    ) -> AnyResult {
-        self.serve_(set_conn_handler_rx).await.map_err(|e| e.into())
-    }
-}
-impl<ConnHandler> TcpServer<ConnHandler>
-where
-    ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
-{
-    #[instrument(skip_all)]
-    async fn serve_(
-        self,
-        set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
-    ) -> Result<(), ServeError> {
-        let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
-        let listener = &self.listener;
-        let mut state = ();
-        common::serve_loop::serve_loop(
-            "tcp",
-            Some("stream.tcp.accepts"),
-            false,
-            addr,
-            Arc::new(self.conn_handler),
-            set_conn_handler_rx,
-            |_| {},
-            || listener.accept(),
-            |_, (stream, _): (TcpStream, SocketAddr), conn_handler: Arc<ConnHandler>| {
-                tokio::spawn(async move {
-                    conn_handler.handle_stream(IoTcpStream(stream)).await;
-                });
-            },
-            &mut state,
-            |_| Box::pin(std::future::pending::<()>()),
-        )
-        .await
-    }
-}
-pub use common::serve_loop::ServeError;
+use super::listener::TcpServer;
 
 #[derive(Debug, Clone)]
 pub struct TcpConnector {
@@ -115,7 +45,7 @@ impl TcpConnector {
 }
 #[async_trait]
 impl StreamConnect for TcpConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
         let bind = self
             .config
             .read()
@@ -131,13 +61,13 @@ impl StreamConnect for TcpConnector {
         socket.bind(bind)?;
         let stream = socket.connect(addr).await?;
         counter!("stream.tcp.connects").increment(1);
-        Ok(Box::new(IoTcpStream(stream)))
+        Ok(Box::new(AddressedTcpStream(stream)))
     }
 }
 
 #[derive(Debug)]
-pub struct IoTcpStream(pub TcpStream);
-impl AsyncWrite for IoTcpStream {
+pub struct AddressedTcpStream(pub TcpStream);
+impl AsyncWrite for AddressedTcpStream {
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -160,7 +90,7 @@ impl AsyncWrite for IoTcpStream {
         std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
     }
 }
-impl AsyncRead for IoTcpStream {
+impl AsyncRead for AddressedTcpStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -169,9 +99,9 @@ impl AsyncRead for IoTcpStream {
         std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
     }
 }
-impl AsConn for IoTcpStream {}
-impl OwnIoStream for IoTcpStream {}
-impl HasIoAddr for IoTcpStream {
+impl ConnParts for AddressedTcpStream {}
+impl OwnIoStream for AddressedTcpStream {}
+impl HasIoAddr for AddressedTcpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         self.0.peer_addr()
     }
@@ -188,7 +118,7 @@ pub struct TcpProxyServerConfig {
     pub inner: StreamProxyConnHandlerConfig,
 }
 impl TcpProxyServerConfig {
-    pub fn into_builder(self, stream_context: StreamContext) -> TcpProxyServerBuilder {
+    pub fn into_builder(self, stream_context: StreamRuntime) -> TcpProxyServerBuilder {
         let listen_addr = Arc::clone(&self.listen_addr);
         let inner = self.inner.into_builder(stream_context, listen_addr);
         TcpProxyServerBuilder {
@@ -249,15 +179,16 @@ mod tests {
     use crate::stream::connect::build_concrete_stream_connector_table;
 
     use super::*;
+    use crate::stream::streams::tcp::listener::TCP_STREAM_TYPE;
     use ae::anti_replay::ReplayValidator;
     use common::{
         addr::BothVerIp,
         anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
-        connect::{ConnectorConfig, ConnectorReset},
-        header::{codec::write_header_async, heartbeat},
+        connect::{ConnectorConfig, ConnectorResetSignal},
+        header::{codec::write_header_async, preamble},
         loading::Serve,
         notify::Notify,
-        proto::{addr::StreamAddr, context::StreamContext, header::StreamRequestHeader},
+        proto::{addr::RouteAddr, context::StreamRuntime, header::StreamRequestHeader},
         stream::pool::StreamConnPool,
     };
     use swap::Swap;
@@ -269,7 +200,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_proxy() {
         let crypto = tokio_chacha20::config::Config::new(vec![].into());
-        let connector_reset = ConnectorReset(Notify::new());
+        let connector_reset = ConnectorResetSignal(Notify::new());
         let proxy_addr = {
             let listen_addr = Arc::from("localhost:0");
             let connector_config = ConnectorConfig {
@@ -278,7 +209,7 @@ mod tests {
             let proxy = StreamProxyConnHandler::new(
                 crypto.clone(),
                 None,
-                StreamContext {
+                StreamRuntime {
                     session_table: None,
                     pool: Swap::new(StreamConnPool::empty()),
                     connector_table: Arc::new(build_concrete_stream_connector_table(
@@ -321,13 +252,13 @@ mod tests {
         };
         let mut stream = TcpStream::connect(proxy_addr).await.unwrap();
         {
-            heartbeat::send_upgrade(&mut stream, Duration::from_secs(1), &crypto)
+            preamble::send_upgrade(&mut stream, Duration::from_secs(1), &crypto)
                 .await
                 .unwrap();
             let header = StreamRequestHeader {
-                upstream: Some(StreamAddr {
+                upstream: Some(RouteAddr {
                     address: origin_addr.into(),
-                    stream_type: TCP_STREAM_TYPE.into(),
+                    protocol: TCP_STREAM_TYPE.into(),
                 }),
             };
             write_header_async(&mut stream, &header, *crypto.key())

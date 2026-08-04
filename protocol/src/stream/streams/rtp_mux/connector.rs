@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use common::{
     addr::any_addr,
-    connect::{ConnectorConfig, ConnectorReset},
+    connect::{ConnectorConfig, ConnectorResetSignal},
     proto::connect::stream::StreamConnect,
-    stream::{AsConn, HasIoAddr, OwnIoStream},
+    stream::{ConnParts, HasIoAddr, OwnIoStream},
 };
 use std::{
     io,
@@ -22,7 +22,7 @@ pub struct RtpMuxConnector {
 impl RtpMuxConnector {
     pub fn new(
         config: Arc<std::sync::RwLock<ConnectorConfig>>,
-        reset: ConnectorReset,
+        reset: ConnectorResetSignal,
         fec: bool,
     ) -> Self {
         let bind = Arc::new(move |addr: SocketAddr| {
@@ -39,7 +39,7 @@ impl RtpMuxConnector {
         {
             let inner = Arc::clone(&inner);
             reset_tasks.spawn(async move {
-                let mut waiter = reset.0.waiter();
+                let mut waiter = reset.0.subscription();
                 loop {
                     waiter.notified().await;
                     if inner.reset().await.is_err() {
@@ -56,15 +56,15 @@ impl RtpMuxConnector {
 }
 #[async_trait]
 impl StreamConnect for RtpMuxConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
         self.inner
             .connect_stream(addr)
             .await
             .map(ProxyRtpMuxClientStream)
-            .map(|stream| Box::new(stream) as Box<dyn AsConn>)
+            .map(|stream| Box::new(stream) as Box<dyn ConnParts>)
     }
     fn reset_addr(&self, addr: SocketAddr) {
-        self.inner.reset_addr(addr);
+        self.inner.force_redial(addr);
     }
     fn reoptimize(&self, addr: SocketAddr) {
         self.inner.reoptimize(addr);
@@ -116,7 +116,7 @@ impl AsyncWrite for ProxyRtpMuxClientStream {
     }
 }
 impl OwnIoStream for ProxyRtpMuxClientStream {}
-impl AsConn for ProxyRtpMuxClientStream {
+impl ConnParts for ProxyRtpMuxClientStream {
     fn set_stream_name(&self, name: &str) {
         self.0.set_name(name);
     }

@@ -6,8 +6,8 @@ use std::{
 };
 
 use crate::stream::streams::{
-    http_tunnel::{proxy::run_proxy_mode, tunnel::run_tunnel_mode},
-    tcp::proxy_server::TcpServer,
+    http_tunnel::{proxy::dispatch_proxy, tunnel::dispatch_tunnel},
+    tcp::listener::TcpServer,
 };
 use async_speed_limit::Limiter;
 use bytes::Bytes;
@@ -15,12 +15,8 @@ use common::{
     addr::ParseInternetAddrError,
     config::SharableConfig,
     loading,
-    proto::{
-        client::stream::StreamEstablishError,
-        context::StreamContext,
-        route::{StreamRouteTable, StreamRouteTableBuildContext, StreamRouteTableBuilder},
-    },
-    route::RouteTableBuildError,
+    proto::{client::stream::StreamEstablishError, context::StreamRuntime},
+    route::{Registries, RouteTable, RouteTableBuildError, RouteTableBuilder},
     stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
@@ -40,13 +36,13 @@ use failure::{
     HttpDownstreamContext, HttpFailureReporter, HttpRequestFailure, RequestErrorContext,
 };
 
-type ReturnType = Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>;
+type HttpResult = Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>;
 
 fn retain_failed_request_context(
     request_error_context: &RequestErrorContext,
     reporter: HttpFailureReporter,
-    result: ReturnType,
-) -> ReturnType {
+    result: HttpResult,
+) -> HttpResult {
     if let Err(error) = &result {
         *request_error_context.lock().unwrap() = Some(reporter.clone());
         reporter.report(error, None);
@@ -87,22 +83,22 @@ impl HttpRequestContext {
 #[serde(deny_unknown_fields)]
 pub struct HttpAccessServerConfig {
     pub listen_addr: Arc<str>,
-    pub route_table: SharableConfig<StreamRouteTableBuilder>,
+    pub route_table: SharableConfig<RouteTableBuilder>,
     pub speed_limit: Option<f64>,
 }
 impl HttpAccessServerConfig {
     pub fn into_builder(
         self,
-        route_tables: &HashMap<Arc<str>, StreamRouteTable>,
-        route_tables_cx: StreamRouteTableBuildContext<'_>,
-        stream_context: StreamContext,
-    ) -> Result<HttpAccessServerBuilder, BuildError> {
+        route_tables: &HashMap<Arc<str>, RouteTable>,
+        registries: &Registries<'_>,
+        stream_context: StreamRuntime,
+    ) -> Result<HttpAccessServerBuilder, HttpBuildError> {
         let route_table = match self.route_table {
             SharableConfig::SharingKey(key) => route_tables
                 .get(&key)
-                .ok_or_else(|| BuildError::ProxyTableKeyNotFound(key.clone()))?
+                .ok_or_else(|| HttpBuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(route_tables_cx.clone())?,
+            SharableConfig::Private(x) => x.resolve(registries)?,
         };
 
         Ok(HttpAccessServerBuilder {
@@ -114,7 +110,7 @@ impl HttpAccessServerConfig {
     }
 }
 #[derive(Debug, Error)]
-pub enum BuildError {
+pub enum HttpBuildError {
     #[error("Proxy table key not found: {0}")]
     ProxyTableKeyNotFound(Arc<str>),
     #[error("{0}")]
@@ -124,9 +120,9 @@ pub enum BuildError {
 #[derive(Debug, Clone)]
 pub struct HttpAccessServerBuilder {
     listen_addr: Arc<str>,
-    route_table: StreamRouteTable,
+    route_table: RouteTable,
     speed_limit: f64,
-    stream_context: StreamContext,
+    stream_context: StreamRuntime,
 }
 impl loading::Build for HttpAccessServerBuilder {
     type ConnHandler = HttpAccessConnHandler;
@@ -158,9 +154,9 @@ impl loading::Build for HttpAccessServerBuilder {
 
 #[derive(Debug, Clone)]
 struct HttpAccessConnContext {
-    pub route_table: Arc<StreamRouteTable>,
+    pub route_table: Arc<RouteTable>,
     pub speed_limiter: Limiter,
-    pub stream_context: StreamContext,
+    pub stream_context: StreamRuntime,
     pub listen_addr: Arc<str>,
 }
 
@@ -170,9 +166,9 @@ pub struct HttpAccessConnHandler {
 }
 impl HttpAccessConnHandler {
     pub fn new(
-        route_table: StreamRouteTable,
+        route_table: RouteTable,
         speed_limit: f64,
-        stream_context: StreamContext,
+        stream_context: StreamRuntime,
         listen_addr: Arc<str>,
     ) -> Self {
         let ctx = HttpAccessConnContext {
@@ -269,9 +265,9 @@ async fn run_service(
         listener,
     };
     let res = if Method::CONNECT == req.method() {
-        run_tunnel_mode(ctx, req, reporter.clone()).await
+        dispatch_tunnel(ctx, req, reporter.clone()).await
     } else {
-        run_proxy_mode(ctx, req, reporter.clone()).await
+        dispatch_proxy(ctx, req, reporter.clone()).await
     };
     retain_failed_request_context(request_error_context, reporter, res)
 }
@@ -307,7 +303,7 @@ impl From<StreamEstablishError> for TunnelError {
     }
 }
 impl TunnelError {
-    fn upstream_addr(&self) -> Option<&common::proto::addr::StreamAddr> {
+    fn upstream_addr(&self) -> Option<&common::proto::addr::RouteAddr> {
         match self {
             Self::EstablishProxyChain(e) => match e.as_ref() {
                 StreamEstablishError::ConnectDestination { upstream_addr, .. }
@@ -356,9 +352,9 @@ mod tests {
 
     #[test]
     fn connect_error_exposes_attempted_upstream_address() {
-        let addr = common::proto::addr::StreamAddr {
+        let addr = common::proto::addr::RouteAddr {
             address: "127.0.0.1:8080".parse().unwrap(),
-            stream_type: "tcp".into(),
+            protocol: "tcp".into(),
         };
         let source = common::stream::pool::ConnectError::ConnectAddr {
             source: io::Error::other("test"),
@@ -373,14 +369,14 @@ mod tests {
         assert!(tunnel_err.upstream_addr().is_some());
         let up = tunnel_err.upstream_addr().unwrap();
         assert_eq!(up.address.to_string(), "127.0.0.1:8080");
-        assert_eq!(up.stream_type.as_ref(), "tcp");
+        assert_eq!(up.protocol.as_ref(), "tcp");
     }
 
     #[test]
     fn establish_error_exposes_structured_upstream_address() {
-        let addr = common::proto::addr::StreamAddr {
+        let addr = common::proto::addr::RouteAddr {
             address: "10.0.0.1:9090".parse().unwrap(),
-            stream_type: "rtp-mux".into(),
+            protocol: "rtp-mux".into(),
         };
         let source = common::stream::pool::ConnectError::ConnectAddr {
             source: io::Error::other("test"),
@@ -393,7 +389,7 @@ mod tests {
         };
         let tunnel_err = TunnelError::from(err);
         let up = tunnel_err.upstream_addr().unwrap();
-        assert_eq!(up.stream_type.as_ref(), "rtp-mux");
+        assert_eq!(up.protocol.as_ref(), "rtp-mux");
         assert_eq!(up.address.to_string(), "10.0.0.1:9090");
     }
 }

@@ -12,7 +12,7 @@ use primitive::ops::unit::HumanBytes;
 use crate::{
     addr::{InternetAddr, InternetAddrHdv, InternetAddrKind},
     log::{HdvLogger, Timing, TimingHdv},
-    proto::addr::{StreamAddr, StreamAddrHdv},
+    proto::addr::{RouteAddr, RouteAddrHdv},
 };
 
 pub static LOGGER: LazyLock<Arc<Mutex<Option<HdvLogger<StreamLogHdv>>>>> =
@@ -28,15 +28,15 @@ pub struct StreamLog {
     pub timing: Timing,
     pub bytes_uplink: u64,
     pub bytes_downlink: u64,
-    pub upstream_addr: StreamAddr,
+    pub upstream_addr: RouteAddr,
     pub upstream_sock_addr: SocketAddr,
     pub downstream_addr: Option<SocketAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SimplifiedStreamLog {
+pub struct StreamLogWithoutByteCounts {
     pub timing: Timing,
-    pub upstream_addr: StreamAddr,
+    pub upstream_addr: RouteAddr,
     pub upstream_sock_addr: SocketAddr,
     pub downstream_addr: Option<SocketAddr>,
 }
@@ -48,8 +48,8 @@ pub struct StreamProxyLog {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SimplifiedStreamProxyLog {
-    pub stream: SimplifiedStreamLog,
+pub struct StreamProxyLogWithoutByteCounts {
+    pub stream: StreamLogWithoutByteCounts,
     pub destination: InternetAddr,
 }
 
@@ -58,7 +58,7 @@ pub struct StreamLogHdv {
     pub timing: TimingHdv,
     pub up_bytes: Option<u64>,
     pub dn_bytes: Option<u64>,
-    pub upstream_addr: StreamAddrHdv,
+    pub upstream_addr: RouteAddrHdv,
     pub upstream_sock_addr: InternetAddrHdv,
     pub downstream_addr: Option<InternetAddrHdv>,
     pub destination: Option<InternetAddrHdv>,
@@ -83,8 +83,8 @@ impl From<&StreamLog> for StreamLogHdv {
         }
     }
 }
-impl From<&SimplifiedStreamLog> for StreamLogHdv {
-    fn from(value: &SimplifiedStreamLog) -> Self {
+impl From<&StreamLogWithoutByteCounts> for StreamLogHdv {
+    fn from(value: &StreamLogWithoutByteCounts) -> Self {
         let timing = (&value.timing).into();
         let up_bytes = None;
         let dn_bytes = None;
@@ -110,8 +110,8 @@ impl From<&StreamProxyLog> for StreamLogHdv {
         this
     }
 }
-impl From<&SimplifiedStreamProxyLog> for StreamLogHdv {
-    fn from(value: &SimplifiedStreamProxyLog) -> Self {
+impl From<&StreamProxyLogWithoutByteCounts> for StreamLogHdv {
+    fn from(value: &StreamProxyLogWithoutByteCounts) -> Self {
         let mut this: StreamLogHdv = (&value.stream).into();
         this.destination = Some((&value.destination).into());
         this
@@ -146,7 +146,7 @@ impl Display for StreamLog {
     }
 }
 
-impl Display for SimplifiedStreamLog {
+impl Display for StreamLogWithoutByteCounts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let duration = self.timing.duration().as_secs_f64();
         let upstream_addrs = match self.upstream_addr.address.deref() {
@@ -171,7 +171,7 @@ impl Display for StreamProxyLog {
     }
 }
 
-impl Display for SimplifiedStreamProxyLog {
+impl Display for StreamProxyLogWithoutByteCounts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.stream.to_string())?;
         write!(f, ",dt:{}", self.destination)?;
@@ -184,7 +184,7 @@ pub struct IoCopyFinished {
     pub timing: Timing,
     pub bytes_uplink: u64,
     pub bytes_downlink: u64,
-    pub upstream_addr: StreamAddr,
+    pub upstream_addr: RouteAddr,
     pub upstream_sock_addr: SocketAddr,
     pub downstream_addr: Option<SocketAddr>,
     pub destination: Option<InternetAddr>,

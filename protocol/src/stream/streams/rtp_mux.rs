@@ -8,7 +8,7 @@ use common::{
                 StreamProxyConnHandlerConfig, StreamProxyServerBuildError,
             },
         },
-        context::StreamContext,
+        context::StreamRuntime,
     },
 };
 use serde::Deserialize;
@@ -21,31 +21,28 @@ pub use connector::RtpMuxConnector;
 pub use server::{RtpMuxServer, ServeError};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RtpMuxListenerConfig {
-    pub listen_addr: Arc<str>,
-    pub fec: bool,
-}
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RtpMuxProxyServerConfig {
-    #[serde(flatten)]
-    pub listener: RtpMuxListenerConfig,
+    pub listen_addr: Arc<str>,
+    #[serde(default)]
+    pub fec: bool,
     #[serde(flatten)]
     pub inner: StreamProxyConnHandlerConfig,
 }
 impl RtpMuxProxyServerConfig {
-    pub fn into_builder(self, stream_context: StreamContext) -> RtpMuxProxyServerBuilder {
-        let listen_addr = Arc::clone(&self.listener.listen_addr);
+    pub fn into_builder(self, stream_context: StreamRuntime) -> RtpMuxProxyServerBuilder {
+        let listen_addr = Arc::clone(&self.listen_addr);
         let inner = self.inner.into_builder(stream_context, listen_addr);
         RtpMuxProxyServerBuilder {
-            listener: self.listener,
+            listen_addr: self.listen_addr,
+            fec: self.fec,
             inner,
         }
     }
 }
 #[derive(Debug, Clone)]
 pub struct RtpMuxProxyServerBuilder {
-    pub listener: RtpMuxListenerConfig,
+    pub listen_addr: Arc<str>,
+    pub fec: bool,
     pub inner: StreamProxyConnHandlerBuilder,
 }
 impl loading::Build for RtpMuxProxyServerBuilder {
@@ -53,9 +50,10 @@ impl loading::Build for RtpMuxProxyServerBuilder {
     type Server = RtpMuxServer<Self::ConnHandler>;
     type Err = RtpMuxProxyServerBuildError;
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
-        let listener = self.listener.clone();
+        let listen_addr = self.listen_addr.clone();
+        let fec = self.fec;
         let stream_proxy = self.build_conn_handler()?;
-        build_rtp_mux_proxy_server(listener.listen_addr.as_ref(), stream_proxy, listener.fec)
+        build_rtp_mux_proxy_server(listen_addr.as_ref(), stream_proxy, fec)
             .await
             .map_err(Into::into)
     }
@@ -63,7 +61,7 @@ impl loading::Build for RtpMuxProxyServerBuilder {
         self.inner.build().map_err(Into::into)
     }
     fn key(&self) -> &Arc<str> {
-        &self.listener.listen_addr
+        &self.listen_addr
     }
 }
 #[derive(Debug, Error)]

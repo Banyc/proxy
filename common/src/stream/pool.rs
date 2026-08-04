@@ -1,6 +1,4 @@
-use std::{
-    collections::HashMap, convert::Infallible, io, net::SocketAddr, sync::Arc, time::Duration,
-};
+use std::{convert::Infallible, io, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -9,54 +7,43 @@ use tokio_conn_pool::{ConnPool, ConnPoolEntry};
 
 use crate::{
     config::{Merge, SharableConfig},
-    header::heartbeat::send_noop,
-    proto::{
-        addr::{StreamAddr, StreamAddrStr},
-        connect::stream::StreamConnectorTable,
-        context::StreamContext,
-    },
-    route::{ConnConfig, ConnConfigBuildError, ConnConfigBuilder, IntoAddr},
+    header::preamble::send_keep_alive,
+    proto::{addr::RouteAddr, connect::stream::StreamConnectorTable, context::StreamRuntime},
+    route::{ConnConfig, ConnConfigBuildError, Registries},
 };
 
-use super::AsConn;
+use super::ConnParts;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
-pub type StreamPoolBuilder = PoolBuilder<StreamAddrStr>;
-pub type StreamConnPool = ConnPool<StreamAddr, Box<dyn AsConn>>;
+pub type StreamPoolBuilder = PoolBuilder;
+pub type StreamConnPool = ConnPool<RouteAddr, Box<dyn ConnParts>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[serde(bound(deserialize = "AddrStr: Deserialize<'de>"))]
-pub struct PoolBuilder<AddrStr>(
-    #[serde(default)] pub Vec<SharableConfig<ConnConfigBuilder<AddrStr>>>,
-);
-impl<AddrStr> PoolBuilder<AddrStr> {
+pub struct PoolBuilder(#[serde(default)] pub Vec<SharableConfig<ConnConfig>>);
+impl PoolBuilder {
     pub fn new() -> Self {
         Self(vec![])
     }
-}
-impl<AddrStr> PoolBuilder<AddrStr>
-where
-    AddrStr: IntoAddr<Addr = StreamAddr>,
-{
-    pub fn build(
+    pub fn resolve(
         self,
-        connector_table: Arc<StreamConnectorTable>,
-        conn: &HashMap<Arc<str>, ConnConfig<StreamAddr>>,
-    ) -> Result<ConnPool<StreamAddr, Box<dyn AsConn>>, PoolBuildError> {
+        registries: &Registries<'_>,
+    ) -> Result<ConnPool<RouteAddr, Box<dyn ConnParts>>, PoolBuildError> {
         let c = self
             .0
             .into_iter()
             .map(|c| match c {
-                SharableConfig::SharingKey(k) => conn
+                SharableConfig::SharingKey(k) => registries
+                    .conn
                     .get(&k)
                     .cloned()
                     .ok_or(PoolBuildError::ProxyServerKeyNotFound(k)),
-                SharableConfig::Private(c) => c.build().map_err(PoolBuildError::ProxyConfigBuild),
+                SharableConfig::Private(c) => Ok(c),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let entries = pool_entries_from_proxy_configs(c.into_iter(), connector_table.clone());
+        let entries =
+            pool_entries_from_proxy_configs(c.into_iter(), registries.connector_table.clone());
         let pool = ConnPool::new(entries);
         Ok(pool)
     }
@@ -68,12 +55,12 @@ pub enum PoolBuildError {
     #[error("Proxy server key not found: {0}")]
     ProxyServerKeyNotFound(Arc<str>),
 }
-impl<AddrStr> Default for PoolBuilder<AddrStr> {
+impl Default for PoolBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
-impl<AddrStr> Merge for PoolBuilder<AddrStr> {
+impl Merge for PoolBuilder {
     type Error = Infallible;
 
     fn merge(mut self, other: Self) -> Result<Self, Self::Error>
@@ -86,9 +73,9 @@ impl<AddrStr> Merge for PoolBuilder<AddrStr> {
 }
 
 fn pool_entries_from_proxy_configs(
-    proxy_configs: impl Iterator<Item = ConnConfig<StreamAddr>>,
+    proxy_configs: impl Iterator<Item = ConnConfig>,
     connector_table: Arc<StreamConnectorTable>,
-) -> impl Iterator<Item = ConnPoolEntry<StreamAddr, Box<dyn AsConn>>> {
+) -> impl Iterator<Item = ConnPoolEntry<RouteAddr, Box<dyn ConnParts>>> {
     proxy_configs.map(move |c| ConnPoolEntry {
         key: c.address.clone(),
         connect: Arc::new(PoolConnector {
@@ -101,22 +88,18 @@ fn pool_entries_from_proxy_configs(
 
 #[derive(Debug)]
 struct PoolConnector {
-    conn: ConnConfig<StreamAddr>,
+    conn: ConnConfig,
     connector_table: Arc<StreamConnectorTable>,
 }
 #[async_trait]
 impl tokio_conn_pool::Connect for PoolConnector {
-    type Connection = Box<dyn AsConn>;
+    type Connection = Box<dyn ConnParts>;
     async fn connect(&self) -> Option<Self::Connection> {
         let addr = self.conn.address.clone();
         let sock_addrs = addr.address.to_socket_addrs().await.ok()?;
         let (stream, _sock_addr) = self
             .connector_table
-            .timed_connect_2(
-                &self.conn.address.stream_type,
-                sock_addrs,
-                HEARTBEAT_INTERVAL,
-            )
+            .timed_connect_any(&self.conn.address.protocol, sock_addrs, HEARTBEAT_INTERVAL)
             .await
             .ok()?;
         Some(stream)
@@ -125,13 +108,13 @@ impl tokio_conn_pool::Connect for PoolConnector {
 
 #[derive(Debug)]
 struct PoolHeartbeat {
-    conn: ConnConfig<StreamAddr>,
+    conn: ConnConfig,
 }
 #[async_trait]
 impl tokio_conn_pool::Heartbeat for PoolHeartbeat {
-    type Connection = Box<dyn AsConn>;
+    type Connection = Box<dyn ConnParts>;
     async fn heartbeat(&self, mut conn: Self::Connection) -> Option<Self::Connection> {
-        send_noop(
+        send_keep_alive(
             &mut conn,
             HEARTBEAT_INTERVAL,
             &self.conn.header_crypto.clone(),
@@ -143,11 +126,11 @@ impl tokio_conn_pool::Heartbeat for PoolHeartbeat {
 }
 
 pub async fn connect_with_pool(
-    addr: &StreamAddr,
-    stream_context: &StreamContext,
+    addr: &RouteAddr,
+    stream_context: &StreamRuntime,
     allow_loopback: bool,
     timeout: Duration,
-) -> Result<(Box<dyn AsConn>, SocketAddr), ConnectError> {
+) -> Result<(Box<dyn ConnParts>, SocketAddr), ConnectError> {
     let stream = stream_context.pool.inner().pull(addr);
     let sock_addr = stream.as_ref().and_then(|s| s.peer_addr().ok());
     if let (Some(stream), Some(sock_addr)) = (stream, sock_addr) {
@@ -173,7 +156,7 @@ pub async fn connect_with_pool(
     }
     let (stream, sock_addr) = stream_context
         .connector_table
-        .timed_connect_2(&addr.stream_type, sock_addrs.iter().copied(), timeout)
+        .timed_connect_any(&addr.protocol, sock_addrs.iter().copied(), timeout)
         .await
         .map_err(|e| ConnectError::ConnectAddr {
             source: e,
@@ -188,18 +171,18 @@ pub enum ConnectError {
     ResolveAddr {
         #[source]
         source: io::Error,
-        addr: StreamAddr,
+        addr: RouteAddr,
     },
     #[error("Refused to connect to loopback address: {addr}, {sock_addrs:?}")]
     Loopback {
-        addr: StreamAddr,
+        addr: RouteAddr,
         sock_addrs: Vec<SocketAddr>,
     },
     #[error("Failed to connect to address: {source}, {addr}, {sock_addrs:?}")]
     ConnectAddr {
         #[source]
         source: io::Error,
-        addr: StreamAddr,
+        addr: RouteAddr,
         sock_addrs: Vec<SocketAddr>,
     },
 }
@@ -207,6 +190,7 @@ pub enum ConnectError {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashMap,
         pin::Pin,
         sync::RwLock,
         task::{Context, Poll},
@@ -264,7 +248,7 @@ mod tests {
     }
 
     impl OwnIoStream for TestConn {}
-    impl AsConn for TestConn {}
+    impl ConnParts for TestConn {}
 
     #[derive(Debug)]
     struct TestConnect {
@@ -272,7 +256,7 @@ mod tests {
     }
     #[async_trait]
     impl tokio_conn_pool::Connect for TestConnect {
-        type Connection = Box<dyn AsConn>;
+        type Connection = Box<dyn ConnParts>;
         async fn connect(&self) -> Option<Self::Connection> {
             let (io, _peer) = tokio::io::duplex(1);
             Some(Box::new(TestConn {
@@ -286,22 +270,22 @@ mod tests {
     struct TestHeartbeat;
     #[async_trait]
     impl tokio_conn_pool::Heartbeat for TestHeartbeat {
-        type Connection = Box<dyn AsConn>;
+        type Connection = Box<dyn ConnParts>;
         async fn heartbeat(&self, conn: Self::Connection) -> Option<Self::Connection> {
             Some(conn)
         }
     }
 
-    fn stream_addr(addr: &str, stream_type: &str) -> StreamAddr {
-        StreamAddr {
+    fn stream_addr(addr: &str, protocol: &str) -> RouteAddr {
+        RouteAddr {
             address: addr.parse::<SocketAddr>().unwrap().into(),
-            stream_type: stream_type.into(),
+            protocol: protocol.into(),
         }
     }
 
-    fn conn_config(addr: &str, stream_type: &str) -> ConnConfig<StreamAddr> {
+    fn conn_config(addr: &str, protocol: &str) -> ConnConfig {
         ConnConfig {
-            address: stream_addr(addr, stream_type),
+            address: stream_addr(addr, protocol),
             header_crypto: tokio_chacha20::config::Config::new(
                 [7; tokio_chacha20::KEY_BYTES].into(),
             ),
@@ -309,7 +293,7 @@ mod tests {
         }
     }
 
-    fn entry(key: &StreamAddr) -> ConnPoolEntry<StreamAddr, Box<dyn AsConn>> {
+    fn entry(key: &RouteAddr) -> ConnPoolEntry<RouteAddr, Box<dyn ConnParts>> {
         ConnPoolEntry {
             key: key.clone(),
             connect: Arc::new(TestConnect {
@@ -327,9 +311,9 @@ mod tests {
     }
 
     async fn pull_until_ready(
-        pool: &ConnPool<StreamAddr, Box<dyn AsConn>>,
-        key: &StreamAddr,
-    ) -> Box<dyn AsConn> {
+        pool: &ConnPool<RouteAddr, Box<dyn ConnParts>>,
+        key: &RouteAddr,
+    ) -> Box<dyn ConnParts> {
         for _ in 0..10_000 {
             if let Some(conn) = pool.pull(key) {
                 return conn;
@@ -339,7 +323,7 @@ mod tests {
         panic!("the pool never produced a connection for {key}");
     }
 
-    fn socket_addr_of(key: &StreamAddr) -> SocketAddr {
+    fn socket_addr_of(key: &RouteAddr) -> SocketAddr {
         match *key.address {
             InternetAddrKind::SocketAddr(addr) => addr,
             InternetAddrKind::DomainName { .. } => panic!("test keys are socket addrs"),
@@ -383,8 +367,36 @@ mod tests {
 
     #[test]
     fn an_unknown_sharing_key_is_rejected_at_build() {
-        let err = PoolBuilder::<StreamAddrStr>(vec![SharableConfig::SharingKey("missing".into())])
-            .build(empty_table(), &HashMap::new())
+        use crate::route::{ProbeRtt, Registries};
+        use tokio_util::sync::CancellationToken;
+        struct NoTracer;
+        impl ProbeRtt for NoTracer {
+            fn probe_rtt(
+                &self,
+                _chain: &crate::route::ConnChain,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<Duration, crate::error::AnyError>>
+                        + Send,
+                >,
+            > {
+                unreachable!()
+            }
+        }
+        let conn: HashMap<Arc<str>, ConnConfig> = HashMap::new();
+        let matcher = Arc::new(HashMap::new());
+        let conn_selector = HashMap::new();
+        let tracer: Arc<dyn ProbeRtt + Send + Sync> = Arc::new(NoTracer);
+        let registries = Registries {
+            conn: &conn,
+            matcher: &matcher,
+            conn_selector: &conn_selector,
+            tracer: &tracer,
+            connector_table: &empty_table(),
+            cancellation: CancellationToken::new(),
+        };
+        let err = PoolBuilder(vec![SharableConfig::SharingKey("missing".into())])
+            .resolve(&registries)
             .unwrap_err();
         assert!(
             matches!(err, PoolBuildError::ProxyServerKeyNotFound(ref k) if k.as_ref() == "missing"),

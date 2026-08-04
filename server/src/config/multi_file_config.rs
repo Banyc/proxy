@@ -7,11 +7,11 @@ use crate::ReadConfig;
 
 use super::toml::human_toml_error;
 
-pub struct MultiConfigReader<Config> {
+pub struct MultiFileConfigReader<Config> {
     config_file_paths: Arc<[Arc<str>]>,
     phantom_config: PhantomData<Config>,
 }
-impl<Config> MultiConfigReader<Config> {
+impl<Config> MultiFileConfigReader<Config> {
     pub fn new(config_file_paths: Arc<[Arc<str>]>) -> Self {
         Self {
             config_file_paths,
@@ -19,7 +19,7 @@ impl<Config> MultiConfigReader<Config> {
         }
     }
 }
-impl<Config> ReadConfig for MultiConfigReader<Config>
+impl<Config> ReadConfig for MultiFileConfigReader<Config>
 where
     for<'de> Config: Deserialize<'de> + Send + Sync + 'static,
     Config: Merge<Error = AnyError>,

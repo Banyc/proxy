@@ -8,8 +8,8 @@ use std::{
 };
 
 use common::{
-    connect::ConnectorReset,
-    stream::{AsConn, HasIoAddr, OwnIoStream},
+    connect::ConnectorResetSignal,
+    stream::{ConnParts, HasIoAddr, OwnIoStream},
 };
 use mux::{
     DeadControl, Initiation, MuxConfig, MuxError, StreamAccepter, StreamOpener, StreamReader,
@@ -40,7 +40,7 @@ fn client_mux_config() -> MuxConfig {
 pub async fn run_mux_accepter(
     mut accepter: StreamAccepter,
     addr: SocketAddrPair,
-    mut handle_conn: impl FnMut(IoMuxStream<StreamReader, StreamWriter>),
+    mut handle_conn: impl FnMut(AddressedMuxStream<StreamReader, StreamWriter>),
 ) {
     loop {
         let (reader, writer) = match accepter.accept().await {
@@ -48,12 +48,12 @@ pub async fn run_mux_accepter(
             Err(DeadControl {}) => break,
         };
         let stream = tokio_chacha20::stream::DuplexStream::new(reader, writer);
-        handle_conn(IoMuxStream::new(stream, addr));
+        handle_conn(AddressedMuxStream::new(stream, addr));
     }
 }
 
 pub async fn run_mux_connector<R, W, Fut>(
-    reset: ConnectorReset,
+    reset: ConnectorResetSignal,
     mut connect_request_rx: ConnectRequestRx,
     mut connect: impl FnMut(SocketAddr) -> Fut,
 ) where
@@ -63,7 +63,7 @@ pub async fn run_mux_connector<R, W, Fut>(
 {
     let mut openers: HashMap<SocketAddr, (StreamOpener, SocketAddrPair)> = HashMap::new();
     let mut mux_spawner: JoinSet<(SocketAddr, MuxError)> = JoinSet::new();
-    let mut reset_notified = reset.0.waiter();
+    let mut reset_notified = reset.0.subscription();
     loop {
         tokio::select! {
             // TCP conns don't survive suspend; abort, don't drain
@@ -228,18 +228,18 @@ pub struct SocketAddrPair {
 }
 
 #[derive(Debug)]
-pub struct IoMuxStream<R, W> {
+pub struct AddressedMuxStream<R, W> {
     stream: tokio_chacha20::stream::DuplexStream<R, W>,
     addr: SocketAddrPair,
 }
 
-impl<R, W> IoMuxStream<R, W> {
+impl<R, W> AddressedMuxStream<R, W> {
     pub fn new(stream: tokio_chacha20::stream::DuplexStream<R, W>, addr: SocketAddrPair) -> Self {
         Self { stream, addr }
     }
 }
 
-impl<R: AsyncRead + Unpin, W: Unpin> AsyncRead for IoMuxStream<R, W> {
+impl<R: AsyncRead + Unpin, W: Unpin> AsyncRead for AddressedMuxStream<R, W> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -249,7 +249,7 @@ impl<R: AsyncRead + Unpin, W: Unpin> AsyncRead for IoMuxStream<R, W> {
     }
 }
 
-impl<R: Unpin, W: AsyncWrite + Unpin> AsyncWrite for IoMuxStream<R, W> {
+impl<R: Unpin, W: AsyncWrite + Unpin> AsyncWrite for AddressedMuxStream<R, W> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -273,9 +273,9 @@ impl<R: Unpin, W: AsyncWrite + Unpin> AsyncWrite for IoMuxStream<R, W> {
     }
 }
 
-impl<R, W> AsConn for IoMuxStream<R, W> where Self: OwnIoStream {}
+impl<R, W> ConnParts for AddressedMuxStream<R, W> where Self: OwnIoStream {}
 
-impl<R, W> OwnIoStream for IoMuxStream<R, W>
+impl<R, W> OwnIoStream for AddressedMuxStream<R, W>
 where
     R: std::fmt::Debug + Send + Sync + Unpin + 'static,
     W: std::fmt::Debug + Send + Sync + Unpin + 'static,
@@ -283,7 +283,7 @@ where
 {
 }
 
-impl<R, W> HasIoAddr for IoMuxStream<R, W> {
+impl<R, W> HasIoAddr for AddressedMuxStream<R, W> {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.addr.peer_addr)
     }

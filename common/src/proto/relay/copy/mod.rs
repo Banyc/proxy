@@ -1,3 +1,4 @@
+#[allow(clippy::module_inception)]
 mod copy;
 mod copy_bidirectional;
 mod timed_copy_bidirectional;

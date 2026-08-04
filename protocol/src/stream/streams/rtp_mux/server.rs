@@ -2,7 +2,7 @@ pub use ::rtp_mux::ServeError;
 use common::{
     error::AnyResult,
     loading,
-    stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 use std::{
     io,
@@ -111,7 +111,7 @@ impl AsyncWrite for ProxyRtpMuxStream {
     }
 }
 impl OwnIoStream for ProxyRtpMuxStream {}
-impl AsConn for ProxyRtpMuxStream {}
+impl ConnParts for ProxyRtpMuxStream {}
 impl HasIoAddr for ProxyRtpMuxStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.0.addr().peer_addr)

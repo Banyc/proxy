@@ -1,8 +1,8 @@
 use crate::{addr::InternetAddr, header::route::RouteRequest};
 
-use super::addr::StreamAddr;
+use super::addr::RouteAddr;
 
-pub type StreamRequestHeader = RouteRequest<StreamAddr>;
+pub type StreamRequestHeader = RouteRequest<RouteAddr>;
 pub type UdpRequestHeader = RouteRequest<InternetAddr>;
 
 #[cfg(test)]

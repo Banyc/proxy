@@ -8,11 +8,10 @@ use common::{
     proto::{
         client::{self, udp::UdpProxyClient},
         conn::udp::{Flow, UpstreamAddr},
-        context::UdpContext,
-        io_copy::udp::{CopyBiError, CopyBidirectional, DownstreamParts, UpstreamParts},
-        route::{UdpConnSelector, UdpConnSelectorBuildContext, UdpConnSelectorBuilder},
+        context::UdpRuntime,
+        relay::udp::{CopyBiError, CopyBidirectional, DownstreamParts, UpstreamParts},
     },
-    route::ConnSelectorBuildError,
+    route::{ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, Registries},
     udp::{
         Packet,
         server::{UdpServer, UdpServerHandleConn},
@@ -29,22 +28,22 @@ use udp_listener::Conn;
 pub struct UdpAccessServerConfig {
     pub listen_addr: Arc<str>,
     pub destination: InternetAddrStr,
-    pub conn_selector: SharableConfig<UdpConnSelectorBuilder>,
+    pub conn_selector: SharableConfig<ConnSelectorBuilder>,
     pub speed_limit: Option<f64>,
 }
 impl UdpAccessServerConfig {
     pub fn into_builder(
         self,
-        conn_selector: &HashMap<Arc<str>, UdpConnSelector>,
-        cx: UdpConnSelectorBuildContext<'_>,
-        udp_context: UdpContext,
-    ) -> Result<UdpAccessServerBuilder, BuildError> {
+        conn_selector: &HashMap<Arc<str>, ConnSelector>,
+        registries: &Registries<'_>,
+        udp_runtime: UdpRuntime,
+    ) -> Result<UdpAccessServerBuilder, UdpAccessBuildError> {
         let conn_selector = match self.conn_selector {
             SharableConfig::SharingKey(key) => conn_selector
                 .get(&key)
-                .ok_or_else(|| BuildError::ProxyGroupKeyNotFound(key.clone()))?
+                .ok_or_else(|| UdpAccessBuildError::ProxyGroupKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.build(cx)?,
+            SharableConfig::Private(x) => x.resolve(registries)?,
         };
 
         Ok(UdpAccessServerBuilder {
@@ -52,12 +51,12 @@ impl UdpAccessServerConfig {
             destination: self.destination,
             conn_selector,
             speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
-            udp_context,
+            udp_runtime,
         })
     }
 }
 #[derive(Debug, Error)]
-pub enum BuildError {
+pub enum UdpAccessBuildError {
     #[error("Proxy group key not found: {0}")]
     ProxyGroupKeyNotFound(Arc<str>),
     #[error("{0}")]
@@ -68,9 +67,9 @@ pub enum BuildError {
 pub struct UdpAccessServerBuilder {
     listen_addr: Arc<str>,
     destination: InternetAddrStr,
-    conn_selector: UdpConnSelector,
+    conn_selector: ConnSelector,
     speed_limit: f64,
-    udp_context: UdpContext,
+    udp_runtime: UdpRuntime,
 }
 impl loading::Build for UdpAccessServerBuilder {
     type ConnHandler = UdpAccessConnHandler;
@@ -93,31 +92,31 @@ impl loading::Build for UdpAccessServerBuilder {
             self.conn_selector,
             self.destination.0,
             self.speed_limit,
-            self.udp_context,
+            self.udp_runtime,
         ))
     }
 }
 
 #[derive(Debug)]
 pub struct UdpAccessConnHandler {
-    conn_selector: UdpConnSelector,
+    conn_selector: ConnSelector,
     destination: InternetAddr,
     speed_limiter: Limiter,
-    udp_context: UdpContext,
+    udp_runtime: UdpRuntime,
 }
 impl loading::HandleConn for UdpAccessConnHandler {}
 impl UdpAccessConnHandler {
     pub fn new(
-        route_table: UdpConnSelector,
+        route_table: ConnSelector,
         destination: InternetAddr,
         speed_limit: f64,
-        udp_context: UdpContext,
+        udp_runtime: UdpRuntime,
     ) -> Self {
         Self {
             conn_selector: route_table,
             destination,
             speed_limiter: Limiter::new(speed_limit),
-            udp_context,
+            udp_runtime,
         }
     }
 
@@ -130,8 +129,8 @@ impl UdpAccessConnHandler {
         // Connect to upstream
         let (chain, payload_crypto) = match &self.conn_selector {
             common::route::ConnSelector::Empty => ([].into(), None),
-            common::route::ConnSelector::Some(conn_selector1) => {
-                let proxy_chain = conn_selector1.choose_chain();
+            common::route::ConnSelector::Some(non_empty_conn_selector) => {
+                let proxy_chain = non_empty_conn_selector.choose_chain();
                 (
                     proxy_chain.chain.clone(),
                     proxy_chain.payload_crypto.clone(),
@@ -139,13 +138,13 @@ impl UdpAccessConnHandler {
             }
         };
         let upstream =
-            UdpProxyClient::establish(chain, self.destination.clone(), &self.udp_context).await?;
+            UdpProxyClient::establish(chain, self.destination.clone(), &self.udp_runtime).await?;
         let upstream_remote = upstream.remote_addr().clone();
 
         let (upstream_read, upstream_write) = upstream.into_split();
 
         let speed_limiter = self.speed_limiter.clone();
-        let session_table = self.udp_context.session_table.clone();
+        let session_table = self.udp_runtime.session_table.clone();
         let upstream_local = upstream_read.inner().local_addr().ok();
         let flow = conn.conn_key().clone();
         let (dn_read, dn_write) = conn.split();

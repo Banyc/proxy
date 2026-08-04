@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use common::{
-    connect::{ConnectorConfig, ConnectorReset},
+    connect::{ConnectorConfig, ConnectorResetSignal},
     proto::connect::stream::StreamConnect,
 };
 
@@ -11,15 +11,15 @@ use super::{
         build_kcp_connector, build_mptcp_connector, build_rtp_connector, build_rtp_mux_connector,
         build_rtp_mux_fec_connector, build_tcp_connector, build_tcp_mux_connector,
     },
-    streams::tcp::proxy_server::TCP_STREAM_TYPE,
+    streams::tcp::listener::TCP_STREAM_TYPE,
 };
 
 type StreamProtoTable = [(
     ConcreteStreamType,
     &'static str,
-    fn(Arc<RwLock<ConnectorConfig>>, ConnectorReset) -> Arc<dyn StreamConnect>,
+    fn(Arc<RwLock<ConnectorConfig>>, ConnectorResetSignal) -> Arc<dyn StreamConnect>,
 )];
-pub const CONCRETE_STREAM_PROTO: &StreamProtoTable = &[
+pub const STREAM_PROTOS: &StreamProtoTable = &[
     (
         ConcreteStreamType::Tcp,
         TCP_STREAM_TYPE,

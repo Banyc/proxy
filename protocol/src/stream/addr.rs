@@ -2,7 +2,7 @@ use std::{fmt, str::FromStr};
 
 use common::addr::ParseInternetAddrError;
 
-use super::registry::CONCRETE_STREAM_PROTO;
+use super::protos::STREAM_PROTOS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConcreteStreamType {
@@ -16,17 +16,14 @@ pub enum ConcreteStreamType {
 }
 impl fmt::Display for ConcreteStreamType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        let (_, ty, _) = CONCRETE_STREAM_PROTO
-            .iter()
-            .find(|(x, _, _)| x == self)
-            .unwrap();
+        let (_, ty, _) = STREAM_PROTOS.iter().find(|(x, _, _)| x == self).unwrap();
         write!(f, "{ty}")
     }
 }
 impl FromStr for ConcreteStreamType {
     type Err = ParseInternetAddrError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let Some((ty, _, _)) = CONCRETE_STREAM_PROTO.iter().find(|(_, x, _)| *x == s) else {
+        let Some((ty, _, _)) = STREAM_PROTOS.iter().find(|(_, x, _)| *x == s) else {
             return Err(ParseInternetAddrError);
         };
         Ok(*ty)

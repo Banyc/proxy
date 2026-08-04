@@ -16,12 +16,12 @@ pub trait HasIoAddr {
     fn local_addr(&self) -> io::Result<SocketAddr>;
 }
 
-pub trait AsConn: OwnIoStream + HasIoAddr {
+pub trait ConnParts: OwnIoStream + HasIoAddr {
     fn set_stream_name(&self, _name: &str) {}
 }
 
 pub trait StreamServerHandleConn: loading::HandleConn {
     fn handle_stream<Stream>(&self, stream: Stream) -> impl Future<Output = ()> + Send
     where
-        Stream: AsConn + std::fmt::Debug;
+        Stream: ConnParts + std::fmt::Debug;
 }

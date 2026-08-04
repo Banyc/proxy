@@ -1,14 +1,9 @@
-use std::{
-    io,
-    time::{Duration, Instant},
-};
+use std::{io, time::Instant};
 
 use async_speed_limit::Limiter;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::{BytesCopied, CopyBiError, TimeoutStreamShared, copy_bidirectional};
-
-const TIMEOUT: Duration = Duration::from_secs(60);
 
 pub async fn timed_copy_bidirectional<A, B>(
     a: A,
@@ -22,8 +17,8 @@ where
     let mut a = TimeoutStreamShared::new(a);
     let mut b = TimeoutStreamShared::new(b);
 
-    a.set_timeout(Some(TIMEOUT));
-    b.set_timeout(Some(TIMEOUT));
+    a.set_timeout(Some(crate::STREAM_IO_TIMEOUT));
+    b.set_timeout(Some(crate::STREAM_IO_TIMEOUT));
 
     let a = speed_limiter.limit(a);
 
@@ -41,7 +36,7 @@ where
                 CopyBiError::FromBToA(e) => e,
             };
             match io_error.kind() {
-                io::ErrorKind::TimedOut => now - TIMEOUT,
+                io::ErrorKind::TimedOut => now - crate::STREAM_IO_TIMEOUT,
                 _ => now,
             }
         }

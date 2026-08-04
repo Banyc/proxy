@@ -6,7 +6,7 @@ pub mod respond;
 pub mod server;
 
 pub const PACKET_BUFFER_LENGTH: usize = 2_usize.pow(16);
-pub const TIMEOUT: Duration = Duration::from_secs(10);
+pub const UDP_FLOW_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct Packet {
     buf: udp_listener::Packet,

@@ -29,14 +29,14 @@ pub fn monitor_router() -> (SessionTables, Router) {
     ) -> anyhow::Result<String> {
         let mut text = String::new();
         {
-            let sql = &params.stream_sql;
+            let sql = &params.stream_query;
             text.push_str("Stream:\n");
             let sessions = session_table.stream.to_view(sql).map(|s| s.to_string())?;
             text.push_str(&sessions);
             text.push('\n');
         }
         {
-            let sql = &params.udp_sql;
+            let sql = &params.udp_query;
             text.push_str("UDP:\n");
             let sessions = session_table.udp.to_view(sql).map(|s| s.to_string())?;
             text.push_str(&sessions);
@@ -74,7 +74,9 @@ select (col "destination.host") (col "destination.port") duration (col "upstream
 #[derive(Debug, Deserialize)]
 struct SessionsParams {
     #[serde(default = "stream_default_sql")]
-    stream_sql: String,
+    #[serde(alias = "stream_sql")]
+    stream_query: String,
     #[serde(default = "udp_default_sql")]
-    udp_sql: String,
+    #[serde(alias = "udp_sql")]
+    udp_query: String,
 }

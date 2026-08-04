@@ -14,8 +14,6 @@ use serde::{Deserialize, Serialize, de::Visitor};
 use thiserror::Error;
 use tokio::net::lookup_host;
 
-use crate::route::IntoAddr;
-
 const RESOLVED_SOCKET_ADDR_SIZE: usize = 128;
 static RESOLVED_SOCKET_ADDR: LazyLock<
     Mutex<WeakLru<Arc<str>, Vec<IpAddr>, RESOLVED_SOCKET_ADDR_SIZE>>,
@@ -198,12 +196,6 @@ impl From<SocketAddr> for InternetAddrHdv {
 
 #[derive(Debug, Clone)]
 pub struct InternetAddrStr(pub InternetAddr);
-impl IntoAddr for InternetAddrStr {
-    type Addr = InternetAddr;
-    fn into_address(self) -> Self::Addr {
-        self.0
-    }
-}
 impl Serialize for InternetAddrStr {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

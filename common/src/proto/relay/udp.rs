@@ -29,15 +29,15 @@ use crate::{
     log::Timing,
     proto::{
         conn::udp::Flow,
-        io_copy::{
+        log::udp::{FlowLog, LOGGER, TrafficLog},
+        metrics::udp::{UdpSession, UdpSessionTable},
+        relay::{
             EncryptionDirection, nonce_ciphertext_reader, nonce_ciphertext_writer, noop_context,
             retain_dead_session, unwrap_ready,
         },
-        log::udp::{FlowLog, LOGGER, TrafficLog},
-        metrics::udp::{Session, UdpSessionTable},
     },
     ttl_cell::RegeneratingHeader,
-    udp::{PACKET_BUFFER_LENGTH, Packet, TIMEOUT},
+    udp::{PACKET_BUFFER_LENGTH, Packet, UDP_FLOW_TIMEOUT},
 };
 
 const ACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
@@ -90,7 +90,7 @@ where
             let r = ReadGauge(up);
             let w = WriteGauge(dn);
 
-            let session = Session {
+            let session = UdpSession {
                 start: SystemTime::now(),
                 end: None,
                 destination: None,
@@ -121,7 +121,7 @@ where
             let r = ReadGauge(up);
             let w = WriteGauge(dn);
 
-            let session = Session {
+            let session = UdpSession {
                 start: SystemTime::now(),
                 end: None,
                 destination: Some(self.flow.upstream.as_ref().unwrap().0.clone()),
@@ -142,7 +142,7 @@ where
     async fn serve(
         self,
         session: Option<(
-            monitor_table::table::RowOwnedGuard<Session>,
+            monitor_table::table::RowOwnedGuard<UdpSession>,
             ReadGauge,
             WriteGauge,
         )>,
@@ -233,7 +233,7 @@ where
     let packets_uplink = Arc::new(AtomicU64::new(0));
     let packets_downlink = Arc::new(AtomicU64::new(0));
 
-    let mut en_dec_buf = [0; PACKET_BUFFER_LENGTH];
+    let mut send_dyn_buf = [0; PACKET_BUFFER_LENGTH];
 
     let (up_gauge, dn_gauge) = gauges
         .map(|(r, w)| (Some(r.0), Some(w.0)))
@@ -250,7 +250,7 @@ where
         let payload_crypto = payload_crypto.clone();
         async move {
             loop {
-                let res = downstream.read.recv().recv().await;
+                let res = downstream.read.read_half().recv().await;
                 trace!("Received packet from downstream");
                 let mut packet = match res {
                     Some(packet) => packet,
@@ -270,9 +270,12 @@ where
 
                 // Encrypt/Decrypt payload
                 let packet = if let Some(payload_crypto) = &payload_crypto {
-                    let Some(pkt) =
-                        en_dec(packet.slice_mut(), &mut en_dec_buf, payload_crypto, en_dir)
-                    else {
+                    let Some(pkt) = send_dyn(
+                        packet.slice_mut(),
+                        &mut send_dyn_buf,
+                        payload_crypto,
+                        en_dir,
+                    ) else {
                         log_crypto_drop(&flow, &last_crypto_fail_warn);
                         continue;
                     };
@@ -332,7 +335,7 @@ where
 
                 // Encrypt/Decrypt payload
                 let pkt = if let Some(payload_crypto) = &payload_crypto {
-                    let Some(pkt) = en_dec(pkt, &mut en_dec_buf, payload_crypto, en_dir.flip())
+                    let Some(pkt) = send_dyn(pkt, &mut send_dyn_buf, payload_crypto, en_dir.flip())
                     else {
                         log_crypto_drop(&flow, &last_crypto_fail_warn);
                         continue;
@@ -399,7 +402,7 @@ where
                 let last_uplink_packet = *last_uplink_packet.read().unwrap();
                 let last_downlink_packet = *last_downlink_packet.read().unwrap();
 
-                if now.duration_since(last_uplink_packet) > TIMEOUT && now.duration_since(last_downlink_packet) > TIMEOUT {
+                if now.duration_since(last_uplink_packet) > UDP_FLOW_TIMEOUT && now.duration_since(last_downlink_packet) > UDP_FLOW_TIMEOUT {
                     trace!(?flow, "Flow timed out");
                     io_copy_tasks.abort_all();
                     break;
@@ -424,10 +427,10 @@ where
         start,
         end: last_packet,
     };
-    counter!("udp.io_copy.up.bytes").increment(up.bytes);
-    counter!("udp.io_copy.up.packets").increment(up.packets);
-    counter!("udp.io_copy.dn.bytes").increment(dn.bytes);
-    counter!("udp.io_copy.dn.packets").increment(dn.packets);
+    counter!("udp.relay.up.bytes").increment(up.bytes);
+    counter!("udp.relay.up.packets").increment(up.packets);
+    counter!("udp.relay.dn.bytes").increment(dn.bytes);
+    counter!("udp.relay.dn.packets").increment(dn.packets);
     Ok(FlowLog {
         flow,
         timing,
@@ -463,7 +466,7 @@ impl UdpRecv for Arc<UdpSocket> {
 }
 
 fn log_crypto_drop(flow: &Flow, last_warn: &RwLock<std::time::Instant>) {
-    counter!("udp.io_copy.crypto_drops").increment(1);
+    counter!("udp.relay.crypto_drops").increment(1);
     let now = std::time::Instant::now();
     let mut last_warn = last_warn.write().unwrap();
     if now.duration_since(*last_warn) > CRYPTO_FAIL_WARN_INTERVAL {
@@ -472,7 +475,10 @@ fn log_crypto_drop(flow: &Flow, last_warn: &RwLock<std::time::Instant>) {
     }
 }
 
-fn en_dec<'buf>(
+/// Apply the payload crypto in the given direction, returning the transformed
+/// packet or `None` on failure. Named `send_dyn` (rather than the direction
+/// word) to dodge the inherent `send` method on the sockets involved.
+fn send_dyn<'buf>(
     pkt: &'buf mut [u8],
     buf: &'buf mut [u8],
     config: &tokio_chacha20::config::Config,
@@ -519,7 +525,7 @@ mod tests {
         ] {
             let mut pkt = vec![0xab; len];
             assert!(
-                en_dec(&mut pkt, &mut buf, &config, EncryptionDirection::Encrypt).is_none(),
+                send_dyn(&mut pkt, &mut buf, &config, EncryptionDirection::Encrypt).is_none(),
                 "a {len}-byte packet must be dropped, not encrypted into a {} byte buffer",
                 buf.len(),
             );
@@ -542,12 +548,12 @@ mod tests {
         ] {
             let plain: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
             let mut pkt = plain.clone();
-            let ct = en_dec(&mut pkt, &mut en_buf, &config, EncryptionDirection::Encrypt)
+            let ct = send_dyn(&mut pkt, &mut en_buf, &config, EncryptionDirection::Encrypt)
                 .unwrap_or_else(|| panic!("a {len}-byte packet fits and must encrypt"))
                 .to_vec();
             assert_eq!(ct.len(), len + X_NONCE_BYTES);
             let mut ct = ct;
-            let pt = en_dec(&mut ct, &mut de_buf, &config, EncryptionDirection::Decrypt)
+            let pt = send_dyn(&mut ct, &mut de_buf, &config, EncryptionDirection::Decrypt)
                 .unwrap_or_else(|| panic!("a {len}-byte packet must decrypt"));
             assert_eq!(pt, &plain[..], "a {len}-byte packet did not round-trip");
         }
@@ -559,7 +565,7 @@ mod tests {
         for len in 0..X_NONCE_BYTES {
             let mut pkt = vec![0xab; len];
             assert!(
-                en_dec(&mut pkt, &mut buf, &config, EncryptionDirection::Decrypt).is_none(),
+                send_dyn(&mut pkt, &mut buf, &config, EncryptionDirection::Decrypt).is_none(),
                 "a {len}-byte ciphertext is shorter than the {X_NONCE_BYTES}-byte nonce",
             );
         }

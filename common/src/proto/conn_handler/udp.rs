@@ -9,9 +9,9 @@ use crate::{
     loading,
     proto::{
         conn::udp::{Flow, UpstreamAddr},
-        context::UdpContext,
-        io_copy::udp::{CopyBidirectional, DownstreamParts, UpstreamParts},
-        steer::udp::{decode_route_header, echo},
+        context::UdpRuntime,
+        relay::udp::{CopyBidirectional, DownstreamParts, UpstreamParts},
+        route_header::udp::{decode_route_header, echo},
     },
     udp::{
         Packet,
@@ -31,14 +31,14 @@ use super::ListenerBindError;
 pub struct UdpProxyConnHandler {
     header_crypto: tokio_chacha20::config::Config,
     payload_crypto: Option<tokio_chacha20::config::Config>,
-    udp_context: UdpContext,
+    udp_context: UdpRuntime,
     allow_loopback: bool,
 }
 impl UdpProxyConnHandler {
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
         payload_crypto: Option<tokio_chacha20::config::Config>,
-        udp_context: UdpContext,
+        udp_context: UdpRuntime,
         allow_loopback: bool,
     ) -> Self {
         Self {
@@ -60,10 +60,10 @@ impl UdpProxyConnHandler {
     }
 
     #[instrument(skip(self, conn))]
-    async fn proxy(&self, mut conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), ProxyError> {
+    async fn proxy(&self, mut conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), UdpProxyError> {
         let flow = conn.conn_key().clone();
         if flow.upstream.is_none() {
-            let pkt = conn.read().recv().try_recv().unwrap();
+            let pkt = conn.read_half().read_half().try_recv().unwrap();
             echo(pkt.slice(), conn.write(), &self.header_crypto).await;
             return Ok(());
         }
@@ -74,13 +74,13 @@ impl UdpProxyConnHandler {
             .0
             .to_socket_addrs()
             .await
-            .map_err(|e| ProxyError::Resolve {
+            .map_err(|e| UdpProxyError::Resolve {
                 source: e,
                 addr: flow.upstream.as_ref().unwrap().0.clone(),
             })?
             .first();
         if !self.allow_loopback && crate::addr::reaches_loopback(&resolved_upstream.ip()) {
-            return Err(ProxyError::Loopback {
+            return Err(UdpProxyError::Loopback {
                 addr: flow.upstream.as_ref().unwrap().0.clone(),
                 sock_addr: resolved_upstream,
             });
@@ -90,7 +90,7 @@ impl UdpProxyConnHandler {
             .connector
             .connect(resolved_upstream)
             .await
-            .map_err(|e| ProxyError::ConnectUpstream {
+            .map_err(|e| UdpProxyError::ConnectUpstream {
                 source: e,
                 addr: flow.upstream.as_ref().unwrap().0.clone(),
                 sock_addr: resolved_upstream,
@@ -136,7 +136,7 @@ impl UdpProxyConnHandler {
     async fn handle_proxy_result(
         &self,
         dn_write: &ConnWrite<UdpSocket>,
-        res: Result<(), ProxyError>,
+        res: Result<(), UdpProxyError>,
     ) {
         match res {
             Ok(()) => (),
@@ -152,7 +152,7 @@ impl UdpProxyConnHandler {
     }
 }
 #[derive(Debug, Error)]
-pub enum ProxyError {
+pub enum UdpProxyError {
     #[error("Failed to resolve upstream address: {source}, {addr}")]
     Resolve {
         #[source]
@@ -172,10 +172,10 @@ pub enum ProxyError {
         sock_addr: SocketAddr,
     },
 }
-fn error_kind_from_proxy_error(e: ProxyError) -> RouteErrorKind {
+fn error_kind_from_proxy_error(e: UdpProxyError) -> RouteErrorKind {
     match e {
-        ProxyError::Resolve { .. } | ProxyError::ConnectUpstream { .. } => RouteErrorKind::Io,
-        ProxyError::Loopback { .. } => RouteErrorKind::Loopback,
+        UdpProxyError::Resolve { .. } | UdpProxyError::ConnectUpstream { .. } => RouteErrorKind::Io,
+        UdpProxyError::Loopback { .. } => RouteErrorKind::Loopback,
     }
 }
 

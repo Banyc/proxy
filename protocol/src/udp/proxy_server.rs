@@ -4,7 +4,7 @@ use common::{
     loading,
     proto::{
         conn_handler::{ListenerBindError, udp::UdpProxyConnHandler},
-        context::UdpContext,
+        context::UdpRuntime,
     },
     udp::server::UdpServer,
 };
@@ -24,7 +24,7 @@ pub struct UdpProxyServerConfig {
 #[derive(Debug, Clone)]
 pub struct UdpProxyServerBuilder {
     pub config: UdpProxyServerConfig,
-    pub udp_context: UdpContext,
+    pub udp_context: UdpRuntime,
 }
 impl loading::Build for UdpProxyServerBuilder {
     type ConnHandler = UdpProxyConnHandler;
@@ -96,7 +96,7 @@ mod tests {
                 )),
                 allow_loopback: false,
             },
-            udp_context: UdpContext {
+            udp_context: UdpRuntime {
                 session_table: None,
                 time_validator: Arc::new(TimeValidator::new(Duration::from_secs(1))),
                 connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(

@@ -1,10 +1,10 @@
 use std::net::SocketAddr;
 
-use crate::{proto::addr::StreamAddr, stream::AsConn};
+use crate::{proto::addr::RouteAddr, stream::ConnParts};
 
 #[derive(Debug)]
 pub struct ConnAndAddr {
-    pub stream: Box<dyn AsConn>,
-    pub addr: StreamAddr,
+    pub stream: Box<dyn ConnParts>,
+    pub addr: RouteAddr,
     pub sock_addr: SocketAddr,
 }

@@ -14,54 +14,54 @@ use tokio_throughput::GaugeHandle;
 use crate::{
     addr::InternetAddrHdv,
     metrics::{GaugeView, display_value},
-    proto::addr::{StreamAddr, StreamAddrHdv},
+    proto::addr::{RouteAddr, RouteAddrHdv},
 };
 
-pub type StreamSessionTable = Table<Session>;
+pub type StreamSessionTable = Table<StreamSession>;
 
 #[derive(Debug)]
-pub struct Session {
+pub struct StreamSession {
     pub start: SystemTime,
     pub end: Option<SystemTime>,
-    pub destination: Option<StreamAddr>,
+    pub destination: Option<RouteAddr>,
     pub upstream_local: Option<SocketAddr>,
-    pub upstream_remote: StreamAddr,
+    pub upstream_remote: RouteAddr,
     pub downstream_local: Arc<str>,
     pub downstream_remote: Option<SocketAddr>,
     pub up_gauge: Option<Mutex<GaugeHandle>>,
     pub dn_gauge: Option<Mutex<GaugeHandle>>,
 }
-impl TableRow for Session {
+impl TableRow for StreamSession {
     fn schema() -> Vec<(String, LiteralType)> {
-        <SessionView as TableRow>::schema()
+        <StreamSessionView as TableRow>::schema()
     }
 
     fn fields(&self) -> Vec<Option<LiteralValue>> {
-        let view = SessionView::from_session(self);
+        let view = StreamSessionView::from_stream_session(self);
         TableRow::fields(&view)
     }
 }
-impl ValueDisplay for Session {
+impl ValueDisplay for StreamSession {
     fn display_value(header: &str, value: Option<LiteralValue>) -> String {
         display_value(header, value)
     }
 }
 
 #[derive(Debug, HdvSerde)]
-struct SessionView {
-    pub destination: Option<StreamAddrHdv>,
+struct StreamSessionView {
+    pub destination: Option<RouteAddrHdv>,
     pub duration: u64,
     pub start_ms: u64,
     pub end_ms: Option<u64>,
     pub upstream_local: Option<InternetAddrHdv>,
-    pub upstream_remote: StreamAddrHdv,
+    pub upstream_remote: RouteAddrHdv,
     pub downstream_local: Arc<str>,
     pub downstream_remote: Option<InternetAddrHdv>,
     pub up: Option<GaugeView>,
     pub dn: Option<GaugeView>,
 }
-impl SessionView {
-    pub fn from_session(s: &Session) -> Self {
+impl StreamSessionView {
+    pub fn from_stream_session(s: &StreamSession) -> Self {
         let start_unix = s.start.duration_since(UNIX_EPOCH).unwrap_or_default();
         let now_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)

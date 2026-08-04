@@ -1,4 +1,4 @@
 pub mod addr;
 pub mod connect;
-pub mod registry;
+pub mod protos;
 pub mod streams;

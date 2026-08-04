@@ -2,6 +2,11 @@
 #[cfg(feature = "nightly")]
 extern crate test;
 
+use std::time::Duration;
+
+/// Stream I/O timeout used across the relay plumbing (connect/header/copy).
+pub const STREAM_IO_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Print a line to stdout when the INFO log level is enabled.
 /// Replaces noisy `info!()` for user-facing terminal output.
 #[macro_export]
@@ -18,10 +23,10 @@ pub mod anti_replay;
 pub mod config;
 pub mod connect;
 pub mod error;
-pub mod filter;
 pub mod header;
 pub mod loading;
 pub mod log;
+pub mod matcher;
 pub mod metrics;
 pub mod notify;
 pub mod proto;

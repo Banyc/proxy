@@ -29,9 +29,9 @@ use common::{
             },
         },
         connect::stream::StreamConnect,
-        context::StreamContext,
+        context::StreamRuntime,
     },
-    stream::{AsConn, HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 
 #[derive(Debug)]
@@ -78,7 +78,7 @@ where
     async fn serve_(
         self,
         set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
-    ) -> Result<(), ServeError> {
+    ) -> Result<(), ServeLoopError> {
         let addr = self.listener.local_addr();
         let listener = &self.listener;
         let fec = self.fec;
@@ -114,7 +114,7 @@ where
         .await
     }
 }
-pub use common::serve_loop::ServeError;
+pub use common::serve_loop::ServeLoopError;
 
 #[derive(Debug, Clone)]
 pub struct RtpConnector {
@@ -128,7 +128,7 @@ impl RtpConnector {
 }
 #[async_trait]
 impl StreamConnect for RtpConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn AsConn>> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
         let bind = self
             .config
             .read()
@@ -160,12 +160,12 @@ impl StreamConnect for RtpConnector {
 
 #[derive(Debug)]
 pub struct AddressedRtpStream {
-    read: rtp::socket::ReadStream,
-    write: rtp::socket::WriteStream,
+    read: rtp::socket::AsyncReadAdapter,
+    write: rtp::socket::AsyncWriteAdapter,
     local_addr: SocketAddr,
     peer_addr: SocketAddr,
 }
-impl AsConn for AddressedRtpStream {}
+impl ConnParts for AddressedRtpStream {}
 impl OwnIoStream for AddressedRtpStream {}
 impl HasIoAddr for AddressedRtpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
@@ -216,7 +216,7 @@ pub struct RtpProxyServerConfig {
     pub inner: StreamProxyConnHandlerConfig,
 }
 impl RtpProxyServerConfig {
-    pub fn into_builder(self, stream_context: StreamContext) -> RtpProxyServerBuilder {
+    pub fn into_builder(self, stream_context: StreamRuntime) -> RtpProxyServerBuilder {
         let listen_addr = Arc::clone(&self.listen_addr);
         let inner = self.inner.into_builder(stream_context, listen_addr);
         RtpProxyServerBuilder {

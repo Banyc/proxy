@@ -12,14 +12,14 @@ use crate::{
     error::AnyError,
     header::{
         codec::{CodecError, MAX_HEADER_LEN, read_header, write_header},
-        route::{RouteError, RouteResponse},
+        route::{RouteError, RouteRequest, RouteResponse},
     },
     proto::{
-        context::UdpContext,
-        io_copy::udp::{UdpRecv, UdpSend},
-        route::UdpConnChain,
+        addr::RouteAddr,
+        context::UdpRuntime,
+        relay::udp::{UdpRecv, UdpSend},
     },
-    route::{BuildTracer, TraceRtt, convert_proxies_to_header_crypto_pairs},
+    route::{ConnChain, ProbeRtt, convert_proxies_to_header_crypto_pairs},
     ttl_cell::RegeneratingHeader,
     udp::PACKET_BUFFER_LENGTH,
 };
@@ -40,9 +40,9 @@ pub struct UdpProxyClient {
 impl UdpProxyClient {
     #[instrument(skip_all)]
     pub async fn establish(
-        proxies: Arc<UdpConnChain>,
+        proxies: Arc<ConnChain>,
         destination: InternetAddr,
-        context: &UdpContext,
+        context: &UdpRuntime,
     ) -> Result<UdpProxyClient, EstablishError> {
         // If there are no proxy configs, just connect to the destination
         if proxies.is_empty() {
@@ -75,23 +75,36 @@ impl UdpProxyClient {
         // Connect to upstream
         let proxy_addr = proxies[0].address.clone();
         let addr = *proxy_addr
+            .address
             .to_socket_addrs()
             .await
             .map_err(|e| EstablishError::ResolveFirstProxy {
                 source: e,
-                addr: proxy_addr.clone(),
+                addr: proxy_addr.address.clone(),
             })?
             .first();
         let upstream = context.connector.connect(addr).await.map_err(|e| {
             EstablishError::ConnectFirstProxy {
                 source: e,
-                addr: proxy_addr.clone(),
+                addr: proxy_addr.address.clone(),
                 sock_addr: addr,
             }
         })?;
 
-        // Convert addresses to headers
-        let pairs = convert_proxies_to_header_crypto_pairs(&proxies, Some(destination));
+        // Convert addresses to headers (UDP wires carry the bare InternetAddr)
+        let pairs =
+            convert_proxies_to_header_crypto_pairs(&proxies, Some(RouteAddr::udp(destination)));
+        let pairs = pairs
+            .into_iter()
+            .map(|(header, crypto)| {
+                (
+                    RouteRequest {
+                        upstream: header.upstream.map(|addr| addr.address),
+                    },
+                    crypto,
+                )
+            })
+            .collect::<Vec<(RouteRequest<InternetAddr>, &tokio_chacha20::config::Config)>>();
 
         // Save headers to buffer
         let request_header = {
@@ -117,7 +130,7 @@ impl UdpProxyClient {
         Ok(UdpProxyClient {
             write,
             read,
-            upstream_addr: proxy_addr,
+            upstream_addr: proxy_addr.address,
         })
     }
 
@@ -235,7 +248,7 @@ fn time_validator() -> TimeValidator {
 pub struct UdpProxyClientReadHalf {
     upstream: Arc<UdpSocket>,
     max_response_header_size: usize,
-    proxies: Arc<UdpConnChain>,
+    proxies: Arc<ConnChain>,
     read_buf: Vec<u8>,
     time_validator: TimeValidator,
 }
@@ -248,7 +261,7 @@ impl UdpProxyClientReadHalf {
     pub fn new(
         upstream: Arc<UdpSocket>,
         max_response_header_size: usize,
-        proxies: Arc<UdpConnChain>,
+        proxies: Arc<ConnChain>,
     ) -> Self {
         Self {
             upstream,
@@ -280,7 +293,7 @@ impl UdpProxyClientReadHalf {
                 warn!(?err, %node.address, "Upstream responded with an error");
                 return Err(RecvError::Response {
                     err,
-                    addr: node.address.clone(),
+                    addr: node.address.address.clone(),
                 });
             }
         }
@@ -308,54 +321,48 @@ pub enum RecvError {
     Response { err: RouteError, addr: InternetAddr },
 }
 
-pub struct UdpTracerBuilder {
-    context: UdpContext,
-}
-impl UdpTracerBuilder {
-    pub fn new(context: UdpContext) -> Self {
-        Self { context }
-    }
-}
-impl BuildTracer for UdpTracerBuilder {
-    type Tracer = UdpTracer;
-
-    fn build(&self) -> Self::Tracer {
-        UdpTracer::new(self.context.clone())
-    }
-}
-
 #[derive(Debug)]
 pub struct UdpTracer {
-    pool: ArcObjPool<BytesMut>,
-    context: UdpContext,
+    pool: Arc<ArcObjPool<BytesMut>>,
+    context: UdpRuntime,
 }
 impl UdpTracer {
-    pub fn new(context: UdpContext) -> Self {
+    pub fn new(context: UdpRuntime) -> Self {
         let pool = ArcObjPool::new(
             None,
             NonZeroUsize::new(1).unwrap(),
             || BytesMut::with_capacity(PACKET_BUFFER_LENGTH),
             |buf| buf.clear(),
         );
-        Self { pool, context }
+        Self {
+            pool: Arc::new(pool),
+            context,
+        }
     }
 }
-impl TraceRtt for UdpTracer {
-    type Addr = InternetAddr;
-
-    async fn trace_rtt(&self, chain: &UdpConnChain) -> Result<Duration, AnyError> {
-        let mut pkt_buf = self.pool.take();
-        let res = trace_rtt(&mut pkt_buf, chain, &self.context)
-            .await
-            .map_err(|e| e.into());
-        self.pool.put(pkt_buf);
-        res
+impl ProbeRtt for UdpTracer {
+    fn probe_rtt(
+        &self,
+        chain: &ConnChain,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Duration, AnyError>> + Send>>
+    {
+        let pool = self.pool.clone();
+        let context = self.context.clone();
+        let chain: Vec<crate::route::ConnConfig> = chain.to_vec();
+        Box::pin(async move {
+            let mut pkt_buf = pool.take();
+            let res = probe_rtt(&mut pkt_buf, &chain, &context)
+                .await
+                .map_err(|e| e.into());
+            pool.put(pkt_buf);
+            res
+        })
     }
 }
-pub async fn trace_rtt(
+pub async fn probe_rtt(
     pkt_buf: &mut BytesMut,
-    proxies: &UdpConnChain,
-    context: &UdpContext,
+    proxies: &ConnChain,
+    context: &UdpRuntime,
 ) -> Result<Duration, TraceError> {
     if proxies.is_empty() {
         return Ok(Duration::from_secs(0));
@@ -363,11 +370,22 @@ pub async fn trace_rtt(
 
     // Connect to upstream
     let proxy_addr = &proxies[0].address;
-    let addr = *proxy_addr.to_socket_addrs().await?.first();
+    let addr = *proxy_addr.address.to_socket_addrs().await?.first();
     let upstream = context.connector.connect(addr).await?;
 
-    // Convert addresses to headers
+    // Convert addresses to headers (UDP wires carry the bare InternetAddr)
     let pairs = convert_proxies_to_header_crypto_pairs(proxies, None);
+    let pairs = pairs
+        .into_iter()
+        .map(|(header, crypto)| {
+            (
+                RouteRequest {
+                    upstream: header.upstream.map(|addr| addr.address),
+                },
+                crypto,
+            )
+        })
+        .collect::<Vec<(RouteRequest<InternetAddr>, &tokio_chacha20::config::Config)>>();
 
     // Save headers to buffer
     let mut buf = Vec::new();
@@ -396,7 +414,7 @@ pub async fn trace_rtt(
             warn!(?err, %node.address, "Upstream responded with an error");
             return Err(TraceError::Response {
                 err,
-                addr: node.address.clone(),
+                addr: node.address.address.clone(),
             });
         }
     }

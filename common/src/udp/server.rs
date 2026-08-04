@@ -62,7 +62,7 @@ where
     async fn serve_(
         self,
         set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
-    ) -> Result<(), ServeError> {
+    ) -> Result<(), UdpServerServeError> {
         let conn_handler = Arc::new(RwLock::new(Arc::new(self.conn_handler)));
         let dispatch = {
             let conn_handler = Arc::clone(&conn_handler);
@@ -80,7 +80,10 @@ where
                 Some((flow, packet))
             }
         };
-        let addr = self.listener.local_addr().map_err(ServeError::LocalAddr)?;
+        let addr = self
+            .listener
+            .local_addr()
+            .map_err(UdpServerServeError::LocalAddr)?;
         let dispatcher_buffer_size = NonZeroUsize::new(64).unwrap();
         let downstream_listener =
             UtpListener::new(self.listener, dispatcher_buffer_size, Arc::new(dispatch));
@@ -97,7 +100,7 @@ where
             initial,
             set_conn_handler_rx,
             swap,
-            || downstream_listener.accept(),
+            || downstream_listener.poll_next_conn(),
             |state: &mut JoinSet<()>,
              flow: Conn<UdpSocket, Flow, Packet>,
              current: Arc<ConnHandler>| {
@@ -110,15 +113,15 @@ where
         )
         .await
         .map_err(|e| match e {
-            crate::serve_loop::ServeError::LocalAddr(e) => ServeError::LocalAddr(e),
-            crate::serve_loop::ServeError::Accept { source, addr } => {
-                ServeError::RecvFrom { source, addr }
+            crate::serve_loop::ServeLoopError::LocalAddr(e) => UdpServerServeError::LocalAddr(e),
+            crate::serve_loop::ServeLoopError::Accept { source, addr } => {
+                UdpServerServeError::RecvFrom { source, addr }
             }
         })
     }
 }
 #[derive(Debug, Error)]
-pub enum ServeError {
+pub enum UdpServerServeError {
     #[error("Failed to get local address: {0}")]
     LocalAddr(#[source] io::Error),
     #[error("Failed to receive packet from downstream: {source}, {addr}")]
@@ -154,7 +157,7 @@ mod tests {
         }
         async fn handle_flow(&self, conn: Conn<UdpSocket, Flow, Packet>) {
             let (mut read, write) = conn.split();
-            while let Some(packet) = read.recv().recv().await {
+            while let Some(packet) = read.read_half().recv().await {
                 let _ = write.send(packet.slice()).await;
             }
         }

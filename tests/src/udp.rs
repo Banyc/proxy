@@ -16,12 +16,11 @@ mod tests {
         proto::{
             client::{
                 self,
-                udp::{UdpProxyClient, UdpProxyClientReadHalf, trace_rtt},
+                udp::{UdpProxyClient, UdpProxyClientReadHalf, probe_rtt},
             },
             conn_handler::udp::UdpProxyConnHandler,
             connect::udp::UdpConnector,
-            context::UdpContext,
-            route::UdpConnConfig,
+            context::UdpRuntime,
         },
         route::ConnConfig,
         udp::PACKET_BUFFER_LENGTH,
@@ -36,8 +35,8 @@ mod tests {
         tokio_chacha20::config::Config::new(key.into())
     }
 
-    fn udp_context() -> UdpContext {
-        UdpContext {
+    fn udp_context() -> UdpRuntime {
+        UdpRuntime {
             session_table: None,
             connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
                 ConnectorConfig::default(),
@@ -48,14 +47,14 @@ mod tests {
         }
     }
 
-    async fn spawn_proxy(join_set: &mut tokio::task::JoinSet<()>, addr: &str) -> UdpConnConfig {
+    async fn spawn_proxy(join_set: &mut tokio::task::JoinSet<()>, addr: &str) -> ConnConfig {
         spawn_proxy_(join_set, addr, true).await
     }
 
     async fn spawn_guarded_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
-    ) -> UdpConnConfig {
+    ) -> ConnConfig {
         spawn_proxy_(join_set, addr, false).await
     }
 
@@ -63,7 +62,7 @@ mod tests {
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
         allow_loopback: bool,
-    ) -> UdpConnConfig {
+    ) -> ConnConfig {
         let crypto = create_random_crypto();
         let proxy = UdpProxyConnHandler::new(crypto.clone(), None, udp_context(), allow_loopback);
         let server = proxy.build(addr).await.unwrap();
@@ -74,7 +73,7 @@ mod tests {
             server.serve(set_conn_handler_rx).await.unwrap();
         });
         ConnConfig {
-            address: proxy_addr.into(),
+            address: common::proto::addr::RouteAddr::udp(proxy_addr.into()),
             header_crypto: crypto,
             payload_crypto: None,
         }
@@ -147,7 +146,7 @@ mod tests {
         read_response(&mut client_read, resp_msg).await.unwrap();
 
         // Trace
-        let rtt = trace_rtt(&mut pkt_buf, &proxies, &context).await.unwrap();
+        let rtt = probe_rtt(&mut pkt_buf, &proxies, &context).await.unwrap();
         assert!(rtt > Duration::from_secs(0));
         assert!(rtt < Duration::from_secs(1));
     }
@@ -277,7 +276,7 @@ mod tests {
                     RouteErrorKind::Loopback => {}
                     _ => panic!("Unexpected error: {err:?}"),
                 }
-                assert_eq!(addr, proxy_1_config.address);
+                assert_eq!(addr, proxy_1_config.address.address);
             }
             _ => panic!("Unexpected error: {err:?}"),
         }
@@ -316,7 +315,7 @@ mod tests {
                     matches!(err.kind, RouteErrorKind::Loopback),
                     "unexpected error: {err:?}"
                 );
-                assert_eq!(addr, proxy_config.address);
+                assert_eq!(addr, proxy_config.address.address);
             }
             _ => panic!("unexpected error: {err:?}"),
         }
@@ -348,7 +347,7 @@ mod tests {
                     matches!(err.kind, RouteErrorKind::Loopback),
                     "unexpected error: {err:?}"
                 );
-                assert_eq!(addr, proxy_config.address);
+                assert_eq!(addr, proxy_config.address.address);
             }
             _ => panic!("unexpected error: {err:?}"),
         }

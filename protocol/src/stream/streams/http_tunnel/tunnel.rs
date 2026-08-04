@@ -4,10 +4,10 @@ use crate::stream::{
     addr::ConcreteStreamType,
     streams::{
         http_tunnel::{
-            HttpAccessConnContext, HttpFailureReporter, ReturnType, TunnelError, full,
+            HttpAccessConnContext, HttpFailureReporter, HttpResult, TunnelError, full,
             host_and_port, redacted_uri, respond_with_rejection,
         },
-        tcp::proxy_server::TCP_STREAM_TYPE,
+        tcp::listener::TCP_STREAM_TYPE,
     },
 };
 use async_speed_limit::Limiter;
@@ -15,17 +15,16 @@ use bytes::Bytes;
 use common::{
     addr::InternetAddr,
     proto::{
-        addr::StreamAddr,
+        addr::RouteAddr,
         client::stream::{StreamEstablishError, establish},
         connect::stream::StreamConnectorTable,
-        context::StreamContext,
-        io_copy::stream::{ConnContext, CopyBidirectional},
+        context::StreamRuntime,
         log::stream::IoCopyFinished,
         metrics::stream::StreamSessionTable,
-        route::StreamRouteGroup,
+        relay::stream::{ConnContext, CopyBidirectional},
     },
-    route::RouteAction,
-    udp::TIMEOUT,
+    route::{ConnSelector, RouteAction},
+    udp::UDP_FLOW_TIMEOUT,
 };
 use http_body_util::{BodyExt, Empty, combinators::BoxBody};
 use hyper::{Request, Response, body::Incoming, upgrade::Upgraded};
@@ -59,11 +58,11 @@ enum ConnectFailure {
 }
 
 #[instrument(skip_all)]
-pub async fn run_tunnel_mode(
+pub async fn dispatch_tunnel(
     ctx: &HttpAccessConnContext,
     req: Request<Incoming>,
     reporter: HttpFailureReporter,
-) -> ReturnType {
+) -> HttpResult {
     let addr = match host_addr(req.uri()) {
         Some(addr) => addr,
         None => {
@@ -91,7 +90,7 @@ async fn dispatch(
     req: Request<Incoming>,
     ctx: &HttpAccessConnContext,
     reporter: HttpFailureReporter,
-) -> ReturnType {
+) -> HttpResult {
     let method = req.method().to_string();
     let uri = redacted_uri(req.uri());
     let action = ctx.route_table.action(&dst_addr);
@@ -191,11 +190,15 @@ async fn direct(ctx: DirectContext, upgraded: Upgraded) -> Result<(), ConnectFai
         .map_err(ConnectFailure::Resolution)?;
     let (upstream, dst_sock_addr) = ctx
         .connector_table
-        .timed_connect_2(TCP_STREAM_TYPE, dst_sock_addrs.iter().copied(), TIMEOUT)
+        .timed_connect_any(
+            TCP_STREAM_TYPE,
+            dst_sock_addrs.iter().copied(),
+            UDP_FLOW_TIMEOUT,
+        )
         .await
         .map_err(ConnectFailure::DirectConnect)?;
-    let upstream_addr = StreamAddr {
-        stream_type: ConcreteStreamType::Tcp.to_string().into(),
+    let upstream_addr = RouteAddr {
+        protocol: ConcreteStreamType::Tcp.to_string().into(),
         address: ctx.dst_addr,
     };
     let conn_context = ConnContext {
@@ -231,9 +234,9 @@ async fn direct(ctx: DirectContext, upgraded: Upgraded) -> Result<(), ConnectFai
 
 #[derive(Debug)]
 struct ProxyContext {
-    pub conn_selector: Arc<StreamRouteGroup>,
+    pub conn_selector: Arc<ConnSelector>,
     pub speed_limiter: Limiter,
-    pub stream_context: StreamContext,
+    pub stream_context: StreamRuntime,
     pub listen_addr: Arc<str>,
     pub dst_addr: InternetAddr,
     pub downstream: super::HttpDownstreamContext,
@@ -242,14 +245,14 @@ struct ProxyContext {
 }
 #[instrument(skip_all, fields(ctx.dst_addr))]
 async fn proxy(ctx: &ProxyContext, upgraded: Upgraded) -> Result<(), ProxyError> {
-    let destination = StreamAddr {
+    let destination = RouteAddr {
         address: ctx.dst_addr.clone(),
-        stream_type: ConcreteStreamType::Tcp.to_string().into(),
+        protocol: ConcreteStreamType::Tcp.to_string().into(),
     };
     let (chain, payload_crypto) = match &ctx.conn_selector.as_ref() {
         common::route::ConnSelector::Empty => ([].into(), None),
-        common::route::ConnSelector::Some(conn_selector1) => {
-            let proxy_chain = conn_selector1.choose_chain();
+        common::route::ConnSelector::Some(non_empty_conn_selector) => {
+            let proxy_chain = non_empty_conn_selector.choose_chain();
             (
                 proxy_chain.chain.clone(),
                 proxy_chain.payload_crypto.clone(),

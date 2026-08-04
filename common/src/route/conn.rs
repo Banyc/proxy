@@ -1,30 +1,45 @@
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::de::Error as _;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConnConfigBuilder<AddrStr> {
-    pub address: AddrStr,
-    pub header_key: tokio_chacha20::config::ConfigBuilder,
-    pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
+use crate::proto::addr::RouteAddrStr;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConnConfig {
+    pub address: crate::proto::addr::RouteAddr,
+    pub header_crypto: tokio_chacha20::config::Config,
+    pub payload_crypto: Option<tokio_chacha20::config::Config>,
 }
-impl<AddrStr> ConnConfigBuilder<AddrStr> {
-    pub fn build<Addr>(self) -> Result<ConnConfig<Addr>, ConnConfigBuildError>
+impl<'de> Deserialize<'de> for ConnConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        AddrStr: IntoAddr<Addr = Addr>,
+        D: serde::Deserializer<'de>,
     {
-        let header_crypto = self
-            .header_key
-            .build()
-            .map_err(|e| ConnConfigBuildError::HeaderCrypto(e.source.to_string()))?;
-        let payload_crypto = self
-            .payload_key
-            .map(|p| p.build())
-            .transpose()
-            .map_err(|e| ConnConfigBuildError::PayloadCrypto(e.source.to_string()))?;
-        let address = self.address.into_address();
-        Ok(ConnConfig {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ConnConfigSeed {
+            address: RouteAddrStr,
+            header_key: String,
+            payload_key: Option<String>,
+        }
+        let ConnConfigSeed {
             address,
+            header_key,
+            payload_key,
+        } = ConnConfigSeed::deserialize(deserializer)?;
+        let header_crypto = tokio_chacha20::config::ConfigBuilder(header_key)
+            .build()
+            .map_err(|e| {
+                D::Error::custom(ConnConfigBuildError::HeaderCrypto(e.source.to_string()))
+            })?;
+        let payload_crypto = payload_key
+            .map(|p| tokio_chacha20::config::ConfigBuilder(p).build())
+            .transpose()
+            .map_err(|e| {
+                D::Error::custom(ConnConfigBuildError::PayloadCrypto(e.source.to_string()))
+            })?;
+        Ok(ConnConfig {
+            address: address.0,
             header_crypto,
             payload_crypto,
         })
@@ -38,41 +53,26 @@ pub enum ConnConfigBuildError {
     PayloadCrypto(String),
 }
 
-pub trait IntoAddr: Serialize + DeserializeOwned {
-    type Addr;
-    fn into_address(self) -> Self::Addr;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-pub struct ConnConfig<Addr> {
-    pub address: Addr,
-    pub header_crypto: tokio_chacha20::config::Config,
-    pub payload_crypto: Option<tokio_chacha20::config::Config>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::addr::InternetAddrStr;
     const BAD_KEY: &str = "c2VjcmV0LXByb3h5LWtleQ!!";
-    fn build(header: &str, payload: &str) -> ConnConfigBuildError {
-        ConnConfigBuilder {
-            address: InternetAddrStr("127.0.0.1:1".parse().unwrap()),
-            header_key: tokio_chacha20::config::ConfigBuilder(header.to_owned()),
-            payload_key: Some(tokio_chacha20::config::ConfigBuilder(payload.to_owned())),
-        }
-        .build::<crate::addr::InternetAddr>()
-        .unwrap_err()
+    fn build(header: &str, payload: &str) -> String {
+        let src = format!(
+            r#"{{"address": "tcp://127.0.0.1:1", "header_key": "{header}", "payload_key": "{payload}"}}"#
+        );
+        let e = serde_json::from_str::<ConnConfig>(&src).unwrap_err();
+        format!("{e}")
     }
     #[test]
     fn a_key_that_fails_to_decode_is_not_repeated_back_into_the_log() {
         let e = build(BAD_KEY, "aGVsbG8");
-        assert!(!format!("{e}").contains("c2VjcmV0"), "{e}");
-        assert!(!format!("{e:?}").contains("c2VjcmV0"), "{e:?}");
+        assert!(!e.contains("c2VjcmV0"), "{e}");
     }
     #[test]
     fn a_bad_payload_key_is_not_reported_as_a_bad_header_key() {
         let e = build("aGVsbG8", BAD_KEY);
-        assert!(matches!(e, ConnConfigBuildError::PayloadCrypto(_)), "{e:?}");
+        assert!(e.contains("PayloadCrypto"), "{e}");
+        assert!(!e.contains("HeaderCrypto"), "{e}");
     }
 }

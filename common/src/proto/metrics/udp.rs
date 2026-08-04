@@ -16,10 +16,10 @@ use crate::{
     metrics::{GaugeView, display_value},
 };
 
-pub type UdpSessionTable = Table<Session>;
+pub type UdpSessionTable = Table<UdpSession>;
 
 #[derive(Debug)]
-pub struct Session {
+pub struct UdpSession {
     pub start: SystemTime,
     pub end: Option<SystemTime>,
     pub destination: Option<InternetAddr>,
@@ -29,24 +29,24 @@ pub struct Session {
     pub up_gauge: Mutex<GaugeHandle>,
     pub dn_gauge: Mutex<GaugeHandle>,
 }
-impl TableRow for Session {
+impl TableRow for UdpSession {
     fn schema() -> Vec<(String, LiteralType)> {
-        <SessionHdv as TableRow>::schema()
+        <UdpSessionHdv as TableRow>::schema()
     }
 
     fn fields(&self) -> Vec<Option<LiteralValue>> {
-        let view = SessionHdv::from_session(self);
+        let view = UdpSessionHdv::from_udp_session(self);
         TableRow::fields(&view)
     }
 }
-impl ValueDisplay for Session {
+impl ValueDisplay for UdpSession {
     fn display_value(header: &str, value: Option<LiteralValue>) -> String {
         display_value(header, value)
     }
 }
 
 #[derive(Debug, HdvSerde)]
-struct SessionHdv {
+struct UdpSessionHdv {
     pub destination: Option<InternetAddrHdv>,
     pub duration: u64,
     pub start_ms: u64,
@@ -57,8 +57,8 @@ struct SessionHdv {
     pub up: GaugeView,
     pub dn: GaugeView,
 }
-impl SessionHdv {
-    pub fn from_session(s: &Session) -> Self {
+impl UdpSessionHdv {
+    pub fn from_udp_session(s: &UdpSession) -> Self {
         let start_unix = s.start.duration_since(UNIX_EPOCH).unwrap_or_default();
         let now_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)

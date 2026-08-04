@@ -1,6 +1,4 @@
 use std::{
-    collections::HashMap,
-    fmt,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -9,27 +7,24 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::{config::SharableConfig, header::route::RouteRequest};
+use crate::{config::SharableConfig, header::route::RouteRequest, proto::addr::RouteAddr};
 
 use super::{
-    ConnConfig, ConnConfigBuildError, ConnConfigBuilder, IntoAddr, TraceRtt, prober::spawn_tracer,
+    ConnConfig, ConnConfigBuildError, ProbeRtt, Registries, prober::spawn_tracer,
     rtt_stats::RttStats,
 };
 
-pub const TRACE_INTERVAL: Duration = Duration::from_secs(30);
+pub const PROBE_ROUND_INTERVAL: Duration = Duration::from_secs(30);
 
-pub type ConnChain<Addr> = [ConnConfig<Addr>];
+pub type ConnChain = [ConnConfig];
 
 /// # Panic
 ///
 /// `nodes` must not be empty.
-pub fn convert_proxies_to_header_crypto_pairs<Addr>(
-    nodes: &ConnChain<Addr>,
-    destination: Option<Addr>,
-) -> Vec<(RouteRequest<Addr>, &tokio_chacha20::config::Config)>
-where
-    Addr: Clone + Sync + Send,
-{
+pub fn convert_proxies_to_header_crypto_pairs(
+    nodes: &ConnChain,
+    destination: Option<RouteAddr>,
+) -> Vec<(RouteRequest<RouteAddr>, &tokio_chacha20::config::Config)> {
     assert!(!nodes.is_empty());
     let mut pairs = (0..nodes.len() - 1)
         .map(|i| {
@@ -50,27 +45,25 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WeightedConnChainBuilder<AddrStr> {
+pub struct WeightedConnChainBuilder {
     pub weight: usize,
-    pub chain: Vec<SharableConfig<ConnConfigBuilder<AddrStr>>>,
+    pub chain: Vec<SharableConfig<ConnConfig>>,
 }
-impl<AddrStr> WeightedConnChainBuilder<AddrStr> {
-    pub fn build<Addr: Clone>(
+impl WeightedConnChainBuilder {
+    pub fn resolve(
         self,
-        conn: &HashMap<Arc<str>, ConnConfig<Addr>>,
-    ) -> Result<WeightedConnChain<Addr>, WeightedConnChainBuildError>
-    where
-        AddrStr: IntoAddr<Addr = Addr>,
-    {
+        registries: &Registries<'_>,
+    ) -> Result<WeightedConnChain, WeightedConnChainBuildError> {
         let chain = self
             .chain
             .into_iter()
             .map(|c| match c {
-                SharableConfig::SharingKey(k) => conn
+                SharableConfig::SharingKey(k) => registries
+                    .conn
                     .get(&k)
                     .cloned()
                     .ok_or(WeightedConnChainBuildError::ProxyServerKeyNotFound(k)),
-                SharableConfig::Private(c) => c.build().map_err(Into::into),
+                SharableConfig::Private(c) => Ok(c),
             })
             .collect::<Result<Arc<_>, _>>()?;
         let mut payload_crypto = None;
@@ -101,31 +94,25 @@ pub enum WeightedConnChainBuildError {
 }
 
 #[derive(Debug)]
-pub struct WeightedConnChain<Addr> {
+pub struct WeightedConnChain {
     pub weight: usize,
-    pub chain: Arc<ConnChain<Addr>>,
+    pub chain: Arc<ConnChain>,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
 }
 
 #[derive(Debug)]
-pub struct GaugedConnChain<Addr> {
-    weighted: WeightedConnChain<Addr>,
+pub struct GaugedConnChain {
+    weighted: WeightedConnChain,
     rtt_stats: Arc<RwLock<RttStats>>,
     loss: Arc<RwLock<Option<f64>>>,
     task_handle: Option<tokio::task::JoinHandle<()>>,
 }
-impl<Addr> GaugedConnChain<Addr>
-where
-    Addr: std::fmt::Debug + fmt::Display + Clone + Send + Sync + 'static,
-{
-    pub fn new<T>(
-        weighted: WeightedConnChain<Addr>,
-        tracer: Option<Arc<T>>,
+impl GaugedConnChain {
+    pub fn new(
+        weighted: WeightedConnChain,
+        tracer: Option<Arc<dyn ProbeRtt + Send + Sync>>,
         cancellation: CancellationToken,
-    ) -> Self
-    where
-        T: TraceRtt<Addr = Addr> + Send + Sync + 'static,
-    {
+    ) -> Self {
         let rtt_stats = Arc::new(RwLock::new(RttStats::default()));
         let loss = Arc::new(RwLock::new(None));
         let task_handle = tracer.map(|tracer| {
@@ -145,7 +132,7 @@ where
         }
     }
 
-    pub fn weighted(&self) -> &WeightedConnChain<Addr> {
+    pub fn weighted(&self) -> &WeightedConnChain {
         &self.weighted
     }
 
@@ -157,6 +144,7 @@ where
         self.rtt_stats.read().unwrap().rttvar
     }
 
+    /// `srtt + 2*rttvar` (the RFC 6298-style effective RTT used for chain scoring).
     pub fn rtt_eff(&self) -> Option<Duration> {
         self.rtt_stats.read().unwrap().effective()
     }
@@ -173,7 +161,7 @@ where
         *self.loss.write().unwrap() = loss;
     }
 }
-impl<Addr> Drop for GaugedConnChain<Addr> {
+impl Drop for GaugedConnChain {
     fn drop(&mut self) {
         if let Some(h) = self.task_handle.as_ref() {
             h.abort()
