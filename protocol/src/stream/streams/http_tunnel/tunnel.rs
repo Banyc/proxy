@@ -4,8 +4,8 @@ use crate::stream::{
     addr::ConcreteStreamType,
     streams::{
         http_tunnel::{
-            HttpAccessConnContext, HttpFailureReporter, ReturnType,
-            TunnelError, full, host_and_port, redacted_uri, respond_with_rejection,
+            HttpAccessConnContext, HttpFailureReporter, ReturnType, TunnelError, full,
+            host_and_port, redacted_uri, respond_with_rejection,
         },
         tcp::proxy_server::TCP_STREAM_TYPE,
     },

@@ -80,7 +80,10 @@ mod tests {
         let mut header = RegeneratingHeader::new(regenerate, Duration::from_secs(60));
         let first = header.get().clone();
         let cached = header.get().clone();
-        assert_eq!(first, cached, "the value must be cached until the TTL expires");
+        assert_eq!(
+            first, cached,
+            "the value must be cached until the TTL expires"
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 

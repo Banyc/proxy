@@ -12,8 +12,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{config::SharableConfig, header::route::RouteRequest};
 
 use super::{
-    ConnConfig, ConnConfigBuildError, ConnConfigBuilder, IntoAddr, TraceRtt,
-    prober::spawn_tracer,
+    ConnConfig, ConnConfigBuildError, ConnConfigBuilder, IntoAddr, TraceRtt, prober::spawn_tracer,
     rtt_stats::RttStats,
 };
 
@@ -181,4 +180,3 @@ impl<Addr> Drop for GaugedConnChain<Addr> {
         }
     }
 }
-

@@ -269,12 +269,18 @@ mod tests {
     #[test]
     fn an_empty_table_blocks_everything() {
         let table = RouteTable::<SocketAddr>::new(vec![], Arc::new(HashMap::new()));
-        assert!(matches!(table.action(&addr("1.2.3.4:80")), RouteAction::Block));
+        assert!(matches!(
+            table.action(&addr("1.2.3.4:80")),
+            RouteAction::Block
+        ));
         assert!(matches!(
             table.action(&addr("[2001:db8::1]:443")),
             RouteAction::Block
         ));
-        assert!(matches!(table.action(&addr("example.com:443")), RouteAction::Block));
+        assert!(matches!(
+            table.action(&addr("example.com:443")),
+            RouteAction::Block
+        ));
     }
 
     #[test]
@@ -287,9 +293,15 @@ mod tests {
             Arc::new(HashMap::new()),
         );
         // 10.0.0.5 matches both entries; the earlier Direct action wins.
-        assert!(matches!(table.action(&addr("10.0.0.5:80")), RouteAction::Direct));
+        assert!(matches!(
+            table.action(&addr("10.0.0.5:80")),
+            RouteAction::Direct
+        ));
         // 9.9.9.9 only matches the catch-all; still Direct.
-        assert!(matches!(table.action(&addr("9.9.9.9:80")), RouteAction::Direct));
+        assert!(matches!(
+            table.action(&addr("9.9.9.9:80")),
+            RouteAction::Direct
+        ));
     }
 
     #[test]
@@ -301,17 +313,29 @@ mod tests {
             ],
             Arc::new(HashMap::new()),
         );
-        assert!(matches!(table.action(&addr("1.2.3.4:80")), RouteAction::Block));
-        assert!(matches!(table.action(&addr("1.2.3.4:443")), RouteAction::Direct));
+        assert!(matches!(
+            table.action(&addr("1.2.3.4:80")),
+            RouteAction::Block
+        ));
+        assert!(matches!(
+            table.action(&addr("1.2.3.4:443")),
+            RouteAction::Direct
+        ));
     }
 
     #[test]
     fn unmatched_traffic_is_blocked() {
         let table = RouteTable::new(
-            vec![entry(matcher(r#"{"addr": "10.0.0.5"}"#), RouteAction::Direct)],
+            vec![entry(
+                matcher(r#"{"addr": "10.0.0.5"}"#),
+                RouteAction::Direct,
+            )],
             Arc::new(HashMap::new()),
         );
-        assert!(matches!(table.action(&addr("10.0.0.6:80")), RouteAction::Block));
+        assert!(matches!(
+            table.action(&addr("10.0.0.6:80")),
+            RouteAction::Block
+        ));
     }
 
     #[test]
@@ -332,7 +356,10 @@ mod tests {
             table.action(&addr("192.168.1.10:80")),
             RouteAction::Direct
         ));
-        assert!(matches!(table.action(&addr("8.8.8.8:80")), RouteAction::Block));
+        assert!(matches!(
+            table.action(&addr("8.8.8.8:80")),
+            RouteAction::Block
+        ));
     }
 
     #[test]
@@ -340,14 +367,25 @@ mod tests {
         let matchers = Arc::new(HashMap::from([(Arc::from("direct"), matcher("{}"))]));
         let table = RouteTable::new(
             vec![
-                RouteTableEntry::new(Some("direct".into()), matcher("{}"), RouteAction::<SocketAddr>::Direct),
-                RouteTableEntry::new(Some("direct".into()), matcher("{}"), RouteAction::<SocketAddr>::Block),
+                RouteTableEntry::new(
+                    Some("direct".into()),
+                    matcher("{}"),
+                    RouteAction::<SocketAddr>::Direct,
+                ),
+                RouteTableEntry::new(
+                    Some("direct".into()),
+                    matcher("{}"),
+                    RouteAction::<SocketAddr>::Block,
+                ),
             ],
             matchers,
         );
         // Both entries carry the same shared matcher name, so the second is skipped
         // entirely and the first entry's Direct action wins over the later Block.
-        assert!(matches!(table.action(&addr("1.2.3.4:80")), RouteAction::Direct));
+        assert!(matches!(
+            table.action(&addr("1.2.3.4:80")),
+            RouteAction::Direct
+        ));
     }
 
     #[test]
@@ -355,11 +393,18 @@ mod tests {
         let self_ref = matcher(r#""recur""#);
         let matchers = Arc::new(HashMap::from([(Arc::from("recur"), self_ref.clone())]));
         let table = RouteTable::new(
-            vec![RouteTableEntry::new(None, self_ref, RouteAction::<SocketAddr>::Direct)],
+            vec![RouteTableEntry::new(
+                None,
+                self_ref,
+                RouteAction::<SocketAddr>::Direct,
+            )],
             matchers,
         );
         // The self reference is stopped by the visited set and cannot match.
-        assert!(matches!(table.action(&addr("1.2.3.4:80")), RouteAction::Block));
+        assert!(matches!(
+            table.action(&addr("1.2.3.4:80")),
+            RouteAction::Block
+        ));
     }
 
     #[test]

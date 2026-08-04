@@ -1,9 +1,4 @@
-use std::{
-    collections::HashMap,
-    io,
-    num::NonZeroU8,
-    sync::Arc,
-};
+use std::{collections::HashMap, io, num::NonZeroU8, sync::Arc};
 
 use common::stream::{HasIoAddr, OwnIoStream};
 

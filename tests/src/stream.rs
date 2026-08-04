@@ -505,9 +505,12 @@ mod tests {
     async fn test_bad_proxy() {
         let mut join_set = tokio::task::JoinSet::new();
         let addr = Arc::from("0.0.0.0:0");
-        let proxy_1_config = spawn_guarded_proxy(&mut join_set, &addr, ConcreteStreamType::Tcp).await;
-        let proxy_2_config = spawn_guarded_proxy(&mut join_set, &addr, ConcreteStreamType::Tcp).await;
-        let proxy_3_config = spawn_guarded_proxy(&mut join_set, &addr, ConcreteStreamType::Tcp).await;
+        let proxy_1_config =
+            spawn_guarded_proxy(&mut join_set, &addr, ConcreteStreamType::Tcp).await;
+        let proxy_2_config =
+            spawn_guarded_proxy(&mut join_set, &addr, ConcreteStreamType::Tcp).await;
+        let proxy_3_config =
+            spawn_guarded_proxy(&mut join_set, &addr, ConcreteStreamType::Tcp).await;
         let req_msg = b"hello world";
         let resp_msg = b"goodbye world";
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
@@ -550,11 +553,8 @@ mod tests {
         let greet_addr = spawn_greet(&mut join_set, "0.0.0.0:0", req_msg, resp_msg, 1).await;
         let greet_port = greet_addr.address.port();
         let unspecified: StreamAddr = StreamAddr {
-            address: std::net::SocketAddr::new(
-                std::net::Ipv4Addr::UNSPECIFIED.into(),
-                greet_port,
-            )
-            .into(),
+            address: std::net::SocketAddr::new(std::net::Ipv4Addr::UNSPECIFIED.into(), greet_port)
+                .into(),
             stream_type: ConcreteStreamType::Tcp.to_string().into(),
         };
         assert_refused(&[proxy_config], unspecified).await;

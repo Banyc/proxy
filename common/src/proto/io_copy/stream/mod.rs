@@ -170,7 +170,8 @@ fn log(log: StreamLog, destination: Option<StreamAddr>) {
     }
 }
 
-pub async fn copy_bidirectional_with_payload_crypto<Downstream, Upstream>(    downstream: Downstream,
+pub async fn copy_bidirectional_with_payload_crypto<Downstream, Upstream>(
+    downstream: Downstream,
     upstream: Upstream,
     payload_crypto: Option<&tokio_chacha20::config::Config>,
     speed_limiter: Limiter,

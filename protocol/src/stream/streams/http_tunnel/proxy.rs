@@ -1,5 +1,6 @@
 use std::{fmt, net::SocketAddr, ops::Deref, sync::Arc, time::SystemTime};
 
+use super::authority::get_authority_from_req;
 use crate::stream::{
     addr::ConcreteStreamType,
     streams::{
@@ -10,7 +11,6 @@ use crate::stream::{
         tcp::proxy_server::TCP_STREAM_TYPE,
     },
 };
-use super::authority::get_authority_from_req;
 use common::{
     addr::{InternetAddr, InternetAddrKind},
     log::Timing,

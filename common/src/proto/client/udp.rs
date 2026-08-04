@@ -184,7 +184,8 @@ impl UdpProxyClientWriteHalf {
     ) -> Self {
         Self {
             upstream,
-            request_header: request_header.map(|f| RegeneratingHeader::new(f, VALIDATOR_UDP_HDR_TTL)),
+            request_header: request_header
+                .map(|f| RegeneratingHeader::new(f, VALIDATOR_UDP_HDR_TTL)),
             write_buf: vec![],
         }
     }

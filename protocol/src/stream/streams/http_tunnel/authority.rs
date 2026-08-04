@@ -178,10 +178,7 @@ mod tests {
             .body(())
             .unwrap();
         assert_eq!(redacted_uri(req.uri()), "http://example.com/path?q=1");
-        assert_eq!(
-            host_and_port(req.uri().authority().unwrap()),
-            "example.com"
-        );
+        assert_eq!(host_and_port(req.uri().authority().unwrap()), "example.com");
         let req = Request::builder()
             .method(Method::GET)
             .uri("http://example.com:8080/path")

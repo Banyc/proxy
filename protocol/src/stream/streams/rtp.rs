@@ -91,10 +91,12 @@ where
             Arc::new(self.conn_handler),
             set_conn_handler_rx,
             |_| {},
-            || listener.accept_without_handshake_with(rtp::udp::AcceptConfig {
-                fec,
-                ..rtp::udp::AcceptConfig::default()
-            }),
+            || {
+                listener.accept_without_handshake_with(rtp::udp::AcceptConfig {
+                    fec,
+                    ..rtp::udp::AcceptConfig::default()
+                })
+            },
             |_, stream: rtp::udp::Accepted, conn_handler: Arc<ConnHandler>| {
                 let stream = AddressedRtpStream {
                     read: stream.read.into_async_read(),

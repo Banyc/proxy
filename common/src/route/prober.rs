@@ -176,10 +176,7 @@ mod tests {
     }
     impl TraceRtt for FakeTracer {
         type Addr = SocketAddr;
-        async fn trace_rtt(
-            &self,
-            _chain: &ConnChain<SocketAddr>,
-        ) -> Result<Duration, AnyError> {
+        async fn trace_rtt(&self, _chain: &ConnChain<SocketAddr>) -> Result<Duration, AnyError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(Duration::from_millis(10))
         }
@@ -195,7 +192,9 @@ mod tests {
         let loss = Arc::new(RwLock::new(None));
         let cancellation = CancellationToken::new();
         let handle = spawn_tracer(
-            Arc::new(FakeTracer { calls: calls.clone() }),
+            Arc::new(FakeTracer {
+                calls: calls.clone(),
+            }),
             chain,
             rtt_stats,
             loss,

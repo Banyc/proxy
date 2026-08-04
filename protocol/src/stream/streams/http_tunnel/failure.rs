@@ -1,10 +1,10 @@
 use std::{
     net::SocketAddr,
+    sync::OnceLock,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    sync::OnceLock,
 };
 
 use tracing::warn;

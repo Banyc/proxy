@@ -1,11 +1,8 @@
 use std::{
     collections::HashMap,
     io,
-    sync::{
-        Arc, Mutex,
-        atomic::AtomicBool,
-    },
     sync::OnceLock,
+    sync::{Arc, Mutex, atomic::AtomicBool},
 };
 
 use crate::stream::streams::{
@@ -39,7 +36,9 @@ mod proxy;
 mod tunnel;
 
 use authority::{host_and_port, redacted_uri};
-use failure::{HttpDownstreamContext, HttpFailureReporter, HttpRequestFailure, RequestErrorContext};
+use failure::{
+    HttpDownstreamContext, HttpFailureReporter, HttpRequestFailure, RequestErrorContext,
+};
 
 type ReturnType = Result<Response<BoxBody<Bytes, hyper::Error>>, TunnelError>;
 

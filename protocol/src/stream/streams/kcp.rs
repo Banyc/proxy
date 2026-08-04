@@ -93,7 +93,12 @@ where
             || {
                 let accept_listener = Arc::clone(&accept_listener);
                 async move {
-                    accept_listener.lock().await.accept().await.map_err(Into::into)
+                    accept_listener
+                        .lock()
+                        .await
+                        .accept()
+                        .await
+                        .map_err(Into::into)
                 }
             },
             |_, (stream, peer_addr): (KcpStream, SocketAddr), conn_handler: Arc<ConnHandler>| {

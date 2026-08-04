@@ -136,7 +136,11 @@ mod tests {
         }
         assert_eq!(seen, ["a", "d", "c"]);
         assert_eq!(set.len(), 3);
-        assert_eq!(b.load(Ordering::Relaxed), 1, "the removed entry's index is stale but unused");
+        assert_eq!(
+            b.load(Ordering::Relaxed),
+            1,
+            "the removed entry's index is stale but unused"
+        );
 
         // A subsequent remove through the patched index still targets "d".
         set.remove(1);

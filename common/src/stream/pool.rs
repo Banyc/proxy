@@ -275,7 +275,10 @@ mod tests {
         type Connection = Box<dyn AsConn>;
         async fn connect(&self) -> Option<Self::Connection> {
             let (io, _peer) = tokio::io::duplex(1);
-            Some(Box::new(TestConn { io, addr: self.addr }))
+            Some(Box::new(TestConn {
+                io,
+                addr: self.addr,
+            }))
         }
     }
 
@@ -380,11 +383,9 @@ mod tests {
 
     #[test]
     fn an_unknown_sharing_key_is_rejected_at_build() {
-        let err = PoolBuilder::<StreamAddrStr>(vec![SharableConfig::SharingKey(
-            "missing".into(),
-        )])
-        .build(empty_table(), &HashMap::new())
-        .unwrap_err();
+        let err = PoolBuilder::<StreamAddrStr>(vec![SharableConfig::SharingKey("missing".into())])
+            .build(empty_table(), &HashMap::new())
+            .unwrap_err();
         assert!(
             matches!(err, PoolBuildError::ProxyServerKeyNotFound(ref k) if k.as_ref() == "missing"),
             "{err:?}"
@@ -404,9 +405,7 @@ mod tests {
         let a_tcp = stream_addr("127.0.0.1:1", "tcp");
         let b_tcp = stream_addr("127.0.0.1:2", "tcp");
         let a_udp = stream_addr("127.0.0.1:1", "udp");
-        let pool = ConnPool::new(
-            [entry(&a_tcp), entry(&b_tcp), entry(&a_udp)].into_iter(),
-        );
+        let pool = ConnPool::new([entry(&a_tcp), entry(&b_tcp), entry(&a_udp)].into_iter());
 
         let conn = pull_until_ready(&pool, &a_tcp).await;
         assert_eq!(conn.peer_addr().unwrap(), socket_addr_of(&a_tcp));
