@@ -26,6 +26,7 @@ use common::{
         context::StreamRuntime,
     },
     stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    session::SessionSpawner,
 };
 
 const STREAMS: usize = 4;
@@ -34,12 +35,18 @@ const STREAMS: usize = 4;
 pub struct MptcpServer<ConnHandler> {
     listener: MptcpListener,
     conn_handler: ConnHandler,
+    session_spawner: SessionSpawner,
 }
 impl<ConnHandler> MptcpServer<ConnHandler> {
-    pub fn new(listener: MptcpListener, conn_handler: ConnHandler) -> Self {
+    pub fn new(
+        listener: MptcpListener,
+        conn_handler: ConnHandler,
+        session_spawner: SessionSpawner,
+    ) -> Self {
         Self {
             listener,
             conn_handler,
+            session_spawner,
         }
     }
 
@@ -81,6 +88,7 @@ where
             .map_err(ServeLoopError::LocalAddr)?;
         let listener = Arc::new(tokio::sync::Mutex::new(self.listener));
         let accept_listener = Arc::clone(&listener);
+        let session_spawner = self.session_spawner.clone();
         let mut state = ();
         common::serve_loop::serve_loop(
             "mptcp",
@@ -95,11 +103,17 @@ where
                 async move { accept_listener.lock().await.accept().await }
             },
             |_, stream: MptcpStream, conn_handler: Arc<ConnHandler>| {
-                tokio::spawn(async move {
-                    conn_handler
-                        .handle_stream(AddressedMptcpStream(stream))
+                let session_spawner = session_spawner.clone();
+                Box::pin(async move {
+                    session_spawner
+                        .spawn(async move {
+                            conn_handler
+                                .handle_stream(AddressedMptcpStream(stream))
+                                .await;
+                            Ok(())
+                        })
                         .await;
-                });
+                })
             },
             &mut state,
             |_| Box::pin(std::future::pending::<()>()),
@@ -208,8 +222,9 @@ impl loading::Build for MptcpProxyServerBuilder {
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
+        let session_spawner = self.inner.stream_context.session_spawner.clone();
         let stream_proxy = self.build_conn_handler()?;
-        build_mptcp_proxy_server(listen_addr.as_ref(), stream_proxy)
+        build_mptcp_proxy_server(listen_addr.as_ref(), stream_proxy, session_spawner)
             .await
             .map_err(|e| e.into())
     }
@@ -232,6 +247,7 @@ pub enum MptcpProxyServerBuildError {
 pub async fn build_mptcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyConnHandler,
+    session_spawner: SessionSpawner,
 ) -> Result<MptcpServer<StreamProxyConnHandler>, ListenerBindError> {
     let listener = MptcpListener::bind(
         [listen_addr].iter(),
@@ -239,6 +255,6 @@ pub async fn build_mptcp_proxy_server(
     )
     .await
     .map_err(ListenerBindError)?;
-    let server = MptcpServer::new(listener, stream_proxy);
+    let server = MptcpServer::new(listener, stream_proxy, session_spawner);
     Ok(server)
 }

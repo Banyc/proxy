@@ -118,9 +118,10 @@ impl loading::Build for Socks5ServerTcpAccessServerBuilder {
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
+        let session_spawner = self.stream_context.session_spawner.clone();
         let access = self.build_conn_handler()?;
         let tcp_listener = tokio::net::TcpListener::bind(listen_addr.as_ref()).await?;
-        Ok(TcpServer::new(tcp_listener, access))
+        Ok(TcpServer::new(tcp_listener, access, session_spawner))
     }
 
     fn key(&self) -> &Arc<str> {
@@ -218,30 +219,28 @@ impl Socks5ServerTcpAccessConnHandler {
                     session_table: self.stream_context.session_table.clone(),
                     destination: Some(upstream_addr),
                 };
+                let retention = self.stream_context.retention.clone();
                 let io_copy = CopyBidirectional {
                     downstream,
                     upstream,
                     payload_crypto: None,
                     speed_limiter: self.speed_limiter.clone(),
                     conn_context,
+                    retention,
                 }
                 .serve_as_access_server();
-                tokio::spawn(async move {
-                    let (io, res) = io_copy.await;
-                    let log = Socks5TcpLog { io, cmd, dst };
-                    match &res {
-                        Ok(()) => common::info_println!("SOCKS5 TCP direct: Finished {log}"),
-                        Err(err) => common::info_println!("SOCKS5 TCP direct: Error {log}: {err}"),
-                    }
-                });
+                let (io, res) = io_copy.await;
+                let log = Socks5TcpLog { io, cmd, dst };
+                match &res {
+                    Ok(()) => common::info_println!("SOCKS5 TCP direct: Finished {log}"),
+                    Err(err) => common::info_println!("SOCKS5 TCP direct: Error {log}: {err}"),
+                }
                 return Ok(ProxyResult::IoCopy);
             }
             EstablishResult::Udp { mut downstream } => {
-                tokio::spawn(async move {
-                    // Prevent the UDP association from terminating
-                    let mut buf = [0; 1];
-                    let _ = downstream.read_exact(&mut buf).await;
-                });
+                // Prevent the UDP association from terminating
+                let mut buf = [0; 1];
+                let _ = downstream.read_exact(&mut buf).await;
                 return Ok(ProxyResult::Udp);
             }
             EstablishResult::Proxy {
@@ -267,22 +266,22 @@ impl Socks5ServerTcpAccessConnHandler {
                 address: destination,
             }),
         };
+        let retention = self.stream_context.retention.clone();
         let io_copy = CopyBidirectional {
             downstream,
             upstream: upstream.stream,
             payload_crypto,
             speed_limiter: self.speed_limiter.clone(),
             conn_context,
+            retention,
         }
         .serve_as_access_server();
-        tokio::spawn(async move {
-            let (io, res) = io_copy.await;
-            let log = Socks5TcpLog { io, cmd, dst };
-            match &res {
-                Ok(()) => common::info_println!("SOCKS5 TCP: Finished {log}"),
-                Err(err) => common::info_println!("SOCKS5 TCP: Error {log}: {err}"),
-            }
-        });
+        let (io, res) = io_copy.await;
+        let log = Socks5TcpLog { io, cmd, dst };
+        match &res {
+            Ok(()) => common::info_println!("SOCKS5 TCP: Finished {log}"),
+            Err(err) => common::info_println!("SOCKS5 TCP: Error {log}: {err}"),
+        }
         Ok(ProxyResult::IoCopy)
     }
 

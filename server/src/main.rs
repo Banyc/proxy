@@ -2,14 +2,19 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use axum::Router;
 use clap::Parser;
-use common::{error::AnyResult, suspend::spawn_check_system_suspend};
+use common::{
+    error::AnyResult,
+    process::ProcessTaskExit,
+    retention::RetentionActor,
+    suspend::spawn_check_system_suspend,
+};
 use server::{
     ServeContext,
     config::{multi_file_config::MultiFileConfigReader, spawn_watch_tasks},
     monitor::monitor_router,
     serve,
 };
-use tracing::info;
+use tracing::{error, info};
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -42,8 +47,13 @@ async fn main() -> AnyResult {
         common::proto::log::udp::init_logger(path.clone());
     };
 
-    let config_changed = spawn_watch_tasks(&args.config_file_paths);
-    let system_suspended = spawn_check_system_suspend();
+    let mut process_tasks: tokio::task::JoinSet<ProcessTaskExit> = tokio::task::JoinSet::new();
+
+    let (retention_actor, retention) = RetentionActor::new();
+    process_tasks.spawn(retention_actor.run());
+
+    let config_changed = spawn_watch_tasks(&mut process_tasks, &args.config_file_paths);
+    let system_suspended = spawn_check_system_suspend(&mut process_tasks);
 
     #[cfg(feature = "dhat-heap")]
     let profiler = dhat::Profiler::new_heap();
@@ -63,8 +73,9 @@ async fn main() -> AnyResult {
         let listen_addr = listener.local_addr().unwrap();
         let server = axum::serve(listener, router.into_make_service());
         info!("Monitoring HTTP server listening addr: {listen_addr}");
-        tokio::spawn(async move {
+        process_tasks.spawn(async move {
             server.await.unwrap();
+            ProcessTaskExit::Completed
         });
 
         serve_context = ServeContext {
@@ -72,6 +83,7 @@ async fn main() -> AnyResult {
             udp_session_table: Some(session_tables.udp),
             config_changed,
             system_suspended,
+            retention,
         };
     } else {
         serve_context = ServeContext {
@@ -79,11 +91,30 @@ async fn main() -> AnyResult {
             udp_session_table: None,
             config_changed,
             system_suspended,
+            retention,
         };
     }
 
     let config_reader = MultiFileConfigReader::new(args.config_file_paths.into());
-    serve(config_reader, serve_context)
-        .await
-        .map_err(Into::into)
+    let serving = serve(config_reader, serve_context);
+    tokio::pin!(serving);
+    loop {
+        tokio::select! {
+            res = &mut serving => return res.map_err(Into::into),
+            Some(res) = process_tasks.join_next() => {
+                match res {
+                    Ok(ProcessTaskExit::Completed) => {
+                        error!("Root process task completed unexpectedly");
+                    }
+                    Err(error) if error.is_panic() => {
+                        error!(?error, "Root process task panicked");
+                        std::panic::resume_unwind(error.into_panic());
+                    }
+                    Err(error) => {
+                        error!(?error, "Root process task failed to join");
+                    }
+                }
+            }
+        }
+    }
 }

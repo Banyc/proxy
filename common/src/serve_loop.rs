@@ -199,7 +199,7 @@ where
     H: Send + Sync + 'static,
     A: FnMut() -> AF,
     AF: Future<Output = io::Result<T>> + Send,
-    W: for<'a> FnMut(&'a mut X, T, Arc<H>),
+    W: for<'a> FnMut(&'a mut X, T, Arc<H>) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
     S: FnMut(Arc<H>),
     E: for<'a> FnMut(&'a mut X) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
 {
@@ -232,7 +232,7 @@ where
                 if let Some(counter_name) = counter_name {
                     counter!(counter_name).increment(1);
                 }
-                wrap_conn(loop_state, stream, Arc::clone(&conn_handler));
+                wrap_conn(loop_state, stream, Arc::clone(&conn_handler)).await;
             }
             _ = after_accept(loop_state) => {}
             res = set_conn_handler_rx.0.recv() => {

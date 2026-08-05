@@ -2,6 +2,7 @@ pub use ::rtp_mux::ServeError;
 use common::{
     error::AnyResult,
     loading,
+    session::SessionSpawner,
     stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 use std::{
@@ -16,6 +17,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 pub struct RtpMuxServer<ConnHandler> {
     inner: ::rtp_mux::RtpMuxServer,
     conn_handler: ConnHandler,
+    session_spawner: SessionSpawner,
 }
 impl<ConnHandler> RtpMuxServer<ConnHandler> {
     pub fn new(
@@ -23,16 +25,23 @@ impl<ConnHandler> RtpMuxServer<ConnHandler> {
         bulk_listener: rtp::udp::Listener,
         conn_handler: ConnHandler,
         fec: bool,
+        session_spawner: SessionSpawner,
     ) -> Self {
         Self::from_core(
             ::rtp_mux::RtpMuxServer::new(interactive_listener, bulk_listener, fec),
             conn_handler,
+            session_spawner,
         )
     }
-    pub(crate) fn from_core(inner: ::rtp_mux::RtpMuxServer, conn_handler: ConnHandler) -> Self {
+    pub(crate) fn from_core(
+        inner: ::rtp_mux::RtpMuxServer,
+        conn_handler: ConnHandler,
+        session_spawner: SessionSpawner,
+    ) -> Self {
         Self {
             inner,
             conn_handler,
+            session_spawner,
         }
     }
     pub fn listener(&self) -> &rtp::udp::Listener {
@@ -51,14 +60,34 @@ where
         let Self {
             inner,
             conn_handler,
+            session_spawner,
         } = self;
         let conn_handler = Arc::new(RwLock::new(Arc::new(conn_handler)));
         let handler_for_stream = Arc::clone(&conn_handler);
-        let serving = inner.serve(move |stream| {
+        let rtp_mux_spawner = rtp_mux::SessionSpawner::new({
+            let session_spawner = session_spawner.clone();
+            move |fut| {
+                // rtp_mux calls this synchronously from its accept path, so it
+                // cannot await the bounded process session scope; try_spawn
+                // drops the session only when that scope is saturated.
+                if !session_spawner.try_spawn(async move {
+                    fut.await;
+                    Ok(())
+                }) {
+                    tracing::warn!("dropping rtp_mux session: process session scope is full");
+                }
+            }
+        });
+        let serving = inner.serve(rtp_mux_spawner, move |stream| {
             let handler = handler_for_stream.read().unwrap().clone();
-            tokio::spawn(async move {
+            let session_spawner = session_spawner.clone();
+            // rtp_mux's stream handler is synchronous; submit via try_spawn.
+            if !session_spawner.try_spawn(async move {
                 handler.handle_stream(ProxyRtpMuxStream(stream)).await;
-            });
+                Ok(())
+            }) {
+                tracing::warn!("dropping rtp_mux stream: process session scope is full");
+            }
         });
         tokio::pin!(serving);
         loop {

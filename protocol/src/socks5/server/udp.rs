@@ -112,7 +112,8 @@ impl Socks5ServerUdpAccessConnHandler {
 
     pub async fn build(self, listen_addr: impl ToSocketAddrs) -> io::Result<UdpServer<Self>> {
         let listener = tokio::net::UdpSocket::bind(listen_addr).await?;
-        Ok(UdpServer::new(listener, self))
+        let session_spawner = self.udp_runtime.session_spawner.clone();
+        Ok(UdpServer::new(listener, self, session_spawner))
     }
 
     async fn proxy(&self, conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), AccessProxyError> {
@@ -155,27 +156,27 @@ impl Socks5ServerUdpAccessConnHandler {
 
         let speed_limiter = self.speed_limiter.clone();
         let session_table = self.udp_runtime.session_table.clone();
+        let retention = self.udp_runtime.retention.clone();
         let upstream_local = upstream_read.inner().local_addr().ok();
         let (dn_read, dn_write) = conn.split();
-        tokio::spawn(async move {
-            let io_copy = CopyBidirectional {
-                flow,
-                upstream: UpstreamParts {
-                    read: upstream_read,
-                    write: upstream_write,
-                },
-                downstream: DownstreamParts {
-                    read: dn_read,
-                    write: dn_write,
-                },
-                speed_limiter,
-                payload_crypto,
-                response_header: Some(Box::new(response_header)),
-            };
-            let _ = io_copy
-                .serve_as_access_server(session_table, upstream_local, upstream_remote, "SOCKS UDP")
-                .await;
-        });
+        let io_copy = CopyBidirectional {
+            flow,
+            upstream: UpstreamParts {
+                read: upstream_read,
+                write: upstream_write,
+            },
+            downstream: DownstreamParts {
+                read: dn_read,
+                write: dn_write,
+            },
+            speed_limiter,
+            payload_crypto,
+            response_header: Some(Box::new(response_header)),
+            retention,
+        };
+        let _ = io_copy
+            .serve_as_access_server(session_table, upstream_local, upstream_remote, "SOCKS UDP")
+            .await;
         Ok(())
     }
 }

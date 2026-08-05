@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use common::{error::AnyError, notify::Notify};
+use common::{error::AnyError, notify::Notify, process::ProcessTaskExit};
 
 pub mod multi_file_config;
 pub mod toml;
@@ -40,13 +40,19 @@ impl file_watcher_tokio::HandleEvent for ConfigWatcher {
     }
 }
 
-pub fn spawn_watch_tasks(config_file_paths: &[Arc<str>]) -> ConfigChangeSignal {
+pub fn spawn_watch_tasks(
+    process_tasks: &mut tokio::task::JoinSet<ProcessTaskExit>,
+    config_file_paths: &[Arc<str>],
+) -> ConfigChangeSignal {
     let watcher = ConfigWatcher::new();
     let signal = watcher.signal().clone();
     config_file_paths.iter().for_each(|path| {
         let watcher = watcher.clone();
         let path = path.clone();
-        tokio::spawn(async move { file_watcher_tokio::watch_file(path.as_ref(), watcher).await });
+        process_tasks.spawn(async move {
+            file_watcher_tokio::watch_file(path.as_ref(), watcher).await;
+            ProcessTaskExit::Completed
+        });
     });
     signal
 }

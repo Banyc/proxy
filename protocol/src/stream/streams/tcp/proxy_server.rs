@@ -30,6 +30,7 @@ use common::{
         context::StreamRuntime,
     },
     stream::{ConnParts, HasIoAddr, OwnIoStream},
+    session::SessionSpawner,
 };
 
 use super::listener::TcpServer;
@@ -140,8 +141,9 @@ impl loading::Build for TcpProxyServerBuilder {
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
+        let session_spawner = self.inner.stream_context.session_spawner.clone();
         let stream_proxy = self.build_conn_handler()?;
-        build_tcp_proxy_server(listen_addr.as_ref(), stream_proxy)
+        build_tcp_proxy_server(listen_addr.as_ref(), stream_proxy, session_spawner)
             .await
             .map_err(|e| e.into())
     }
@@ -164,11 +166,12 @@ pub enum TcpProxyServerBuildError {
 pub async fn build_tcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyConnHandler,
+    session_spawner: SessionSpawner,
 ) -> Result<TcpServer<StreamProxyConnHandler>, ListenerBindError> {
     let listener = TcpListener::bind(listen_addr)
         .await
         .map_err(ListenerBindError)?;
-    let server = TcpServer::new(listener, stream_proxy);
+    let server = TcpServer::new(listener, stream_proxy, session_spawner);
     Ok(server)
 }
 
@@ -201,6 +204,21 @@ mod tests {
     async fn test_proxy() {
         let crypto = tokio_chacha20::config::Config::new(vec![].into());
         let connector_reset = ConnectorResetSignal(Notify::new());
+        let (session_spawner, mut session_rx) = common::session::SessionSpawner::channel();
+        let (retention_actor, retention) = common::retention::RetentionActor::new();
+        // Test-owned session reaper; lifetime is the test runtime.
+        #[allow(clippy::disallowed_methods)]
+        tokio::spawn(async move {
+            let _retention_actor = retention_actor;
+            let mut sessions = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    Some(fut) = session_rx.recv() => { sessions.spawn(fut); }
+                    Some(res) = sessions.join_next() => { let _ = res; }
+                    else => break,
+                }
+            }
+        });
         let proxy_addr = {
             let listen_addr = Arc::from("localhost:0");
             let connector_config = ConnectorConfig {
@@ -220,14 +238,18 @@ mod tests {
                         VALIDATOR_TIME_FRAME,
                         VALIDATOR_CAPACITY,
                     )),
+                    session_spawner: session_spawner.clone(),
+                    retention: retention.clone(),
                 },
                 Arc::clone(&listen_addr),
                 true,
             );
-            let server = build_tcp_proxy_server(listen_addr.as_ref(), proxy)
+            let server = build_tcp_proxy_server(listen_addr.as_ref(), proxy, session_spawner.clone())
                 .await
                 .unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
+            // Test-owned server task; lifetime is the test runtime.
+            #[allow(clippy::disallowed_methods)]
             tokio::spawn(async move {
                 let (_set_conn_handler_tx, set_conn_handler_rx) =
                     loading::replace_conn_handler_channel();
@@ -240,6 +262,8 @@ mod tests {
         let origin_addr = {
             let listener = TcpListener::bind("[::]:0").await.unwrap();
             let origin_addr = listener.local_addr().unwrap();
+            // Test-owned origin server; lifetime is the test runtime.
+            #[allow(clippy::disallowed_methods)]
             tokio::spawn(async move {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut buf = [0; 1024];

@@ -36,6 +36,21 @@ mod tests {
     }
 
     fn udp_context() -> UdpRuntime {
+        let (session_spawner, mut session_rx) = common::session::SessionSpawner::channel();
+        tokio::spawn(async move {
+            let mut sessions = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    Some(fut) = session_rx.recv() => { sessions.spawn(fut); }
+                    Some(res) = sessions.join_next() => { let _ = res; }
+                    else => break,
+                }
+            }
+        });
+        let (retention_actor, retention) = common::retention::RetentionActor::new();
+        tokio::spawn(async move {
+            let _ = retention_actor.run().await;
+        });
         UdpRuntime {
             session_table: None,
             connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
@@ -44,6 +59,8 @@ mod tests {
             time_validator: Arc::new(TimeValidator::new(
                 VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
             )),
+            session_spawner,
+            retention,
         }
     }
 

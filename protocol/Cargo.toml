@@ -35,3 +35,10 @@ tokio-util = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+
+[lints.clippy]
+disallowed-methods = [
+    { path = "tokio::spawn", reason = "spawn into an explicit task scope or object-owned JoinSet" },
+    { path = "tokio::task::spawn", reason = "spawn into an explicit task scope or object-owned JoinSet" },
+    { path = "tokio::runtime::Handle::spawn", reason = "spawn into an explicit task scope or object-owned JoinSet" },
+]

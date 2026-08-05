@@ -17,7 +17,9 @@ use common::{
         context::{Runtime, StreamRuntime, UdpRuntime},
         metrics::{stream::StreamSessionTable, udp::UdpSessionTable},
     },
+    retention::RetentionActorSender,
     route::{ConnConfig, ConnSelector, ProbeRtt, Registries},
+    session::SessionSpawner,
     stream::pool::{StreamConnPool, StreamPoolBuilder},
     suspend::SystemSuspendSignal,
 };
@@ -44,6 +46,7 @@ pub struct ServeContext {
     pub udp_session_table: Option<UdpSessionTable>,
     pub config_changed: ConfigChangeSignal,
     pub system_suspended: SystemSuspendSignal,
+    pub retention: RetentionActorSender,
 }
 
 pub async fn serve<CR>(
@@ -53,6 +56,8 @@ pub async fn serve<CR>(
 where
     CR: ReadConfig<Config = ServerConfig>,
 {
+    let (session_spawner, mut session_rx) = SessionSpawner::channel();
+    let mut sessions = tokio::task::JoinSet::new();
     let mut server_loader = ServerLoader {
         access_server: AccessServerLoader::new(),
         proxy_server: ProxyServerLoader::new(),
@@ -69,6 +74,7 @@ where
     ));
     let connector_reset = ConnectorResetSignal(serve_context.system_suspended.0);
     let runtime = Runtime {
+        session_spawner: session_spawner.clone(),
         stream: StreamRuntime {
             session_table: serve_context.stream_session_table,
             pool: stream_pool,
@@ -77,6 +83,8 @@ where
                 connector_reset,
             )),
             replay_validator: Arc::clone(&stream_validator),
+            session_spawner: session_spawner.clone(),
+            retention: serve_context.retention.clone(),
         },
         udp: UdpRuntime {
             session_table: serve_context.udp_session_table,
@@ -84,6 +92,8 @@ where
             connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
                 ConnectorConfig::default(),
             )))),
+            session_spawner: session_spawner.clone(),
+            retention: serve_context.retention.clone(),
         },
     };
 
@@ -115,6 +125,25 @@ where
                     }
                 };
                 res.map_err(ServerServeError::ServerTask)?;
+            }
+            Some(fut) = session_rx.recv() => {
+                sessions.spawn(fut);
+            }
+            Some(res) = sessions.join_next() => {
+                let res = match res {
+                    Ok(res) => res,
+                    Err(error) if error.is_panic() => {
+                        error!(?error, "Session task panicked");
+                        std::panic::resume_unwind(error.into_panic());
+                    }
+                    Err(error) => {
+                        error!(?error, "Session task failed to join");
+                        continue;
+                    }
+                };
+                if let Err(e) = res {
+                    error!(?e, "Session task returned an error");
+                }
             }
             _ = config_changed.notified() => {
                 info!("Config file changed");

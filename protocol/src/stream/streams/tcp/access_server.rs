@@ -88,9 +88,10 @@ impl loading::Build for TcpAccessServerBuilder {
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
+        let session_spawner = self.stream_runtime.session_spawner.clone();
         let access = self.build_conn_handler()?;
         let tcp_listener = tokio::net::TcpListener::bind(listen_addr.as_ref()).await?;
-        let server = TcpServer::new(tcp_listener, access);
+        let server = TcpServer::new(tcp_listener, access, session_spawner);
         Ok(server)
     }
 
@@ -161,22 +162,22 @@ impl TcpAccessConnHandler {
             destination: Some(self.destination.clone()),
         };
         let dst = self.destination.clone();
+        let retention = self.stream_runtime.retention.clone();
         let io_copy = CopyBidirectional {
             downstream,
             upstream: upstream.stream,
             payload_crypto,
             speed_limiter: self.speed_limiter.clone(),
             conn_context,
+            retention,
         }
         .serve_as_access_server();
-        tokio::spawn(async move {
-            let (io, res) = io_copy.await;
-            let log = TcpAccessLog { io, dst };
-            match &res {
-                Ok(()) => common::info_println!("TCP: Finished {log}"),
-                Err(err) => common::info_println!("TCP: Error {log}: {err}"),
-            }
-        });
+        let (io, res) = io_copy.await;
+        let log = TcpAccessLog { io, dst };
+        match &res {
+            Ok(()) => common::info_println!("TCP: Finished {log}"),
+            Err(err) => common::info_println!("TCP: Error {log}: {err}"),
+        }
         Ok(())
     }
 }

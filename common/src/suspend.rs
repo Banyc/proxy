@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::notify::Notify;
+use crate::{notify::Notify, process::ProcessTaskExit};
 
 const SUSPEND_CHECK_INTERVAL: Duration = Duration::from_millis(200);
 /// The tolerance factor applied to the suspend check interval before a gap is
@@ -13,9 +13,11 @@ fn suspend_toleration() -> Duration {
 #[derive(Debug, Clone)]
 pub struct SystemSuspendSignal(pub Notify);
 
-pub fn spawn_check_system_suspend() -> SystemSuspendSignal {
+pub fn spawn_check_system_suspend(
+    process_tasks: &mut tokio::task::JoinSet<ProcessTaskExit>,
+) -> SystemSuspendSignal {
     let system_suspend = SystemSuspendSignal(Notify::new());
-    tokio::spawn({
+    process_tasks.spawn({
         let system_suspend = system_suspend.clone();
         async move {
             let mut prev = (Instant::now(), SystemTime::now());
@@ -40,7 +42,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires an actual system suspend to trigger the notification"]
     async fn basics() {
-        let system_suspend = spawn_check_system_suspend();
+        let mut process_tasks = tokio::task::JoinSet::new();
+        let system_suspend = spawn_check_system_suspend(&mut process_tasks);
         let mut system_suspend = system_suspend.0.subscription();
         system_suspend.notified().await;
     }

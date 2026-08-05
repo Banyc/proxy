@@ -7,7 +7,6 @@ use std::{
 
 use thiserror::Error;
 use tokio::net::UdpSocket;
-use tokio::task::JoinSet;
 use tracing::instrument;
 use udp_listener::{Conn, UtpListener};
 
@@ -15,6 +14,7 @@ use crate::{
     error::AnyResult,
     loading,
     proto::conn::udp::{DownstreamAddr, Flow, UpstreamAddr},
+    session::SessionSpawner,
     udp::Packet,
 };
 
@@ -22,14 +22,18 @@ use crate::{
 pub struct UdpServer<ConnHandler> {
     listener: UdpSocket,
     conn_handler: ConnHandler,
-    flows: JoinSet<()>,
+    session_spawner: SessionSpawner,
 }
 impl<ConnHandler> UdpServer<ConnHandler> {
-    pub fn new(listener: UdpSocket, conn_handler: ConnHandler) -> Self {
+    pub fn new(
+        listener: UdpSocket,
+        conn_handler: ConnHandler,
+        session_spawner: SessionSpawner,
+    ) -> Self {
         Self {
             listener,
             conn_handler,
-            flows: JoinSet::new(),
+            session_spawner,
         }
     }
 
@@ -85,13 +89,25 @@ where
             .local_addr()
             .map_err(UdpServerServeError::LocalAddr)?;
         let dispatcher_buffer_size = NonZeroUsize::new(64).unwrap();
-        let downstream_listener =
-            UtpListener::new(self.listener, dispatcher_buffer_size, Arc::new(dispatch));
+        let downstream_listener = Arc::new(UtpListener::new(
+            self.listener,
+            dispatcher_buffer_size,
+            Arc::new(dispatch),
+        ));
+        let session_spawner = self.session_spawner;
+        let dispatch_listener = Arc::clone(&downstream_listener);
+        session_spawner
+            .spawn(async move {
+                loop {
+                    let _ = dispatch_listener.dispatch_next().await;
+                }
+            })
+            .await;
         let initial = Arc::clone(&conn_handler.read().unwrap());
         let swap = |new: Arc<ConnHandler>| {
             *conn_handler.write().unwrap() = new;
         };
-        let mut state = self.flows;
+        let mut state = ();
         crate::serve_loop::serve_loop(
             "udp",
             None,
@@ -100,13 +116,29 @@ where
             initial,
             set_conn_handler_rx,
             swap,
-            || downstream_listener.poll_next_conn(),
-            |state: &mut JoinSet<()>,
+            || {
+                let downstream_listener = Arc::clone(&downstream_listener);
+                async move {
+                    downstream_listener
+                        .accept_next()
+                        .await
+                        .ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::BrokenPipe, "accept queue closed")
+                        })
+                }
+            },
+            |_: &mut (),
              flow: Conn<UdpSocket, Flow, Packet>,
              current: Arc<ConnHandler>| {
-                state.spawn(async move {
-                    current.handle_flow(flow).await;
-                });
+                let session_spawner = session_spawner.clone();
+                Box::pin(async move {
+                    session_spawner
+                        .spawn(async move {
+                            current.handle_flow(flow).await;
+                            Ok(())
+                        })
+                        .await;
+                })
             },
             &mut state,
             |_| Box::pin(std::future::pending::<()>()),
@@ -167,7 +199,22 @@ mod tests {
         let listener = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (set_conn_handler_tx, set_conn_handler_rx) = loading::replace_conn_handler_channel();
-        tokio::spawn(UdpServer::new(listener, TagEcho(1)).serve(set_conn_handler_rx));
+        let (session_spawner, mut session_rx) = crate::session::SessionSpawner::channel();
+        // Test-owned session reaper; lifetime is the test runtime, which aborts it on shutdown.
+        #[allow(clippy::disallowed_methods)]
+        tokio::spawn(async move {
+            let mut sessions = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    Some(fut) = session_rx.recv() => { sessions.spawn(fut); }
+                    Some(res) = sessions.join_next() => { let _ = res; }
+                    else => break,
+                }
+            }
+        });
+        // Test-owned server task; lifetime is the test runtime.
+        #[allow(clippy::disallowed_methods)]
+        tokio::spawn(UdpServer::new(listener, TagEcho(1), session_spawner).serve(set_conn_handler_rx));
         let echoed = |tag: u8| async move {
             let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
             for _ in 0..50 {

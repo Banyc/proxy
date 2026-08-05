@@ -131,9 +131,10 @@ impl loading::Build for HttpAccessServerBuilder {
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
+        let session_spawner = self.stream_context.session_spawner.clone();
         let access = self.build_conn_handler()?;
         let tcp_listener = tokio::net::TcpListener::bind(listen_addr.as_ref()).await?;
-        let server = TcpServer::new(tcp_listener, access);
+        let server = TcpServer::new(tcp_listener, access, session_spawner);
         Ok(server)
     }
 

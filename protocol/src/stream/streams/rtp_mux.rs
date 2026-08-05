@@ -10,6 +10,7 @@ use common::{
         },
         context::StreamRuntime,
     },
+    session::SessionSpawner,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -52,8 +53,9 @@ impl loading::Build for RtpMuxProxyServerBuilder {
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let fec = self.fec;
+        let session_spawner = self.inner.stream_context.session_spawner.clone();
         let stream_proxy = self.build_conn_handler()?;
-        build_rtp_mux_proxy_server(listen_addr.as_ref(), stream_proxy, fec)
+        build_rtp_mux_proxy_server(listen_addr.as_ref(), stream_proxy, fec, session_spawner)
             .await
             .map_err(Into::into)
     }
@@ -75,9 +77,10 @@ pub async fn build_rtp_mux_proxy_server(
     listen_addr: impl ToSocketAddrs + Clone + std::fmt::Debug,
     stream_proxy: StreamProxyConnHandler,
     fec: bool,
+    session_spawner: SessionSpawner,
 ) -> Result<RtpMuxServer<StreamProxyConnHandler>, ListenerBindError> {
     let server = ::rtp_mux::RtpMuxServer::bind(listen_addr, fec)
         .await
         .map_err(ListenerBindError)?;
-    Ok(RtpMuxServer::from_core(server, stream_proxy))
+    Ok(RtpMuxServer::from_core(server, stream_proxy, session_spawner))
 }

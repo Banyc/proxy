@@ -32,6 +32,7 @@ use common::{
         context::StreamRuntime,
     },
     stream::{ConnParts, StreamServerHandleConn},
+    session::SessionSpawner,
 };
 
 use crate::stream::streams::mux::{run_mux_accepter, server_mux_config};
@@ -51,13 +52,19 @@ pub struct TcpMuxServer<ConnHandler> {
     listener: TcpListener,
     mux: JoinSet<MuxError>,
     conn_handler: ConnHandler,
+    session_spawner: SessionSpawner,
 }
 impl<ConnHandler> TcpMuxServer<ConnHandler> {
-    pub fn new(listener: TcpListener, conn_handler: ConnHandler) -> Self {
+    pub fn new(
+        listener: TcpListener,
+        conn_handler: ConnHandler,
+        session_spawner: SessionSpawner,
+    ) -> Self {
         Self {
             listener,
             mux: JoinSet::new(),
             conn_handler,
+            session_spawner,
         }
     }
     pub fn listener(&self) -> &TcpListener {
@@ -95,6 +102,7 @@ where
             accepting: JoinSet::new(),
         };
         let listener = &self.listener;
+        let session_spawner = self.session_spawner.clone();
         common::serve_loop::serve_loop(
             "tcp_mux",
             Some("stream.tcp_mux.tcp.accepts"),
@@ -109,7 +117,7 @@ where
              conn_handler: Arc<ConnHandler>| {
                 let addr = match socket_addr_pair(&stream) {
                     Ok(addr) => addr,
-                    Err(_) => return,
+                    Err(_) => return Box::pin(async {}),
                 };
                 let (r, w) = stream.into_split();
                 let (_, accepter) =
@@ -118,12 +126,19 @@ where
                     run_mux_accepter(accepter, addr, |stream| {
                         counter!("stream.tcp_mux.mux.accepts").increment(1);
                         let conn_handler = Arc::clone(&conn_handler);
-                        tokio::spawn(async move {
-                            conn_handler.handle_stream(stream).await;
-                        });
+                        let session_spawner = session_spawner.clone();
+                        Box::pin(async move {
+                            session_spawner
+                                .spawn(async move {
+                                    conn_handler.handle_stream(stream).await;
+                                    Ok(())
+                                })
+                                .await;
+                        })
                     })
                     .await;
                 });
+                Box::pin(async {})
             },
             &mut state,
             |state: &mut MuxState| Box::pin(async move {
@@ -234,8 +249,9 @@ impl loading::Build for TcpMuxProxyServerBuilder {
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
+        let session_spawner = self.inner.stream_context.session_spawner.clone();
         let stream_proxy = self.build_conn_handler()?;
-        build_tcp_mux_proxy_server(listen_addr.as_ref(), stream_proxy)
+        build_tcp_mux_proxy_server(listen_addr.as_ref(), stream_proxy, session_spawner)
             .await
             .map_err(|e| e.into())
     }
@@ -258,11 +274,12 @@ pub enum TcpMuxProxyServerBuildError {
 pub async fn build_tcp_mux_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyConnHandler,
+    session_spawner: SessionSpawner,
 ) -> Result<TcpMuxServer<StreamProxyConnHandler>, ListenerBindError> {
     let listener = TcpListener::bind(listen_addr)
         .await
         .map_err(ListenerBindError)?;
-    let server = TcpMuxServer::new(listener, stream_proxy);
+    let server = TcpMuxServer::new(listener, stream_proxy, session_spawner);
     Ok(server)
 }
 #[cfg(test)]

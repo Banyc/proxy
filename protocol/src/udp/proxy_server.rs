@@ -102,6 +102,14 @@ mod tests {
                 connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
                     ConnectorConfig::default(),
                 )))),
+                session_spawner: {
+                    let (spawner, _rx) = common::session::SessionSpawner::channel();
+                    spawner
+                },
+                retention: {
+                    let (_actor, sender) = common::retention::RetentionActor::new();
+                    sender
+                },
             },
         };
         let e = loading::Build::build_conn_handler(builder).unwrap_err();

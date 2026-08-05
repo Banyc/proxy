@@ -162,16 +162,15 @@ impl StreamProxyConnHandler {
             payload_crypto: self.payload_crypto.clone(),
             speed_limiter: Limiter::new(f64::INFINITY),
             conn_context,
+            retention: self.stream_context.retention.clone(),
         }
         .serve_as_proxy_server();
-        tokio::spawn(async move {
-            let (io, res) = io_copy.await;
-            let log = StreamProxyFinished { io, up };
-            match &res {
-                Ok(()) => crate::info_println!("Stream: Finished {log}"),
-                Err(err) => crate::info_println!("Stream: Error {log}: {err}"),
-            }
-        });
+        let (io, res) = io_copy.await;
+        let log = StreamProxyFinished { io, up };
+        match &res {
+            Ok(()) => crate::info_println!("Stream: Finished {log}"),
+            Err(err) => crate::info_println!("Stream: Error {log}: {err}"),
+        }
         Ok(ProxyResult::IoCopy)
     }
 }

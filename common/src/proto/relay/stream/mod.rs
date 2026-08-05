@@ -32,6 +32,7 @@ pub struct CopyBidirectional<Downstream, Upstream> {
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
     pub speed_limiter: Limiter,
     pub conn_context: ConnContext,
+    pub retention: crate::retention::RetentionActorSender,
 }
 
 impl<Downstream, Upstream> CopyBidirectional<Downstream, Upstream>
@@ -106,7 +107,7 @@ where
                 session.inspect_mut(|session| {
                     session.end = Some(SystemTime::now());
                 });
-                retain_dead_session(session);
+                retain_dead_session(session, &self.retention).await;
                 res
             }
             None => {

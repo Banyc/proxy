@@ -19,11 +19,16 @@ pub mod udp;
 
 pub const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
 
-pub fn retain_dead_session<Session: Send + Sync + 'static>(session: RowOwnedGuard<Session>) {
-    tokio::spawn(async move {
-        let _session = session;
-        tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
-    });
+pub async fn retain_dead_session<Session: Send + Sync + 'static>(
+    session: RowOwnedGuard<Session>,
+    retention: &crate::retention::RetentionActorSender,
+) {
+    retention
+        .retain(
+            Box::new(session),
+            std::time::Instant::now() + DEAD_SESSION_RETENTION_DURATION,
+        )
+        .await;
 }
 
 #[derive(Debug, Clone, Copy)]

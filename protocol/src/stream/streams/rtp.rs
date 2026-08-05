@@ -32,6 +32,7 @@ use common::{
         context::StreamRuntime,
     },
     stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    session::SessionSpawner,
 };
 
 #[derive(Debug)]
@@ -39,13 +40,20 @@ pub struct RtpServer<ConnHandler> {
     listener: rtp::udp::Listener,
     conn_handler: ConnHandler,
     fec: bool,
+    session_spawner: SessionSpawner,
 }
 impl<ConnHandler> RtpServer<ConnHandler> {
-    pub fn new(listener: rtp::udp::Listener, conn_handler: ConnHandler, fec: bool) -> Self {
+    pub fn new(
+        listener: rtp::udp::Listener,
+        conn_handler: ConnHandler,
+        fec: bool,
+        session_spawner: SessionSpawner,
+    ) -> Self {
         Self {
             listener,
             conn_handler,
             fec,
+            session_spawner,
         }
     }
 
@@ -82,6 +90,7 @@ where
         let addr = self.listener.local_addr();
         let listener = &self.listener;
         let fec = self.fec;
+        let session_spawner = self.session_spawner.clone();
         let mut state = ();
         common::serve_loop::serve_loop(
             "rtp",
@@ -104,9 +113,15 @@ where
                     local_addr: listener.local_addr(),
                     peer_addr: stream.peer_addr,
                 };
-                tokio::spawn(async move {
-                    conn_handler.handle_stream(stream).await;
-                });
+                let session_spawner = session_spawner.clone();
+                Box::pin(async move {
+                    session_spawner
+                        .spawn(async move {
+                            conn_handler.handle_stream(stream).await;
+                            Ok(())
+                        })
+                        .await;
+                })
             },
             &mut state,
             |_| Box::pin(std::future::pending::<()>()),
@@ -238,8 +253,9 @@ impl loading::Build for RtpProxyServerBuilder {
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
+        let session_spawner = self.inner.stream_context.session_spawner.clone();
         let stream_proxy = self.build_conn_handler()?;
-        build_rtp_proxy_server(listen_addr.as_ref(), stream_proxy)
+        build_rtp_proxy_server(listen_addr.as_ref(), stream_proxy, session_spawner)
             .await
             .map_err(|e| e.into())
     }
@@ -262,11 +278,12 @@ pub enum RtpProxyServerBuildError {
 pub async fn build_rtp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyConnHandler,
+    session_spawner: SessionSpawner,
 ) -> Result<RtpServer<StreamProxyConnHandler>, ListenerBindError> {
     let fec = false;
     let listener = rtp::udp::Listener::bind(listen_addr)
         .await
         .map_err(ListenerBindError)?;
-    let server = RtpServer::new(listener, stream_proxy, fec);
+    let server = RtpServer::new(listener, stream_proxy, fec, session_spawner);
     Ok(server)
 }

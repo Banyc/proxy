@@ -1,4 +1,10 @@
-use std::{fmt, net::SocketAddr, ops::Deref, sync::Arc, time::SystemTime};
+use std::{
+    fmt,
+    net::SocketAddr,
+    ops::Deref,
+    sync::Arc,
+    time::{Instant, SystemTime},
+};
 
 use super::authority::get_authority_from_req;
 use crate::stream::{
@@ -21,7 +27,9 @@ use common::{
         metrics::stream::StreamSession,
         relay::{DEAD_SESSION_RETENTION_DURATION, same_key_nonce_ciphertext},
     },
+    retention::RetentionActorSender,
     route::{ConnSelector, RouteAction},
+    session::SessionSpawner,
     udp::UDP_FLOW_TIMEOUT,
 };
 use http_body_util::BodyExt;
@@ -149,7 +157,15 @@ async fn direct(
             dn_gauge: None,
         })
     });
-    let res = tls_http(upstream, req, session_guard, &reporter).await;
+    let res = tls_http(
+        upstream,
+        req,
+        session_guard,
+        &reporter,
+        &ctx.stream_context.session_spawner,
+        &ctx.stream_context.retention,
+    )
+    .await;
     let end = std::time::Instant::now();
     let timing = Timing { start, end };
     let log = HttpProxyLog {
@@ -220,9 +236,27 @@ async fn proxy(
             let (r, w) = tokio::io::split(upstream.stream);
             let (r, w) = same_key_nonce_ciphertext(crypto.key(), r, w);
             let upstream = tokio_chacha20::stream::DuplexStream::new(r, w);
-            tls_http(upstream, req, session_guard, &reporter).await
+            tls_http(
+                upstream,
+                req,
+                session_guard,
+                &reporter,
+                &ctx.stream_context.session_spawner,
+                &ctx.stream_context.retention,
+            )
+            .await
         }
-        None => tls_http(upstream.stream, req, session_guard, &reporter).await,
+        None => {
+            tls_http(
+                upstream.stream,
+                req,
+                session_guard,
+                &reporter,
+                &ctx.stream_context.session_spawner,
+                &ctx.stream_context.retention,
+            )
+            .await
+        }
     };
 
     let end = std::time::Instant::now();
@@ -261,6 +295,8 @@ async fn tls_http<Upstream>(
     req: Request<Incoming>,
     session_guard: Option<RowOwnedGuard<StreamSession>>,
     reporter: &HttpFailureReporter,
+    session_spawner: &SessionSpawner,
+    retention: &RetentionActorSender,
 ) -> HttpResult
 where
     Upstream: AsyncWrite + AsyncRead + Send + Unpin + 'static,
@@ -277,12 +313,16 @@ where
         })?;
 
     let bg_reporter = reporter.clone();
-    tokio::task::spawn(async move {
-        if let Err(e) = conn.await {
-            let err = TunnelError::BackgroundConnection(e);
-            bg_reporter.report(&err, None);
-        }
-    });
+    let session_spawner = session_spawner.clone();
+    session_spawner
+        .spawn(async move {
+            if let Err(e) = conn.await {
+                let err = TunnelError::BackgroundConnection(e);
+                bg_reporter.report(&err, None);
+            }
+            Ok(())
+        })
+        .await;
 
     let resp = sender.send_request(req).await.map_err(|e| {
         let err = TunnelError::UpstreamRequestSend(e);
@@ -293,10 +333,12 @@ where
     if let Some(s) = &session_guard {
         s.inspect_mut(|session| session.end = Some(SystemTime::now()));
     }
-    tokio::spawn(async move {
-        let _session_guard = session_guard;
-        tokio::time::sleep(DEAD_SESSION_RETENTION_DURATION).await;
-    });
+    retention
+        .retain(
+            session_guard,
+            Instant::now() + DEAD_SESSION_RETENTION_DURATION,
+        )
+        .await;
 
     Ok(resp.map(|b| b.boxed()))
 }

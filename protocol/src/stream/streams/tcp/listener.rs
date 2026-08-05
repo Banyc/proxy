@@ -3,7 +3,7 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::instrument;
 
-use common::{error::AnyResult, loading, stream::StreamServerHandleConn};
+use common::{error::AnyResult, loading, session::SessionSpawner, stream::StreamServerHandleConn};
 
 use super::proxy_server::AddressedTcpStream;
 
@@ -13,12 +13,18 @@ pub const TCP_STREAM_TYPE: &str = "tcp";
 pub struct TcpServer<ConnHandler> {
     listener: TcpListener,
     conn_handler: ConnHandler,
+    session_spawner: SessionSpawner,
 }
 impl<ConnHandler> TcpServer<ConnHandler> {
-    pub fn new(listener: TcpListener, conn_handler: ConnHandler) -> Self {
+    pub fn new(
+        listener: TcpListener,
+        conn_handler: ConnHandler,
+        session_spawner: SessionSpawner,
+    ) -> Self {
         Self {
             listener,
             conn_handler,
+            session_spawner,
         }
     }
 
@@ -57,6 +63,7 @@ where
             .local_addr()
             .map_err(ServeLoopError::LocalAddr)?;
         let listener = &self.listener;
+        let session_spawner = self.session_spawner.clone();
         let mut loop_state = ();
         common::serve_loop::serve_loop(
             "tcp",
@@ -68,9 +75,15 @@ where
             |_| {},
             || listener.accept(),
             |_, (stream, _): (TcpStream, SocketAddr), conn_handler: Arc<ConnHandler>| {
-                tokio::spawn(async move {
-                    conn_handler.handle_stream(AddressedTcpStream(stream)).await;
-                });
+                let session_spawner = session_spawner.clone();
+                Box::pin(async move {
+                    session_spawner
+                        .spawn(async move {
+                            conn_handler.handle_stream(AddressedTcpStream(stream)).await;
+                            Ok(())
+                        })
+                        .await;
+                })
             },
             &mut loop_state,
             |_| Box::pin(std::future::pending::<()>()),

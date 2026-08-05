@@ -122,25 +122,30 @@ async fn dispatch(
                 downstream: reporter.downstream.clone(),
                 method: method.clone(),
                 uri: uri.clone(),
+                retention: ctx.stream_context.retention.clone(),
             };
             UpgradeAction::Direct(direct_ctx)
         }
     };
     let reporter_dst_addr = dst_addr.clone();
-    tokio::task::spawn(async move {
-        if let Err(failure) = upgrade(req, action).await {
-            let tunnel_err: TunnelError = match failure {
-                ConnectFailure::Upgrade(e) => TunnelError::HyperError(e),
-                ConnectFailure::Resolution(e) | ConnectFailure::DirectConnect(e) => {
-                    TunnelError::Direct(e)
-                }
-                ConnectFailure::EstablishProxyChain(e) => {
-                    TunnelError::EstablishProxyChain(Box::new(e))
-                }
-            };
-            reporter.report(&tunnel_err, Some(&reporter_dst_addr.to_string()));
-        }
-    });
+    let session_spawner = ctx.stream_context.session_spawner.clone();
+    session_spawner
+        .spawn(async move {
+            if let Err(failure) = upgrade(req, action).await {
+                let tunnel_err: TunnelError = match failure {
+                    ConnectFailure::Upgrade(e) => TunnelError::HyperError(e),
+                    ConnectFailure::Resolution(e) | ConnectFailure::DirectConnect(e) => {
+                        TunnelError::Direct(e)
+                    }
+                    ConnectFailure::EstablishProxyChain(e) => {
+                        TunnelError::EstablishProxyChain(Box::new(e))
+                    }
+                };
+                reporter.report(&tunnel_err, Some(&reporter_dst_addr.to_string()));
+            }
+            Ok(())
+        })
+        .await;
 
     Ok(Response::new(empty()))
 }
@@ -180,6 +185,7 @@ struct DirectContext {
     pub downstream: super::HttpDownstreamContext,
     pub method: String,
     pub uri: String,
+    pub retention: common::retention::RetentionActorSender,
 }
 #[instrument(skip_all)]
 async fn direct(ctx: DirectContext, upgraded: Upgraded) -> Result<(), ConnectFailure> {
@@ -211,12 +217,14 @@ async fn direct(ctx: DirectContext, upgraded: Upgraded) -> Result<(), ConnectFai
         session_table: ctx.session_table,
         destination: Some(upstream_addr),
     };
+    let retention = ctx.retention;
     let (io, res) = CopyBidirectional {
         downstream: TokioIo::new(upgraded),
         upstream,
         payload_crypto: None,
         speed_limiter: ctx.speed_limiter,
         conn_context,
+        retention,
     }
     .serve_as_access_server()
     .await;
@@ -273,22 +281,22 @@ async fn proxy(ctx: &ProxyContext, upgraded: Upgraded) -> Result<(), ProxyError>
     };
     let method = ctx.method.clone();
     let uri = ctx.uri.clone();
+    let retention = ctx.stream_context.retention.clone();
     let io_copy = CopyBidirectional {
         downstream: TokioIo::new(upgraded),
         upstream: upstream.stream,
         payload_crypto,
         speed_limiter: ctx.speed_limiter.clone(),
         conn_context,
+        retention,
     }
     .serve_as_access_server();
-    tokio::spawn(async move {
-        let (io, res) = io_copy.await;
-        let log = HttpTunnelLog { io, method, uri };
-        match &res {
-            Ok(()) => common::info_println!("HTTP CONNECT: Finished {log}"),
-            Err(err) => common::info_println!("HTTP CONNECT: Error {log}: {err}"),
-        }
-    });
+    let (io, res) = io_copy.await;
+    let log = HttpTunnelLog { io, method, uri };
+    match &res {
+        Ok(()) => common::info_println!("HTTP CONNECT: Finished {log}"),
+        Err(err) => common::info_println!("HTTP CONNECT: Error {log}: {err}"),
+    }
     Ok(())
 }
 #[derive(Debug, Error)]

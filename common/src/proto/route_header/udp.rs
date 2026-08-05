@@ -23,12 +23,9 @@ pub async fn echo(
     let mut wtr = Vec::new();
     write_header(&mut wtr, &resp, *header_crypto.key()).unwrap();
     wtr.write_all(buf).unwrap();
-    let dn_writer = dn_writer.clone();
-    tokio::spawn(async move {
-        if let Err(e) = dn_writer.send(&wtr).await {
-            warn!(?e, ?dn_writer, "Failed to send response to downstream");
-        };
-    });
+    if let Err(e) = dn_writer.send(&wtr).await {
+        warn!(?e, ?dn_writer, "Failed to send response to downstream");
+    };
     counter!("udp.echoes").increment(1);
 }
 

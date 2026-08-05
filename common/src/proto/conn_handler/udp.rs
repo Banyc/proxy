@@ -56,7 +56,8 @@ impl UdpProxyConnHandler {
         let listener = UdpSocket::bind(listen_addr)
             .await
             .map_err(ListenerBindError)?;
-        Ok(UdpServer::new(listener, self))
+        let session_spawner = self.udp_context.session_spawner.clone();
+        Ok(UdpServer::new(listener, self, session_spawner))
     }
 
     #[instrument(skip(self, conn))]
@@ -106,30 +107,30 @@ impl UdpProxyConnHandler {
         let header_crypto = self.header_crypto.clone();
         let payload_crypto = self.payload_crypto.clone();
         let session_table = self.udp_context.session_table.clone();
+        let retention = self.udp_context.retention.clone();
         let upstream_local = upstream.local_addr().ok();
         let (dn_read, dn_write) = conn.split();
-        tokio::spawn(async move {
-            let io_copy = CopyBidirectional {
-                flow,
-                upstream: UpstreamParts {
-                    read: upstream.clone(),
-                    write: upstream,
-                },
-                downstream: DownstreamParts {
-                    read: dn_read,
-                    write: dn_write.clone(),
-                },
-                speed_limiter: Limiter::new(f64::INFINITY),
-                payload_crypto,
-                response_header: Some(Box::new(response_header)),
-            };
-            let res = io_copy
-                .serve_as_proxy_server(session_table, upstream_local, "UDP")
-                .await;
-            if res.is_err() {
-                let _ = respond_with_error(&dn_write, RouteErrorKind::Io, &header_crypto).await;
-            }
-        });
+        let io_copy = CopyBidirectional {
+            flow,
+            upstream: UpstreamParts {
+                read: upstream.clone(),
+                write: upstream,
+            },
+            downstream: DownstreamParts {
+                read: dn_read,
+                write: dn_write.clone(),
+            },
+            speed_limiter: Limiter::new(f64::INFINITY),
+            payload_crypto,
+            response_header: Some(Box::new(response_header)),
+            retention,
+        };
+        let res = io_copy
+            .serve_as_proxy_server(session_table, upstream_local, "UDP")
+            .await;
+        if res.is_err() {
+            let _ = respond_with_error(&dn_write, RouteErrorKind::Io, &header_crypto).await;
+        }
         Ok(())
     }
 

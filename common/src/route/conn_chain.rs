@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{config::SharableConfig, header::route::RouteRequest, proto::addr::RouteAddr};
 
 use super::{
-    ConnConfig, ConnConfigBuildError, ProbeRtt, Registries, prober::spawn_tracer,
+    ConnConfig, ConnConfigBuildError, ProbeRtt, Registries, prober::probe_task,
     rtt_stats::RttStats,
 };
 
@@ -105,7 +105,7 @@ pub struct GaugedConnChain {
     weighted: WeightedConnChain,
     rtt_stats: Arc<RwLock<RttStats>>,
     loss: Arc<RwLock<Option<f64>>>,
-    task_handle: Option<tokio::task::JoinHandle<()>>,
+    tasks: tokio::task::JoinSet<()>,
 }
 impl GaugedConnChain {
     pub fn new(
@@ -115,20 +115,37 @@ impl GaugedConnChain {
     ) -> Self {
         let rtt_stats = Arc::new(RwLock::new(RttStats::default()));
         let loss = Arc::new(RwLock::new(None));
-        let task_handle = tracer.map(|tracer| {
-            spawn_tracer(
+        let mut tasks = tokio::task::JoinSet::new();
+        if let Some(tracer) = tracer {
+            tasks.spawn(probe_task(
                 tracer,
                 weighted.chain.clone(),
                 rtt_stats.clone(),
                 loss.clone(),
                 cancellation,
-            )
-        });
+            ));
+        }
         Self {
             weighted,
             rtt_stats,
             loss,
-            task_handle,
+            tasks,
+        }
+    }
+
+    /// Observe probe task exits while the object is alive.
+    pub fn reap(&mut self) {
+        while let Some(res) = self.tasks.try_join_next() {
+            match res {
+                Ok(()) => {}
+                Err(error) if error.is_panic() => {
+                    tracing::error!(?error, "Route probe task panicked");
+                    std::panic::resume_unwind(error.into_panic());
+                }
+                Err(error) => {
+                    tracing::error!(?error, "Route probe task failed to join");
+                }
+            }
         }
     }
 
@@ -161,10 +178,51 @@ impl GaugedConnChain {
         *self.loss.write().unwrap() = loss;
     }
 }
-impl Drop for GaugedConnChain {
-    fn drop(&mut self) {
-        if let Some(h) = self.task_handle.as_ref() {
-            h.abort()
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        pin::Pin,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    use crate::error::AnyError;
+
+    struct CountingTracer(Arc<AtomicUsize>);
+    impl ProbeRtt for CountingTracer {
+        fn probe_rtt(
+            &self,
+            _chain: &ConnChain,
+        ) -> Pin<Box<dyn Future<Output = Result<Duration, AnyError>> + Send + '_>> {
+            Box::pin(async move {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(Duration::from_millis(1))
+            })
         }
+    }
+
+    #[tokio::test]
+    async fn dropping_the_chain_aborts_the_probe_task() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let chain = GaugedConnChain::new(
+            WeightedConnChain {
+                weight: 1,
+                chain: Arc::from(Vec::<crate::route::ConnConfig>::new()),
+                payload_crypto: None,
+            },
+            Some(Arc::new(CountingTracer(counter.clone())) as Arc<dyn ProbeRtt + Send + Sync>),
+            CancellationToken::new(),
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let before = counter.load(Ordering::SeqCst);
+        assert!(before >= 1, "the probe task should have run");
+        drop(chain);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let after = counter.load(Ordering::SeqCst);
+        assert!(
+            after <= before + 2,
+            "probe task must be aborted by object drop (before={before}, after={after})"
+        );
     }
 }

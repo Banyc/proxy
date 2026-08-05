@@ -33,18 +33,25 @@ use common::{
         context::StreamRuntime,
     },
     stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    session::SessionSpawner,
 };
 
 #[derive(Debug)]
 pub struct KcpServer<ConnHandler> {
     listener: KcpListener,
     conn_handler: ConnHandler,
+    session_spawner: SessionSpawner,
 }
 impl<ConnHandler> KcpServer<ConnHandler> {
-    pub fn new(listener: KcpListener, conn_handler: ConnHandler) -> Self {
+    pub fn new(
+        listener: KcpListener,
+        conn_handler: ConnHandler,
+        session_spawner: SessionSpawner,
+    ) -> Self {
         Self {
             listener,
             conn_handler,
+            session_spawner,
         }
     }
 
@@ -84,6 +91,7 @@ where
             .map_err(ServeLoopError::LocalAddr)?;
         let listener = Arc::new(tokio::sync::Mutex::new(self.listener));
         let accept_listener = Arc::clone(&listener);
+        let session_spawner = self.session_spawner.clone();
         let mut state = ();
         common::serve_loop::serve_loop(
             "kcp",
@@ -110,9 +118,15 @@ where
                     local_addr: addr,
                     peer_addr,
                 };
-                tokio::spawn(async move {
-                    conn_handler.handle_stream(stream).await;
-                });
+                let session_spawner = session_spawner.clone();
+                Box::pin(async move {
+                    session_spawner
+                        .spawn(async move {
+                            conn_handler.handle_stream(stream).await;
+                            Ok(())
+                        })
+                        .await;
+                })
             },
             &mut state,
             |_| Box::pin(std::future::pending::<()>()),
@@ -243,8 +257,9 @@ impl loading::Build for KcpProxyServerBuilder {
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
+        let session_spawner = self.inner.stream_context.session_spawner.clone();
         let stream_proxy = self.build_conn_handler()?;
-        build_kcp_proxy_server(listen_addr.as_ref(), stream_proxy)
+        build_kcp_proxy_server(listen_addr.as_ref(), stream_proxy, session_spawner)
             .await
             .map_err(|e| e.into())
     }
@@ -267,12 +282,13 @@ pub enum KcpProxyServerBuildError {
 pub async fn build_kcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyConnHandler,
+    session_spawner: SessionSpawner,
 ) -> Result<KcpServer<StreamProxyConnHandler>, ListenerBindError> {
     let config = fast_kcp_config();
     let listener = KcpListener::bind(config, listen_addr)
         .await
         .map_err(|e| ListenerBindError(e.into()))?;
-    let server = KcpServer::new(listener, stream_proxy);
+    let server = KcpServer::new(listener, stream_proxy, session_spawner);
     Ok(server)
 }
 #[cfg(test)]
@@ -286,6 +302,8 @@ mod tests {
             .await
             .unwrap();
         let listen_addr = listener.local_addr().unwrap();
+        // Test-owned accept task; lifetime is the test runtime.
+        #[allow(clippy::disallowed_methods)]
         tokio::spawn(async move {
             let mut listener = listener;
             let _ = listener.accept().await;

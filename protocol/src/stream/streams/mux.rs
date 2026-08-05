@@ -40,7 +40,9 @@ fn client_mux_config() -> MuxConfig {
 pub async fn run_mux_accepter(
     mut accepter: StreamAccepter,
     addr: SocketAddrPair,
-    mut handle_conn: impl FnMut(AddressedMuxStream<StreamReader, StreamWriter>),
+    mut handle_conn: impl FnMut(
+            AddressedMuxStream<StreamReader, StreamWriter>,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send>>,
 ) {
     loop {
         let (reader, writer) = match accepter.accept().await {
@@ -48,7 +50,7 @@ pub async fn run_mux_accepter(
             Err(DeadControl {}) => break,
         };
         let stream = tokio_chacha20::stream::DuplexStream::new(reader, writer);
-        handle_conn(AddressedMuxStream::new(stream, addr));
+        handle_conn(AddressedMuxStream::new(stream, addr)).await;
     }
 }
 

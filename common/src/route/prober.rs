@@ -65,14 +65,14 @@ pub trait ProbeRtt {
     }
 }
 
-pub(crate) fn spawn_tracer(
+pub(crate) fn probe_task(
     tracer: Arc<dyn ProbeRtt + Send + Sync>,
     chain: Arc<ConnChain>,
     rtt_stats_store: Arc<RwLock<RttStats>>,
     loss_store: Arc<RwLock<Option<f64>>>,
     cancellation: CancellationToken,
-) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn(async move {
+) -> impl Future<Output = ()> + Send {
+    async move {
         let mut consecutive_failures: u32 = 0;
         let mut probes_since_log: u32 = 0;
         let mut degradation = RttDegradation::default();
@@ -144,7 +144,7 @@ pub(crate) fn spawn_tracer(
                 () = cancellation.cancelled() => {}
             }
         }
-    })
+    }
 }
 
 #[cfg(test)]
@@ -187,7 +187,8 @@ mod tests {
         let rtt_stats = Arc::new(RwLock::new(RttStats::default()));
         let loss = Arc::new(RwLock::new(None));
         let cancellation = CancellationToken::new();
-        let handle = spawn_tracer(
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(probe_task(
             Arc::new(FakeTracer {
                 calls: calls.clone(),
             }),
@@ -195,7 +196,7 @@ mod tests {
             rtt_stats,
             loss,
             cancellation.clone(),
-        );
+        ));
         for _ in 0..100 {
             tokio::task::yield_now().await;
         }
@@ -204,6 +205,8 @@ mod tests {
             "the fake tracer should be polled at least once"
         );
         cancellation.cancel();
-        handle.await.unwrap();
+        while let Some(res) = tasks.join_next().await {
+            res.unwrap();
+        }
     }
 }
