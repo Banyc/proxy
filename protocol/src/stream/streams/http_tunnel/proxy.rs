@@ -335,7 +335,7 @@ where
     }
     retention
         .retain(
-            session_guard,
+            Box::new(session_guard),
             Instant::now() + DEAD_SESSION_RETENTION_DURATION,
         )
         .await;

@@ -122,6 +122,7 @@ where
                 let (r, w) = stream.into_split();
                 let (_, accepter) =
                     spawn_mux_no_reconnection(r, w, server_mux_config(), &mut state.mux);
+                let session_spawner = session_spawner.clone();
                 state.accepting.spawn(async move {
                     run_mux_accepter(accepter, addr, |stream| {
                         counter!("stream.tcp_mux.mux.accepts").increment(1);

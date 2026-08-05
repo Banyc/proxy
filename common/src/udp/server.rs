@@ -89,20 +89,12 @@ where
             .local_addr()
             .map_err(UdpServerServeError::LocalAddr)?;
         let dispatcher_buffer_size = NonZeroUsize::new(64).unwrap();
-        let downstream_listener = Arc::new(UtpListener::new(
+        let downstream_listener = UtpListener::new(
             self.listener,
             dispatcher_buffer_size,
             Arc::new(dispatch),
-        ));
+        );
         let session_spawner = self.session_spawner;
-        let dispatch_listener = Arc::clone(&downstream_listener);
-        session_spawner
-            .spawn(async move {
-                loop {
-                    let _ = dispatch_listener.dispatch_next().await;
-                }
-            })
-            .await;
         let initial = Arc::clone(&conn_handler.read().unwrap());
         let swap = |new: Arc<ConnHandler>| {
             *conn_handler.write().unwrap() = new;
@@ -116,17 +108,7 @@ where
             initial,
             set_conn_handler_rx,
             swap,
-            || {
-                let downstream_listener = Arc::clone(&downstream_listener);
-                async move {
-                    downstream_listener
-                        .accept_next()
-                        .await
-                        .ok_or_else(|| {
-                            io::Error::new(io::ErrorKind::BrokenPipe, "accept queue closed")
-                        })
-                }
-            },
+            || downstream_listener.poll_next_conn(),
             |_: &mut (),
              flow: Conn<UdpSocket, Flow, Packet>,
              current: Arc<ConnHandler>| {

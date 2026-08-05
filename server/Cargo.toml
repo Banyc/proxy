@@ -34,8 +34,4 @@ default = []
 dhat-heap = ["dhat"]
 
 [lints.clippy]
-disallowed-methods = [
-    { path = "tokio::spawn", reason = "spawn into an explicit task scope or object-owned JoinSet" },
-    { path = "tokio::task::spawn", reason = "spawn into an explicit task scope or object-owned JoinSet" },
-    { path = "tokio::runtime::Handle::spawn", reason = "spawn into an explicit task scope or object-owned JoinSet" },
-]
+disallowed_methods = "deny"

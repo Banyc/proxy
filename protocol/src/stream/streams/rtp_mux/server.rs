@@ -64,24 +64,12 @@ where
         } = self;
         let conn_handler = Arc::new(RwLock::new(Arc::new(conn_handler)));
         let handler_for_stream = Arc::clone(&conn_handler);
-        let rtp_mux_spawner = rtp_mux::SessionSpawner::new({
-            let session_spawner = session_spawner.clone();
-            move |fut| {
-                // rtp_mux calls this synchronously from its accept path, so it
-                // cannot await the bounded process session scope; try_spawn
-                // drops the session only when that scope is saturated.
-                if !session_spawner.try_spawn(async move {
-                    fut.await;
-                    Ok(())
-                }) {
-                    tracing::warn!("dropping rtp_mux session: process session scope is full");
-                }
-            }
-        });
-        let serving = inner.serve(rtp_mux_spawner, move |stream| {
+        let serving = inner.serve(move |stream| {
             let handler = handler_for_stream.read().unwrap().clone();
             let session_spawner = session_spawner.clone();
-            // rtp_mux's stream handler is synchronous; submit via try_spawn.
+            // rtp_mux's stream handler is synchronous, so it cannot await the
+            // bounded process session scope; try_spawn drops the session only
+            // when that scope is saturated.
             if !session_spawner.try_spawn(async move {
                 handler.handle_stream(ProxyRtpMuxStream(stream)).await;
                 Ok(())

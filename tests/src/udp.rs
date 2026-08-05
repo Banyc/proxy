@@ -124,7 +124,9 @@ mod tests {
         resp_msg: &[u8],
     ) -> Result<(), client::udp::RecvError> {
         let mut buf = [0; 1024];
-        let n = client.recv(&mut buf).await?;
+        let n = tokio::time::timeout(std::time::Duration::from_secs(10), client.recv(&mut buf))
+            .await
+            .expect("timed out waiting for the UDP proxy response")?;
         let msg_buf = &buf[..n];
         assert_eq!(msg_buf, resp_msg);
         Ok(())
@@ -151,9 +153,13 @@ mod tests {
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let client = UdpProxyClient::establish(proxies.clone(), greet_addr, &context)
-            .await
-            .unwrap();
+        let client = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            UdpProxyClient::establish(proxies.clone(), greet_addr, &context),
+        )
+        .await
+        .expect("timed out establishing the UDP proxy session")
+        .unwrap();
         let (mut client_read, mut client_write) = client.into_split();
 
         // Send message
@@ -163,7 +169,13 @@ mod tests {
         read_response(&mut client_read, resp_msg).await.unwrap();
 
         // Trace
-        let rtt = probe_rtt(&mut pkt_buf, &proxies, &context).await.unwrap();
+        let rtt = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            probe_rtt(&mut pkt_buf, &proxies, &context),
+        )
+        .await
+        .expect("timed out probing the UDP proxy chain")
+        .unwrap();
         assert!(rtt > Duration::from_secs(0));
         assert!(rtt < Duration::from_secs(1));
     }
@@ -196,9 +208,13 @@ mod tests {
             let context = context.clone();
             handles.spawn(async move {
                 // Connect to proxy server
-                let client = UdpProxyClient::establish(proxies, greet_addr, &context)
-                    .await
-                    .unwrap();
+                let client = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    UdpProxyClient::establish(proxies, greet_addr, &context),
+                )
+                .await
+                .expect("timed out establishing the UDP proxy session")
+                .unwrap();
                 let (mut client_read, mut client_write) = client.into_split();
 
                 // Send message
@@ -248,9 +264,13 @@ mod tests {
                 for _ in 0..STRESS_SERIAL {
                     let greet_addr = greet_addr.clone();
                     // Connect to proxy server
-                    let client = UdpProxyClient::establish(proxies.clone(), greet_addr, &context)
-                        .await
-                        .unwrap();
+                    let client = tokio::time::timeout(
+                        std::time::Duration::from_secs(30),
+                        UdpProxyClient::establish(proxies.clone(), greet_addr, &context),
+                    )
+                    .await
+                    .expect("timed out establishing the UDP proxy session")
+                    .unwrap();
                     let (mut client_read, mut client_write) = client.into_split();
 
                     // Send message
@@ -277,12 +297,16 @@ mod tests {
         let req_msg = b"hello world";
         let resp_msg = b"goodbye world";
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
-        let client = UdpProxyClient::establish(
-            vec![proxy_1_config.clone(), proxy_2_config, proxy_3_config].into(),
-            greet_addr,
-            &context,
+        let client = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            UdpProxyClient::establish(
+                vec![proxy_1_config.clone(), proxy_2_config, proxy_3_config].into(),
+                greet_addr,
+                &context,
+            ),
         )
         .await
+        .expect("timed out establishing the UDP proxy session")
         .unwrap();
         let (mut client_read, mut client_write) = client.into_split();
         client_write.send(req_msg).await.unwrap();
@@ -318,9 +342,13 @@ mod tests {
             greet_port,
         )
         .into();
-        let client = UdpProxyClient::establish(vec![proxy_config.clone()].into(), mapped, &context)
-            .await
-            .unwrap();
+        let client = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            UdpProxyClient::establish(vec![proxy_config.clone()].into(), mapped, &context),
+        )
+        .await
+        .expect("timed out establishing the UDP proxy session")
+        .unwrap();
         let (mut client_read, mut client_write) = client.into_split();
         client_write.send(req_msg).await.unwrap();
         let err = read_response(&mut client_read, resp_msg)
@@ -349,10 +377,13 @@ mod tests {
         let unspecified: InternetAddr =
             std::net::SocketAddr::new(std::net::Ipv4Addr::UNSPECIFIED.into(), greet_addr.port())
                 .into();
-        let client =
-            UdpProxyClient::establish(vec![proxy_config.clone()].into(), unspecified, &context)
-                .await
-                .unwrap();
+        let client = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            UdpProxyClient::establish(vec![proxy_config.clone()].into(), unspecified, &context),
+        )
+        .await
+        .expect("timed out establishing the UDP proxy session")
+        .unwrap();
         let (mut client_read, mut client_write) = client.into_split();
         client_write.send(req_msg).await.unwrap();
         let err = read_response(&mut client_read, resp_msg)
@@ -386,9 +417,13 @@ mod tests {
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let client = UdpProxyClient::establish(vec![].into(), greet_addr, &context)
-            .await
-            .unwrap();
+        let client = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            UdpProxyClient::establish(vec![].into(), greet_addr, &context),
+        )
+        .await
+        .expect("timed out establishing the UDP proxy session")
+        .unwrap();
         let (mut client_read, mut client_write) = client.into_split();
 
         // Send message

@@ -71,8 +71,8 @@ debug = true
 # mux = { path = "../mux" }
 # [patch."https://github.com/Banyc/rtp_mux.git"]
 # rtp_mux = { path = "../rtp_mux" }
-[patch."https://github.com/Banyc/udp_listener.git"]
-udp_listener = { path = "../udp_listener" }
+# [patch."https://github.com/Banyc/udp_listener.git"]
+# udp_listener = { path = "../udp_listener" }
 # [patch."https://github.com/Banyc/tokio_udp.git"]
 # tokio_udp = { path = "../tokio_udp" }
 # [patch."https://github.com/Banyc/monitor_table.git"]

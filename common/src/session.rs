@@ -153,12 +153,12 @@ mod tests {
         // (and even every sender) must not stop already-submitted sessions.
         let (spawner, mut rx) = SessionSpawner::channel();
         let mut sessions = tokio::task::JoinSet::new();
-        let finished = Arc::new(tokio::sync::Notify::new());
+        let (finished_tx, finished_rx) = tokio::sync::oneshot::channel::<()>();
         {
             let listener_spawner = spawner.clone();
             listener_spawner
                 .spawn(async move {
-                    finished.notified().await;
+                    finished_rx.await.ok();
                     Ok(())
                 })
                 .await;
@@ -167,7 +167,7 @@ mod tests {
         sessions.spawn(fut);
         drop(spawner);
         drop(rx);
-        finished.notify_waiters();
+        finished_tx.send(()).ok();
         let res = sessions.join_next().await.unwrap();
         assert!(res.is_ok(), "the session survived listener removal");
     }

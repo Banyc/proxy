@@ -242,7 +242,10 @@ mod tests {
     {
         let mut buf = [0; 1024];
         let msg_buf = &mut buf[..resp_msg.len()];
-        stream.read_exact(msg_buf).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), stream.read_exact(msg_buf))
+            .await
+            .expect("timed out waiting for the proxy response")
+            .unwrap();
         assert_eq!(msg_buf, resp_msg);
         Ok(())
     }
@@ -268,8 +271,9 @@ mod tests {
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let ConnAndAddr { mut stream, .. } = establish(&proxies, greet_addr, &stream_context)
+        let ConnAndAddr { mut stream, .. } = tokio::time::timeout(Duration::from_secs(30), establish(&proxies, greet_addr, &stream_context))
             .await
+            .expect("timed out establishing the proxy session")
             .unwrap();
 
         // Send message
@@ -279,7 +283,10 @@ mod tests {
         read_response(&mut stream, resp_msg).await.unwrap();
 
         // Trace
-        let rtt = probe_rtt(&proxies, &stream_context).await.unwrap();
+        let rtt = tokio::time::timeout(Duration::from_secs(30), probe_rtt(&proxies, &stream_context))
+            .await
+            .expect("timed out probing the proxy chain")
+            .unwrap();
         assert!(rtt > Duration::from_secs(0));
         assert!(rtt < Duration::from_secs(1));
     }
@@ -314,8 +321,9 @@ mod tests {
             handles.spawn(async move {
                 // Connect to proxy server
                 let ConnAndAddr { mut stream, .. } =
-                    establish(&proxies, greet_addr, &stream_context)
+                    tokio::time::timeout(Duration::from_secs(30), establish(&proxies, greet_addr, &stream_context))
                         .await
+                        .expect("timed out establishing the proxy session")
                         .unwrap();
 
                 // Send message
@@ -400,10 +408,11 @@ mod tests {
                 for _ in 0..STRESS_SERIAL {
                     let greet_addr = greet_addr.clone();
                     // Connect to proxy server
-                    let ConnAndAddr { mut stream, .. } =
-                        establish(&proxies, greet_addr, &stream_context)
-                            .await
-                            .unwrap();
+                let ConnAndAddr { mut stream, .. } =
+                    tokio::time::timeout(Duration::from_secs(30), establish(&proxies, greet_addr, &stream_context))
+                        .await
+                        .expect("timed out establishing the proxy session")
+                        .unwrap();
 
                     // Send message
                     stream.write_all(req_msg).await.unwrap();
@@ -467,8 +476,9 @@ mod tests {
 
         // Establish a single stream through the proxy chain
         let ConnAndAddr { mut stream, .. } =
-            establish(&proxies, receiver_greet_addr, &stream_context)
+            tokio::time::timeout(Duration::from_secs(30), establish(&proxies, receiver_greet_addr, &stream_context))
                 .await
+                .expect("timed out establishing the proxy session")
                 .unwrap();
 
         // Send TOTAL_BYTES in CHUNK-sized chunks
@@ -501,14 +511,23 @@ mod tests {
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
 
         let ConnAndAddr { mut stream, .. } =
-            establish(&[], greet_addr, &stream_context()).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(30), establish(&[], greet_addr, &stream_context()))
+                .await
+                .expect("timed out establishing the proxy session")
+                .unwrap();
 
         stream.write_all(req_msg).await.unwrap();
         read_response(&mut stream, resp_msg).await.unwrap();
     }
 
     async fn assert_refused(proxies: &[ConnConfig], greet_addr: RouteAddr) {
-        let mut stream = match establish(proxies, greet_addr, &stream_context()).await {
+        let mut stream = match tokio::time::timeout(
+            Duration::from_secs(30),
+            establish(proxies, greet_addr, &stream_context()),
+        )
+        .await
+        .expect("timed out establishing the proxy session")
+        {
             Ok(ConnAndAddr { stream, .. }) => stream,
             Err(_) => {
                 // The guarded proxy dropped the connection during the
@@ -644,8 +663,9 @@ mod tests {
             let stream_context = stream_context.clone();
             handles.spawn(async move {
                 let ConnAndAddr { mut stream, .. } =
-                    establish(&proxies, greet_addr, &stream_context)
+                    tokio::time::timeout(Duration::from_secs(30), establish(&proxies, greet_addr, &stream_context))
                         .await
+                        .expect("timed out establishing the proxy session")
                         .unwrap();
 
                 // Large burst >2048 → bulk lane
