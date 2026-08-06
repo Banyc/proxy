@@ -65,84 +65,82 @@ pub trait ProbeRtt {
     }
 }
 
-pub(crate) fn probe_task(
+pub(crate) async fn probe_task(
     tracer: Arc<dyn ProbeRtt + Send + Sync>,
     chain: Arc<ConnChain>,
     rtt_stats_store: Arc<RwLock<RttStats>>,
     loss_store: Arc<RwLock<Option<f64>>>,
     cancellation: CancellationToken,
-) -> impl Future<Output = ()> + Send {
-    async move {
-        let mut consecutive_failures: u32 = 0;
-        let mut probes_since_log: u32 = 0;
-        let mut degradation = RttDegradation::default();
-        let mut pacer = RecyclePacer::new(std::time::Instant::now());
-        let mut reoptimize_pacer = RecyclePacer::new(std::time::Instant::now());
-        while !cancellation.is_cancelled() {
-            let sample = match tokio::time::timeout(RTT_TIMEOUT, tracer.probe_rtt(&chain)).await {
-                Ok(Ok(rtt)) => Some(rtt),
-                Ok(Err(e)) => {
-                    trace!("probe error: {e:?}");
-                    None
-                }
-                Err(_) => {
-                    trace!("probe timeout");
-                    None
-                }
-            };
-            if cancellation.is_cancelled() {
-                break;
+) {
+    let mut consecutive_failures: u32 = 0;
+    let mut probes_since_log: u32 = 0;
+    let mut degradation = RttDegradation::default();
+    let mut pacer = RecyclePacer::new(std::time::Instant::now());
+    let mut reoptimize_pacer = RecyclePacer::new(std::time::Instant::now());
+    while !cancellation.is_cancelled() {
+        let sample = match tokio::time::timeout(RTT_TIMEOUT, tracer.probe_rtt(&chain)).await {
+            Ok(Ok(rtt)) => Some(rtt),
+            Ok(Err(e)) => {
+                trace!("probe error: {e:?}");
+                None
             }
-            let (rtt, rttvar, rtt_eff) = {
-                let mut store = rtt_stats_store.write().unwrap();
-                if let Some(sample) = sample {
-                    store.apply_sample(sample);
-                }
-                (store.srtt, store.rttvar, store.effective())
-            };
-            let loss = {
-                let mut store = loss_store.write().unwrap();
-                *store = Some(ewma_loss(*store, if sample.is_some() { 0. } else { 1. }));
-                *store
-            };
-            consecutive_failures = if sample.is_some() {
-                0
+            Err(_) => {
+                trace!("probe timeout");
+                None
+            }
+        };
+        if cancellation.is_cancelled() {
+            break;
+        }
+        let (rtt, rttvar, rtt_eff) = {
+            let mut store = rtt_stats_store.write().unwrap();
+            if let Some(sample) = sample {
+                store.apply_sample(sample);
+            }
+            (store.srtt, store.rttvar, store.effective())
+        };
+        let loss = {
+            let mut store = loss_store.write().unwrap();
+            *store = Some(ewma_loss(*store, if sample.is_some() { 0. } else { 1. }));
+            *store
+        };
+        consecutive_failures = if sample.is_some() {
+            0
+        } else {
+            consecutive_failures.saturating_add(1)
+        };
+        if reoptimize_pacer.allow(std::time::Instant::now()) {
+            let addresses = DisplayChain(&chain);
+            trace!(%addresses, "Timer reoptimize: reoptimizing first-hop relay");
+            let _ = tokio::time::timeout(RTT_TIMEOUT, tracer.reoptimize(&chain)).await;
+        }
+        if let (Some(_), Some(srtt)) = (sample, rtt)
+            && degradation.observe(srtt)
+        {
+            let mux = tracer.session_stats(&chain).await;
+            let addresses = DisplayChain(&chain);
+            if pacer.allow(std::time::Instant::now()) {
+                info!(%addresses, ?srtt, ?rtt_eff, ?mux, "Chain RTT degraded; recycling first-hop session");
+                let _ = tokio::time::timeout(RTT_TIMEOUT, tracer.recycle(&chain)).await;
             } else {
-                consecutive_failures.saturating_add(1)
-            };
-            if reoptimize_pacer.allow(std::time::Instant::now()) {
-                let addresses = DisplayChain(&chain);
-                trace!(%addresses, "Timer reoptimize: reoptimizing first-hop relay");
-                let _ = tokio::time::timeout(RTT_TIMEOUT, tracer.reoptimize(&chain)).await;
+                info!(%addresses, ?srtt, ?rtt_eff, ?mux, "Chain RTT degraded; recycle suppressed (min interval), accepting as new baseline");
             }
-            if let (Some(_), Some(srtt)) = (sample, rtt)
-                && degradation.observe(srtt)
-            {
-                let mux = tracer.session_stats(&chain).await;
-                let addresses = DisplayChain(&chain);
-                if pacer.allow(std::time::Instant::now()) {
-                    info!(%addresses, ?srtt, ?rtt_eff, ?mux, "Chain RTT degraded; recycling first-hop session");
-                    let _ = tokio::time::timeout(RTT_TIMEOUT, tracer.recycle(&chain)).await;
-                } else {
-                    info!(%addresses, ?srtt, ?rtt_eff, ?mux, "Chain RTT degraded; recycle suppressed (min interval), accepting as new baseline");
-                }
-            }
-            probes_since_log += 1;
-            if probes_since_log >= PROBES_PER_INTERVAL {
-                probes_since_log = 0;
-                let mux = tracer.session_stats(&chain).await;
-                let addresses = DisplayChain(&chain);
-                info!(%addresses, sample = ?sample, rtt = ?rtt, rttvar = ?rttvar, rtt_eff = ?rtt_eff, ?loss, ?mux, "Probed RTT");
-            }
-            let mean = if consecutive_failures >= DEAD_CONSECUTIVE_FAILURES {
-                PROBE_MEAN_INTERVAL_DEAD
-            } else {
-                PROBE_MEAN_INTERVAL
-            };
-            tokio::select! {
-                () = tokio::time::sleep(poisson_interval(mean)) => {}
-                () = cancellation.cancelled() => {}
-            }
+        }
+        probes_since_log += 1;
+        if probes_since_log >= PROBES_PER_INTERVAL {
+            probes_since_log = 0;
+            let mux = tracer.session_stats(&chain).await;
+            let addresses = DisplayChain(&chain);
+            info!(%addresses, sample = ?sample, rtt = ?rtt, rttvar = ?rttvar, rtt_eff = ?rtt_eff, ?loss, ?mux, "Probed RTT");
+        }
+        let mean = if consecutive_failures >= DEAD_CONSECUTIVE_FAILURES {
+            PROBE_MEAN_INTERVAL_DEAD
+        } else {
+            PROBE_MEAN_INTERVAL
+        };
+        tokio::select! {
+            () = tokio::time::sleep(poisson_interval(mean)) => {}
+            () = cancellation.cancelled() => {}
         }
     }
 }
