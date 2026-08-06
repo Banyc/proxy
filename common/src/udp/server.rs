@@ -7,8 +7,9 @@ use std::{
 
 use thiserror::Error;
 use tokio::net::UdpSocket;
+use tokio::sync::{Notify, watch};
 use tracing::instrument;
-use udp_listener::{Conn, UtpListener};
+use udp_listener::{Conn, Dispatch, UtpListener};
 
 use crate::{
     error::AnyResult,
@@ -89,18 +90,55 @@ where
             .local_addr()
             .map_err(UdpServerServeError::LocalAddr)?;
         let dispatcher_buffer_size = NonZeroUsize::new(64).unwrap();
-        let downstream_listener = UtpListener::new(
+        let downstream_listener = Arc::new(UtpListener::new(
             self.listener,
             dispatcher_buffer_size,
             Arc::new(dispatch),
-        );
+        ));
         let session_spawner = self.session_spawner;
         let initial = Arc::clone(&conn_handler.read().unwrap());
         let swap = |new: Arc<ConnHandler>| {
             *conn_handler.write().unwrap() = new;
         };
+
+        // Packet dispatch is process-scoped while flow handlers are
+        // process-scoped too: a removed listener must keep routing datagrams
+        // to its surviving flows, so dispatch runs here (in the session scope)
+        // rather than inside the listener's accept loop.
+        let dispatcher_idle = downstream_listener.idle();
+        let accept_done = Arc::new(Notify::new());
+        let dispatcher_done = Arc::new(Notify::new());
+        {
+            let dispatcher_listener = Arc::clone(&downstream_listener);
+            let accept_done = Arc::clone(&accept_done);
+            let dispatcher_done = Arc::clone(&dispatcher_done);
+            let mut dispatcher_idle = dispatcher_idle;
+            session_spawner
+                .spawn(async move {
+                    loop {
+                        tokio::select! {
+                            _ = accept_done.notified() => {
+                                // The listener is gone: survive on dispatch until
+                                // the last flow closes, then stop and release the
+                                // socket.
+                                drain_until_idle(&dispatcher_listener, &mut dispatcher_idle).await;
+                                break;
+                            }
+                            result = dispatcher_listener.dispatch_next() => {
+                                if result.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    dispatcher_done.notify_one();
+                    Ok(())
+                })
+                .await;
+        }
+
         let mut state = ();
-        crate::serve_loop::serve_loop(
+        let serve_result = crate::serve_loop::serve_loop(
             "udp",
             None,
             false,
@@ -108,10 +146,25 @@ where
             initial,
             set_conn_handler_rx,
             swap,
-            || downstream_listener.poll_next_conn(),
-            |_: &mut (),
-             flow: Conn<UdpSocket, Flow, Packet>,
-             current: Arc<ConnHandler>| {
+            || {
+                let listener = Arc::clone(&downstream_listener);
+                let dispatcher_done = Arc::clone(&dispatcher_done);
+                async move {
+                    tokio::select! {
+                        conn = listener.accept_next() => conn.ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::BrokenPipe,
+                                "udp listener accept queue closed",
+                            )
+                        }),
+                        _ = dispatcher_done.notified() => Err(io::Error::new(
+                            io::ErrorKind::BrokenPipe,
+                            "udp packet dispatcher stopped",
+                        )),
+                    }
+                }
+            },
+            |_: &mut (), flow: Conn<UdpSocket, Flow, Packet>, current: Arc<ConnHandler>| {
                 let session_spawner = session_spawner.clone();
                 Box::pin(async move {
                     session_spawner
@@ -125,13 +178,47 @@ where
             &mut state,
             |_| Box::pin(std::future::pending::<()>()),
         )
-        .await
-        .map_err(|e| match e {
+        .await;
+        // The listener is removed: tell the dispatcher to drain and stop.
+        accept_done.notify_one();
+        serve_result.map_err(|e| match e {
             crate::serve_loop::ServeLoopError::LocalAddr(e) => UdpServerServeError::LocalAddr(e),
             crate::serve_loop::ServeLoopError::Accept { source, addr } => {
                 UdpServerServeError::RecvFrom { source, addr }
             }
         })
+    }
+}
+
+/// Keep dispatching to a removed listener's surviving flows until the last one
+/// closes, then return so the socket can be released. New flows are refused by
+/// consuming and dropping the queued connection.
+async fn drain_until_idle(
+    listener: &UtpListener<UdpSocket, Flow, Packet>,
+    idle_rx: &mut watch::Receiver<bool>,
+) {
+    // Drop any queued-but-unaccepted flows so their connection entries close.
+    while let Some(conn) = listener.try_accept_next() {
+        drop(conn);
+    }
+    loop {
+        if *idle_rx.borrow_and_update() {
+            return;
+        }
+        tokio::select! {
+            _ = idle_rx.changed() => {
+                if *idle_rx.borrow_and_update() {
+                    return;
+                }
+            }
+            result = listener.dispatch_next() => match result {
+                Err(_) => return,
+                Ok(Dispatch::Accepted) => {
+                    let _ = listener.accept_next().await;
+                }
+                Ok(Dispatch::Routed) => {}
+            },
+        }
     }
 }
 #[derive(Debug, Error)]
@@ -196,7 +283,9 @@ mod tests {
         });
         // Test-owned server task; lifetime is the test runtime.
         #[allow(clippy::disallowed_methods)]
-        tokio::spawn(UdpServer::new(listener, TagEcho(1), session_spawner).serve(set_conn_handler_rx));
+        tokio::spawn(
+            UdpServer::new(listener, TagEcho(1), session_spawner).serve(set_conn_handler_rx),
+        );
         let echoed = |tag: u8| async move {
             let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
             for _ in 0..50 {
@@ -212,5 +301,67 @@ mod tests {
         assert_eq!(echoed(1).await.as_deref(), Some(&[42][..]));
         set_conn_handler_tx.0.send(TagEcho(2)).await.unwrap();
         assert_eq!(echoed(2).await.as_deref(), Some(&[42][..]));
+    }
+
+    #[tokio::test]
+    async fn removing_the_listener_keeps_surviving_flows_dispatching() {
+        let listener = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (set_conn_handler_tx, set_conn_handler_rx) = loading::replace_conn_handler_channel();
+        let (session_spawner, mut session_rx) = crate::session::SessionSpawner::channel();
+        // Test-owned session reaper; lifetime is the test runtime, which aborts it on shutdown.
+        #[allow(clippy::disallowed_methods)]
+        tokio::spawn(async move {
+            let mut sessions = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    Some(fut) = session_rx.recv() => { sessions.spawn(fut); }
+                    Some(res) = sessions.join_next() => { let _ = res; }
+                    else => break,
+                }
+            }
+        });
+        // Test-owned server task so the listener can be removed mid-test.
+        #[allow(clippy::disallowed_methods)]
+        let serve_task = tokio::spawn(
+            UdpServer::new(listener, TagEcho(1), session_spawner).serve(set_conn_handler_rx),
+        );
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let echoed = async {
+            for _ in 0..50 {
+                client.send_to(&[1, 42], addr).await.unwrap();
+                let mut buf = [0; 8];
+                let recv = tokio::time::timeout(Duration::from_millis(100), client.recv(&mut buf));
+                if let Ok(Ok(n)) = recv.await {
+                    return Some(buf[..n].to_vec());
+                }
+            }
+            None
+        };
+        assert_eq!(echoed.await.as_deref(), Some(&[42][..]));
+        // Remove the listener: the serve task must despawn...
+        drop(set_conn_handler_tx);
+        tokio::time::timeout(Duration::from_secs(5), serve_task)
+            .await
+            .expect("the listener never despawned after removal")
+            .unwrap()
+            .unwrap();
+        // ...while the already-accepted flow keeps receiving packet dispatch.
+        let echoed_again = async {
+            for _ in 0..50 {
+                client.send_to(&[1, 42], addr).await.unwrap();
+                let mut buf = [0; 8];
+                let recv = tokio::time::timeout(Duration::from_millis(100), client.recv(&mut buf));
+                if let Ok(Ok(n)) = recv.await {
+                    return Some(buf[..n].to_vec());
+                }
+            }
+            None
+        };
+        assert_eq!(
+            echoed_again.await.as_deref(),
+            Some(&[42][..]),
+            "removing the listener left the surviving flow without packet dispatch"
+        );
     }
 }
