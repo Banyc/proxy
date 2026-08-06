@@ -324,7 +324,7 @@ where
         })
         .await
     {
-        log_rejection("http_proxy", error);
+        log_rejection("http_connection", error);
     }
 
     let resp = sender.send_request(req).await.map_err(|e| {

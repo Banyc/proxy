@@ -148,7 +148,9 @@ pub fn log_rejection(protocol: &'static str, error: SessionSpawnError) {
 /// bounded sender. Submissions are admitted against an atomic concurrency
 /// limit: `spawn` backpressures while the scope is full and `try_spawn`
 /// refuses, so the session `JoinSet` stays bounded. If the scope is dropped,
-/// submits are silently dropped (releasing their admission slots).
+/// both async and sync submission return `SessionSpawnError::ScopeClosed`,
+/// and a rejected wrapper is dropped immediately so its RAII admission permit
+/// is released.
 #[derive(Clone)]
 pub struct SessionSpawner {
     tx: tokio::sync::mpsc::Sender<SessionFuture>,
@@ -163,6 +165,7 @@ impl SessionSpawner {
     }
 
     /// [`Self::channel`] with a custom concurrent-session admission limit.
+    #[cfg(test)]
     pub(crate) fn channel_with_limit(limit: usize) -> (Self, mpsc::Receiver<SessionFuture>) {
         Self::channel_with_limits(SESSION_SCOPE_CHANNEL_CAPACITY, limit)
     }
@@ -465,7 +468,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queue_full_polls_back_the_reserved_permit() {
+    async fn queue_full_rolls_back_the_reserved_permit() {
         let (spawner, mut rx) = SessionSpawner::channel_with_limits(1, 2);
         spawner.try_spawn(async { Ok(()) }).unwrap();
         assert_eq!(
@@ -484,24 +487,21 @@ mod tests {
 
     #[tokio::test]
     async fn closed_scope_is_reported_and_releases_permits() {
-        let (spawner_a, rx_a) = SessionSpawner::channel_with_limit(2);
-        let (spawner_b, rx_b) = SessionSpawner::channel_with_limit(2);
-        spawner_a.try_spawn(async { Ok(()) }).unwrap();
-        spawner_b.try_spawn(async { Ok(()) }).unwrap();
-        drop(rx_a);
-        drop(rx_b);
+        let (async_spawner, async_rx) = SessionSpawner::channel_with_limit(1);
+        drop(async_rx);
         assert_eq!(
-            spawner_a.try_spawn(async { Ok(()) }),
+            async_spawner.spawn(async { Ok(()) }).await,
             Err(SessionSpawnError::ScopeClosed),
-            "a dropped scope must be reported as closed"
         );
+        assert_eq!(async_spawner.admission.live.load(Ordering::Acquire), 0);
+
+        let (sync_spawner, sync_rx) = SessionSpawner::channel_with_limit(1);
+        drop(sync_rx);
         assert_eq!(
-            spawner_b.try_spawn(async { Ok(()) }),
+            sync_spawner.try_spawn(async { Ok(()) }),
             Err(SessionSpawnError::ScopeClosed),
-            "a dropped scope must be reported as closed"
         );
-        assert_eq!(spawner_a.admission.live.load(Ordering::Acquire), 0);
-        assert_eq!(spawner_b.admission.live.load(Ordering::Acquire), 0);
+        assert_eq!(sync_spawner.admission.live.load(Ordering::Acquire), 0);
     }
 
     #[tokio::test]

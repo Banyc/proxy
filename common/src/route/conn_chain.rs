@@ -116,7 +116,7 @@ pub struct GaugedConnChain {
     rtt_stats: Arc<RwLock<RttStats>>,
     loss: Arc<RwLock<Option<f64>>>,
     _probe_supervision: tokio::task::JoinSet<()>,
-    probe_state: watch::Receiver<ProbeTaskState>,
+    _probe_state: watch::Receiver<ProbeTaskState>,
 }
 impl GaugedConnChain {
     pub fn new(
@@ -163,7 +163,12 @@ impl GaugedConnChain {
                         tracing::error!(?error, "Route probe task failed to join");
                         probe_state_tx.send(ProbeTaskState::JoinFailed).ok();
                     }
-                    None => {}
+                    None => {
+                        tracing::error!("Route probe task set became empty unexpectedly");
+                        probe_state_tx
+                            .send(ProbeTaskState::CompletedUnexpectedly)
+                            .ok();
+                    }
                 }
             });
         }
@@ -172,7 +177,7 @@ impl GaugedConnChain {
             rtt_stats,
             loss,
             _probe_supervision,
-            probe_state,
+            _probe_state: probe_state,
         }
     }
 
@@ -199,7 +204,7 @@ impl GaugedConnChain {
 
     #[cfg(test)]
     fn probe_state(&self) -> ProbeTaskState {
-        *self.probe_state.borrow()
+        *self._probe_state.borrow()
     }
 
     #[cfg(test)]
