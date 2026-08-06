@@ -64,7 +64,16 @@ where
         } = self;
         let conn_handler = Arc::new(RwLock::new(Arc::new(conn_handler)));
         let handler_for_stream = Arc::clone(&conn_handler);
-        let serving = inner.serve(move |stream| {
+        let mux_session_spawner = rtp_mux::SessionSpawner::new({
+            let session_spawner = session_spawner.clone();
+            move |session| {
+                let _ = session_spawner.try_spawn(async move {
+                    session.await;
+                    Ok(())
+                });
+            }
+        });
+        let serving = inner.serve(mux_session_spawner, move |stream| {
             let handler = handler_for_stream.read().unwrap().clone();
             let session_spawner = session_spawner.clone();
             // rtp_mux's stream handler is synchronous, so it cannot await the
