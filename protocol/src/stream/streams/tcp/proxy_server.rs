@@ -29,8 +29,8 @@ use common::{
         connect::stream::StreamConnect,
         context::StreamRuntime,
     },
-    stream::{ConnParts, HasIoAddr, OwnIoStream},
     session::SessionSpawner,
+    stream::{ConnParts, HasIoAddr, OwnIoStream},
 };
 
 use super::listener::TcpServer;
@@ -244,9 +244,10 @@ mod tests {
                 Arc::clone(&listen_addr),
                 true,
             );
-            let server = build_tcp_proxy_server(listen_addr.as_ref(), proxy, session_spawner.clone())
-                .await
-                .unwrap();
+            let server =
+                build_tcp_proxy_server(listen_addr.as_ref(), proxy, session_spawner.clone())
+                    .await
+                    .unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
             // Test-owned server task; lifetime is the test runtime.
             #[allow(clippy::disallowed_methods)]

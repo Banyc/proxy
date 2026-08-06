@@ -1,4 +1,5 @@
 #![cfg_attr(feature = "nightly", feature(test))]
+#![warn(clippy::disallowed_methods, clippy::disallowed_types)]
 #[cfg(feature = "nightly")]
 extern crate test;
 

@@ -3,8 +3,8 @@
 /// Panics surface through the `JoinError` yielded by the supervising
 /// `JoinSet` (the caller resumes them); this value marks a task that ran to
 /// completion on its own, which for a root-owned task is unexpected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum ProcessTaskExit {
-    /// The task completed normally instead of running until process exit.
-    Completed,
+    Completed { task: &'static str },
+    Failed { task: &'static str, detail: String },
 }

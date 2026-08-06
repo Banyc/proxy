@@ -225,6 +225,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod test {
     use super::*;
     use std::io::Write;

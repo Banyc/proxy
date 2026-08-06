@@ -25,8 +25,8 @@ use common::{
         connect::stream::StreamConnect,
         context::StreamRuntime,
     },
+    session::{SessionSpawner, log_rejection},
     stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
-    session::SessionSpawner,
 };
 
 const STREAMS: usize = 4;
@@ -105,14 +105,17 @@ where
             |_, stream: MptcpStream, conn_handler: Arc<ConnHandler>| {
                 let session_spawner = session_spawner.clone();
                 Box::pin(async move {
-                    session_spawner
+                    if let Err(error) = session_spawner
                         .spawn(async move {
                             conn_handler
                                 .handle_stream(AddressedMptcpStream(stream))
                                 .await;
                             Ok(())
                         })
-                        .await;
+                        .await
+                    {
+                        log_rejection("mptcp", error);
+                    }
                 })
             },
             &mut state,

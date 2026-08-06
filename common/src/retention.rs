@@ -36,7 +36,8 @@ impl RetentionActorSender {
 
 impl std::fmt::Debug for RetentionActorSender {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RetentionActorSender").finish_non_exhaustive()
+        f.debug_struct("RetentionActorSender")
+            .finish_non_exhaustive()
     }
 }
 
@@ -50,7 +51,13 @@ pub struct RetentionActor {
 impl RetentionActor {
     pub fn new() -> (Self, RetentionActorSender) {
         let (tx, rx) = mpsc::channel(RETENTION_CHANNEL_CAPACITY);
-        (Self { rx, guards: Vec::new() }, RetentionActorSender { tx })
+        (
+            Self {
+                rx,
+                guards: Vec::new(),
+            },
+            RetentionActorSender { tx },
+        )
     }
 
     /// Run the retention loop until every sender is dropped.
@@ -79,7 +86,7 @@ impl RetentionActor {
                 msg = self.rx.recv() => {
                     match msg {
                         Some(retain) => self.guards.push((retain.until, retain.guard)),
-                        None => return ProcessTaskExit::Completed,
+                        None => return ProcessTaskExit::Completed { task: "retention_actor" },
                     }
                 }
                 () = sleep => {

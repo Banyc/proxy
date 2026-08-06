@@ -2,7 +2,7 @@ pub use ::rtp_mux::ServeError;
 use common::{
     error::AnyResult,
     loading,
-    session::SessionSpawner,
+    session::{SessionSpawner, log_rejection},
     stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 use std::{
@@ -66,24 +66,23 @@ where
         let handler_for_stream = Arc::clone(&conn_handler);
         let mux_session_spawner = rtp_mux::SessionSpawner::new({
             let session_spawner = session_spawner.clone();
-            move |session| {
-                let _ = session_spawner.try_spawn(async move {
-                    session.await;
-                    Ok(())
-                });
+            move |session| match session_spawner.try_spawn(async move {
+                session.await;
+                Ok(())
+            }) {
+                Ok(()) => {}
+                Err(error) => log_rejection("rtp_mux_session", error),
             }
         });
         let serving = inner.serve(mux_session_spawner, move |stream| {
             let handler = handler_for_stream.read().unwrap().clone();
             let session_spawner = session_spawner.clone();
-            // rtp_mux's stream handler is synchronous, so it cannot await the
-            // bounded process session scope; try_spawn drops the session only
-            // when that scope is saturated.
-            if !session_spawner.try_spawn(async move {
+            match session_spawner.try_spawn(async move {
                 handler.handle_stream(ProxyRtpMuxStream(stream)).await;
                 Ok(())
             }) {
-                tracing::warn!("dropping rtp_mux stream: process session scope is full");
+                Ok(()) => {}
+                Err(error) => log_rejection("rtp_mux_stream", error),
             }
         });
         tokio::pin!(serving);

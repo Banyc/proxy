@@ -143,9 +143,10 @@ mod tests {
                 proxy_addr
             }
             ConcreteStreamType::Mptcp => {
-                let server = build_mptcp_proxy_server(addr.as_ref(), proxy, session_spawner.clone())
-                    .await
-                    .unwrap();
+                let server =
+                    build_mptcp_proxy_server(addr.as_ref(), proxy, session_spawner.clone())
+                        .await
+                        .unwrap();
                 let proxy_addr = server.listener().local_addrs().next().unwrap().unwrap();
                 join_set.spawn(async move {
                     let _set_conn_handler_tx = set_conn_handler_tx;
@@ -271,10 +272,13 @@ mod tests {
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
-        let ConnAndAddr { mut stream, .. } = tokio::time::timeout(Duration::from_secs(30), establish(&proxies, greet_addr, &stream_context))
-            .await
-            .expect("timed out establishing the proxy session")
-            .unwrap();
+        let ConnAndAddr { mut stream, .. } = tokio::time::timeout(
+            Duration::from_secs(30),
+            establish(&proxies, greet_addr, &stream_context),
+        )
+        .await
+        .expect("timed out establishing the proxy session")
+        .unwrap();
 
         // Send message
         stream.write_all(req_msg).await.unwrap();
@@ -283,10 +287,13 @@ mod tests {
         read_response(&mut stream, resp_msg).await.unwrap();
 
         // Trace
-        let rtt = tokio::time::timeout(Duration::from_secs(30), probe_rtt(&proxies, &stream_context))
-            .await
-            .expect("timed out probing the proxy chain")
-            .unwrap();
+        let rtt = tokio::time::timeout(
+            Duration::from_secs(30),
+            probe_rtt(&proxies, &stream_context),
+        )
+        .await
+        .expect("timed out probing the proxy chain")
+        .unwrap();
         assert!(rtt > Duration::from_secs(0));
         assert!(rtt < Duration::from_secs(1));
     }
@@ -320,11 +327,13 @@ mod tests {
             let stream_context = stream_context.clone();
             handles.spawn(async move {
                 // Connect to proxy server
-                let ConnAndAddr { mut stream, .. } =
-                    tokio::time::timeout(Duration::from_secs(30), establish(&proxies, greet_addr, &stream_context))
-                        .await
-                        .expect("timed out establishing the proxy session")
-                        .unwrap();
+                let ConnAndAddr { mut stream, .. } = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    establish(&proxies, greet_addr, &stream_context),
+                )
+                .await
+                .expect("timed out establishing the proxy session")
+                .unwrap();
 
                 // Send message
                 stream.write_all(req_msg).await.unwrap();
@@ -408,11 +417,13 @@ mod tests {
                 for _ in 0..STRESS_SERIAL {
                     let greet_addr = greet_addr.clone();
                     // Connect to proxy server
-                let ConnAndAddr { mut stream, .. } =
-                    tokio::time::timeout(Duration::from_secs(30), establish(&proxies, greet_addr, &stream_context))
-                        .await
-                        .expect("timed out establishing the proxy session")
-                        .unwrap();
+                    let ConnAndAddr { mut stream, .. } = tokio::time::timeout(
+                        Duration::from_secs(30),
+                        establish(&proxies, greet_addr, &stream_context),
+                    )
+                    .await
+                    .expect("timed out establishing the proxy session")
+                    .unwrap();
 
                     // Send message
                     stream.write_all(req_msg).await.unwrap();
@@ -475,11 +486,13 @@ mod tests {
         });
 
         // Establish a single stream through the proxy chain
-        let ConnAndAddr { mut stream, .. } =
-            tokio::time::timeout(Duration::from_secs(30), establish(&proxies, receiver_greet_addr, &stream_context))
-                .await
-                .expect("timed out establishing the proxy session")
-                .unwrap();
+        let ConnAndAddr { mut stream, .. } = tokio::time::timeout(
+            Duration::from_secs(30),
+            establish(&proxies, receiver_greet_addr, &stream_context),
+        )
+        .await
+        .expect("timed out establishing the proxy session")
+        .unwrap();
 
         // Send TOTAL_BYTES in CHUNK-sized chunks
         let chunk = vec![0u8; CHUNK];
@@ -510,11 +523,13 @@ mod tests {
 
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
 
-        let ConnAndAddr { mut stream, .. } =
-            tokio::time::timeout(Duration::from_secs(30), establish(&[], greet_addr, &stream_context()))
-                .await
-                .expect("timed out establishing the proxy session")
-                .unwrap();
+        let ConnAndAddr { mut stream, .. } = tokio::time::timeout(
+            Duration::from_secs(30),
+            establish(&[], greet_addr, &stream_context()),
+        )
+        .await
+        .expect("timed out establishing the proxy session")
+        .unwrap();
 
         stream.write_all(req_msg).await.unwrap();
         read_response(&mut stream, resp_msg).await.unwrap();
@@ -662,11 +677,13 @@ mod tests {
             let greet_addr = greet_addr.clone();
             let stream_context = stream_context.clone();
             handles.spawn(async move {
-                let ConnAndAddr { mut stream, .. } =
-                    tokio::time::timeout(Duration::from_secs(30), establish(&proxies, greet_addr, &stream_context))
-                        .await
-                        .expect("timed out establishing the proxy session")
-                        .unwrap();
+                let ConnAndAddr { mut stream, .. } = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    establish(&proxies, greet_addr, &stream_context),
+                )
+                .await
+                .expect("timed out establishing the proxy session")
+                .unwrap();
 
                 // Large burst >2048 → bulk lane
                 let large: Vec<u8> = (0..4096u16)

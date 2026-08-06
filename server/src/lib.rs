@@ -1,3 +1,5 @@
+#![warn(clippy::disallowed_methods, clippy::disallowed_types)]
+
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},

@@ -3,7 +3,12 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::instrument;
 
-use common::{error::AnyResult, loading, session::SessionSpawner, stream::StreamServerHandleConn};
+use common::{
+    error::AnyResult,
+    loading,
+    session::{SessionSpawner, log_rejection},
+    stream::StreamServerHandleConn,
+};
 
 use super::proxy_server::AddressedTcpStream;
 
@@ -77,12 +82,15 @@ where
             |_, (stream, _): (TcpStream, SocketAddr), conn_handler: Arc<ConnHandler>| {
                 let session_spawner = session_spawner.clone();
                 Box::pin(async move {
-                    session_spawner
+                    if let Err(error) = session_spawner
                         .spawn(async move {
                             conn_handler.handle_stream(AddressedTcpStream(stream)).await;
                             Ok(())
                         })
-                        .await;
+                        .await
+                    {
+                        log_rejection("tcp", error);
+                    }
                 })
             },
             &mut loop_state,

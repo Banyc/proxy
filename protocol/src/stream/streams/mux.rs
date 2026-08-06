@@ -41,8 +41,8 @@ pub async fn run_mux_accepter(
     mut accepter: StreamAccepter,
     addr: SocketAddrPair,
     mut handle_conn: impl FnMut(
-            AddressedMuxStream<StreamReader, StreamWriter>,
-        ) -> Pin<Box<dyn Future<Output = ()> + Send>>,
+        AddressedMuxStream<StreamReader, StreamWriter>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send>>,
 ) {
     loop {
         let (reader, writer) = match accepter.accept().await {

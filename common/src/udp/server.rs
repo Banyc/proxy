@@ -15,7 +15,7 @@ use crate::{
     error::AnyResult,
     loading,
     proto::conn::udp::{DownstreamAddr, Flow, UpstreamAddr},
-    session::SessionSpawner,
+    session::{SessionSpawner, log_rejection},
     udp::Packet,
 };
 
@@ -113,7 +113,7 @@ where
             let accept_done = Arc::clone(&accept_done);
             let dispatcher_done = Arc::clone(&dispatcher_done);
             let mut dispatcher_idle = dispatcher_idle;
-            session_spawner
+            if let Err(error) = session_spawner
                 .spawn(async move {
                     loop {
                         tokio::select! {
@@ -134,7 +134,10 @@ where
                     dispatcher_done.notify_one();
                     Ok(())
                 })
-                .await;
+                .await
+            {
+                log_rejection("udp_dispatch", error);
+            }
         }
 
         let mut state = ();
@@ -167,12 +170,15 @@ where
             |_: &mut (), flow: Conn<UdpSocket, Flow, Packet>, current: Arc<ConnHandler>| {
                 let session_spawner = session_spawner.clone();
                 Box::pin(async move {
-                    session_spawner
+                    if let Err(error) = session_spawner
                         .spawn(async move {
                             current.handle_flow(flow).await;
                             Ok(())
                         })
-                        .await;
+                        .await
+                    {
+                        log_rejection("udp_flow", error);
+                    }
                 })
             },
             &mut state,

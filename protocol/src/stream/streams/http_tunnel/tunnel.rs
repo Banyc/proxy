@@ -24,6 +24,7 @@ use common::{
         relay::stream::{ConnContext, CopyBidirectional},
     },
     route::{ConnSelector, RouteAction},
+    session::log_rejection,
     udp::UDP_FLOW_TIMEOUT,
 };
 use http_body_util::{BodyExt, Empty, combinators::BoxBody};
@@ -129,7 +130,7 @@ async fn dispatch(
     };
     let reporter_dst_addr = dst_addr.clone();
     let session_spawner = ctx.stream_context.session_spawner.clone();
-    session_spawner
+    if let Err(error) = session_spawner
         .spawn(async move {
             if let Err(failure) = upgrade(req, action).await {
                 let tunnel_err: TunnelError = match failure {
@@ -145,7 +146,10 @@ async fn dispatch(
             }
             Ok(())
         })
-        .await;
+        .await
+    {
+        log_rejection("http_upgrade", error);
+    }
 
     Ok(Response::new(empty()))
 }

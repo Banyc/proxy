@@ -82,5 +82,9 @@ pub async fn build_rtp_mux_proxy_server(
     let server = ::rtp_mux::RtpMuxServer::bind(listen_addr, fec)
         .await
         .map_err(ListenerBindError)?;
-    Ok(RtpMuxServer::from_core(server, stream_proxy, session_spawner))
+    Ok(RtpMuxServer::from_core(
+        server,
+        stream_proxy,
+        session_spawner,
+    ))
 }

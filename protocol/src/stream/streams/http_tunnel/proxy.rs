@@ -29,7 +29,7 @@ use common::{
     },
     retention::RetentionActorSender,
     route::{ConnSelector, RouteAction},
-    session::SessionSpawner,
+    session::{SessionSpawner, log_rejection},
     udp::UDP_FLOW_TIMEOUT,
 };
 use http_body_util::BodyExt;
@@ -314,7 +314,7 @@ where
 
     let bg_reporter = reporter.clone();
     let session_spawner = session_spawner.clone();
-    session_spawner
+    if let Err(error) = session_spawner
         .spawn(async move {
             if let Err(e) = conn.await {
                 let err = TunnelError::BackgroundConnection(e);
@@ -322,7 +322,10 @@ where
             }
             Ok(())
         })
-        .await;
+        .await
+    {
+        log_rejection("http_proxy", error);
+    }
 
     let resp = sender.send_request(req).await.map_err(|e| {
         let err = TunnelError::UpstreamRequestSend(e);

@@ -3,9 +3,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use axum::Router;
 use clap::Parser;
 use common::{
-    error::AnyResult,
-    process::ProcessTaskExit,
-    retention::RetentionActor,
+    error::AnyResult, process::ProcessTaskExit, retention::RetentionActor,
     suspend::spawn_check_system_suspend,
 };
 use server::{
@@ -74,8 +72,15 @@ async fn main() -> AnyResult {
         let server = axum::serve(listener, router.into_make_service());
         info!("Monitoring HTTP server listening addr: {listen_addr}");
         process_tasks.spawn(async move {
-            server.await.unwrap();
-            ProcessTaskExit::Completed
+            match server.await {
+                Ok(()) => ProcessTaskExit::Completed {
+                    task: "monitor_server",
+                },
+                Err(error) => ProcessTaskExit::Failed {
+                    task: "monitor_server",
+                    detail: error.to_string(),
+                },
+            }
         });
 
         serve_context = ServeContext {
@@ -103,12 +108,18 @@ async fn main() -> AnyResult {
             res = &mut serving => return res.map_err(Into::into),
             Some(res) = process_tasks.join_next() => {
                 match res {
-                    Ok(ProcessTaskExit::Completed) => {
-                        error!("Root process task completed unexpectedly");
+                    Ok(ProcessTaskExit::Completed { task }) => {
+                        error!(task, "Root process task completed unexpectedly");
+                    }
+                    Ok(ProcessTaskExit::Failed { task, detail }) => {
+                        error!(task, detail, "Root process task failed");
                     }
                     Err(error) if error.is_panic() => {
                         error!(?error, "Root process task panicked");
                         std::panic::resume_unwind(error.into_panic());
+                    }
+                    Err(error) if error.is_cancelled() => {
+                        info!(?error, "Root process task cancelled (normal exit)");
                     }
                     Err(error) => {
                         error!(?error, "Root process task failed to join");
