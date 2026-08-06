@@ -31,8 +31,8 @@ use common::{
         connect::stream::StreamConnect,
         context::StreamRuntime,
     },
-    stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
     session::SessionSpawner,
+    stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 
 #[derive(Debug)]
@@ -112,6 +112,7 @@ where
                     write: stream.write.into_async_write(),
                     local_addr: listener.local_addr(),
                     peer_addr: stream.peer_addr,
+                    _supervisor: stream.supervisor,
                 };
                 let session_spawner = session_spawner.clone();
                 Box::pin(async move {
@@ -167,6 +168,7 @@ impl StreamConnect for RtpConnector {
             write: connected.write.into_async_write(),
             local_addr: connected.local_addr,
             peer_addr: connected.peer_addr,
+            _supervisor: connected.supervisor,
         };
         counter!("stream.rtp.connects").increment(1);
         Ok(Box::new(stream))
@@ -179,6 +181,9 @@ pub struct AddressedRtpStream {
     write: rtp::socket::AsyncWriteAdapter,
     local_addr: SocketAddr,
     peer_addr: SocketAddr,
+    // Held for the stream's lifetime: dropping the RTP session handle aborts
+    // the session driver tasks, so the reliable transport stalls without it.
+    _supervisor: rtp::socket::SessionHandle,
 }
 impl ConnParts for AddressedRtpStream {}
 impl OwnIoStream for AddressedRtpStream {}
