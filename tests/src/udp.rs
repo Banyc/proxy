@@ -35,20 +35,20 @@ mod tests {
         tokio_chacha20::config::Config::new(key.into())
     }
 
-    fn udp_context() -> UdpRuntime {
+    fn udp_context(join_set: &mut tokio::task::JoinSet<()>) -> UdpRuntime {
         let (session_spawner, mut session_rx) = common::session::SessionSpawner::channel();
-        tokio::spawn(async move {
+        join_set.spawn(async move {
             let mut sessions = tokio::task::JoinSet::new();
             loop {
                 tokio::select! {
                     Some(fut) = session_rx.recv() => { sessions.spawn(fut); }
-                    Some(res) = sessions.join_next() => { let _ = res; }
+                    Some(res) = sessions.join_next() => { let _ = res.unwrap(); }
                     else => break,
                 }
             }
         });
         let (retention_actor, retention) = common::retention::RetentionActor::new();
-        tokio::spawn(async move {
+        join_set.spawn(async move {
             let _ = retention_actor.run().await;
         });
         UdpRuntime {
@@ -81,7 +81,8 @@ mod tests {
         allow_loopback: bool,
     ) -> ConnConfig {
         let crypto = create_random_crypto();
-        let proxy = UdpProxyConnHandler::new(crypto.clone(), None, udp_context(), allow_loopback);
+        let proxy =
+            UdpProxyConnHandler::new(crypto.clone(), None, udp_context(join_set), allow_loopback);
         let server = proxy.build(addr).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         join_set.spawn(async move {
@@ -134,10 +135,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_proxies() {
-        let context = udp_context();
+        let mut join_set = tokio::task::JoinSet::new();
+        let context = udp_context(&mut join_set);
 
         let mut pkt_buf = BytesMut::with_capacity(PACKET_BUFFER_LENGTH);
-        let mut join_set = tokio::task::JoinSet::new();
 
         // Start proxy servers
         let proxy_1_config = spawn_proxy(&mut join_set, "0.0.0.0:0").await;
@@ -182,9 +183,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_clients() {
-        let context = udp_context();
-
         let mut join_set = tokio::task::JoinSet::new();
+        let context = udp_context(&mut join_set);
 
         // Start proxy servers
         let proxy_1_config = spawn_proxy(&mut join_set, "0.0.0.0:0").await;
@@ -235,9 +235,8 @@ mod tests {
     async fn stress_test() {
         tokio::time::sleep(Duration::from_secs_f64(0.6)).await;
 
-        let context = udp_context();
-
         let mut join_set = tokio::task::JoinSet::new();
+        let context = udp_context(&mut join_set);
 
         // Start proxy servers
         let mut proxies = Vec::new();
@@ -289,8 +288,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_bad_proxy() {
-        let context = udp_context();
         let mut join_set = tokio::task::JoinSet::new();
+        let context = udp_context(&mut join_set);
         let proxy_1_config = spawn_guarded_proxy(&mut join_set, "localhost:0").await;
         let proxy_2_config = spawn_guarded_proxy(&mut join_set, "localhost:0").await;
         let proxy_3_config = spawn_guarded_proxy(&mut join_set, "localhost:0").await;
@@ -325,8 +324,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn loopback_spelled_as_ipv6_is_still_refused() {
-        let context = udp_context();
         let mut join_set = tokio::task::JoinSet::new();
+        let context = udp_context(&mut join_set);
         let proxy_config = spawn_guarded_proxy(&mut join_set, "0.0.0.0:0").await;
         let req_msg = b"hello world";
         let resp_msg = b"goodbye world";
@@ -368,8 +367,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn an_unspecified_destination_is_still_refused() {
-        let context = udp_context();
         let mut join_set = tokio::task::JoinSet::new();
+        let context = udp_context(&mut join_set);
         let proxy_config = spawn_guarded_proxy(&mut join_set, "0.0.0.0:0").await;
         let req_msg = b"hello world";
         let resp_msg = b"goodbye world";
@@ -403,11 +402,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_no_proxies() {
-        let context = udp_context();
+        let mut join_set = tokio::task::JoinSet::new();
+        let context = udp_context(&mut join_set);
 
         // Start proxy servers
-
-        let mut join_set = tokio::task::JoinSet::new();
 
         // Message to send
         let req_msg = b"hello world";

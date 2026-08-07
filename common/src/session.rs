@@ -417,14 +417,14 @@ mod tests {
             .unwrap();
         sessions.spawn(fut);
         // The single slot is held; a second submission must wait.
-        #[allow(clippy::disallowed_methods)]
-        let waiting = tokio::task::spawn(async move {
+        let mut waiting_tasks = tokio::task::JoinSet::new();
+        waiting_tasks.spawn(async move {
             spawner.spawn(async { Ok(()) }).await.unwrap();
             true
         });
         tokio::task::yield_now().await;
         assert!(
-            !waiting.is_finished(),
+            waiting_tasks.try_join_next().is_none(),
             "spawn proceeded while the scope was at its concurrency limit"
         );
         release_tx.send(()).ok();
@@ -433,10 +433,16 @@ mod tests {
             .expect("the released session never completed")
             .unwrap()
             .unwrap();
-        let admitted = tokio::time::timeout(Duration::from_secs(5), waiting)
-            .await
-            .expect("the waiting submission never got a slot")
-            .unwrap();
+        let admitted = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(result) = waiting_tasks.try_join_next() {
+                    return result.unwrap();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the waiting submission never got a slot");
         assert!(admitted);
         // Drain the second session.
         let fut = tokio::time::timeout(Duration::from_secs(5), rx.recv())

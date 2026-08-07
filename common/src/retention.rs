@@ -117,9 +117,8 @@ mod tests {
     async fn a_guard_is_dropped_after_its_deadline() {
         let dropped = Arc::new(AtomicBool::new(false));
         let (actor, sender) = RetentionActor::new();
-        // Test-owned actor task; lifetime is the test runtime.
-        #[allow(clippy::disallowed_methods)]
-        let actor = tokio::spawn(actor.run());
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(actor.run());
         let guard = Box::new(DropGuard(dropped.clone()));
         sender
             .retain(guard, Instant::now() + Duration::from_millis(50))
@@ -127,16 +126,17 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(dropped.load(Ordering::SeqCst), "guard must be dropped");
         drop(sender);
-        let _ = actor.await;
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap();
+        }
     }
 
     #[tokio::test]
     async fn a_guard_is_kept_until_its_deadline() {
         let dropped = Arc::new(AtomicBool::new(false));
         let (actor, sender) = RetentionActor::new();
-        // Test-owned actor task; lifetime is the test runtime.
-        #[allow(clippy::disallowed_methods)]
-        let actor = tokio::spawn(actor.run());
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(actor.run());
         let guard = Box::new(DropGuard(dropped.clone()));
         sender
             .retain(guard, Instant::now() + Duration::from_secs(60))
@@ -147,6 +147,8 @@ mod tests {
             "guard must outlive the deadline"
         );
         drop(sender);
-        let _ = actor.await;
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap();
+        }
     }
 }

@@ -41,15 +41,15 @@ mod tests {
         tokio_chacha20::config::Config::new(key.into())
     }
 
-    fn stream_context() -> StreamRuntime {
+    fn stream_context(join_set: &mut tokio::task::JoinSet<()>) -> StreamRuntime {
         let connector_reset = ConnectorResetSignal(Notify::new());
         let (session_spawner, mut session_rx) = common::session::SessionSpawner::channel();
-        tokio::spawn(async move {
+        join_set.spawn(async move {
             let mut sessions = tokio::task::JoinSet::new();
             loop {
                 tokio::select! {
                     Some(fut) = session_rx.recv() => { sessions.spawn(fut); }
-                    Some(res) = sessions.join_next() => { let _ = res; }
+                    Some(res) = sessions.join_next() => { let _ = res.unwrap(); }
                     else => break,
                 }
             }
@@ -63,13 +63,13 @@ mod tests {
             connector_reset,
             &mut connector_drivers,
         ));
-        tokio::spawn(async move {
+        join_set.spawn(async move {
             while let Some(res) = connector_drivers.join_next().await {
-                let _ = res;
+                let _ = res.unwrap();
             }
         });
         let (retention_actor, retention) = common::retention::RetentionActor::new();
-        tokio::spawn(async move {
+        join_set.spawn(async move {
             let _ = retention_actor.run().await;
         });
         StreamRuntime {
@@ -108,7 +108,7 @@ mod tests {
         allow_loopback: bool,
     ) -> ConnConfig {
         let crypto = create_random_crypto();
-        let stream_context = stream_context();
+        let stream_context = stream_context(join_set);
         let session_spawner = stream_context.session_spawner.clone();
         let proxy = StreamProxyConnHandler::new(
             crypto.clone(),
@@ -264,9 +264,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_proxies() {
-        let stream_context = stream_context();
-
         let mut join_set = tokio::task::JoinSet::new();
+        let stream_context = stream_context(&mut join_set);
 
         // Start proxy servers
         let addr = Arc::from("0.0.0.0:0");
@@ -311,9 +310,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_clients() {
-        let stream_context = stream_context();
-
         let mut join_set = tokio::task::JoinSet::new();
+        let stream_context = stream_context(&mut join_set);
 
         // Start proxy servers
         let addr = Arc::from("0.0.0.0:0");
@@ -399,9 +397,8 @@ mod tests {
     async fn stress_test(ty: ConcreteStreamType) {
         tokio::time::sleep(Duration::from_secs_f64(0.6)).await;
 
-        let stream_context = stream_context();
-
         let mut join_set = tokio::task::JoinSet::new();
+        let stream_context = stream_context(&mut join_set);
 
         // Start proxy servers
         let mut proxies = Vec::new();
@@ -458,9 +455,8 @@ mod tests {
 
         tokio::time::sleep(Duration::from_secs_f64(0.6)).await;
 
-        let stream_context = stream_context();
-
         let mut join_set = tokio::task::JoinSet::new();
+        let stream_context = stream_context(&mut join_set);
 
         // Start proxy servers
         let mut proxies = Vec::new();
@@ -534,9 +530,10 @@ mod tests {
 
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
 
+        let stream_context = stream_context(&mut join_set);
         let ConnAndAddr { mut stream, .. } = tokio::time::timeout(
             Duration::from_secs(30),
-            establish(&[], greet_addr, &stream_context()),
+            establish(&[], greet_addr, &stream_context),
         )
         .await
         .expect("timed out establishing the proxy session")
@@ -546,10 +543,15 @@ mod tests {
         read_response(&mut stream, resp_msg).await.unwrap();
     }
 
-    async fn assert_refused(proxies: &[ConnConfig], greet_addr: RouteAddr) {
+    async fn assert_refused(
+        join_set: &mut tokio::task::JoinSet<()>,
+        proxies: &[ConnConfig],
+        greet_addr: RouteAddr,
+    ) {
+        let stream_context = stream_context(join_set);
         let mut stream = match tokio::time::timeout(
             Duration::from_secs(30),
-            establish(proxies, greet_addr, &stream_context()),
+            establish(proxies, greet_addr, &stream_context),
         )
         .await
         .expect("timed out establishing the proxy session")
@@ -587,6 +589,7 @@ mod tests {
         let resp_msg = b"goodbye world";
         let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
         assert_refused(
+            &mut join_set,
             &[proxy_1_config, proxy_2_config, proxy_3_config],
             greet_addr,
         )
@@ -612,7 +615,7 @@ mod tests {
             .into(),
             protocol: ConcreteStreamType::Tcp.to_string().into(),
         };
-        assert_refused(&[proxy_config], mapped).await;
+        assert_refused(&mut join_set, &[proxy_config], mapped).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -629,7 +632,7 @@ mod tests {
                 .into(),
             protocol: ConcreteStreamType::Tcp.to_string().into(),
         };
-        assert_refused(&[proxy_config], unspecified).await;
+        assert_refused(&mut join_set, &[proxy_config], unspecified).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -638,8 +641,8 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         tokio::time::sleep(Duration::from_secs_f64(0.6)).await;
 
-        let stream_context = stream_context();
         let mut join_set = tokio::task::JoinSet::new();
+        let stream_context = stream_context(&mut join_set);
 
         // Start proxy server
         let addr = Arc::from("0.0.0.0:0");
@@ -656,12 +659,13 @@ mod tests {
             protocol: ConcreteStreamType::Tcp.to_string().into(),
         };
         join_set.spawn(async move {
+            let mut handlers = tokio::task::JoinSet::new();
             loop {
                 let (mut sock, _) = match listener.accept().await {
                     Ok(x) => x,
                     Err(_) => break,
                 };
-                tokio::spawn(async move {
+                handlers.spawn(async move {
                     loop {
                         let mut len_buf = [0u8; 4];
                         if sock.read_exact(&mut len_buf).await.is_err() {
@@ -677,6 +681,9 @@ mod tests {
                         let _ = sock.write_all(&data).await;
                     }
                 });
+            }
+            while let Some(result) = handlers.join_next().await {
+                result.unwrap();
             }
         });
 

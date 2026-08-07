@@ -307,9 +307,8 @@ mod tests {
             .await
             .unwrap();
         let listen_addr = listener.local_addr().unwrap();
-        // Test-owned accept task; lifetime is the test runtime.
-        #[allow(clippy::disallowed_methods)]
-        tokio::spawn(async move {
+        let mut accept_tasks = tokio::task::JoinSet::new();
+        accept_tasks.spawn(async move {
             let mut listener = listener;
             let _ = listener.accept().await;
         });
@@ -319,5 +318,6 @@ mod tests {
         let stream = connector.connect(listen_addr).await.unwrap();
         let local_addr = stream.local_addr().unwrap();
         assert_ne!(local_addr.port(), 0, "{local_addr}");
+        drop(accept_tasks);
     }
 }

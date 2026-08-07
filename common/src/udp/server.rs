@@ -277,21 +277,19 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let (set_conn_handler_tx, set_conn_handler_rx) = loading::replace_conn_handler_channel();
         let (session_spawner, mut session_rx) = crate::session::SessionSpawner::channel();
-        // Test-owned session reaper; lifetime is the test runtime, which aborts it on shutdown.
-        #[allow(clippy::disallowed_methods)]
-        tokio::spawn(async move {
+        let mut session_tasks = tokio::task::JoinSet::new();
+        session_tasks.spawn(async move {
             let mut sessions = tokio::task::JoinSet::new();
             loop {
                 tokio::select! {
                     Some(fut) = session_rx.recv() => { sessions.spawn(fut); }
-                    Some(res) = sessions.join_next() => { let _ = res; }
+                    Some(res) = sessions.join_next() => { let _ = res.unwrap(); }
                     else => break,
                 }
             }
         });
-        // Test-owned server task; lifetime is the test runtime.
-        #[allow(clippy::disallowed_methods)]
-        tokio::spawn(
+        let mut server_tasks = tokio::task::JoinSet::new();
+        server_tasks.spawn(
             UdpServer::new(listener, TagEcho(1), session_spawner).serve(set_conn_handler_rx),
         );
         let echoed = |tag: u8| async move {
@@ -317,21 +315,19 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let (set_conn_handler_tx, set_conn_handler_rx) = loading::replace_conn_handler_channel();
         let (session_spawner, mut session_rx) = crate::session::SessionSpawner::channel();
-        // Test-owned session reaper; lifetime is the test runtime, which aborts it on shutdown.
-        #[allow(clippy::disallowed_methods)]
-        tokio::spawn(async move {
+        let mut session_tasks = tokio::task::JoinSet::new();
+        session_tasks.spawn(async move {
             let mut sessions = tokio::task::JoinSet::new();
             loop {
                 tokio::select! {
                     Some(fut) = session_rx.recv() => { sessions.spawn(fut); }
-                    Some(res) = sessions.join_next() => { let _ = res; }
+                    Some(res) = sessions.join_next() => { let _ = res.unwrap(); }
                     else => break,
                 }
             }
         });
-        // Test-owned server task so the listener can be removed mid-test.
-        #[allow(clippy::disallowed_methods)]
-        let serve_task = tokio::spawn(
+        let mut server_tasks = tokio::task::JoinSet::new();
+        server_tasks.spawn(
             UdpServer::new(listener, TagEcho(1), session_spawner).serve(set_conn_handler_rx),
         );
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -349,9 +345,10 @@ mod tests {
         assert_eq!(echoed.await.as_deref(), Some(&[42][..]));
         // Remove the listener: the serve task must despawn...
         drop(set_conn_handler_tx);
-        tokio::time::timeout(Duration::from_secs(5), serve_task)
+        tokio::time::timeout(Duration::from_secs(5), server_tasks.join_next())
             .await
             .expect("the listener never despawned after removal")
+            .unwrap()
             .unwrap()
             .unwrap();
         // ...while the already-accepted flow keeps receiving packet dispatch.
