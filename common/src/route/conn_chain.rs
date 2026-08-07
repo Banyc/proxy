@@ -195,7 +195,7 @@ impl GaugedConnChain {
             _probe_supervision,
             probe_state,
             #[cfg(test)]
-            probe_state_tx: probe_state_tx,
+            probe_state_tx,
         }
     }
 

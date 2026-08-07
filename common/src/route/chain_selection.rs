@@ -85,7 +85,7 @@ pub(crate) fn chain_score(weight: f64, loss: Option<f64>, rtt: RttSlot) -> f64 {
     let loss = loss.unwrap_or(0.).clamp(0., 1.);
     let rtt_factor = match rtt {
         RttSlot::Unreachable => 0.,
-        RttSlot::Unmeasured => (1. / (1. + r0 / r0)).powi(RTT_EXP),
+        RttSlot::Unmeasured => (0.5_f64).powi(RTT_EXP),
         RttSlot::Measured(_) => {
             let rtt = rtt.as_secs_f64_or(r0);
             (1. / (1. + rtt / r0)).powi(RTT_EXP)
