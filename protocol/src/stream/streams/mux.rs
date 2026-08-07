@@ -19,7 +19,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     task::JoinSet,
 };
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, trace, warn};
 
 pub fn server_mux_config() -> MuxConfig {
     MuxConfig {
@@ -80,7 +80,7 @@ pub async fn run_mux_connector<R, W, Fut>(
                         openers.remove(&addr);
                     }
                     Err(error) if error.is_cancelled() => trace!(?error, "MUX task cancelled (normal shutdown/reset)"),
-                    Err(error) => error!(?error, "MUX supervision task failed to join"),
+                    Err(error) => std::panic::resume_unwind(error.into_panic()),
                 }
             }
             result = connect_request_rx.recv() => {
@@ -156,13 +156,7 @@ where
                     source,
                 }
             }
-            Some(Err(source)) => {
-                debug!(?source, "build_opener: inner mux task join error");
-                MuxError::TaskJoin {
-                    task: "mux",
-                    source,
-                }
-            }
+            Some(Err(source)) => std::panic::resume_unwind(source.into_panic()),
             None => {
                 debug!("build_opener: inner mux task produced no result");
                 MuxError::TaskStopped { task: "mux" }
