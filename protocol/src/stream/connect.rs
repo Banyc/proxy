@@ -5,7 +5,7 @@ use std::{
 
 use common::{
     connect::{ConnectorConfig, ConnectorResetSignal},
-    error::AnyResult,
+    error::{AnyError, AnyResult},
     proto::connect::stream::{StreamConnect, StreamConnectorTable},
 };
 
@@ -55,8 +55,11 @@ pub fn build_tcp_mux_connector(
 ) -> Arc<dyn StreamConnect> {
     let (connector, driver) = TcpMuxConnector::new(config.clone(), reset);
     drivers.spawn(async move {
-        driver.await;
-        Ok(())
+        // A connector driver exiting is fatal — the connector is inert.
+        // Surface the typed error instead of converting completion to Ok(()),
+        // so `server_tasks` tears the server down rather than continuing.
+        let error = driver.await;
+        Err(Box::new(error) as AnyError)
     });
     Arc::new(connector)
 }
@@ -103,8 +106,11 @@ fn build_rtp_mux_connector_with_fec(
 ) -> Arc<dyn StreamConnect> {
     let (connector, driver) = RtpMuxConnector::new(config.clone(), reset, fec);
     drivers.spawn(async move {
-        driver.await;
-        Ok(())
+        // A connector driver exiting is fatal — the connector is inert.
+        // Surface the typed error instead of converting completion to Ok(()),
+        // so `server_tasks` tears the server down rather than continuing.
+        let error = driver.await;
+        Err(Box::new(error) as AnyError)
     });
     Arc::new(connector)
 }

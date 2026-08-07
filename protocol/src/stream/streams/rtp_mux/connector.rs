@@ -12,10 +12,31 @@ use std::{
     sync::Arc,
     task::{Context, Poll},
 };
+use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 #[derive(Debug)]
 pub struct RtpMuxConnector {
     inner: Arc<::rtp_mux::RtpMuxConnector>,
+}
+
+/// A fatal error from a connector driver.
+///
+/// A connector driver is a process-lifetime task: it only exits when its
+/// command loop or reset listener terminates, which leaves the connector
+/// inert. Such an exit is fatal — the owning `server_tasks` `JoinSet` must
+/// surface it so the server does not continue running with a dead
+/// connector.
+#[derive(Debug, Error)]
+pub enum ConnectorDriverError {
+    /// The inner [`rtp_mux::RtpMuxConnector`] command loop exited. It only
+    /// returns when its command sender is dropped, i.e. every
+    /// [`RtpMuxConnector`] handle has gone away — the connector is inert.
+    #[error("rtp_mux connector command loop exited; connector is inert")]
+    ConnectorExited,
+    /// The proxy reset listener exited after a [`ConnectorResetSignal`]
+    /// reset failed, i.e. the connector refused or failed a reset.
+    #[error("rtp_mux connector reset listener exited after a failed reset")]
+    ResetListenerExited,
 }
 
 /// The driver for a proxy [`RtpMuxConnector`].
@@ -25,11 +46,17 @@ pub struct RtpMuxConnector {
 /// [`ConnectorResetSignal`]. Spawn it into the parent runtime's
 /// actively-reaped `JoinSet` so its exit is observed and its drop aborts
 /// both child tasks.
+///
+/// Its [`Future::Output`] is a [`ConnectorDriverError`]: the driver only
+/// exits when one of its children terminates, which is fatal — the
+/// connector is left inert and must not continue serving.
 #[must_use = "the connector is inert until the driver is spawned"]
-pub struct RtpMuxConnectorDriver(Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>);
+pub struct RtpMuxConnectorDriver(
+    Pin<Box<dyn std::future::Future<Output = ConnectorDriverError> + Send + 'static>>,
+);
 
 impl std::future::Future for RtpMuxConnectorDriver {
-    type Output = ();
+    type Output = ConnectorDriverError;
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.0.as_mut().poll(cx)
     }
@@ -66,8 +93,8 @@ impl RtpMuxConnector {
         };
         let driver = RtpMuxConnectorDriver(Box::pin(async move {
             tokio::select! {
-                () = inner_driver => {},
-                () = reset_driver => {},
+                () = inner_driver => ConnectorDriverError::ConnectorExited,
+                () = reset_driver => ConnectorDriverError::ResetListenerExited,
             }
         }));
         (Self { inner }, driver)

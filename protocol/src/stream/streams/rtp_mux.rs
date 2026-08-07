@@ -18,7 +18,7 @@ use thiserror::Error;
 use tokio::net::ToSocketAddrs;
 mod connector;
 mod server;
-pub use connector::{RtpMuxConnector, RtpMuxConnectorDriver};
+pub use connector::{ConnectorDriverError, RtpMuxConnector, RtpMuxConnectorDriver};
 pub use server::{RtpMuxServer, ServeError};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

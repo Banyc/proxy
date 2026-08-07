@@ -186,11 +186,21 @@ pub struct TcpMuxConnector {
 /// errors and clearing it on reset). Spawn it into the parent runtime's
 /// actively-reaped `JoinSet` so its exit is observed and its drop aborts
 /// the connector task.
+///
+/// Its [`Future::Output`] is a [`ConnectorDriverError`]: the driver only
+/// exits when the connector loop returns, which is fatal — the connector
+/// is left inert and must not continue serving.
 #[must_use = "the connector is inert until the driver is spawned"]
-pub struct TcpMuxConnectorDriver(Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>);
+pub struct TcpMuxConnectorDriver(
+    Pin<
+        Box<
+            dyn std::future::Future<Output = super::rtp_mux::ConnectorDriverError> + Send + 'static,
+        >,
+    >,
+);
 
 impl std::future::Future for TcpMuxConnectorDriver {
-    type Output = ();
+    type Output = super::rtp_mux::ConnectorDriverError;
     fn poll(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -228,6 +238,7 @@ impl TcpMuxConnector {
                 }
             })
             .await;
+            super::rtp_mux::ConnectorDriverError::ConnectorExited
         };
         (
             Self { connect_request_tx },
