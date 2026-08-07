@@ -101,7 +101,7 @@ pub struct WeightedConnChain {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProbeTaskState {
+pub(crate) enum ProbeTaskState {
     Disabled,
     Running,
     Cancelled,
@@ -110,13 +110,29 @@ enum ProbeTaskState {
     JoinFailed,
 }
 
+impl ProbeTaskState {
+    /// Whether the probe is alive or was never started / intentionally stopped.
+    ///
+    /// `Disabled` — no probe configured; gauges are neutral (`None`).
+    /// `Running` — probe is actively updating gauges.
+    /// `Cancelled` — the generation token was intentionally cancelled.
+    ///
+    /// All other variants are terminal failures: the probe died without
+    /// an explicit cancel, so its gauges are frozen and stale.
+    fn is_healthy(self) -> bool {
+        matches!(self, Self::Disabled | Self::Running | Self::Cancelled)
+    }
+}
+
 #[derive(Debug)]
 pub struct GaugedConnChain {
     weighted: WeightedConnChain,
     rtt_stats: Arc<RwLock<RttStats>>,
     loss: Arc<RwLock<Option<f64>>>,
     _probe_supervision: tokio::task::JoinSet<()>,
-    _probe_state: watch::Receiver<ProbeTaskState>,
+    probe_state: watch::Receiver<ProbeTaskState>,
+    #[cfg(test)]
+    probe_state_tx: watch::Sender<ProbeTaskState>,
 }
 impl GaugedConnChain {
     pub fn new(
@@ -177,7 +193,9 @@ impl GaugedConnChain {
             rtt_stats,
             loss,
             _probe_supervision,
-            _probe_state: probe_state,
+            probe_state,
+            #[cfg(test)]
+            probe_state_tx: probe_state_tx,
         }
     }
 
@@ -198,13 +216,36 @@ impl GaugedConnChain {
         self.rtt_stats.read().unwrap().effective()
     }
 
+    /// The RTT knowledge state for chain scoring.
+    ///
+    /// Returns [`RttSlot::Unreachable`] when the probe has died without an
+    /// intentional cancel, so the frozen gauges are not used for routing.
+    /// Otherwise returns `Measured` or `Unmeasured` depending on whether
+    /// the probe has produced a sample.
+    pub(crate) fn rtt_slot(&self) -> super::chain_selection::RttSlot {
+        if !self.probe_healthy() {
+            return super::chain_selection::RttSlot::Unreachable;
+        }
+        match self.rtt_eff() {
+            Some(d) => super::chain_selection::RttSlot::Measured(d),
+            None => super::chain_selection::RttSlot::Unmeasured,
+        }
+    }
+
     pub fn loss(&self) -> Option<f64> {
         *self.loss.read().unwrap()
     }
 
-    #[cfg(test)]
-    fn probe_state(&self) -> ProbeTaskState {
-        *self._probe_state.borrow()
+    pub(crate) fn probe_state(&self) -> ProbeTaskState {
+        *self.probe_state.borrow()
+    }
+
+    /// Whether the probe is alive (or was never started / intentionally
+    /// stopped).  When this returns `false` the RTT/loss gauges are frozen
+    /// at whatever the probe last wrote and should not drive routing
+    /// decisions.
+    pub(crate) fn probe_healthy(&self) -> bool {
+        self.probe_state().is_healthy()
     }
 
     #[cfg(test)]
@@ -213,6 +254,11 @@ impl GaugedConnChain {
             self.rtt_stats.write().unwrap().apply_sample(rtt_sample);
         }
         *self.loss.write().unwrap() = loss;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_probe_state_for_test(&self, state: ProbeTaskState) {
+        self.probe_state_tx.send(state).ok();
     }
 }
 
@@ -319,5 +365,39 @@ mod tests {
             tokio::task::yield_now().await;
         }
         drop(chain);
+    }
+
+    #[test]
+    fn is_healthy_classifies_terminal_failures_as_unhealthy() {
+        assert!(ProbeTaskState::Disabled.is_healthy());
+        assert!(ProbeTaskState::Running.is_healthy());
+        assert!(ProbeTaskState::Cancelled.is_healthy());
+        assert!(!ProbeTaskState::CompletedUnexpectedly.is_healthy());
+        assert!(!ProbeTaskState::Panicked.is_healthy());
+        assert!(!ProbeTaskState::JoinFailed.is_healthy());
+    }
+
+    #[test]
+    fn probe_healthy_reflects_injected_state() {
+        let chain = GaugedConnChain::new(
+            WeightedConnChain {
+                weight: 1,
+                chain: Arc::from(Vec::<crate::route::ConnConfig>::new()),
+                payload_crypto: None,
+            },
+            None,
+            CancellationToken::new(),
+        );
+        assert!(chain.probe_healthy(), "Disabled is healthy");
+        chain.set_probe_state_for_test(ProbeTaskState::Panicked);
+        assert!(
+            !chain.probe_healthy(),
+            "Panicked must be reflected as unhealthy"
+        );
+        chain.set_probe_state_for_test(ProbeTaskState::Cancelled);
+        assert!(
+            chain.probe_healthy(),
+            "Cancelled must be reflected as healthy"
+        );
     }
 }

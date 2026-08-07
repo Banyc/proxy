@@ -7,10 +7,33 @@ const LOSS_EXP: i32 = 3;
 /// RTT exponent applied to `1 / (1 + rtt / r0)` in [`chain_score`]; 1 means the latency factor is 1/2 at `RTT_REF`.
 const RTT_EXP: i32 = 1;
 
+/// The RTT knowledge state for a chain's scoring slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RttSlot {
+    /// The probe has measured this chain; the effective RTT is `srtt + 2*rttvar`.
+    Measured(Duration),
+    /// The probe has never produced a sample (or no probe is configured).
+    /// Treated neutrally — the RTT factor defaults to the reference RTT.
+    Unmeasured,
+    /// The probe has died without an intentional cancel, so its gauges are
+    /// frozen and stale.  The chain is excluded from weighted selection and
+    /// dropped by the eligibility gate.
+    Unreachable,
+}
+
+impl RttSlot {
+    fn as_secs_f64_or(self, default: f64) -> f64 {
+        match self {
+            Self::Measured(d) => d.as_secs_f64(),
+            _ => default,
+        }
+    }
+}
+
 pub(crate) struct ScoredChain {
     pub(crate) index: usize,
     pub(crate) score: f64,
-    pub(crate) rtt: Option<Duration>,
+    pub(crate) rtt: RttSlot,
 }
 
 /// Gate that retains only chains whose measured RTT is within `max_ratio` of the best one.
@@ -24,13 +47,24 @@ impl EligibilityGate {
         Self { max_ratio }
     }
     pub(crate) fn retain_eligible(&self, chains: &mut Vec<ScoredChain>) -> usize {
-        let Some(best) = chains.iter().filter_map(|c| c.rtt).min() else {
+        let Some(best) = chains
+            .iter()
+            .filter_map(|c| match c.rtt {
+                RttSlot::Measured(d) => Some(d),
+                RttSlot::Unmeasured | RttSlot::Unreachable => None,
+            })
+            .min()
+        else {
             return 0;
         };
         let cutoff = Duration::try_from_secs_f64(best.as_secs_f64() * self.max_ratio)
             .unwrap_or(Duration::MAX);
         let before = chains.len();
-        chains.retain(|c| c.rtt.is_none_or(|rtt| rtt <= cutoff));
+        chains.retain(|c| match c.rtt {
+            RttSlot::Measured(d) => d <= cutoff,
+            RttSlot::Unmeasured => true,
+            RttSlot::Unreachable => false,
+        });
         before - chains.len()
     }
 }
@@ -46,12 +80,18 @@ pub(crate) fn pick_weighted(scores: &[(usize, f64)], r: f64) -> usize {
     scores.last().map(|(i, _)| *i).unwrap_or(0)
 }
 
-pub(crate) fn chain_score(weight: f64, loss: Option<f64>, rtt: Option<Duration>) -> f64 {
+pub(crate) fn chain_score(weight: f64, loss: Option<f64>, rtt: RttSlot) -> f64 {
     let r0 = RTT_REF.as_secs_f64();
     let loss = loss.unwrap_or(0.).clamp(0., 1.);
-    let rtt = rtt.map(|r| r.as_secs_f64()).unwrap_or(r0);
+    let rtt_factor = match rtt {
+        RttSlot::Unreachable => 0.,
+        RttSlot::Unmeasured => (1. / (1. + r0 / r0)).powi(RTT_EXP),
+        RttSlot::Measured(_) => {
+            let rtt = rtt.as_secs_f64_or(r0);
+            (1. / (1. + rtt / r0)).powi(RTT_EXP)
+        }
+    };
     let loss_factor = (1. - loss).powi(LOSS_EXP);
-    let rtt_factor = (1. / (1. + rtt / r0)).powi(RTT_EXP);
     weight * loss_factor * rtt_factor
 }
 
@@ -65,34 +105,45 @@ mod tests {
     #[test]
     fn lower_loss_scores_higher() {
         assert!(
-            chain_score(1., Some(0.0), Some(ms(50))) > chain_score(1., Some(0.10), Some(ms(50)))
+            chain_score(1., Some(0.0), RttSlot::Measured(ms(50)))
+                > chain_score(1., Some(0.10), RttSlot::Measured(ms(50)))
         );
     }
     #[test]
     fn lower_rtt_scores_higher() {
         assert!(
-            chain_score(1., Some(0.0), Some(ms(10))) > chain_score(1., Some(0.0), Some(ms(300)))
+            chain_score(1., Some(0.0), RttSlot::Measured(ms(10)))
+                > chain_score(1., Some(0.0), RttSlot::Measured(ms(300)))
         );
     }
     #[test]
     fn a_lossy_chain_is_de_preferred_but_never_excluded() {
-        let lossy = chain_score(1., Some(0.10), Some(ms(50)));
+        let lossy = chain_score(1., Some(0.10), RttSlot::Measured(ms(50)));
         assert!(lossy > 0.);
-        assert!(lossy > chain_score(1., Some(0.0), Some(ms(50))) * 0.5);
+        assert!(lossy > chain_score(1., Some(0.0), RttSlot::Measured(ms(50))) * 0.5);
     }
     #[test]
     fn latency_factor_is_one_half_at_the_reference() {
-        assert!((chain_score(1., Some(0.0), Some(RTT_REF)) - 0.5).abs() < 1e-9);
+        assert!((chain_score(1., Some(0.0), RttSlot::Measured(RTT_REF)) - 0.5).abs() < 1e-9);
     }
     #[test]
     fn small_latency_differences_barely_matter() {
-        let a = chain_score(1., Some(0.0), Some(ms(10)));
-        let b = chain_score(1., Some(0.0), Some(ms(20)));
+        let a = chain_score(1., Some(0.0), RttSlot::Measured(ms(10)));
+        let b = chain_score(1., Some(0.0), RttSlot::Measured(ms(20)));
         assert!(b / a > 0.85, "ratio was {}", b / a);
     }
     #[test]
     fn unknown_metrics_are_neutral() {
-        assert!((chain_score(1., None, None) - 0.5).abs() < 1e-9);
+        assert!((chain_score(1., None, RttSlot::Unmeasured) - 0.5).abs() < 1e-9);
+    }
+    #[test]
+    fn unreachable_scores_zero() {
+        assert_eq!(chain_score(1., None, RttSlot::Unreachable), 0.);
+        assert!(
+            chain_score(1., Some(0.0), RttSlot::Measured(ms(10))) > 0.,
+            "a measured chain must have a positive score"
+        );
+        assert_eq!(chain_score(1., Some(0.0), RttSlot::Unreachable), 0.);
     }
 
     #[test]
@@ -123,7 +174,7 @@ mod tests {
         ScoredChain {
             index,
             score,
-            rtt: Some(rtt),
+            rtt: RttSlot::Measured(rtt),
         }
     }
 
@@ -131,7 +182,15 @@ mod tests {
         ScoredChain {
             index,
             score,
-            rtt: None,
+            rtt: RttSlot::Unmeasured,
+        }
+    }
+
+    fn unreachable(index: usize, score: f64) -> ScoredChain {
+        ScoredChain {
+            index,
+            score,
+            rtt: RttSlot::Unreachable,
         }
     }
 
@@ -146,12 +205,12 @@ mod tests {
     fn gate_keeps_the_fast_tier_and_drops_the_slow_one() {
         let s = |rtt| chain_score(1.0 / 6.0, Some(0.0), rtt);
         let chains = vec![
-            measured(0, s(Some(ms(150))), ms(150)),
-            measured(1, s(Some(ms(150))), ms(150)),
-            measured(2, s(Some(ms(150))), ms(150)),
-            measured(3, s(Some(ms(150))), ms(150)),
-            measured(4, s(Some(ms(250))), ms(250)),
-            measured(5, s(Some(ms(250))), ms(250)),
+            measured(0, s(RttSlot::Measured(ms(150))), ms(150)),
+            measured(1, s(RttSlot::Measured(ms(150))), ms(150)),
+            measured(2, s(RttSlot::Measured(ms(150))), ms(150)),
+            measured(3, s(RttSlot::Measured(ms(150))), ms(150)),
+            measured(4, s(RttSlot::Measured(ms(250))), ms(250)),
+            measured(5, s(RttSlot::Measured(ms(250))), ms(250)),
         ];
         assert_eq!(survivors(chains, 1.5), vec![0, 1, 2, 3]);
     }
@@ -191,9 +250,21 @@ mod tests {
         let dead = ScoredChain {
             index: 1,
             score: 0.0,
-            rtt: Some(ms(5000)),
+            rtt: RttSlot::Measured(ms(5000)),
         };
         let chains = vec![measured(0, 0.4, ms(100)), dead];
         assert_eq!(survivors(chains, 1.5), vec![0]);
+    }
+
+    #[test]
+    fn gate_always_excludes_unreachable_chains() {
+        let chains = vec![measured(0, 0.4, ms(100)), unreachable(1, 0.5)];
+        assert_eq!(survivors(chains, 1.5), vec![0]);
+    }
+
+    #[test]
+    fn gate_keeps_unreachable_when_all_are_unreachable() {
+        let chains = vec![unreachable(0, 0.5), unreachable(1, 0.5)];
+        assert_eq!(survivors(chains, 1.5), vec![0, 1]);
     }
 }

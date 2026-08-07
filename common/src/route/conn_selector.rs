@@ -195,13 +195,10 @@ impl NonEmptyConnSelector {
             .iter()
             .enumerate()
             .map(|(index, c)| {
-                let rtt = c.rtt_eff();
+                let rtt = c.rtt_slot();
                 let weight = c.weighted().weight as f64 / cum_weight;
-                ScoredChain {
-                    index,
-                    score: chain_score(weight, c.loss(), rtt),
-                    rtt,
-                }
+                let score = chain_score(weight, c.loss(), rtt);
+                ScoredChain { index, score, rtt }
             })
             .collect();
         if let Some(gate) = &self.gate {
@@ -241,6 +238,7 @@ struct Scores {
 
 #[cfg(test)]
 mod tests {
+    use super::super::conn_chain::ProbeTaskState;
     use super::*;
     use std::time::Duration;
     fn chain(weight: usize) -> WeightedConnChain {
@@ -267,6 +265,73 @@ mod tests {
                 selector.choose_chain().weight,
                 0,
                 "the gate excluded the slow chain; the fallback must not reinstate it"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dead_probe_chain_is_excluded_regardless_of_stale_gauges() {
+        let selector = NonEmptyConnSelector::new(
+            vec![chain(1), chain(2)],
+            None::<Arc<dyn ProbeRtt + Send + Sync>>,
+            None,
+            Some(1.5),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        selector.chains[0].set_gauges_for_test(Some(Duration::from_millis(10)), Some(0.));
+        selector.chains[0].set_probe_state_for_test(ProbeTaskState::Panicked);
+        selector.chains[1].set_gauges_for_test(Some(Duration::from_millis(5000)), Some(0.));
+        for _ in 0..200 {
+            assert_eq!(
+                selector.choose_chain().weight,
+                2,
+                "the dead-probe chain must never be selected while a healthy one exists"
+            );
+        }
+    }
+
+    #[test]
+    fn all_dead_probes_fall_back_to_uniform_selection() {
+        let selector = NonEmptyConnSelector::new(
+            vec![chain(1), chain(2)],
+            None::<Arc<dyn ProbeRtt + Send + Sync>>,
+            None,
+            None,
+            CancellationToken::new(),
+        )
+        .unwrap();
+        selector.chains[0].set_gauges_for_test(Some(Duration::from_millis(10)), Some(0.));
+        selector.chains[0].set_probe_state_for_test(ProbeTaskState::CompletedUnexpectedly);
+        selector.chains[1].set_gauges_for_test(Some(Duration::from_millis(5000)), Some(0.));
+        selector.chains[1].set_probe_state_for_test(ProbeTaskState::JoinFailed);
+
+        let mut saw = [false; 3];
+        for _ in 0..5000 {
+            let w = selector.choose_chain().weight;
+            saw[w] = true;
+        }
+        assert!(saw[1] && saw[2], "uniform fallback must reach both chains");
+    }
+
+    #[test]
+    fn cancelled_probe_is_treated_as_healthy() {
+        let selector = NonEmptyConnSelector::new(
+            vec![chain(1), chain(2)],
+            None::<Arc<dyn ProbeRtt + Send + Sync>>,
+            None,
+            Some(1.5),
+            CancellationToken::new(),
+        )
+        .unwrap();
+        selector.chains[0].set_gauges_for_test(Some(Duration::from_millis(10)), Some(0.));
+        selector.chains[0].set_probe_state_for_test(ProbeTaskState::Cancelled);
+        selector.chains[1].set_gauges_for_test(Some(Duration::from_millis(5000)), Some(0.));
+        for _ in 0..200 {
+            assert_eq!(
+                selector.choose_chain().weight,
+                1,
+                "a cancelled probe is healthy; its (better) gauges should win"
             );
         }
     }
