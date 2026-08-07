@@ -306,8 +306,17 @@ mod tests {
             stream.read_exact(msg_buf).await.unwrap();
             assert_eq!(msg_buf, resp_msg);
         }
+        // The reaper only exits once every `SessionSpawner` sender is dropped;
+        // the proxy server keeps one alive for the test's lifetime, so the
+        // reaper cannot finish on its own. Abort it (a deliberate cancel) and
+        // drain, surfacing any non-cancellation failure instead of hanging.
+        session_reaper.abort_all();
         while let Some(result) = session_reaper.join_next().await {
-            result.unwrap();
+            if let Err(error) = result
+                && !error.is_cancelled()
+            {
+                panic!("session reaper failed: {error}");
+            }
         }
     }
 }
