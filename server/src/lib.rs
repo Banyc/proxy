@@ -109,7 +109,8 @@ where
     .await?;
     // No live state exists yet — commit immediately.
     let mut _cancellation_guard =
-        commit_reload(&mut server_tasks, &mut server_loader, prepared, &runtime);
+        commit_reload(&mut server_tasks, &mut server_loader, prepared, &runtime)
+            .map_err(ServerServeError::Commit)?;
     let mut config_changed = serve_context.config_changed.0.subscription();
 
     loop {
@@ -165,12 +166,27 @@ where
                         // spawn new listener tasks, and cancel the previous
                         // generation's token. Reassigning `_cancellation_guard`
                         // drops the old guard, cancelling the old token.
-                        _cancellation_guard = commit_reload(
+                        match commit_reload(
                             &mut server_tasks,
                             &mut server_loader,
                             new_prepared,
                             &runtime,
-                        );
+                        ) {
+                            Ok(guard) => _cancellation_guard = guard,
+                            Err(e) => {
+                                // A listener died between prepare and commit, so
+                                // its handler update could not be delivered.
+                                // The global state was already swapped; install
+                                // the new generation's guard (canceling the old
+                                // probe tasks) and surface the lost update.
+                                error!(
+                                    ?e,
+                                    "Reload commit partially failed: a listener \
+                                     died; its handler update was lost"
+                                );
+                                continue;
+                            }
+                        }
                     }
                     Err(e) => {
                         // `prepare_reload` already dropped the failed
@@ -350,12 +366,17 @@ impl Drop for CancelOnDrop {
 /// token stays live for the new generation). Returns a `DropGuard` for the
 /// new generation's `cancellation` token; dropping the previous guard
 /// cancels the previous generation's token.
+///
+/// Returns an error if a listener died between prepare and commit, so a
+/// handler update is never silently lost. The global state is already
+/// swapped at that point, but the lost update is surfaced rather than
+/// swallowed.
 fn commit_reload(
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
     prepared: PreparedReload,
     runtime: &Runtime,
-) -> tokio_util::sync::DropGuard {
+) -> Result<tokio_util::sync::DropGuard, AnyError> {
     let PreparedReloadParts {
         cancellation,
         stream_pool,
@@ -370,16 +391,26 @@ fn commit_reload(
         .connector_table
         .replaced_by(connector_config.clone());
     *runtime.udp.connector.config().write().unwrap() = connector_config;
-    // Commit listener handlers / tasks. Each `commit` is infallible.
-    server_loader
-        .access_server
-        .commit(server_tasks, access_server);
-    server_loader
-        .proxy_server
-        .commit(server_tasks, proxy_server);
+    // Commit listener handlers / tasks. A closed receiver (listener died
+    // since prepare) surfaces an error instead of silently losing the
+    // handler update. On failure the new generation's token is cancelled so
+    // its probe tasks do not leak.
+    let commit_result = (|| {
+        server_loader
+            .access_server
+            .commit(server_tasks, access_server)?;
+        server_loader
+            .proxy_server
+            .commit(server_tasks, proxy_server)?;
+        Ok::<(), AnyError>(())
+    })();
+    if let Err(e) = commit_result {
+        cancellation.cancel();
+        return Err(e);
+    }
     // Return a guard so the next reload (or `serve` returning) cancels this
     // generation's probe tasks.
-    cancellation.drop_guard()
+    Ok(cancellation.drop_guard())
 }
 
 #[derive(Debug, Error)]
@@ -388,6 +419,8 @@ pub enum ServerServeError {
     Config(#[source] AnyError),
     #[error("Failed to load config: {0}")]
     Load(#[source] AnyError),
+    #[error("Failed to commit reload: {0}")]
+    Commit(#[source] AnyError),
     #[error("Server task failed: {0}")]
     ServerTask(#[source] AnyError),
 }

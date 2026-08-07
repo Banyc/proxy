@@ -89,11 +89,14 @@ where
         loop {
             tokio::select! {
                 result = &mut serving => return result.map_err(Into::into),
-                replacement = set_conn_handler_rx.0.recv() => {
-                    let Some(replacement) = replacement else {
-                        return Ok(());
-                    };
-                    *conn_handler.write().unwrap() = Arc::new(replacement);
+                replacement = set_conn_handler_rx.recv() => {
+                    match replacement {
+                        Ok(Some(new_handler)) => {
+                            *conn_handler.write().unwrap() = new_handler;
+                        }
+                        Ok(None) => {}
+                        Err(()) => return Ok(()),
+                    }
                 }
             }
         }

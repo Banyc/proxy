@@ -162,19 +162,21 @@ impl AccessServerLoader {
 
     /// Commit a previously-prepared access-server reload: hot-swap handlers
     /// on existing listeners, spawn new listener tasks, and drop handles for
-    /// removed listeners. Infallible.
+    /// removed listeners. Returns an error if a listener died between
+    /// prepare and commit (a handler update would be silently lost).
     pub fn commit(
         &mut self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         prepared: PreparedAccessServer,
-    ) {
-        self.tcp_server.commit(join_set, prepared.tcp_server);
-        self.udp_server.commit(join_set, prepared.udp_server);
-        self.http_server.commit(join_set, prepared.http_server);
+    ) -> AnyResult {
+        self.tcp_server.commit(join_set, prepared.tcp_server)?;
+        self.udp_server.commit(join_set, prepared.udp_server)?;
+        self.http_server.commit(join_set, prepared.http_server)?;
         self.socks5_tcp_server
-            .commit(join_set, prepared.socks5_tcp_server);
+            .commit(join_set, prepared.socks5_tcp_server)?;
         self.socks5_udp_server
-            .commit(join_set, prepared.socks5_udp_server);
+            .commit(join_set, prepared.socks5_udp_server)?;
+        Ok(())
     }
 }
 

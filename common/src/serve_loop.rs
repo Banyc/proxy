@@ -247,14 +247,18 @@ where
                 wrap_conn(loop_state, stream, Arc::clone(&conn_handler)).await;
             }
             _ = after_accept(loop_state) => {}
-            res = set_conn_handler_rx.0.recv() => {
-                let new_conn_handler = match res {
-                    Some(new_conn_handler) => new_conn_handler,
-                    None => break,
-                };
-                info!(?addr, "Connection handler set");
-                conn_handler = Arc::new(new_conn_handler);
-                on_handler_replaced(Arc::clone(&conn_handler));
+            res = set_conn_handler_rx.recv() => {
+                match res {
+                    Ok(Some(new_conn_handler)) => {
+                        info!(?addr, "Connection handler set");
+                        conn_handler = new_conn_handler;
+                        on_handler_replaced(Arc::clone(&conn_handler));
+                    }
+                    Ok(None) => {
+                        // sentinel — no replacement; keep current handler
+                    }
+                    Err(()) => break,
+                }
             }
         }
     }

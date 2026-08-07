@@ -101,21 +101,23 @@ impl ProxyServerLoader {
 
     /// Commit a previously-prepared proxy-server reload: hot-swap handlers
     /// on existing listeners, spawn new listener tasks, and drop handles for
-    /// removed listeners. Infallible.
+    /// removed listeners. Returns an error if a listener died between
+    /// prepare and commit (a handler update would be silently lost).
     pub fn commit(
         &mut self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         prepared: PreparedProxyServer,
-    ) {
-        self.tcp_server.commit(join_set, prepared.tcp_server);
+    ) -> AnyResult {
+        self.tcp_server.commit(join_set, prepared.tcp_server)?;
         self.tcp_mux_server
-            .commit(join_set, prepared.tcp_mux_server);
-        self.udp_server.commit(join_set, prepared.udp_server);
-        self.kcp_server.commit(join_set, prepared.kcp_server);
-        self.mptcp_server.commit(join_set, prepared.mptcp_server);
-        self.rtp_server.commit(join_set, prepared.rtp_server);
+            .commit(join_set, prepared.tcp_mux_server)?;
+        self.udp_server.commit(join_set, prepared.udp_server)?;
+        self.kcp_server.commit(join_set, prepared.kcp_server)?;
+        self.mptcp_server.commit(join_set, prepared.mptcp_server)?;
+        self.rtp_server.commit(join_set, prepared.rtp_server)?;
         self.rtp_mux_server
-            .commit(join_set, prepared.rtp_mux_server);
+            .commit(join_set, prepared.rtp_mux_server)?;
+        Ok(())
     }
 }
 impl Default for ProxyServerLoader {

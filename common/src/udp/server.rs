@@ -307,7 +307,7 @@ mod tests {
             None
         };
         assert_eq!(echoed(1).await.as_deref(), Some(&[42][..]));
-        set_conn_handler_tx.0.send(TagEcho(2)).await.unwrap();
+        set_conn_handler_tx.send(TagEcho(2)).unwrap();
         assert_eq!(echoed(2).await.as_deref(), Some(&[42][..]));
     }
 
