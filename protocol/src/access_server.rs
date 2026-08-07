@@ -159,17 +159,50 @@ impl AccessServerLoader {
             socks5_udp_server: loading::Loader::new(),
         }
     }
+
+    /// Commit a previously-prepared access-server reload: hot-swap handlers
+    /// on existing listeners, spawn new listener tasks, and drop handles for
+    /// removed listeners. Infallible.
+    pub fn commit(
+        &mut self,
+        join_set: &mut tokio::task::JoinSet<AnyResult>,
+        prepared: PreparedAccessServer,
+    ) {
+        self.tcp_server.commit(join_set, prepared.tcp_server);
+        self.udp_server.commit(join_set, prepared.udp_server);
+        self.http_server.commit(join_set, prepared.http_server);
+        self.socks5_tcp_server
+            .commit(join_set, prepared.socks5_tcp_server);
+        self.socks5_udp_server
+            .commit(join_set, prepared.socks5_udp_server);
+    }
 }
 
-pub async fn spawn_and_clean(
+/// A fully-prepared access-server reload: resolved route selectors/tables,
+/// bound listener sockets, and built handlers for every access-server kind,
+/// ready to commit. Dropping it without [`AccessServerLoader::commit`] drops
+/// the bound sockets and probe tasks — live state is untouched.
+pub struct PreparedAccessServer {
+    tcp_server: loading::PreparedOps<TcpAccessConnHandler>,
+    udp_server: loading::PreparedOps<UdpAccessConnHandler>,
+    http_server: loading::PreparedOps<HttpAccessConnHandler>,
+    socks5_tcp_server: loading::PreparedOps<Socks5ServerTcpAccessConnHandler>,
+    socks5_udp_server: loading::PreparedOps<Socks5ServerUdpAccessConnHandler>,
+}
+
+/// Prepare an access-server reload: resolve conn selectors and route tables
+/// (spawning probe tasks tied to `cancellation`), bind every new listener, and
+/// build every handler — all without touching live state. On any failure the
+/// returned `Err` drops everything already prepared (bound sockets, probe
+/// tasks), leaving the live configuration untouched.
+pub async fn prepare(
     config: AccessServerConfig,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
-    loader: &mut AccessServerLoader,
+    loader: &AccessServerLoader,
     cancellation: CancellationToken,
     context: Runtime,
     stream_conn: &HashMap<Arc<str>, common::route::ConnConfig>,
     udp_conn: &HashMap<Arc<str>, common::route::ConnConfig>,
-) -> AnyResult {
+) -> Result<PreparedAccessServer, AnyError> {
     let matcher = Arc::new(config.matcher);
     let stream_tracer: Arc<dyn ProbeRtt + Send + Sync> =
         Arc::new(StreamTracer::new(context.stream.clone()));
@@ -197,12 +230,18 @@ pub async fn spawn_and_clean(
     let udp_conn_selector = udp_conn_selector(&udp_registries, config.udp.conn_selector)?;
     udp_registries.conn_selector = &udp_conn_selector;
     deny_udp_route_table_key(&config.udp.route_table)?;
-    #[rustfmt::skip] tcp_spawn_and_clean(config.tcp_server, &stream_conn_selector, &stream_registries, &context, loader, join_set).await?;
-    #[rustfmt::skip] udp_spawn_and_clean(config.udp_server, &udp_conn_selector, &udp_registries, &context, loader, join_set).await?;
-    #[rustfmt::skip] http_spawn_and_clean(config.http_server, &stream_route_tables, &stream_registries, &context, loader, join_set).await?;
-    #[rustfmt::skip] socks5_tcp_spawn_and_clean(config.socks5_tcp_server, &stream_route_tables, &stream_registries, &context, loader, join_set).await?;
-    #[rustfmt::skip] socks5_udp_spawn_and_clean(config.socks5_udp_server, &udp_conn_selector, &udp_registries, &context, loader, join_set).await?;
-    Ok(())
+    #[rustfmt::skip] let tcp_server = tcp_prepare(config.tcp_server, &stream_conn_selector, &stream_registries, &context, &loader.tcp_server).await?;
+    #[rustfmt::skip] let udp_server = udp_prepare(config.udp_server, &udp_conn_selector, &udp_registries, &context, &loader.udp_server).await?;
+    #[rustfmt::skip] let http_server = http_prepare(config.http_server, &stream_route_tables, &stream_registries, &context, &loader.http_server).await?;
+    #[rustfmt::skip] let socks5_tcp_server = socks5_tcp_prepare(config.socks5_tcp_server, &stream_route_tables, &stream_registries, &context, &loader.socks5_tcp_server).await?;
+    #[rustfmt::skip] let socks5_udp_server = socks5_udp_prepare(config.socks5_udp_server, &udp_conn_selector, &udp_registries, &context, &loader.socks5_udp_server).await?;
+    Ok(PreparedAccessServer {
+        tcp_server,
+        udp_server,
+        http_server,
+        socks5_tcp_server,
+        socks5_udp_server,
+    })
 }
 fn deny_udp_route_table_key<T>(config: &HashMap<Arc<str>, T>) -> Result<(), AnyError> {
     if config.is_empty() {
@@ -259,95 +298,70 @@ fn stream_route_tables(
         .collect::<Result<HashMap<_, _>, _>>()?;
     Ok(stream_route_tables)
 }
-async fn tcp_spawn_and_clean(
+async fn tcp_prepare(
     config: Vec<TcpAccessServerConfig>,
     stream_conn_selector: &HashMap<Arc<str>, ConnSelector>,
     registries: &Registries<'_>,
     context: &Runtime,
-    loader: &mut AccessServerLoader,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
-) -> Result<(), AnyError> {
+    loader: &loading::Loader<TcpAccessConnHandler>,
+) -> Result<loading::PreparedOps<TcpAccessConnHandler>, AnyError> {
     let tcp_server = config
         .into_iter()
         .map(|c| c.into_builder(stream_conn_selector, registries, context.stream.clone()))
         .collect::<Result<Vec<_>, _>>()?;
-    loader
-        .tcp_server
-        .spawn_and_clean(join_set, tcp_server)
-        .await?;
-    Ok(())
+    loader.prepare(tcp_server).await
 }
-async fn udp_spawn_and_clean(
+async fn udp_prepare(
     config: Vec<UdpAccessServerConfig>,
     udp_conn_selector: &HashMap<Arc<str>, ConnSelector>,
     registries: &Registries<'_>,
     context: &Runtime,
-    loader: &mut AccessServerLoader,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
-) -> Result<(), AnyError> {
+    loader: &loading::Loader<UdpAccessConnHandler>,
+) -> Result<loading::PreparedOps<UdpAccessConnHandler>, AnyError> {
     let udp_server = config
         .into_iter()
         .map(|c| c.into_builder(udp_conn_selector, registries, context.udp.clone()))
         .collect::<Result<Vec<_>, _>>()?;
-    loader
-        .udp_server
-        .spawn_and_clean(join_set, udp_server)
-        .await?;
-    Ok(())
+    loader.prepare(udp_server).await
 }
-async fn http_spawn_and_clean(
+async fn http_prepare(
     config: Vec<HttpAccessServerConfig>,
     stream_route_tables: &HashMap<Arc<str>, RouteTable>,
     registries: &Registries<'_>,
     context: &Runtime,
-    loader: &mut AccessServerLoader,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
-) -> Result<(), AnyError> {
+    loader: &loading::Loader<HttpAccessConnHandler>,
+) -> Result<loading::PreparedOps<HttpAccessConnHandler>, AnyError> {
     let http_server = config
         .into_iter()
         .map(|c| c.into_builder(stream_route_tables, registries, context.stream.clone()))
         .collect::<Result<Vec<_>, _>>()?;
-    loader
-        .http_server
-        .spawn_and_clean(join_set, http_server)
-        .await?;
-    Ok(())
+    loader.prepare(http_server).await
 }
-async fn socks5_tcp_spawn_and_clean(
+async fn socks5_tcp_prepare(
     config: Vec<Socks5ServerTcpAccessServerConfig>,
     stream_route_tables: &HashMap<Arc<str>, RouteTable>,
     registries: &Registries<'_>,
     context: &Runtime,
-    loader: &mut AccessServerLoader,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
-) -> Result<(), AnyError> {
+    loader: &loading::Loader<Socks5ServerTcpAccessConnHandler>,
+) -> Result<loading::PreparedOps<Socks5ServerTcpAccessConnHandler>, AnyError> {
     let socks5_tcp_server = config
         .into_iter()
         .map(|c| c.into_builder(stream_route_tables, registries, context.stream.clone()))
         .collect::<Result<Vec<_>, _>>()?;
-    loader
-        .socks5_tcp_server
-        .spawn_and_clean(join_set, socks5_tcp_server)
-        .await?;
-    Ok(())
+    loader.prepare(socks5_tcp_server).await
 }
-async fn socks5_udp_spawn_and_clean(
+async fn socks5_udp_prepare(
     config: Vec<Socks5ServerUdpAccessServerConfig>,
     udp_conn_selector: &HashMap<Arc<str>, ConnSelector>,
     registries: &Registries<'_>,
     context: &Runtime,
-    loader: &mut AccessServerLoader,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
-) -> Result<(), AnyError> {
+    loader: &loading::Loader<Socks5ServerUdpAccessConnHandler>,
+) -> Result<loading::PreparedOps<Socks5ServerUdpAccessConnHandler>, AnyError> {
     let socks5_udp_server = config
         .into_iter()
         .map(|c| c.into_builder(udp_conn_selector, registries, context.udp.clone()))
         .collect::<Result<Vec<_>, _>>()?;
-    loader
-        .socks5_udp_server
-        .spawn_and_clean(join_set, socks5_udp_server)
-        .await?;
-    Ok(())
+    loader.prepare(socks5_udp_server).await
 }
 #[cfg(test)]
 mod tests {

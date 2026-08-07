@@ -10,7 +10,7 @@ use crate::{
 };
 use common::{
     config::Merge,
-    error::AnyResult,
+    error::{AnyError, AnyResult},
     loading,
     proto::{
         conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
@@ -98,6 +98,25 @@ impl ProxyServerLoader {
             rtp_mux_server: loading::Loader::new(),
         }
     }
+
+    /// Commit a previously-prepared proxy-server reload: hot-swap handlers
+    /// on existing listeners, spawn new listener tasks, and drop handles for
+    /// removed listeners. Infallible.
+    pub fn commit(
+        &mut self,
+        join_set: &mut tokio::task::JoinSet<AnyResult>,
+        prepared: PreparedProxyServer,
+    ) {
+        self.tcp_server.commit(join_set, prepared.tcp_server);
+        self.tcp_mux_server
+            .commit(join_set, prepared.tcp_mux_server);
+        self.udp_server.commit(join_set, prepared.udp_server);
+        self.kcp_server.commit(join_set, prepared.kcp_server);
+        self.mptcp_server.commit(join_set, prepared.mptcp_server);
+        self.rtp_server.commit(join_set, prepared.rtp_server);
+        self.rtp_mux_server
+            .commit(join_set, prepared.rtp_mux_server);
+    }
 }
 impl Default for ProxyServerLoader {
     fn default() -> Self {
@@ -105,67 +124,83 @@ impl Default for ProxyServerLoader {
     }
 }
 
-pub async fn spawn_and_clean(
+/// A fully-prepared proxy-server reload: bound listener sockets and built
+/// handlers for every proxy-server kind, ready to commit. Dropping it without
+/// [`ProxyServerLoader::commit`] drops the bound sockets — live state is
+/// untouched.
+pub struct PreparedProxyServer {
+    tcp_server: loading::PreparedOps<StreamProxyConnHandler>,
+    tcp_mux_server: loading::PreparedOps<StreamProxyConnHandler>,
+    udp_server: loading::PreparedOps<UdpProxyConnHandler>,
+    kcp_server: loading::PreparedOps<StreamProxyConnHandler>,
+    mptcp_server: loading::PreparedOps<StreamProxyConnHandler>,
+    rtp_server: loading::PreparedOps<StreamProxyConnHandler>,
+    rtp_mux_server: loading::PreparedOps<StreamProxyConnHandler>,
+}
+
+/// Prepare a proxy-server reload: build every listener (binding sockets) and
+/// handler without touching live state. On any failure the returned `Err`
+/// drops everything already prepared, leaving the live configuration
+/// untouched.
+pub async fn prepare(
     config: ProxyServerConfig,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
-    loader: &mut ProxyServerLoader,
+    loader: &ProxyServerLoader,
     context: Runtime,
-) -> AnyResult {
-    tcp_spawn_and_clean(config.tcp_server, join_set, loader, &context).await?;
-    tcp_mux_spawn_and_clean(config.tcp_mux_server, join_set, loader, &context).await?;
-    udp_spawn_and_clean(config.udp_server, join_set, loader, &context).await?;
-    kcp_spawn_and_clean(config.kcp_server, join_set, loader, &context).await?;
-    mptcp_spawn_and_clean(config.mptcp_server, join_set, loader, &context).await?;
-    rtp_spawn_and_clean(config.rtp_server, join_set, loader, &context).await?;
-    rtp_mux_spawn_and_clean(config.rtp_mux_server, join_set, loader, &context).await?;
-    Ok(())
+) -> Result<PreparedProxyServer, AnyError> {
+    let tcp_server = tcp_prepare(config.tcp_server, &loader.tcp_server, &context).await?;
+    let tcp_mux_server =
+        tcp_mux_prepare(config.tcp_mux_server, &loader.tcp_mux_server, &context).await?;
+    let udp_server = udp_prepare(config.udp_server, &loader.udp_server, &context).await?;
+    let kcp_server = kcp_prepare(config.kcp_server, &loader.kcp_server, &context).await?;
+    let mptcp_server = mptcp_prepare(config.mptcp_server, &loader.mptcp_server, &context).await?;
+    let rtp_server = rtp_prepare(config.rtp_server, &loader.rtp_server, &context).await?;
+    let rtp_mux_server =
+        rtp_mux_prepare(config.rtp_mux_server, &loader.rtp_mux_server, &context).await?;
+    Ok(PreparedProxyServer {
+        tcp_server,
+        tcp_mux_server,
+        udp_server,
+        kcp_server,
+        mptcp_server,
+        rtp_server,
+        rtp_mux_server,
+    })
 }
-async fn tcp_spawn_and_clean(
+async fn tcp_prepare(
     config: Vec<TcpProxyServerConfig>,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
-    loader: &mut ProxyServerLoader,
+    loader: &loading::Loader<StreamProxyConnHandler>,
     context: &Runtime,
-) -> AnyResult {
+) -> Result<loading::PreparedOps<StreamProxyConnHandler>, AnyError> {
     loader
-        .tcp_server
-        .spawn_and_clean(
-            join_set,
+        .prepare(
             config
                 .into_iter()
                 .map(|s| s.into_builder(context.stream.clone()))
                 .collect(),
         )
-        .await?;
-    Ok(())
+        .await
 }
-async fn tcp_mux_spawn_and_clean(
+async fn tcp_mux_prepare(
     config: Vec<TcpMuxProxyServerConfig>,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
-    loader: &mut ProxyServerLoader,
+    loader: &loading::Loader<StreamProxyConnHandler>,
     context: &Runtime,
-) -> AnyResult {
+) -> Result<loading::PreparedOps<StreamProxyConnHandler>, AnyError> {
     loader
-        .tcp_mux_server
-        .spawn_and_clean(
-            join_set,
+        .prepare(
             config
                 .into_iter()
                 .map(|s| s.into_builder(context.stream.clone()))
                 .collect(),
         )
-        .await?;
-    Ok(())
+        .await
 }
-async fn udp_spawn_and_clean(
+async fn udp_prepare(
     config: Vec<UdpProxyServerConfig>,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
-    loader: &mut ProxyServerLoader,
+    loader: &loading::Loader<UdpProxyConnHandler>,
     context: &Runtime,
-) -> AnyResult {
+) -> Result<loading::PreparedOps<UdpProxyConnHandler>, AnyError> {
     loader
-        .udp_server
-        .spawn_and_clean(
-            join_set,
+        .prepare(
             config
                 .into_iter()
                 .map(|config| UdpProxyServerBuilder {
@@ -174,78 +209,61 @@ async fn udp_spawn_and_clean(
                 })
                 .collect(),
         )
-        .await?;
-    Ok(())
+        .await
 }
-async fn kcp_spawn_and_clean(
+async fn kcp_prepare(
     config: Vec<KcpProxyServerConfig>,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
-    loader: &mut ProxyServerLoader,
+    loader: &loading::Loader<StreamProxyConnHandler>,
     context: &Runtime,
-) -> AnyResult {
+) -> Result<loading::PreparedOps<StreamProxyConnHandler>, AnyError> {
     loader
-        .kcp_server
-        .spawn_and_clean(
-            join_set,
+        .prepare(
             config
                 .into_iter()
                 .map(|s| s.into_builder(context.stream.clone()))
                 .collect(),
         )
-        .await?;
-    Ok(())
+        .await
 }
-async fn mptcp_spawn_and_clean(
+async fn mptcp_prepare(
     config: Vec<MptcpProxyServerConfig>,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
-    loader: &mut ProxyServerLoader,
+    loader: &loading::Loader<StreamProxyConnHandler>,
     context: &Runtime,
-) -> AnyResult {
+) -> Result<loading::PreparedOps<StreamProxyConnHandler>, AnyError> {
     loader
-        .mptcp_server
-        .spawn_and_clean(
-            join_set,
+        .prepare(
             config
                 .into_iter()
                 .map(|s| s.into_builder(context.stream.clone()))
                 .collect(),
         )
-        .await?;
-    Ok(())
+        .await
 }
-async fn rtp_spawn_and_clean(
+async fn rtp_prepare(
     config: Vec<RtpProxyServerConfig>,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
-    loader: &mut ProxyServerLoader,
+    loader: &loading::Loader<StreamProxyConnHandler>,
     context: &Runtime,
-) -> AnyResult {
+) -> Result<loading::PreparedOps<StreamProxyConnHandler>, AnyError> {
     loader
-        .rtp_server
-        .spawn_and_clean(
-            join_set,
+        .prepare(
             config
                 .into_iter()
                 .map(|s| s.into_builder(context.stream.clone()))
                 .collect(),
         )
-        .await?;
-    Ok(())
+        .await
 }
-async fn rtp_mux_spawn_and_clean(
+async fn rtp_mux_prepare(
     config: Vec<RtpMuxProxyServerConfig>,
-    join_set: &mut tokio::task::JoinSet<AnyResult>,
-    loader: &mut ProxyServerLoader,
+    loader: &loading::Loader<StreamProxyConnHandler>,
     context: &Runtime,
-) -> AnyResult {
+) -> Result<loading::PreparedOps<StreamProxyConnHandler>, AnyError> {
     loader
-        .rtp_mux_server
-        .spawn_and_clean(
-            join_set,
+        .prepare(
             config
                 .into_iter()
                 .map(|s| s.into_builder(context.stream.clone()))
                 .collect(),
         )
-        .await?;
-    Ok(())
+        .await
 }

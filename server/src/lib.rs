@@ -27,8 +27,8 @@ use common::{
 };
 use config::ReadConfig;
 use protocol::{
-    access_server,
-    proxy_server::{self, ProxyServerConfig, ProxyServerLoader},
+    access_server::{self, PreparedAccessServer},
+    proxy_server::{self, PreparedProxyServer, ProxyServerConfig, ProxyServerLoader},
     stream::connect::build_concrete_stream_connector_table,
 };
 use serde::Deserialize;
@@ -100,16 +100,16 @@ where
     };
 
     let cancellation = CancellationToken::new();
-    read_and_exec_config(
+    let prepared = prepare_reload(
         &config_reader,
-        &mut server_tasks,
-        &mut server_loader,
+        &server_loader,
         cancellation.clone(),
         runtime.clone(),
     )
     .await?;
-
-    let mut _cancellation_guard = cancellation.drop_guard();
+    // No live state exists yet — commit immediately.
+    let mut _cancellation_guard =
+        commit_reload(&mut server_tasks, &mut server_loader, prepared, &runtime);
     let mut config_changed = serve_context.config_changed.0.subscription();
 
     loop {
@@ -154,18 +154,34 @@ where
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
                 let cancellation = CancellationToken::new();
-                if let Err(e) = read_and_exec_config(
+                match prepare_reload(
                     &config_reader,
-                    &mut server_tasks,
-                    &mut server_loader,
+                    &server_loader,
                     cancellation.clone(),
                     runtime.clone(),
                 ).await {
-                    error!(?e, "Failed to read and execute config");
-                    continue;
+                    Ok(new_prepared) => {
+                        // Commit: atomically swap global state, hot-swap handlers,
+                        // spawn new listener tasks, and cancel the previous
+                        // generation's token. Reassigning `_cancellation_guard`
+                        // drops the old guard, cancelling the old token.
+                        _cancellation_guard = commit_reload(
+                            &mut server_tasks,
+                            &mut server_loader,
+                            new_prepared,
+                            &runtime,
+                        );
+                    }
+                    Err(e) => {
+                        // `prepare_reload` already dropped the failed
+                        // `PreparedReload` (cancelling its candidate token and
+                        // aborting its probe tasks via `JoinSet` drop), so the
+                        // live configuration is untouched. Keep serving with the
+                        // existing generation.
+                        error!(?e, "Failed to prepare reload; live config unchanged");
+                        continue;
+                    }
                 }
-
-                _cancellation_guard = cancellation.drop_guard();
             }
         }
     }
@@ -177,43 +193,90 @@ pub struct ServerLoader {
     pub proxy_server: ProxyServerLoader,
 }
 
-async fn read_and_exec_config<CR>(
+/// A fully-prepared, not-yet-committed reload.
+///
+/// Everything that can fail — config parsing, route/selector resolution
+/// (which spawns probe tasks tied to `cancellation`), and listener socket
+/// binding — is resolved and held here without touching live state. Commit
+/// via [`commit_reload`] atomically swaps global state and hot-swaps
+/// listener handlers.
+///
+/// Dropping a `PreparedReload` without committing cancels its `cancellation`
+/// token (aborting the probe tasks spawned during resolution) and drops the
+/// prepared `PreparedAccessServer`/`PreparedProxyServer` (which aborts their
+/// inner probe-task `JoinSet`s and drops bound sockets). No live state is
+/// mutated, no listener task is spawned, and no candidate token survives a
+/// failed or abandoned prepare.
+pub struct PreparedReload {
+    cancellation: CancellationToken,
+    stream_pool: StreamConnPool,
+    connector_config: ConnectorConfig,
+    access_server: PreparedAccessServer,
+    proxy_server: PreparedProxyServer,
+}
+
+impl PreparedReload {
+    /// Consume `self`, disarming drop-cancellation, and return the parts.
+    /// Used by [`commit_reload`] to move every field out without running
+    /// `Drop` (so the new generation's token stays live).
+    fn into_parts(self) -> PreparedReloadParts {
+        // Wrap in ManuallyDrop so this struct's `Drop` (which would cancel
+        // the token) does not run when the fields are moved out.
+        let me = std::mem::ManuallyDrop::new(self);
+        PreparedReloadParts {
+            cancellation: unsafe { std::ptr::read(&me.cancellation) },
+            stream_pool: unsafe { std::ptr::read(&me.stream_pool) },
+            connector_config: unsafe { std::ptr::read(&me.connector_config) },
+            access_server: unsafe { std::ptr::read(&me.access_server) },
+            proxy_server: unsafe { std::ptr::read(&me.proxy_server) },
+        }
+    }
+}
+
+impl Drop for PreparedReload {
+    fn drop(&mut self) {
+        // Cancel the candidate token so any probe tasks spawned during
+        // prepare observe cancellation promptly. The probe-task `JoinSet`s
+        // owned by each `GaugedConnChain` (inside the `ConnSelector`s held by
+        // the prepared access/proxy servers) are also dropped here, forcefully
+        // aborting the tasks. Together this guarantees no candidate task
+        // survives a failed or abandoned prepare.
+        self.cancellation.cancel();
+    }
+}
+
+struct PreparedReloadParts {
+    cancellation: CancellationToken,
+    stream_pool: StreamConnPool,
+    connector_config: ConnectorConfig,
+    access_server: PreparedAccessServer,
+    proxy_server: PreparedProxyServer,
+}
+
+/// Phase 1 — prepare: read config, resolve routes/selectors (spawning probe
+/// tasks tied to `cancellation`), bind every new listener, and build every
+/// handler, all without touching live state. On any error the in-progress
+/// `PreparedReload` is dropped, which cancels the candidate token and aborts
+/// the probe tasks.
+async fn prepare_reload<CR>(
     config_reader: &CR,
-    server_tasks: &mut tokio::task::JoinSet<AnyResult>,
-    server_loader: &mut ServerLoader,
+    server_loader: &ServerLoader,
     cancellation: CancellationToken,
     runtime: Runtime,
-) -> Result<(), ServerServeError>
+) -> Result<PreparedReload, ServerServeError>
 where
     CR: ReadConfig<Config = ServerConfig>,
 {
+    // `guard` cancels `cancellation` on drop — including every error path
+    // below — so no candidate probe task survives a failed prepare. On
+    // success the guard is disarmed (`disarm`) before returning, leaving the
+    // token live for the new generation.
+    let mut guard = CancelOnDrop(Some(cancellation.clone()));
     let config = config_reader
         .read_config()
         .await
         .map_err(ServerServeError::Config)?;
-    spawn_and_clean(config, server_tasks, server_loader, cancellation, runtime)
-        .await
-        .map_err(ServerServeError::Load)?;
-    Ok(())
-}
 
-#[derive(Debug, Error)]
-pub enum ServerServeError {
-    #[error("Failed to read config file: {0}")]
-    Config(#[source] AnyError),
-    #[error("Failed to load config: {0}")]
-    Load(#[source] AnyError),
-    #[error("Server task failed: {0}")]
-    ServerTask(#[source] AnyError),
-}
-
-pub async fn spawn_and_clean(
-    config: ServerConfig,
-    server_tasks: &mut tokio::task::JoinSet<AnyResult>,
-    server_loader: &mut ServerLoader,
-    cancellation: CancellationToken,
-    runtime: Runtime,
-) -> AnyResult {
     let stream_conn = config.stream.upstream;
     let udp_conn = config.udp.upstream;
 
@@ -229,34 +292,104 @@ pub async fn spawn_and_clean(
         connector_table: &runtime.stream.connector_table,
         cancellation: cancellation.clone(),
     };
-    runtime
+    let stream_pool = config
         .stream
         .pool
-        .replaced_by(config.stream.pool.resolve(&stream_registries)?);
-    runtime
-        .stream
-        .connector_table
-        .replaced_by(config.connector.clone());
-    *runtime.udp.connector.config().write().unwrap() = config.connector.clone();
+        .resolve(&stream_registries)
+        .map_err(|e| ServerServeError::Load(e.into()))?;
+    let connector_config = config.connector.clone();
 
-    access_server::spawn_and_clean(
+    let access_server = access_server::prepare(
         config.access_server,
-        server_tasks,
-        &mut server_loader.access_server,
-        cancellation,
+        &server_loader.access_server,
+        cancellation.clone(),
         runtime.clone(),
         &stream_conn,
         &udp_conn,
     )
-    .await?;
-    proxy_server::spawn_and_clean(
+    .await
+    .map_err(ServerServeError::Load)?;
+    let proxy_server = proxy_server::prepare(
         config.proxy_server,
-        server_tasks,
-        &mut server_loader.proxy_server,
+        &server_loader.proxy_server,
         runtime.clone(),
     )
-    .await?;
-    Ok(())
+    .await
+    .map_err(ServerServeError::Load)?;
+
+    guard.disarm();
+    Ok(PreparedReload {
+        cancellation,
+        stream_pool,
+        connector_config,
+        access_server,
+        proxy_server,
+    })
+}
+
+/// Cancels a `CancellationToken` on drop unless [`Self::disarm`]ed. Used to
+/// guarantee the candidate token is cancelled on every error path of
+/// [`prepare_reload`].
+struct CancelOnDrop(Option<CancellationToken>);
+impl CancelOnDrop {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if let Some(token) = self.0.take() {
+            token.cancel();
+        }
+    }
+}
+
+/// Phase 2 — commit: atomically swap the global pool/connector config,
+/// hot-swap listener handlers, spawn new listener tasks, and drop removed
+/// listener handles. Consumes `prepared` (so its `Drop` does *not* run — the
+/// token stays live for the new generation). Returns a `DropGuard` for the
+/// new generation's `cancellation` token; dropping the previous guard
+/// cancels the previous generation's token.
+fn commit_reload(
+    server_tasks: &mut tokio::task::JoinSet<AnyResult>,
+    server_loader: &mut ServerLoader,
+    prepared: PreparedReload,
+    runtime: &Runtime,
+) -> tokio_util::sync::DropGuard {
+    let PreparedReloadParts {
+        cancellation,
+        stream_pool,
+        connector_config,
+        access_server,
+        proxy_server,
+    } = prepared.into_parts();
+    // Swap global state first.
+    runtime.stream.pool.replaced_by(stream_pool);
+    runtime
+        .stream
+        .connector_table
+        .replaced_by(connector_config.clone());
+    *runtime.udp.connector.config().write().unwrap() = connector_config;
+    // Commit listener handlers / tasks. Each `commit` is infallible.
+    server_loader
+        .access_server
+        .commit(server_tasks, access_server);
+    server_loader
+        .proxy_server
+        .commit(server_tasks, proxy_server);
+    // Return a guard so the next reload (or `serve` returning) cancels this
+    // generation's probe tasks.
+    cancellation.drop_guard()
+}
+
+#[derive(Debug, Error)]
+pub enum ServerServeError {
+    #[error("Failed to read config file: {0}")]
+    Config(#[source] AnyError),
+    #[error("Failed to load config: {0}")]
+    Load(#[source] AnyError),
+    #[error("Server task failed: {0}")]
+    ServerTask(#[source] AnyError),
 }
 
 #[derive(Debug, Deserialize, Default)]
