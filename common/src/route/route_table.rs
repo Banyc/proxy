@@ -20,13 +20,18 @@ pub struct RouteTableBuilder {
     pub entries: Vec<RouteTableEntryBuilder>,
 }
 impl RouteTableBuilder {
-    pub fn resolve(self, registries: &Registries<'_>) -> Result<RouteTable, RouteTableBuildError> {
+    pub fn resolve(
+        self,
+        registries: &Registries<'_>,
+    ) -> Result<(RouteTable, tokio::task::JoinSet<()>), RouteTableBuildError> {
         let mut built = vec![];
+        let mut drivers = tokio::task::JoinSet::new();
         for entry in self.entries {
-            let e = entry.resolve(registries)?;
+            let (e, driver) = entry.resolve(registries)?;
+            drivers.spawn(async move { while driver.join_next().await.is_some() {} });
             built.push(e);
         }
-        Ok(RouteTable::new(built, registries.matcher.clone()))
+        Ok((RouteTable::new(built, registries.matcher.clone()), drivers))
     }
 }
 
@@ -70,7 +75,7 @@ impl RouteTableEntryBuilder {
     pub fn resolve(
         self,
         registries: &Registries<'_>,
-    ) -> Result<RouteTableEntry, RouteTableBuildError> {
+    ) -> Result<(RouteTableEntry, tokio::task::JoinSet<()>), RouteTableBuildError> {
         let (name, matcher) = match self.matcher {
             SharableConfig::SharingKey(k) => (
                 Some(k.clone()),
@@ -82,8 +87,8 @@ impl RouteTableEntryBuilder {
             ),
             SharableConfig::Private(v) => (None, v),
         };
-        let action = self.action.resolve(registries)?;
-        Ok(RouteTableEntry::new(name, matcher, action))
+        let (action, drivers) = self.action.resolve(registries)?;
+        Ok((RouteTableEntry::new(name, matcher, action), drivers))
     }
 }
 
@@ -137,36 +142,51 @@ pub(crate) enum RouteActionBuilder {
     ConnSelector(RouteActionSelector),
 }
 impl RouteActionBuilder {
-    pub fn resolve(self, registries: &Registries<'_>) -> Result<RouteAction, RouteTableBuildError> {
-        Ok(match self {
-            RouteActionBuilder::Tagged(RouteActionTagBuilder::Direct) => RouteAction::Direct,
-            RouteActionBuilder::Tagged(RouteActionTagBuilder::Block) => RouteAction::Block,
+    pub fn resolve(
+        self,
+        registries: &Registries<'_>,
+    ) -> Result<(RouteAction, tokio::task::JoinSet<()>), RouteTableBuildError> {
+        let (action, drivers) = match self {
+            RouteActionBuilder::Tagged(RouteActionTagBuilder::Direct) => {
+                (RouteAction::Direct, tokio::task::JoinSet::new())
+            }
+            RouteActionBuilder::Tagged(RouteActionTagBuilder::Block) => {
+                (RouteAction::Block, tokio::task::JoinSet::new())
+            }
             RouteActionBuilder::ConnSelector(RouteActionSelector::Named { conn_selector }) => {
                 forbid_reserved_selector_name(&conn_selector)?;
-                RouteAction::ConnSelector(Arc::new(
-                    registries
-                        .conn_selector
-                        .get(&conn_selector)
-                        .cloned()
-                        .ok_or(RouteTableBuildError::ConnSelectorKeyNotFound(conn_selector))?,
-                ))
+                let selector = registries
+                    .conn_selector
+                    .get(&conn_selector)
+                    .cloned()
+                    .ok_or(RouteTableBuildError::ConnSelectorKeyNotFound(conn_selector))?;
+                (
+                    RouteAction::ConnSelector(Arc::new(selector)),
+                    tokio::task::JoinSet::new(),
+                )
             }
             RouteActionBuilder::ConnSelector(RouteActionSelector::Sharable(
                 SharableConfig::SharingKey(k),
             )) => {
                 forbid_reserved_selector_name(&k)?;
-                RouteAction::ConnSelector(Arc::new(
-                    registries
-                        .conn_selector
-                        .get(&k)
-                        .cloned()
-                        .ok_or(RouteTableBuildError::ConnSelectorKeyNotFound(k))?,
-                ))
+                let selector = registries
+                    .conn_selector
+                    .get(&k)
+                    .cloned()
+                    .ok_or(RouteTableBuildError::ConnSelectorKeyNotFound(k))?;
+                (
+                    RouteAction::ConnSelector(Arc::new(selector)),
+                    tokio::task::JoinSet::new(),
+                )
             }
             RouteActionBuilder::ConnSelector(RouteActionSelector::Sharable(
                 SharableConfig::Private(p),
-            )) => RouteAction::ConnSelector(Arc::new(p.resolve(registries)?)),
-        })
+            )) => {
+                let (selector, drivers) = p.resolve(registries)?;
+                (RouteAction::ConnSelector(Arc::new(selector)), drivers)
+            }
+        };
+        Ok((action, drivers))
     }
 }
 
@@ -361,7 +381,7 @@ mod tests {
 
     #[test]
     fn a_conn_selector_action_is_preserved_when_selected() {
-        let selector = ConnSelector::new(
+        let (selector, _drivers) = ConnSelector::new(
             vec![chain(1)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,

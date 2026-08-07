@@ -47,22 +47,28 @@ impl TcpAccessServerConfig {
         conn_selector: &HashMap<Arc<str>, ConnSelector>,
         registries: &Registries<'_>,
         stream_runtime: StreamRuntime,
-    ) -> Result<TcpAccessServerBuilder, TcpAccessBuildError> {
-        let conn_selector = match self.conn_selector {
-            SharableConfig::SharingKey(key) => conn_selector
-                .get(&key)
-                .ok_or_else(|| TcpAccessBuildError::ProxyGroupKeyNotFound(key.clone()))?
-                .clone(),
+    ) -> Result<(TcpAccessServerBuilder, tokio::task::JoinSet<()>), TcpAccessBuildError> {
+        let (conn_selector, drivers) = match self.conn_selector {
+            SharableConfig::SharingKey(key) => (
+                conn_selector
+                    .get(&key)
+                    .ok_or_else(|| TcpAccessBuildError::ProxyGroupKeyNotFound(key.clone()))?
+                    .clone(),
+                tokio::task::JoinSet::new(),
+            ),
             SharableConfig::Private(x) => x.resolve(registries)?,
         };
 
-        Ok(TcpAccessServerBuilder {
-            listen_addr: self.listen_addr,
-            destination: self.destination,
-            conn_selector,
-            speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
-            stream_runtime,
-        })
+        Ok((
+            TcpAccessServerBuilder {
+                listen_addr: self.listen_addr,
+                destination: self.destination,
+                conn_selector,
+                speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
+                stream_runtime,
+            },
+            drivers,
+        ))
     }
 }
 #[derive(Debug, Error)]

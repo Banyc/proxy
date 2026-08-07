@@ -57,7 +57,7 @@ impl ConnSelectorBuilder {
     pub fn resolve(
         self,
         registries: &Registries<'_>,
-    ) -> Result<ConnSelector, ConnSelectorBuildError> {
+    ) -> Result<(ConnSelector, tokio::task::JoinSet<()>), ConnSelectorBuildError> {
         let chains = self
             .chains
             .into_iter()
@@ -68,13 +68,14 @@ impl ConnSelectorBuilder {
             true => Some(registries.tracer.clone()),
             false => None,
         };
-        Ok(ConnSelector::new(
+        ConnSelector::new(
             chains,
             tracer,
             self.active_chains,
             self.max_rtt_ratio,
             registries.cancellation.clone(),
-        )?)
+        )
+        .map_err(Into::into)
     }
 }
 #[derive(Debug, Error)]
@@ -91,23 +92,24 @@ pub enum ConnSelector {
     Some(NonEmptyConnSelector),
 }
 impl ConnSelector {
+    /// Build the selector together with the `JoinSet` driving its probe tasks.
+    ///
+    /// The caller owns the returned `JoinSet`: spawn it into an actively-reaped
+    /// set (e.g. the server's `server_tasks`) so probe drivers are reaped, and
+    /// dropping it aborts the probe tasks.
     pub fn new(
         chains: Vec<WeightedConnChain>,
         tracer: Option<Arc<dyn ProbeRtt + Send + Sync>>,
         active_chains: Option<NonZeroUsize>,
         max_rtt_ratio: Option<f64>,
         cancellation: CancellationToken,
-    ) -> Result<Self, ConnSelectorError> {
+    ) -> Result<(Self, tokio::task::JoinSet<()>), ConnSelectorError> {
         if chains.is_empty() {
-            return Ok(Self::Empty);
+            return Ok((Self::Empty, tokio::task::JoinSet::new()));
         }
-        Ok(Self::Some(NonEmptyConnSelector::new(
-            chains,
-            tracer,
-            active_chains,
-            max_rtt_ratio,
-            cancellation,
-        )?))
+        let (selector, drivers) =
+            NonEmptyConnSelector::new(chains, tracer, active_chains, max_rtt_ratio, cancellation)?;
+        Ok((Self::Some(selector), drivers))
     }
 }
 
@@ -120,13 +122,18 @@ pub struct NonEmptyConnSelector {
     gate: Option<EligibilityGate>,
 }
 impl NonEmptyConnSelector {
+    /// Build the selector together with the `JoinSet` driving its probe tasks.
+    ///
+    /// Each chain's probe supervision driver is spawned into the returned
+    /// `JoinSet` via a draining task, so the caller only needs to reap the
+    /// single returned set.
     pub fn new(
         chains: Vec<WeightedConnChain>,
         tracer: Option<Arc<dyn ProbeRtt + Send + Sync>>,
         active_chains: Option<NonZeroUsize>,
         max_rtt_ratio: Option<f64>,
         cancellation: CancellationToken,
-    ) -> Result<Self, ConnSelectorError> {
+    ) -> Result<(Self, tokio::task::JoinSet<()>), ConnSelectorError> {
         let cum_weight = chains.iter().map(|c| c.weight).sum();
         if cum_weight == 0 {
             return Err(ConnSelectorError::ZeroAccumulatedWeight);
@@ -148,18 +155,28 @@ impl NonEmptyConnSelector {
             None => NonZeroUsize::new(chains.len()).unwrap(),
         };
 
+        let mut drivers = tokio::task::JoinSet::new();
         let chains = chains
             .into_iter()
-            .map(|c| GaugedConnChain::new(c, tracer.clone(), cancellation.clone()))
+            .map(|c| {
+                let (chain, inner) = GaugedConnChain::new(c, tracer.clone(), cancellation.clone());
+                // Reap the chain's probe supervision driver via a draining
+                // task in the caller-owned `drivers` set.
+                drivers.spawn(async move { while inner.join_next().await.is_some() {} });
+                chain
+            })
             .collect::<Arc<[_]>>();
         let score_store = Arc::new(RwLock::new(ScoreStore::new(None, PROBE_ROUND_INTERVAL)));
-        Ok(Self {
-            chains,
-            cum_weight,
-            score_store,
-            active_chains,
-            gate,
-        })
+        Ok((
+            Self {
+                chains,
+                cum_weight,
+                score_store,
+                active_chains,
+                gate,
+            },
+            drivers,
+        ))
     }
 
     pub fn choose_chain(&self) -> &WeightedConnChain {
@@ -250,7 +267,7 @@ mod tests {
     }
     #[test]
     fn a_zero_sum_falls_back_within_the_eligible_set() {
-        let selector = NonEmptyConnSelector::new(
+        let (selector, _drivers) = NonEmptyConnSelector::new(
             vec![chain(0), chain(5)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,
@@ -271,7 +288,7 @@ mod tests {
 
     #[test]
     fn a_dead_probe_chain_is_excluded_regardless_of_stale_gauges() {
-        let selector = NonEmptyConnSelector::new(
+        let (selector, _drivers) = NonEmptyConnSelector::new(
             vec![chain(1), chain(2)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,
@@ -293,7 +310,7 @@ mod tests {
 
     #[test]
     fn all_dead_probes_fall_back_to_uniform_selection() {
-        let selector = NonEmptyConnSelector::new(
+        let (selector, _drivers) = NonEmptyConnSelector::new(
             vec![chain(1), chain(2)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,
@@ -316,7 +333,7 @@ mod tests {
 
     #[test]
     fn cancelled_probe_is_treated_as_healthy() {
-        let selector = NonEmptyConnSelector::new(
+        let (selector, _drivers) = NonEmptyConnSelector::new(
             vec![chain(1), chain(2)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,

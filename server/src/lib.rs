@@ -123,7 +123,9 @@ where
                 sessions.spawn(fut);
             }
             Some(res) = sessions.join_next() => {
-                res.unwrap();
+                if let Err(error) = res.unwrap() {
+                    error!(?error, "Session task returned an error");
+                }
             }
             _ = config_changed.notified() => {
                 info!("Config file changed");
@@ -229,11 +231,11 @@ impl PreparedReload {
 impl Drop for PreparedReload {
     fn drop(&mut self) {
         // Cancel the candidate token so any probe tasks spawned during
-        // prepare observe cancellation promptly. The probe-task `JoinSet`s
-        // owned by each `GaugedConnChain` (inside the `ConnSelector`s held by
-        // the prepared access/proxy servers) are also dropped here, forcefully
-        // aborting the tasks. Together this guarantees no candidate task
-        // survives a failed or abandoned prepare.
+        // prepare observe cancellation promptly. The probe-driver `JoinSet`
+        // owned by the prepared `PreparedAccessServer` (its `probe_drivers`
+        // field) is also dropped here, forcefully aborting the probe tasks.
+        // Together this guarantees no candidate task survives a failed or
+        // abandoned prepare.
         self.cancellation.cancel();
     }
 }

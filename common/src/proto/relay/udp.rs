@@ -381,20 +381,10 @@ where
         trace!("Waiting for packet");
         tokio::select! {
             res = io_copy_tasks.join_next() => {
-                let res = match res {
-                    Some(res) => match res {
-                        Ok(res) => res,
-                        Err(error) if error.is_panic() => {
-                            warn!(?error, "I/O copy task panicked");
-                            std::panic::resume_unwind(error.into_panic());
-                        }
-                        Err(error) => {
-                            warn!(?error, "I/O copy task failed to join");
-                            break;
-                        }
-                    },
-                    None => break,
-                };
+                let Some(res) = res else { break; };
+                // A panicked or cancelled copy task propagates instead of
+                // silently breaking the flow loop.
+                let res = res.unwrap();
                 res?;
             }
             _ = activity_check.tick() => {

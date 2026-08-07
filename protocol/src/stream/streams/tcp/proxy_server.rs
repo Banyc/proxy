@@ -206,15 +206,15 @@ mod tests {
         let connector_reset = ConnectorResetSignal(Notify::new());
         let (session_spawner, mut session_rx) = common::session::SessionSpawner::channel();
         let (retention_actor, retention) = common::retention::RetentionActor::new();
-        // Test-owned session reaper; lifetime is the test runtime.
-        #[allow(clippy::disallowed_methods)]
-        tokio::spawn(async move {
+        // Test-owned session reaper; drained at the end of the test.
+        let mut session_reaper: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+        session_reaper.spawn(async move {
             let _retention_actor = retention_actor;
             let mut sessions = tokio::task::JoinSet::new();
             loop {
                 tokio::select! {
                     Some(fut) = session_rx.recv() => { sessions.spawn(fut); }
-                    Some(res) = sessions.join_next() => { let _ = res; }
+                    Some(res) = sessions.join_next() => { res.unwrap(); }
                     else => break,
                 }
             }
@@ -305,6 +305,9 @@ mod tests {
             let msg_buf = &mut buf[..resp_msg.len()];
             stream.read_exact(msg_buf).await.unwrap();
             assert_eq!(msg_buf, resp_msg);
+        }
+        while let Some(result) = session_reaper.join_next().await {
+            result.unwrap();
         }
     }
 }

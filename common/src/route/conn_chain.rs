@@ -129,21 +129,26 @@ pub struct GaugedConnChain {
     weighted: WeightedConnChain,
     rtt_stats: Arc<RwLock<RttStats>>,
     loss: Arc<RwLock<Option<f64>>>,
-    _probe_supervision: tokio::task::JoinSet<()>,
     probe_state: watch::Receiver<ProbeTaskState>,
     #[cfg(test)]
     probe_state_tx: watch::Sender<ProbeTaskState>,
 }
 impl GaugedConnChain {
+    /// Return the chain handle and its probe supervision driver.
+    ///
+    /// The driver is a `JoinSet` that owns the probe task; spawn it into a
+    /// caller-owned, actively-reaped `JoinSet` so probe termination is
+    /// observed. Dropping the driver aborts the probe task. The chain retains
+    /// only the `probe_state` watch receiver for state observation.
     pub fn new(
         weighted: WeightedConnChain,
         tracer: Option<Arc<dyn ProbeRtt + Send + Sync>>,
         cancellation: CancellationToken,
-    ) -> Self {
+    ) -> (Self, tokio::task::JoinSet<()>) {
         let rtt_stats = Arc::new(RwLock::new(RttStats::default()));
         let loss = Arc::new(RwLock::new(None));
         let (probe_state_tx, probe_state) = watch::channel(ProbeTaskState::Disabled);
-        let mut _probe_supervision = tokio::task::JoinSet::new();
+        let mut probe_supervision = tokio::task::JoinSet::new();
         if let Some(tracer) = tracer {
             probe_state_tx.send(ProbeTaskState::Running).ok();
             let probe_cancellation = cancellation.clone();
@@ -151,7 +156,7 @@ impl GaugedConnChain {
             let chain = weighted.chain.clone();
             let rtt_stats = rtt_stats.clone();
             let loss = loss.clone();
-            _probe_supervision.spawn(async move {
+            probe_supervision.spawn(async move {
                 let mut probes = tokio::task::JoinSet::new();
                 probes.spawn(probe_task(
                     tracer,
@@ -188,15 +193,17 @@ impl GaugedConnChain {
                 }
             });
         }
-        Self {
-            weighted,
-            rtt_stats,
-            loss,
-            _probe_supervision,
-            probe_state,
-            #[cfg(test)]
-            probe_state_tx,
-        }
+        (
+            Self {
+                weighted,
+                rtt_stats,
+                loss,
+                probe_state,
+                #[cfg(test)]
+                probe_state_tx,
+            },
+            probe_supervision,
+        )
     }
 
     pub fn weighted(&self) -> &WeightedConnChain {
@@ -288,7 +295,7 @@ mod tests {
     #[tokio::test]
     async fn dropping_the_chain_aborts_the_probe_task() {
         let counter = Arc::new(AtomicUsize::new(0));
-        let chain = GaugedConnChain::new(
+        let (chain, driver) = GaugedConnChain::new(
             WeightedConnChain {
                 weight: 1,
                 chain: Arc::from(Vec::<crate::route::ConnConfig>::new()),
@@ -300,6 +307,8 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         let before = counter.load(Ordering::SeqCst);
         assert!(before >= 1, "the probe task should have run");
+        // The probe is owned by the driver; dropping it aborts the probe task.
+        drop(driver);
         drop(chain);
         tokio::time::sleep(Duration::from_millis(200)).await;
         let after = counter.load(Ordering::SeqCst);
@@ -323,7 +332,7 @@ mod tests {
 
     #[tokio::test]
     async fn probe_panic_is_observed_without_a_reap_call() {
-        let chain = GaugedConnChain::new(
+        let (chain, _driver) = GaugedConnChain::new(
             WeightedConnChain {
                 weight: 1,
                 chain: Arc::from(Vec::<crate::route::ConnConfig>::new()),
@@ -345,7 +354,7 @@ mod tests {
     #[tokio::test]
     async fn probe_cancellation_is_classified() {
         let cancellation = CancellationToken::new();
-        let chain = GaugedConnChain::new(
+        let (chain, _driver) = GaugedConnChain::new(
             WeightedConnChain {
                 weight: 1,
                 chain: Arc::from(Vec::<crate::route::ConnConfig>::new()),
@@ -379,7 +388,7 @@ mod tests {
 
     #[test]
     fn probe_healthy_reflects_injected_state() {
-        let chain = GaugedConnChain::new(
+        let (chain, _driver) = GaugedConnChain::new(
             WeightedConnChain {
                 weight: 1,
                 chain: Arc::from(Vec::<crate::route::ConnConfig>::new()),

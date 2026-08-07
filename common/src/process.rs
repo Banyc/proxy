@@ -42,39 +42,30 @@ pub enum ProcessSupervisionError {
 /// Supervise the join result of a single root-process task.
 ///
 /// Returns `Err(ProcessSupervisionError)` for *every* non-normal completion
-/// of a root task: clean completion, failure, panic, cancellation, and join
-/// failure are all fatal for process-lifetime actors. The caller is expected
-/// to surface this as a process-fatal error (e.g. propagate it out of `main`)
-/// so the service is restarted by the surrounding supervisor (systemd, a
-/// container orchestrator, etc.) instead of running permanently without the
-/// dead actor.
+/// of a root task: clean completion and failure are both fatal for
+/// process-lifetime actors. The caller is expected to surface this as a
+/// process-fatal error (e.g. propagate it out of `main`) so the service is
+/// restarted by the surrounding supervisor (systemd, a container
+/// orchestrator, etc.) instead of running permanently without the dead
+/// actor.
 ///
-/// For panics, the original panic payload is re-resumed via `resume_unwind`
-/// by this function — matching the prior behaviour of the supervision loop
-/// in `main` — so the panic propagates through the caller with its original
-/// backtrace and tears the process down.
+/// The join result is unwrapped first: a panicked task is re-resumed via
+/// `resume_unwind` (propagating the panic through the caller with its
+/// original backtrace), and a cancelled or failed join aborts via the
+/// `unwrap`. The task's ordinary output is then classified.
 ///
 /// `Ok(())` is never returned: there is no normal exit for a root actor.
 pub fn handle_root_task_exit(
     res: Result<ProcessTaskExit, tokio::task::JoinError>,
 ) -> Result<(), ProcessSupervisionError> {
-    match res {
-        Ok(ProcessTaskExit::Completed { task }) => {
+    let exit = res.unwrap();
+    match exit {
+        ProcessTaskExit::Completed { task } => {
             Err(ProcessSupervisionError::CompletedUnexpectedly { task })
         }
-        Ok(ProcessTaskExit::Failed { task, detail }) => {
+        ProcessTaskExit::Failed { task, detail } => {
             Err(ProcessSupervisionError::Failed { task, detail })
         }
-        Err(error) if error.is_panic() => {
-            // Re-resume the panic so it propagates through the main task,
-            // producing the original panic backtrace and tearing the process
-            // down — the same behaviour as the previous supervision loop.
-            std::panic::resume_unwind(error.into_panic());
-        }
-        Err(error) if error.is_cancelled() => Err(ProcessSupervisionError::Cancelled),
-        Err(error) => Err(ProcessSupervisionError::JoinFailed {
-            source: error.to_string().into(),
-        }),
     }
 }
 

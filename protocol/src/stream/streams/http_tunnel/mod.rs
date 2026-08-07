@@ -92,21 +92,27 @@ impl HttpAccessServerConfig {
         route_tables: &HashMap<Arc<str>, RouteTable>,
         registries: &Registries<'_>,
         stream_context: StreamRuntime,
-    ) -> Result<HttpAccessServerBuilder, HttpBuildError> {
-        let route_table = match self.route_table {
-            SharableConfig::SharingKey(key) => route_tables
-                .get(&key)
-                .ok_or_else(|| HttpBuildError::ProxyTableKeyNotFound(key.clone()))?
-                .clone(),
+    ) -> Result<(HttpAccessServerBuilder, tokio::task::JoinSet<()>), HttpBuildError> {
+        let (route_table, drivers) = match self.route_table {
+            SharableConfig::SharingKey(key) => (
+                route_tables
+                    .get(&key)
+                    .ok_or_else(|| HttpBuildError::ProxyTableKeyNotFound(key.clone()))?
+                    .clone(),
+                tokio::task::JoinSet::new(),
+            ),
             SharableConfig::Private(x) => x.resolve(registries)?,
         };
 
-        Ok(HttpAccessServerBuilder {
-            listen_addr: self.listen_addr,
-            route_table,
-            speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
-            stream_context,
-        })
+        Ok((
+            HttpAccessServerBuilder {
+                listen_addr: self.listen_addr,
+                route_table,
+                speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
+                stream_context,
+            },
+            drivers,
+        ))
     }
 }
 #[derive(Debug, Error)]
