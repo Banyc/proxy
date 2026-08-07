@@ -5,8 +5,9 @@ use crate::error::AnyError;
 /// Exit status of a process-lifetime root task.
 ///
 /// Panics surface through the `JoinError` yielded by the supervising
-/// `JoinSet` (the caller resumes them); this value marks a task that ran to
-/// completion on its own, which for a root-owned task is unexpected.
+/// `JoinSet` (the caller's `unwrap` re-raises them); this value marks a task
+/// that ran to completion on its own, which for a root-owned task is
+/// unexpected.
 #[derive(Debug)]
 pub enum ProcessTaskExit {
     Completed { task: &'static str },
@@ -18,9 +19,9 @@ pub enum ProcessTaskExit {
 /// Root-process actors are expected to run for the entire lifetime of the
 /// process; any completion — clean or failed — is a fatal supervision error
 /// that must bring the process down so the operator notices the service is
-/// no longer running. Panics are already fatal (re-`resume_unwind`ed by
-/// [`handle_root_task_exit`]); this type covers the remaining, previously
-/// log-only cases.
+/// no longer running. Panics are already fatal (`JoinError::unwrap`
+/// re-raises them inside [`handle_root_task_exit`]); this type covers the
+/// remaining, previously log-only cases.
 #[derive(Debug, Error)]
 pub enum ProcessSupervisionError {
     /// A root task returned `ProcessTaskExit::Completed` on its own, which
@@ -49,10 +50,10 @@ pub enum ProcessSupervisionError {
 /// orchestrator, etc.) instead of running permanently without the dead
 /// actor.
 ///
-/// The join result is unwrapped first: a panicked task is re-resumed via
-/// `resume_unwind` (propagating the panic through the caller with its
-/// original backtrace), and a cancelled or failed join aborts via the
-/// `unwrap`. The task's ordinary output is then classified.
+/// The join result is unwrapped first: `JoinError::unwrap` re-raises a
+/// panicked task's panic through the caller with its original backtrace
+/// (the scoped panic-cascade), and a cancelled or failed join aborts via the
+/// same `unwrap`. The task's ordinary output is then classified.
 ///
 /// `Ok(())` is never returned: there is no normal exit for a root actor.
 pub fn handle_root_task_exit(
@@ -112,10 +113,12 @@ mod tests {
         }
     }
 
-    /// A panicked root task must re-resume the panic so it propagates
-    /// through the caller (matching the prior `resume_unwind` behaviour).
+    /// A panicked root task must propagate its panic through the caller:
+    /// `handle_root_task_exit` unwraps the `JoinError`, so the panic
+    /// crosses the task boundary (scoped panic-cascade) instead of being
+    /// reported as a supervision error.
     #[test]
-    fn root_task_panicking_resumes_the_panic() {
+    fn root_task_panicking_propagates_the_panic() {
         // We can't build a `JoinError` directly (no public ctor), so join a
         // real panicking task via a task scope. `tokio::task::JoinSet` is
         // the lint-approved spawn path.
@@ -149,7 +152,7 @@ mod tests {
                     "panic must propagate 'boom', got {msg:?}"
                 );
             }
-            Ok(()) => panic!("handle_root_task_exit must re-resume the panic, not return"),
+            Ok(()) => panic!("handle_root_task_exit must propagate the panic, not return"),
         }
     }
 
