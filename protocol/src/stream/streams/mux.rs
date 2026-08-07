@@ -19,7 +19,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     task::JoinSet,
 };
-use tracing::{debug, trace, warn};
+use tracing::{debug, warn};
 
 pub fn server_mux_config() -> MuxConfig {
     MuxConfig {
@@ -74,14 +74,9 @@ pub async fn run_mux_connector<R, W, Fut>(
                 mux_spawner = JoinSet::new();
             }
             Some(result) = mux_spawner.join_next() => {
-                match result {
-                    Ok((addr, error)) => {
-                        warn!(?error, ?addr, "MUX error");
-                        openers.remove(&addr);
-                    }
-                    Err(error) if error.is_cancelled() => trace!(?error, "MUX task cancelled (normal shutdown/reset)"),
-                    Err(error) => std::panic::resume_unwind(error.into_panic()),
-                }
+                let (addr, error) = result.unwrap();
+                warn!(?error, ?addr, "MUX error");
+                openers.remove(&addr);
             }
             result = connect_request_rx.recv() => {
                 let Some(message) = result else { break };

@@ -14,7 +14,7 @@ use tokio::{
     net::{TcpListener, TcpSocket, TcpStream, ToSocketAddrs},
     task::JoinSet,
 };
-use tracing::{instrument, trace, warn};
+use tracing::{instrument, warn};
 
 use common::{
     addr::any_addr,
@@ -147,13 +147,8 @@ where
                 Box::pin(async move {
                     tokio::select! {
                         Some(res) = state.mux.join_next() => {
-                            match res {
-                                Ok(e) => warn!(?e, ?addr, "MUX error"),
-                                Err(error) if error.is_cancelled() => {
-                                    trace!(?error, "MUX task cancelled (normal shutdown/reset)");
-                                }
-                                Err(error) => std::panic::resume_unwind(error.into_panic()),
-                            }
+                            let error = res.unwrap();
+                            warn!(?error, ?addr, "MUX error");
                         }
                         Some(result) = state.accepting.join_next() => {
                             result.unwrap();

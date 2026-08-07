@@ -117,37 +117,13 @@ where
     loop {
         tokio::select! {
             Some(res) = server_tasks.join_next() => {
-                let res = match res {
-                    Ok(res) => res,
-                    Err(error) if error.is_panic() => {
-                        error!(?error, "Server task panicked");
-                        std::panic::resume_unwind(error.into_panic());
-                    }
-                    Err(error) => {
-                        error!(?error, "Server task failed to join");
-                        continue;
-                    }
-                };
-                res.map_err(ServerServeError::ServerTask)?;
+                res.unwrap().map_err(ServerServeError::ServerTask)?;
             }
             Some(fut) = session_rx.recv() => {
                 sessions.spawn(fut);
             }
             Some(res) = sessions.join_next() => {
-                let res = match res {
-                    Ok(res) => res,
-                    Err(error) if error.is_panic() => {
-                        error!(?error, "Session task panicked");
-                        std::panic::resume_unwind(error.into_panic());
-                    }
-                    Err(error) => {
-                        error!(?error, "Session task failed to join");
-                        continue;
-                    }
-                };
-                if let Err(e) = res {
-                    error!(?e, "Session task returned an error");
-                }
+                res.unwrap();
             }
             _ = config_changed.notified() => {
                 info!("Config file changed");
