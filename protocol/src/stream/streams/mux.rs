@@ -148,15 +148,7 @@ where
     let (opener, _) = spawn_mux_no_reconnection(reader, writer, config, &mut spawner);
     mux_spawner.spawn(async move {
         let error = match spawner.join_next().await {
-            Some(Ok(error)) => error,
-            Some(Err(source)) if source.is_cancelled() => {
-                debug!("build_opener: inner mux task cancelled");
-                MuxError::TaskJoin {
-                    task: "mux",
-                    source,
-                }
-            }
-            Some(Err(source)) => std::panic::resume_unwind(source.into_panic()),
+            Some(result) => result.unwrap(),
             None => {
                 debug!("build_opener: inner mux task produced no result");
                 MuxError::TaskStopped { task: "mux" }

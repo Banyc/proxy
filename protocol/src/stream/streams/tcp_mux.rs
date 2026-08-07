@@ -154,7 +154,9 @@ where
                                 Err(error) => std::panic::resume_unwind(error.into_panic()),
                             }
                         }
-                        Some(_) = state.accepting.join_next() => {}
+                        Some(result) = state.accepting.join_next() => {
+                            result.unwrap();
+                        }
                         _ = std::future::pending::<()>() => {}
                     }
                 })
