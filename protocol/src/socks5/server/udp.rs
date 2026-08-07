@@ -37,28 +37,22 @@ impl Socks5ServerUdpAccessServerConfig {
         conn_selector: &HashMap<Arc<str>, ConnSelector>,
         registries: &Registries<'_>,
         udp_runtime: UdpRuntime,
-    ) -> Result<(Socks5ServerUdpAccessServerBuilder, tokio::task::JoinSet<()>), Socks5UdpBuildError>
-    {
-        let (conn_selector, drivers) = match self.conn_selector {
-            SharableConfig::SharingKey(key) => (
-                conn_selector
-                    .get(&key)
-                    .ok_or_else(|| Socks5UdpBuildError::ProxyGroupKeyNotFound(key.clone()))?
-                    .clone(),
-                tokio::task::JoinSet::new(),
-            ),
-            SharableConfig::Private(x) => x.resolve(registries)?,
+        generation: &mut tokio::task::JoinSet<()>,
+    ) -> Result<Socks5ServerUdpAccessServerBuilder, Socks5UdpBuildError> {
+        let conn_selector = match self.conn_selector {
+            SharableConfig::SharingKey(key) => conn_selector
+                .get(&key)
+                .ok_or_else(|| Socks5UdpBuildError::ProxyGroupKeyNotFound(key.clone()))?
+                .clone(),
+            SharableConfig::Private(x) => x.resolve(registries, generation)?,
         };
 
-        Ok((
-            Socks5ServerUdpAccessServerBuilder {
-                listen_addr: self.listen_addr,
-                conn_selector,
-                speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
-                udp_runtime,
-            },
-            drivers,
-        ))
+        Ok(Socks5ServerUdpAccessServerBuilder {
+            listen_addr: self.listen_addr,
+            conn_selector,
+            speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
+            udp_runtime,
+        })
     }
 }
 #[derive(Debug, Error)]

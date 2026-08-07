@@ -37,28 +37,23 @@ impl UdpAccessServerConfig {
         conn_selector: &HashMap<Arc<str>, ConnSelector>,
         registries: &Registries<'_>,
         udp_runtime: UdpRuntime,
-    ) -> Result<(UdpAccessServerBuilder, tokio::task::JoinSet<()>), UdpAccessBuildError> {
-        let (conn_selector, drivers) = match self.conn_selector {
-            SharableConfig::SharingKey(key) => (
-                conn_selector
-                    .get(&key)
-                    .ok_or_else(|| UdpAccessBuildError::ProxyGroupKeyNotFound(key.clone()))?
-                    .clone(),
-                tokio::task::JoinSet::new(),
-            ),
-            SharableConfig::Private(x) => x.resolve(registries)?,
+        generation: &mut tokio::task::JoinSet<()>,
+    ) -> Result<UdpAccessServerBuilder, UdpAccessBuildError> {
+        let conn_selector = match self.conn_selector {
+            SharableConfig::SharingKey(key) => conn_selector
+                .get(&key)
+                .ok_or_else(|| UdpAccessBuildError::ProxyGroupKeyNotFound(key.clone()))?
+                .clone(),
+            SharableConfig::Private(x) => x.resolve(registries, generation)?,
         };
 
-        Ok((
-            UdpAccessServerBuilder {
-                listen_addr: self.listen_addr,
-                destination: self.destination,
-                conn_selector,
-                speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
-                udp_runtime,
-            },
-            drivers,
-        ))
+        Ok(UdpAccessServerBuilder {
+            listen_addr: self.listen_addr,
+            destination: self.destination,
+            conn_selector,
+            speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
+            udp_runtime,
+        })
     }
 }
 #[derive(Debug, Error)]

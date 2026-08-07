@@ -61,17 +61,14 @@ impl Socks5ServerTcpAccessServerConfig {
         route_table: &HashMap<Arc<str>, RouteTable>,
         registries: &Registries<'_>,
         stream_context: StreamRuntime,
-    ) -> Result<(Socks5ServerTcpAccessServerBuilder, tokio::task::JoinSet<()>), Socks5TcpBuildError>
-    {
-        let (route_table, drivers) = match self.route_table {
-            SharableConfig::SharingKey(key) => (
-                route_table
-                    .get(&key)
-                    .ok_or_else(|| Socks5TcpBuildError::ProxyTableKeyNotFound(key.clone()))?
-                    .clone(),
-                tokio::task::JoinSet::new(),
-            ),
-            SharableConfig::Private(x) => x.resolve(registries)?,
+        generation: &mut tokio::task::JoinSet<()>,
+    ) -> Result<Socks5ServerTcpAccessServerBuilder, Socks5TcpBuildError> {
+        let route_table = match self.route_table {
+            SharableConfig::SharingKey(key) => route_table
+                .get(&key)
+                .ok_or_else(|| Socks5TcpBuildError::ProxyTableKeyNotFound(key.clone()))?
+                .clone(),
+            SharableConfig::Private(x) => x.resolve(registries, generation)?,
         };
         let users = self
             .users
@@ -79,17 +76,14 @@ impl Socks5ServerTcpAccessServerConfig {
             .map(|u| (u.username.as_bytes().into(), u.password.as_bytes().into()))
             .collect();
 
-        Ok((
-            Socks5ServerTcpAccessServerBuilder {
-                listen_addr: self.listen_addr,
-                route_table,
-                speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
-                udp_server_addr: self.udp_server_addr.map(|a| a.0),
-                users,
-                stream_context,
-            },
-            drivers,
-        ))
+        Ok(Socks5ServerTcpAccessServerBuilder {
+            listen_addr: self.listen_addr,
+            route_table,
+            speed_limit: self.speed_limit.unwrap_or(f64::INFINITY),
+            udp_server_addr: self.udp_server_addr.map(|a| a.0),
+            users,
+            stream_context,
+        })
     }
 }
 #[derive(Debug, Error)]

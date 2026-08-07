@@ -183,12 +183,15 @@ impl AccessServerLoader {
         prepared: PreparedAccessServer,
     ) -> AnyResult {
         // Reap this generation's probe drivers into the server's
-        // actively-reaped task set. Dropping an uncommitted `PreparedReload`
-        // drops the drivers, aborting the probe tasks.
+        // actively-reaped task set, unwrapping so panics propagate instead of
+        // being swallowed. Dropping an uncommitted `PreparedReload` drops the
+        // drivers, aborting the probe tasks.
         let mut probe_drivers = prepared.probe_drivers;
         if !probe_drivers.is_empty() {
             join_set.spawn(async move {
-                while probe_drivers.join_next().await.is_some() {}
+                while let Some(result) = probe_drivers.join_next().await {
+                    result.unwrap();
+                }
                 Ok(())
             });
         }
@@ -241,17 +244,17 @@ pub async fn prepare(
         cancellation: cancellation.clone(),
     };
     let mut probe_drivers = tokio::task::JoinSet::new();
-    let (stream_conn_selector, mut drivers) =
-        stream_conn_selector(&stream_registries, config.stream.conn_selector)?;
-    if !drivers.is_empty() {
-        probe_drivers.spawn(async move { while drivers.join_next().await.is_some() {} });
-    }
+    let stream_conn_selector = stream_conn_selector(
+        &stream_registries,
+        config.stream.conn_selector,
+        &mut probe_drivers,
+    )?;
     stream_registries.conn_selector = &stream_conn_selector;
-    let (stream_route_tables, mut drivers) =
-        stream_route_tables(&stream_registries, config.stream.route_table)?;
-    if !drivers.is_empty() {
-        probe_drivers.spawn(async move { while drivers.join_next().await.is_some() {} });
-    }
+    let stream_route_tables = stream_route_tables(
+        &stream_registries,
+        config.stream.route_table,
+        &mut probe_drivers,
+    )?;
     let udp_tracer: Arc<dyn ProbeRtt + Send + Sync> = Arc::new(UdpTracer::new(context.udp.clone()));
     let mut udp_registries = Registries {
         conn: udp_conn,
@@ -261,68 +264,58 @@ pub async fn prepare(
         connector_table: &context.stream.connector_table,
         cancellation: cancellation.clone(),
     };
-    let (udp_conn_selector, mut drivers) =
-        udp_conn_selector(&udp_registries, config.udp.conn_selector)?;
-    if !drivers.is_empty() {
-        probe_drivers.spawn(async move { while drivers.join_next().await.is_some() {} });
-    }
+    let udp_conn_selector = udp_conn_selector(
+        &udp_registries,
+        config.udp.conn_selector,
+        &mut probe_drivers,
+    )?;
     udp_registries.conn_selector = &udp_conn_selector;
     deny_udp_route_table_key(&config.udp.route_table)?;
-    let (tcp_server, mut drivers) = tcp_prepare(
+    let tcp_server = tcp_prepare(
         config.tcp_server,
         &stream_conn_selector,
         &stream_registries,
         &context,
         &loader.tcp_server,
+        &mut probe_drivers,
     )
     .await?;
-    if !drivers.is_empty() {
-        probe_drivers.spawn(async move { while drivers.join_next().await.is_some() {} });
-    }
-    let (udp_server, mut drivers) = udp_prepare(
+    let udp_server = udp_prepare(
         config.udp_server,
         &udp_conn_selector,
         &udp_registries,
         &context,
         &loader.udp_server,
+        &mut probe_drivers,
     )
     .await?;
-    if !drivers.is_empty() {
-        probe_drivers.spawn(async move { while drivers.join_next().await.is_some() {} });
-    }
-    let (http_server, mut drivers) = http_prepare(
+    let http_server = http_prepare(
         config.http_server,
         &stream_route_tables,
         &stream_registries,
         &context,
         &loader.http_server,
+        &mut probe_drivers,
     )
     .await?;
-    if !drivers.is_empty() {
-        probe_drivers.spawn(async move { while drivers.join_next().await.is_some() {} });
-    }
-    let (socks5_tcp_server, mut drivers) = socks5_tcp_prepare(
+    let socks5_tcp_server = socks5_tcp_prepare(
         config.socks5_tcp_server,
         &stream_route_tables,
         &stream_registries,
         &context,
         &loader.socks5_tcp_server,
+        &mut probe_drivers,
     )
     .await?;
-    if !drivers.is_empty() {
-        probe_drivers.spawn(async move { while drivers.join_next().await.is_some() {} });
-    }
-    let (socks5_udp_server, mut drivers) = socks5_udp_prepare(
+    let socks5_udp_server = socks5_udp_prepare(
         config.socks5_udp_server,
         &udp_conn_selector,
         &udp_registries,
         &context,
         &loader.socks5_udp_server,
+        &mut probe_drivers,
     )
     .await?;
-    if !drivers.is_empty() {
-        probe_drivers.spawn(async move { while drivers.join_next().await.is_some() {} });
-    }
     Ok(PreparedAccessServer {
         tcp_server,
         udp_server,
@@ -352,55 +345,46 @@ fn forbid_reserved_selector_name(name: Arc<str>) -> Result<(), AnyError> {
 fn stream_conn_selector(
     registries: &Registries<'_>,
     config: HashMap<Arc<str>, ConnSelectorBuilder>,
-) -> Result<(HashMap<Arc<str>, ConnSelector>, tokio::task::JoinSet<()>), AnyError> {
-    let mut drivers = tokio::task::JoinSet::new();
+    generation: &mut tokio::task::JoinSet<()>,
+) -> Result<HashMap<Arc<str>, ConnSelector>, AnyError> {
     let stream_conn_selector = config
         .into_iter()
         .map(|(k, v)| -> Result<(Arc<str>, ConnSelector), AnyError> {
             forbid_reserved_selector_name(k.clone())?;
-            let (selector, mut driver) = v.resolve(registries)?;
-            if !driver.is_empty() {
-                drivers.spawn(async move { while driver.join_next().await.is_some() {} });
-            }
+            let selector = v.resolve(registries, generation)?;
             Ok((k, selector))
         })
         .collect::<Result<HashMap<_, _>, _>>()?;
-    Ok((stream_conn_selector, drivers))
+    Ok(stream_conn_selector)
 }
 fn udp_conn_selector(
     registries: &Registries<'_>,
     config: HashMap<Arc<str>, ConnSelectorBuilder>,
-) -> Result<(HashMap<Arc<str>, ConnSelector>, tokio::task::JoinSet<()>), AnyError> {
-    let mut drivers = tokio::task::JoinSet::new();
+    generation: &mut tokio::task::JoinSet<()>,
+) -> Result<HashMap<Arc<str>, ConnSelector>, AnyError> {
     let udp_conn_selector = config
         .into_iter()
         .map(|(k, v)| -> Result<(Arc<str>, ConnSelector), AnyError> {
             forbid_reserved_selector_name(k.clone())?;
-            let (selector, mut driver) = v.resolve(registries)?;
-            if !driver.is_empty() {
-                drivers.spawn(async move { while driver.join_next().await.is_some() {} });
-            }
+            let selector = v.resolve(registries, generation)?;
             Ok((k, selector))
         })
         .collect::<Result<HashMap<_, _>, _>>()?;
-    Ok((udp_conn_selector, drivers))
+    Ok(udp_conn_selector)
 }
 fn stream_route_tables(
     registries: &Registries<'_>,
     config: HashMap<Arc<str>, RouteTableBuilder>,
-) -> Result<(HashMap<Arc<str>, RouteTable>, tokio::task::JoinSet<()>), AnyError> {
-    let mut drivers = tokio::task::JoinSet::new();
+    generation: &mut tokio::task::JoinSet<()>,
+) -> Result<HashMap<Arc<str>, RouteTable>, AnyError> {
     let stream_route_tables = config
         .into_iter()
         .map(|(k, v)| -> Result<(Arc<str>, RouteTable), AnyError> {
-            let (table, mut driver) = v.resolve(registries)?;
-            if !driver.is_empty() {
-                drivers.spawn(async move { while driver.join_next().await.is_some() {} });
-            }
+            let table = v.resolve(registries, generation)?;
             Ok((k, table))
         })
         .collect::<Result<HashMap<_, _>, _>>()?;
-    Ok((stream_route_tables, drivers))
+    Ok(stream_route_tables)
 }
 async fn tcp_prepare(
     config: Vec<TcpAccessServerConfig>,
@@ -408,27 +392,21 @@ async fn tcp_prepare(
     registries: &Registries<'_>,
     context: &Runtime,
     loader: &loading::Loader<TcpAccessConnHandler>,
-) -> Result<
-    (
-        loading::PreparedOps<TcpAccessConnHandler>,
-        tokio::task::JoinSet<()>,
-    ),
-    AnyError,
-> {
-    let mut drivers = tokio::task::JoinSet::new();
+    generation: &mut tokio::task::JoinSet<()>,
+) -> Result<loading::PreparedOps<TcpAccessConnHandler>, AnyError> {
     let builders = config
         .into_iter()
         .map(|c| -> Result<TcpAccessServerBuilder, TcpAccessBuildError> {
-            let (builder, mut driver) =
-                c.into_builder(stream_conn_selector, registries, context.stream.clone())?;
-            if !driver.is_empty() {
-                drivers.spawn(async move { while driver.join_next().await.is_some() {} });
-            }
-            Ok(builder)
+            c.into_builder(
+                stream_conn_selector,
+                registries,
+                context.stream.clone(),
+                generation,
+            )
         })
         .collect::<Result<Vec<_>, _>>()?;
     let prepared = loader.prepare(builders).await?;
-    Ok((prepared, drivers))
+    Ok(prepared)
 }
 async fn udp_prepare(
     config: Vec<UdpAccessServerConfig>,
@@ -436,27 +414,21 @@ async fn udp_prepare(
     registries: &Registries<'_>,
     context: &Runtime,
     loader: &loading::Loader<UdpAccessConnHandler>,
-) -> Result<
-    (
-        loading::PreparedOps<UdpAccessConnHandler>,
-        tokio::task::JoinSet<()>,
-    ),
-    AnyError,
-> {
-    let mut drivers = tokio::task::JoinSet::new();
+    generation: &mut tokio::task::JoinSet<()>,
+) -> Result<loading::PreparedOps<UdpAccessConnHandler>, AnyError> {
     let builders = config
         .into_iter()
         .map(|c| -> Result<UdpAccessServerBuilder, UdpAccessBuildError> {
-            let (builder, mut driver) =
-                c.into_builder(udp_conn_selector, registries, context.udp.clone())?;
-            if !driver.is_empty() {
-                drivers.spawn(async move { while driver.join_next().await.is_some() {} });
-            }
-            Ok(builder)
+            c.into_builder(
+                udp_conn_selector,
+                registries,
+                context.udp.clone(),
+                generation,
+            )
         })
         .collect::<Result<Vec<_>, _>>()?;
     let prepared = loader.prepare(builders).await?;
-    Ok((prepared, drivers))
+    Ok(prepared)
 }
 async fn http_prepare(
     config: Vec<HttpAccessServerConfig>,
@@ -464,27 +436,21 @@ async fn http_prepare(
     registries: &Registries<'_>,
     context: &Runtime,
     loader: &loading::Loader<HttpAccessConnHandler>,
-) -> Result<
-    (
-        loading::PreparedOps<HttpAccessConnHandler>,
-        tokio::task::JoinSet<()>,
-    ),
-    AnyError,
-> {
-    let mut drivers = tokio::task::JoinSet::new();
+    generation: &mut tokio::task::JoinSet<()>,
+) -> Result<loading::PreparedOps<HttpAccessConnHandler>, AnyError> {
     let builders = config
         .into_iter()
         .map(|c| -> Result<HttpAccessServerBuilder, HttpBuildError> {
-            let (builder, mut driver) =
-                c.into_builder(stream_route_tables, registries, context.stream.clone())?;
-            if !driver.is_empty() {
-                drivers.spawn(async move { while driver.join_next().await.is_some() {} });
-            }
-            Ok(builder)
+            c.into_builder(
+                stream_route_tables,
+                registries,
+                context.stream.clone(),
+                generation,
+            )
         })
         .collect::<Result<Vec<_>, _>>()?;
     let prepared = loader.prepare(builders).await?;
-    Ok((prepared, drivers))
+    Ok(prepared)
 }
 async fn socks5_tcp_prepare(
     config: Vec<Socks5ServerTcpAccessServerConfig>,
@@ -492,29 +458,23 @@ async fn socks5_tcp_prepare(
     registries: &Registries<'_>,
     context: &Runtime,
     loader: &loading::Loader<Socks5ServerTcpAccessConnHandler>,
-) -> Result<
-    (
-        loading::PreparedOps<Socks5ServerTcpAccessConnHandler>,
-        tokio::task::JoinSet<()>,
-    ),
-    AnyError,
-> {
-    let mut drivers = tokio::task::JoinSet::new();
+    generation: &mut tokio::task::JoinSet<()>,
+) -> Result<loading::PreparedOps<Socks5ServerTcpAccessConnHandler>, AnyError> {
     let builders = config
         .into_iter()
         .map(
             |c| -> Result<Socks5ServerTcpAccessServerBuilder, Socks5TcpBuildError> {
-                let (builder, mut driver) =
-                    c.into_builder(stream_route_tables, registries, context.stream.clone())?;
-                if !driver.is_empty() {
-                    drivers.spawn(async move { while driver.join_next().await.is_some() {} });
-                }
-                Ok(builder)
+                c.into_builder(
+                    stream_route_tables,
+                    registries,
+                    context.stream.clone(),
+                    generation,
+                )
             },
         )
         .collect::<Result<Vec<_>, _>>()?;
     let prepared = loader.prepare(builders).await?;
-    Ok((prepared, drivers))
+    Ok(prepared)
 }
 async fn socks5_udp_prepare(
     config: Vec<Socks5ServerUdpAccessServerConfig>,
@@ -522,29 +482,23 @@ async fn socks5_udp_prepare(
     registries: &Registries<'_>,
     context: &Runtime,
     loader: &loading::Loader<Socks5ServerUdpAccessConnHandler>,
-) -> Result<
-    (
-        loading::PreparedOps<Socks5ServerUdpAccessConnHandler>,
-        tokio::task::JoinSet<()>,
-    ),
-    AnyError,
-> {
-    let mut drivers = tokio::task::JoinSet::new();
+    generation: &mut tokio::task::JoinSet<()>,
+) -> Result<loading::PreparedOps<Socks5ServerUdpAccessConnHandler>, AnyError> {
     let builders = config
         .into_iter()
         .map(
             |c| -> Result<Socks5ServerUdpAccessServerBuilder, Socks5UdpBuildError> {
-                let (builder, mut driver) =
-                    c.into_builder(udp_conn_selector, registries, context.udp.clone())?;
-                if !driver.is_empty() {
-                    drivers.spawn(async move { while driver.join_next().await.is_some() {} });
-                }
-                Ok(builder)
+                c.into_builder(
+                    udp_conn_selector,
+                    registries,
+                    context.udp.clone(),
+                    generation,
+                )
             },
         )
         .collect::<Result<Vec<_>, _>>()?;
     let prepared = loader.prepare(builders).await?;
-    Ok((prepared, drivers))
+    Ok(prepared)
 }
 #[cfg(test)]
 mod tests {
