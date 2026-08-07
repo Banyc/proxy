@@ -214,7 +214,7 @@ mod tests {
             loop {
                 tokio::select! {
                     Some(fut) = session_rx.recv() => { sessions.spawn(fut); }
-                    Some(res) = sessions.join_next() => { res.unwrap(); }
+                    Some(res) = sessions.join_next() => { let _ = res.unwrap(); }
                     else => break,
                 }
             }

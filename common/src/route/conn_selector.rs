@@ -159,10 +159,14 @@ impl NonEmptyConnSelector {
         let chains = chains
             .into_iter()
             .map(|c| {
-                let (chain, inner) = GaugedConnChain::new(c, tracer.clone(), cancellation.clone());
+                let (chain, mut inner) =
+                    GaugedConnChain::new(c, tracer.clone(), cancellation.clone());
                 // Reap the chain's probe supervision driver via a draining
-                // task in the caller-owned `drivers` set.
-                drivers.spawn(async move { while inner.join_next().await.is_some() {} });
+                // task in the caller-owned `drivers` set. Skip the drainer
+                // when there is nothing to reap (spawning requires a runtime).
+                if !inner.is_empty() {
+                    drivers.spawn(async move { while inner.join_next().await.is_some() {} });
+                }
                 chain
             })
             .collect::<Arc<[_]>>();

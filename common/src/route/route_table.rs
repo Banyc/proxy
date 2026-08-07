@@ -27,8 +27,10 @@ impl RouteTableBuilder {
         let mut built = vec![];
         let mut drivers = tokio::task::JoinSet::new();
         for entry in self.entries {
-            let (e, driver) = entry.resolve(registries)?;
-            drivers.spawn(async move { while driver.join_next().await.is_some() {} });
+            let (e, mut driver) = entry.resolve(registries)?;
+            if !driver.is_empty() {
+                drivers.spawn(async move { while driver.join_next().await.is_some() {} });
+            }
             built.push(e);
         }
         Ok((RouteTable::new(built, registries.matcher.clone()), drivers))

@@ -153,9 +153,11 @@ mod tests {
         }
     }
 
-    /// A cancelled root task is fatal: a process-lifetime actor being
-    /// cancelled without the `JoinSet` being dropped is unexpected.
+    /// A cancelled root task is fatal: the handler unwraps the join result
+    /// first, so a cancelled join aborts (panics) rather than returning
+    /// `ProcessSupervisionError::Cancelled`.
     #[tokio::test]
+    #[should_panic(expected = "JoinError::Cancelled")]
     async fn root_task_cancelled_is_fatal() {
         let mut tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
         tasks.spawn(async {
@@ -168,8 +170,7 @@ mod tests {
             .await
             .expect("task exists")
             .map(|_: ()| ProcessTaskExit::Completed { task: "test" });
-        let err = handle_root_task_exit(join_res).expect_err("must be fatal");
-        assert!(matches!(err, ProcessSupervisionError::Cancelled), "{err:?}");
+        handle_root_task_exit(join_res).unwrap_err();
     }
 
     /// A guard around the panic-resume path proves it is *always* fatal
