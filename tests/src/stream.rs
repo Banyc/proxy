@@ -54,6 +54,20 @@ mod tests {
                 }
             }
         });
+        // Test-owned connector-driver reaper. The connector drivers run the
+        // per-protocol connector loops (e.g. rtp_mux, tcp_mux) and are reaped
+        // here for the lifetime of the test runtime.
+        let mut connector_drivers = tokio::task::JoinSet::new();
+        let connector_table = Arc::new(build_concrete_stream_connector_table(
+            ConnectorConfig::default(),
+            connector_reset,
+            &mut connector_drivers,
+        ));
+        tokio::spawn(async move {
+            while let Some(res) = connector_drivers.join_next().await {
+                let _ = res;
+            }
+        });
         let (retention_actor, retention) = common::retention::RetentionActor::new();
         tokio::spawn(async move {
             let _ = retention_actor.run().await;
@@ -61,10 +75,7 @@ mod tests {
         StreamRuntime {
             session_table: None,
             pool: Swap::new(StreamConnPool::empty()),
-            connector_table: Arc::new(build_concrete_stream_connector_table(
-                ConnectorConfig::default(),
-                connector_reset,
-            )),
+            connector_table,
             replay_validator: Arc::new(ReplayValidator::new(
                 VALIDATOR_TIME_FRAME,
                 VALIDATOR_CAPACITY,

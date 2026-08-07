@@ -83,6 +83,7 @@ where
             connector_table: Arc::new(build_concrete_stream_connector_table(
                 ConnectorConfig::default(),
                 connector_reset,
+                &mut server_tasks,
             )),
             replay_validator: Arc::clone(&stream_validator),
             session_spawner: session_spawner.clone(),

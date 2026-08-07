@@ -224,16 +224,25 @@ mod tests {
             let connector_config = ConnectorConfig {
                 bind: BothVerIp { v4: None, v6: None },
             };
+            let mut connector_drivers = tokio::task::JoinSet::new();
+            let connector_table = Arc::new(build_concrete_stream_connector_table(
+                connector_config,
+                connector_reset,
+                &mut connector_drivers,
+            ));
+            #[allow(clippy::disallowed_methods)]
+            tokio::spawn(async move {
+                while let Some(res) = connector_drivers.join_next().await {
+                    let _ = res;
+                }
+            });
             let proxy = StreamProxyConnHandler::new(
                 crypto.clone(),
                 None,
                 StreamRuntime {
                     session_table: None,
                     pool: Swap::new(StreamConnPool::empty()),
-                    connector_table: Arc::new(build_concrete_stream_connector_table(
-                        connector_config,
-                        connector_reset,
-                    )),
+                    connector_table,
                     replay_validator: Arc::new(ReplayValidator::new(
                         VALIDATOR_TIME_FRAME,
                         VALIDATOR_CAPACITY,

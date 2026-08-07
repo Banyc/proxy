@@ -13,18 +13,34 @@ use std::{
     task::{Context, Poll},
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::task::JoinSet;
 #[derive(Debug)]
 pub struct RtpMuxConnector {
     inner: Arc<::rtp_mux::RtpMuxConnector>,
-    _reset: JoinSet<()>,
 }
+
+/// The driver for a proxy [`RtpMuxConnector`].
+///
+/// It concurrently runs the inner [`rtp_mux::RtpMuxConnector`]'s connector
+/// loop and the proxy reset listener that tears down sessions on a
+/// [`ConnectorResetSignal`]. Spawn it into the parent runtime's
+/// actively-reaped `JoinSet` so its exit is observed and its drop aborts
+/// both child tasks.
+#[must_use = "the connector is inert until the driver is spawned"]
+pub struct RtpMuxConnectorDriver(Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>);
+
+impl std::future::Future for RtpMuxConnectorDriver {
+    type Output = ();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.0.as_mut().poll(cx)
+    }
+}
+
 impl RtpMuxConnector {
     pub fn new(
         config: Arc<std::sync::RwLock<ConnectorConfig>>,
         reset: ConnectorResetSignal,
         fec: bool,
-    ) -> Self {
+    ) -> (Self, RtpMuxConnectorDriver) {
         let bind = Arc::new(move |addr: SocketAddr| {
             config
                 .read()
@@ -34,11 +50,11 @@ impl RtpMuxConnector {
                 .map(|ip| SocketAddr::new(ip, 0))
                 .unwrap_or_else(|| any_addr(&addr.ip()))
         });
-        let inner = Arc::new(::rtp_mux::RtpMuxConnector::new(bind, fec));
-        let mut reset_tasks = JoinSet::new();
-        {
+        let (inner, inner_driver) = ::rtp_mux::RtpMuxConnector::new(bind, fec);
+        let inner = Arc::new(inner);
+        let reset_driver = {
             let inner = Arc::clone(&inner);
-            reset_tasks.spawn(async move {
+            async move {
                 let mut waiter = reset.0.subscription();
                 loop {
                     waiter.notified().await;
@@ -46,12 +62,15 @@ impl RtpMuxConnector {
                         break;
                     }
                 }
-            });
-        }
-        Self {
-            inner,
-            _reset: reset_tasks,
-        }
+            }
+        };
+        let driver = RtpMuxConnectorDriver(Box::pin(async move {
+            tokio::select! {
+                () = inner_driver => {},
+                () = reset_driver => {},
+            }
+        }));
+        (Self { inner }, driver)
     }
 }
 #[async_trait]

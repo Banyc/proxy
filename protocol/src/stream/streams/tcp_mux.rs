@@ -1,6 +1,7 @@
 use std::{
     io,
     net::SocketAddr,
+    pin::Pin,
     sync::{Arc, RwLock},
 };
 
@@ -182,13 +183,33 @@ fn socket_addr_pair(stream: &tokio::net::TcpStream) -> io::Result<SocketAddrPair
 #[derive(Debug)]
 pub struct TcpMuxConnector {
     connect_request_tx: ConnectRequestTx,
-    _connector: JoinSet<()>,
+}
+/// The driver for a [`TcpMuxConnector`].
+///
+/// It runs the `run_mux_connector` loop that dials TCP peers and manages
+/// per-address mux openers (reaping the inner mux task `JoinSet` on
+/// errors and clearing it on reset). Spawn it into the parent runtime's
+/// actively-reaped `JoinSet` so its exit is observed and its drop aborts
+/// the connector task.
+#[must_use = "the connector is inert until the driver is spawned"]
+pub struct TcpMuxConnectorDriver(Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>);
+
+impl std::future::Future for TcpMuxConnectorDriver {
+    type Output = ();
+    fn poll(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        self.0.as_mut().poll(cx)
+    }
 }
 impl TcpMuxConnector {
-    pub fn new(config: Arc<RwLock<ConnectorConfig>>, reset: ConnectorResetSignal) -> Self {
+    pub fn new(
+        config: Arc<RwLock<ConnectorConfig>>,
+        reset: ConnectorResetSignal,
+    ) -> (Self, TcpMuxConnectorDriver) {
         let (connect_request_tx, connect_request_rx) = connect_request_channel();
-        let mut connector = JoinSet::new();
-        connector.spawn(async move {
+        let driver = async move {
             run_mux_connector(reset, connect_request_rx, move |addr| {
                 let config = config.clone();
                 async move {
@@ -212,11 +233,11 @@ impl TcpMuxConnector {
                 }
             })
             .await;
-        });
-        Self {
-            connect_request_tx,
-            _connector: connector,
-        }
+        };
+        (
+            Self { connect_request_tx },
+            TcpMuxConnectorDriver(Box::pin(driver)),
+        )
     }
 }
 #[async_trait]

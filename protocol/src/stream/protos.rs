@@ -2,6 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use common::{
     connect::{ConnectorConfig, ConnectorResetSignal},
+    error::AnyResult,
     proto::connect::stream::StreamConnect,
 };
 
@@ -14,11 +15,12 @@ use super::{
     streams::tcp::listener::TCP_STREAM_TYPE,
 };
 
-type StreamProtoTable = [(
-    ConcreteStreamType,
-    &'static str,
-    fn(Arc<RwLock<ConnectorConfig>>, ConnectorResetSignal) -> Arc<dyn StreamConnect>,
-)];
+type StreamConnectorBuilder = fn(
+    Arc<RwLock<ConnectorConfig>>,
+    ConnectorResetSignal,
+    &mut tokio::task::JoinSet<AnyResult>,
+) -> Arc<dyn StreamConnect>;
+type StreamProtoTable = [(ConcreteStreamType, &'static str, StreamConnectorBuilder)];
 pub const STREAM_PROTOS: &StreamProtoTable = &[
     (
         ConcreteStreamType::Tcp,
