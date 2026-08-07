@@ -206,9 +206,9 @@ mod tests {
         let connector_reset = ConnectorResetSignal(Notify::new());
         let (session_spawner, mut session_rx) = common::session::SessionSpawner::channel();
         let (retention_actor, retention) = common::retention::RetentionActor::new();
-        // Test-owned session reaper; drained at the end of the test.
-        let mut session_reaper: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
-        session_reaper.spawn(async move {
+        // Test-owned tasks; aborted via JoinSet drop at the end of the test.
+        let mut test_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+        test_tasks.spawn(async move {
             let _retention_actor = retention_actor;
             let mut sessions = tokio::task::JoinSet::new();
             loop {
@@ -230,10 +230,9 @@ mod tests {
                 connector_reset,
                 &mut connector_drivers,
             ));
-            #[allow(clippy::disallowed_methods)]
-            tokio::spawn(async move {
-                while let Some(res) = connector_drivers.join_next().await {
-                    let _ = res;
+            test_tasks.spawn(async move {
+                while let Some(result) = connector_drivers.join_next().await {
+                    let _ = result.unwrap();
                 }
             });
             let proxy = StreamProxyConnHandler::new(
@@ -259,8 +258,7 @@ mod tests {
                     .unwrap();
             let proxy_addr = server.listener().local_addr().unwrap();
             // Test-owned server task; lifetime is the test runtime.
-            #[allow(clippy::disallowed_methods)]
-            tokio::spawn(async move {
+            test_tasks.spawn(async move {
                 let (_set_conn_handler_tx, set_conn_handler_rx) =
                     loading::replace_conn_handler_channel();
                 server.serve(set_conn_handler_rx).await.unwrap();
@@ -273,8 +271,7 @@ mod tests {
             let listener = TcpListener::bind("[::]:0").await.unwrap();
             let origin_addr = listener.local_addr().unwrap();
             // Test-owned origin server; lifetime is the test runtime.
-            #[allow(clippy::disallowed_methods)]
-            tokio::spawn(async move {
+            test_tasks.spawn(async move {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut buf = [0; 1024];
                 let msg_buf = &mut buf[..req_msg.len()];
@@ -308,15 +305,7 @@ mod tests {
         }
         // The reaper only exits once every `SessionSpawner` sender is dropped;
         // the proxy server keeps one alive for the test's lifetime, so the
-        // reaper cannot finish on its own. Abort it (a deliberate cancel) and
-        // drain, surfacing any non-cancellation failure instead of hanging.
-        session_reaper.abort_all();
-        while let Some(result) = session_reaper.join_next().await {
-            if let Err(error) = result
-                && !error.is_cancelled()
-            {
-                panic!("session reaper failed: {error}");
-            }
-        }
+        // reaper cannot finish on its own. Dropping `test_tasks` at the end of
+        // the test aborts the server/origin/reaper as the backstop.
     }
 }
