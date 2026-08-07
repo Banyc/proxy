@@ -3,7 +3,9 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use axum::Router;
 use clap::Parser;
 use common::{
-    error::AnyResult, process::ProcessTaskExit, retention::RetentionActor,
+    error::AnyResult,
+    process::{ProcessTaskExit, handle_root_task_exit},
+    retention::RetentionActor,
     suspend::spawn_check_system_suspend,
 };
 use server::{
@@ -107,23 +109,17 @@ async fn main() -> AnyResult {
         tokio::select! {
             res = &mut serving => return res.map_err(Into::into),
             Some(res) = process_tasks.join_next() => {
-                match res {
-                    Ok(ProcessTaskExit::Completed { task }) => {
-                        error!(task, "Root process task completed unexpectedly");
-                    }
-                    Ok(ProcessTaskExit::Failed { task, detail }) => {
-                        error!(task, detail, "Root process task failed");
-                    }
-                    Err(error) if error.is_panic() => {
-                        error!(?error, "Root process task panicked");
-                        std::panic::resume_unwind(error.into_panic());
-                    }
-                    Err(error) if error.is_cancelled() => {
-                        info!(?error, "Root process task cancelled (normal exit)");
-                    }
-                    Err(error) => {
-                        error!(?error, "Root process task failed to join");
-                    }
+                // Root-process actors are expected to run for the process's
+                // entire lifetime; any exit — clean completion, failure,
+                // cancellation, or join failure — is fatal. Panics are
+                // re-resumed so they propagate with their original backtrace.
+                // Surfacing this as an error (rather than the previous
+                // log-only behaviour) ensures the service is restarted by the
+                // surrounding supervisor instead of running permanently
+                // without the dead actor.
+                if let Err(error) = handle_root_task_exit(res) {
+                    error!(%error, "Root process task exited; shutting down");
+                    return Err(error.into());
                 }
             }
         }
