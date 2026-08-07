@@ -104,9 +104,6 @@ where
         let listener = &self.listener;
         let session_spawner = self.session_spawner.clone();
         common::serve_loop::serve_loop(
-            "tcp_mux",
-            Some("stream.tcp_mux.tcp.accepts"),
-            false,
             addr,
             Arc::new(self.conn_handler),
             set_conn_handler_rx,
@@ -160,6 +157,11 @@ where
                     _ = std::future::pending::<()>() => {}
                 }
             }),
+            common::serve_loop::ServeLoopConfig {
+                label: "tcp_mux",
+                counter_name: Some("stream.tcp_mux.tcp.accepts"),
+                counts_dispatch_errors: false,
+            },
         )
         .await
     }

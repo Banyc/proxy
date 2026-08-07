@@ -142,9 +142,6 @@ where
 
         let mut state = ();
         let serve_result = crate::serve_loop::serve_loop(
-            "udp",
-            None,
-            false,
             addr,
             initial,
             set_conn_handler_rx,
@@ -183,6 +180,11 @@ where
             },
             &mut state,
             |_| Box::pin(std::future::pending::<()>()),
+            crate::serve_loop::ServeLoopConfig {
+                label: "udp",
+                counter_name: None,
+                counts_dispatch_errors: false,
+            },
         )
         .await;
         // The listener is removed: tell the dispatcher to drain and stop.

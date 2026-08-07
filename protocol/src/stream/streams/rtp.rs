@@ -93,9 +93,6 @@ where
         let session_spawner = self.session_spawner.clone();
         let mut state = ();
         common::serve_loop::serve_loop(
-            "rtp",
-            Some("stream.rtp.accepts"),
-            true,
             addr,
             Arc::new(self.conn_handler),
             set_conn_handler_rx,
@@ -129,6 +126,11 @@ where
             },
             &mut state,
             |_| Box::pin(std::future::pending::<()>()),
+            common::serve_loop::ServeLoopConfig {
+                label: "rtp",
+                counter_name: Some("stream.rtp.accepts"),
+                counts_dispatch_errors: true,
+            },
         )
         .await
     }

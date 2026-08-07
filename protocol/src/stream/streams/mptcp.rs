@@ -91,9 +91,6 @@ where
         let session_spawner = self.session_spawner.clone();
         let mut state = ();
         common::serve_loop::serve_loop(
-            "mptcp",
-            Some("stream.mptcp.accepts"),
-            false,
             addr,
             Arc::new(self.conn_handler),
             set_conn_handler_rx,
@@ -120,6 +117,11 @@ where
             },
             &mut state,
             |_| Box::pin(std::future::pending::<()>()),
+            common::serve_loop::ServeLoopConfig {
+                label: "mptcp",
+                counter_name: Some("stream.mptcp.accepts"),
+                counts_dispatch_errors: false,
+            },
         )
         .await
     }

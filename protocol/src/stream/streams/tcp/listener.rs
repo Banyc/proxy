@@ -71,9 +71,6 @@ where
         let session_spawner = self.session_spawner.clone();
         let mut loop_state = ();
         common::serve_loop::serve_loop(
-            "tcp",
-            Some("stream.tcp.accepts"),
-            false,
             addr,
             Arc::new(self.conn_handler),
             set_conn_handler_rx,
@@ -95,6 +92,11 @@ where
             },
             &mut loop_state,
             |_| Box::pin(std::future::pending::<()>()),
+            common::serve_loop::ServeLoopConfig {
+                label: "tcp",
+                counter_name: Some("stream.tcp.accepts"),
+                counts_dispatch_errors: false,
+            },
         )
         .await
     }

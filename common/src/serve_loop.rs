@@ -181,11 +181,17 @@ pub enum ServeLoopError {
     },
 }
 
+/// Tuning for [`serve_loop`]: observability knobs that vary per listener
+/// kind but are not part of the per-connection data/behaviour.
+#[derive(Debug, Clone, Copy)]
+pub struct ServeLoopConfig {
+    pub label: &'static str,
+    pub counter_name: Option<&'static str>,
+    pub counts_dispatch_errors: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_loop<H, T, A, AF, W, S, X, E>(
-    label: &'static str,
-    counter_name: Option<&'static str>,
-    counts_dispatch_errors: bool,
     addr: SocketAddr,
     mut conn_handler: Arc<H>,
     mut set_conn_handler_rx: loading::ReplaceConnHandlerRx<H>,
@@ -194,6 +200,7 @@ pub async fn serve_loop<H, T, A, AF, W, S, X, E>(
     mut wrap_conn: W,
     loop_state: &mut X,
     mut after_accept: E,
+    config: ServeLoopConfig,
 ) -> Result<(), ServeLoopError>
 where
     H: Send + Sync + 'static,
@@ -203,6 +210,11 @@ where
     S: FnMut(Arc<H>),
     E: for<'a> FnMut(&'a mut X) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
 {
+    let ServeLoopConfig {
+        label,
+        counter_name,
+        counts_dispatch_errors,
+    } = config;
     info!(?addr, "Listening");
     let mut accept_backoff = AcceptErrorBackoff::default();
     loop {

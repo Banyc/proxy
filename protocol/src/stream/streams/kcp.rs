@@ -94,9 +94,6 @@ where
         let session_spawner = self.session_spawner.clone();
         let mut state = ();
         common::serve_loop::serve_loop(
-            "kcp",
-            Some("stream.kcp.accepts"),
-            false,
             addr,
             Arc::new(self.conn_handler),
             set_conn_handler_rx,
@@ -133,6 +130,11 @@ where
             },
             &mut state,
             |_| Box::pin(std::future::pending::<()>()),
+            common::serve_loop::ServeLoopConfig {
+                label: "kcp",
+                counter_name: Some("stream.kcp.accepts"),
+                counts_dispatch_errors: false,
+            },
         )
         .await
     }
