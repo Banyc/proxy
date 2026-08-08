@@ -303,6 +303,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[should_panic(expected = "session panic")]
     async fn panics_are_observed_as_join_errors() {
         let (spawner, mut rx) = SessionSpawner::channel();
         let mut sessions = tokio::task::JoinSet::new();
@@ -314,11 +315,11 @@ mod tests {
             .unwrap();
         let fut = rx.recv().await.unwrap();
         sessions.spawn(fut);
-        let res = sessions.join_next().await.unwrap();
-        assert!(
-            matches!(&res, Err(error) if error.is_panic()),
-            "a panicking session must surface as a join error"
-        );
+        // The panic cascades into this test with the original message instead
+        // of being inspected as a JoinError. The join output is itself a
+        // `Result`, so the outer unwrap is discarded with `let _ =`; the
+        // `JoinError` unwrap above is the one that re-raises the panic.
+        let _ = sessions.join_next().await.unwrap().unwrap();
     }
 
     #[tokio::test]

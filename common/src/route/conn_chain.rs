@@ -307,6 +307,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[should_panic(expected = "synthetic probe panic")]
     async fn probe_panic_is_observed_at_the_generation_boundary() {
         let mut generation = tokio::task::JoinSet::new();
         let _chain = GaugedConnChain::new(
@@ -319,26 +320,9 @@ mod tests {
             CancellationToken::new(),
             &mut generation,
         );
-        let deadline = std::time::Instant::now() + Duration::from_secs(1);
-        loop {
-            match generation.join_next().await {
-                Some(Err(error)) => {
-                    assert!(
-                        error.is_panic(),
-                        "the generation reap must surface the probe panic, got {error:?}"
-                    );
-                    break;
-                }
-                Some(Ok(())) => panic!("probe task must not complete normally"),
-                None => {
-                    assert!(
-                        std::time::Instant::now() < deadline,
-                        "probe panic was never observed at the generation boundary"
-                    );
-                    tokio::task::yield_now().await;
-                }
-            }
-        }
+        // The probe task is spawned synchronously by `new`; joining it
+        // re-raises the probe panic with its original message.
+        generation.join_next().await.unwrap().unwrap();
     }
 
     #[tokio::test]
