@@ -159,14 +159,24 @@ impl UdpProxyConnHandler {
             self.header_crypto.clone(),
             self.udp_context.time_validator.clone(),
         );
-        let upstream = read.prime().await.map_err(UdpProxyError::Tunnel)?;
+        let upstream = match read.prime().await {
+            Ok(upstream) => upstream,
+            // The client closed the flow before sending any datagram
+            // (e.g. an abandoned probe or a torn-down flow). This is a
+            // clean close, not an error.
+            Err(error) if is_udp_eof(&error) => return Ok(()),
+            Err(error) => return Err(UdpProxyError::Tunnel(error)),
+        };
         if upstream.is_none() {
             let mut payload = [0; PACKET_BUFFER_LENGTH];
             loop {
-                let n = read
-                    .trait_recv(&mut payload)
-                    .await
-                    .map_err(UdpProxyError::Tunnel)?;
+                let n = match read.trait_recv(&mut payload).await {
+                    Ok(n) => n,
+                    // The probing client closed its flow after the echo;
+                    // end this flow cleanly instead of logging a warning.
+                    Err(error) if is_udp_eof(&error) => return Ok(()),
+                    Err(error) => return Err(UdpProxyError::Tunnel(error)),
+                };
                 let mut response = Vec::new();
                 write_header(
                     &mut response,
@@ -300,6 +310,14 @@ where
         buf[..copied].copy_from_slice(&payload[..copied]);
         Ok(copied)
     }
+}
+
+/// `true` if the error is a clean EOF from the mux substream, i.e. the
+/// client closed the flow rather than failing mid-datagram.
+fn is_udp_eof(error: &AnyError) -> bool {
+    error
+        .downcast_ref::<io::Error>()
+        .is_some_and(|error| error.kind() == io::ErrorKind::UnexpectedEof)
 }
 
 impl loading::HandleConn for UdpProxyConnHandler {}
