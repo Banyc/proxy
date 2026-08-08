@@ -1,4 +1,5 @@
 [stream.upstream]
+# Each entry may define its own payload_key; chains nest all configured layers.
 "tcp1" = { address = "tcp://proxy.example.org:80", header_key = "base64", payload_key = "base64" }
 "mptcp1" = { address = "mptcp://proxy.example.org:81", header_key = "base64", payload_key = "base64" }
 "tcpmux1" = { address = "tcpmux://proxy.example.org:82", header_key = "base64", payload_key = "base64" }

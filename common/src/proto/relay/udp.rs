@@ -1,27 +1,3 @@
-use std::{
-    io,
-    net::SocketAddr,
-    pin::Pin,
-    sync::{
-        Arc, Mutex, RwLock,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{Duration, SystemTime},
-};
-
-use async_speed_limit::Limiter;
-use metrics::{counter, gauge};
-use scopeguard::defer;
-use thiserror::Error;
-use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-    net::UdpSocket,
-};
-use tokio_chacha20::X_NONCE_BYTES;
-use tokio_throughput::{ReadGauge, WriteGauge};
-use tracing::{info, trace, warn};
-use udp_listener::{ConnRead, ConnWrite};
-
 use crate::{
     addr::InternetAddr,
     anti_replay::VALIDATOR_UDP_HDR_TTL,
@@ -32,13 +8,30 @@ use crate::{
         log::udp::{FlowLog, LOGGER, TrafficLog},
         metrics::udp::{UdpSession, UdpSessionTable},
         relay::{
-            EncryptionDirection, nonce_ciphertext_reader, nonce_ciphertext_writer, noop_context,
-            retain_dead_session, unwrap_ready,
+            EncryptionDirection, decrypt_packet_payload, encrypt_packet_payload,
+            retain_dead_session,
         },
     },
     ttl_cell::RegeneratingHeader,
     udp::{PACKET_BUFFER_LENGTH, Packet, UDP_FLOW_TIMEOUT},
 };
+use async_speed_limit::Limiter;
+use metrics::{counter, gauge};
+use scopeguard::defer;
+use std::{
+    io,
+    net::SocketAddr,
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, SystemTime},
+};
+use thiserror::Error;
+use tokio::net::UdpSocket;
+use tokio_throughput::{ReadGauge, WriteGauge};
+use tracing::{info, trace, warn};
+use udp_listener::{ConnRead, ConnWrite};
 
 const ACTIVITY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const CRYPTO_FAIL_WARN_INTERVAL: Duration = Duration::from_secs(1);
@@ -475,33 +468,16 @@ fn send_dyn<'buf>(
     config: &tokio_chacha20::config::Config,
     en_dir: EncryptionDirection,
 ) -> Option<&'buf [u8]> {
-    Some(match en_dir {
-        EncryptionDirection::Encrypt => {
-            if pkt.len().checked_add(X_NONCE_BYTES)? > buf.len() {
-                return None;
-            }
-            let mut buf_wtr = io::Cursor::new(&mut *buf);
-            let mut w = nonce_ciphertext_writer(config.key(), &mut buf_wtr);
-            let n = unwrap_ready(Pin::new(&mut w).poll_write(&mut noop_context(), pkt)).ok()?;
-            if n != pkt.len() {
-                return None;
-            }
-            let pos = usize::try_from(buf_wtr.position()).unwrap();
-            &buf[..pos]
-        }
-        EncryptionDirection::Decrypt => {
-            let mut r = nonce_ciphertext_reader(config.key(), &*pkt);
-            let mut read_buf = ReadBuf::new(buf);
-            unwrap_ready(Pin::new(&mut r).poll_read(&mut noop_context(), &mut read_buf)).ok()?;
-            let pos = read_buf.filled().len();
-            &buf[..pos]
-        }
-    })
+    match en_dir {
+        EncryptionDirection::Encrypt => encrypt_packet_payload(pkt, buf, config).ok(),
+        EncryptionDirection::Decrypt => decrypt_packet_payload(pkt, buf, config).ok(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio_chacha20::X_NONCE_BYTES;
     fn config() -> tokio_chacha20::config::Config {
         tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into())
     }

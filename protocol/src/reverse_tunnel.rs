@@ -901,7 +901,6 @@ mod tests {
             client::stream,
             connect::udp::UdpConnector,
             context::{Runtime, UdpRuntime},
-            relay::same_key_nonce_ciphertext,
         },
         route::ConnConfig,
         stream::pool::StreamConnPool,
@@ -1160,7 +1159,7 @@ mod tests {
             payload_crypto: Some(payload_crypto.clone()),
         }];
         let destination: RouteAddr = format!("tcp://{origin_addr}").parse().unwrap();
-        let stream = tokio::time::timeout(
+        let mut stream = tokio::time::timeout(
             Duration::from_secs(10),
             stream::establish(&chain, destination, &runtime.stream),
         )
@@ -1168,9 +1167,6 @@ mod tests {
         .expect("reverse tunnel did not register")
         .unwrap()
         .stream;
-        let (reader, writer) = tokio::io::split(stream);
-        let (reader, writer) = same_key_nonce_ciphertext(payload_crypto.key(), reader, writer);
-        let mut stream = tokio_chacha20::stream::DuplexStream::new(reader, writer);
         tokio::time::timeout(Duration::from_secs(10), async {
             stream.write_all(b"ping").await.unwrap();
             let mut response = [0; 4];

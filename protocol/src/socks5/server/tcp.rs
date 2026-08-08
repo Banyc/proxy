@@ -470,14 +470,10 @@ impl Socks5ServerTcpAccessConnHandler {
         destination: InternetAddr,
     ) -> Result<(ConnAndAddr, Option<tokio_chacha20::config::Config>), EstablishProxyChainError>
     {
-        let (chain, payload_crypto) = match &conn_selector {
-            common::route::ConnSelector::Empty => ([].into(), None),
+        let chain = match &conn_selector {
+            common::route::ConnSelector::Empty => [].into(),
             common::route::ConnSelector::Some(non_empty_conn_selector) => {
-                let proxy_chain = non_empty_conn_selector.choose_chain();
-                (
-                    proxy_chain.chain.clone(),
-                    proxy_chain.payload_crypto.clone(),
-                )
+                non_empty_conn_selector.choose_chain().chain.clone()
             }
         };
         let res = client::stream::establish(
@@ -489,7 +485,7 @@ impl Socks5ServerTcpAccessConnHandler {
             &self.stream_context,
         )
         .await?;
-        Ok((res, payload_crypto))
+        Ok((res, None))
     }
 }
 #[derive(Debug, Error)]

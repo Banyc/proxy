@@ -1,5 +1,3 @@
-use std::time::{Duration, Instant};
-
 use crate::{
     error::AnyError,
     header::{
@@ -7,14 +5,98 @@ use crate::{
         preamble::{self, PreambleError},
         route::{RouteError, RouteResponse},
     },
-    proto::{addr::RouteAddr, conn::stream::ConnAndAddr, context::StreamRuntime},
+    proto::{
+        addr::RouteAddr, conn::stream::ConnAndAddr, context::StreamRuntime,
+        relay::same_key_nonce_ciphertext,
+    },
     route::{ConnChain, ConnConfig, ProbeRtt, convert_proxies_to_header_crypto_pairs},
-    stream::pool::{ConnectError, connect_with_pool},
+    stream::{
+        ConnParts, HasIoAddr, OwnIoStream,
+        pool::{ConnectError, connect_with_pool},
+    },
 };
 use ae::anti_replay::ValidatorRef;
 use metrics::counter;
+use std::{
+    io,
+    net::SocketAddr,
+    pin::Pin,
+    task::{Context, Poll},
+    time::{Duration, Instant},
+};
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tracing::{instrument, trace};
+
+type PayloadCryptoReader =
+    tokio_chacha20::stream::NonceCiphertextReader<tokio::io::ReadHalf<Box<dyn ConnParts>>>;
+type PayloadCryptoWriter =
+    tokio_chacha20::stream::NonceCiphertextWriter<tokio::io::WriteHalf<Box<dyn ConnParts>>>;
+#[derive(Debug)]
+struct PayloadCryptoConn {
+    stream: tokio_chacha20::stream::DuplexStream<PayloadCryptoReader, PayloadCryptoWriter>,
+    local_addr: Option<SocketAddr>,
+    peer_addr: Option<SocketAddr>,
+}
+
+impl PayloadCryptoConn {
+    fn wrap(
+        stream: Box<dyn ConnParts>,
+        crypto: &tokio_chacha20::config::Config,
+    ) -> Box<dyn ConnParts> {
+        let local_addr = stream.local_addr().ok();
+        let peer_addr = stream.peer_addr().ok();
+        let (reader, writer) = tokio::io::split(stream);
+        let (reader, writer) = same_key_nonce_ciphertext(crypto.key(), reader, writer);
+        Box::new(Self {
+            stream: tokio_chacha20::stream::DuplexStream::new(reader, writer),
+            local_addr,
+            peer_addr,
+        })
+    }
+}
+
+impl AsyncRead for PayloadCryptoConn {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for PayloadCryptoConn {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
+
+impl OwnIoStream for PayloadCryptoConn {}
+impl ConnParts for PayloadCryptoConn {}
+
+impl HasIoAddr for PayloadCryptoConn {
+    fn peer_addr(&self) -> io::Result<SocketAddr> {
+        self.peer_addr.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::AddrNotAvailable, "peer address unavailable")
+        })
+    }
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.local_addr.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::AddrNotAvailable, "local address unavailable")
+        })
+    }
+}
 
 #[instrument(skip(proxies, stream_context))]
 pub async fn establish(
@@ -37,7 +119,6 @@ pub async fn establish(
             sock_addr,
         });
     }
-
     let (mut stream, addr, sock_addr) = {
         let proxy_addr = &proxies[0].address;
         let (stream, sock_addr) =
@@ -49,12 +130,9 @@ pub async fn establish(
                 })?;
         (stream, proxy_addr.clone(), sock_addr)
     };
-
     stream.set_stream_name(&destination.address.to_string());
-
     let pairs = convert_proxies_to_header_crypto_pairs(proxies, Some(destination));
-
-    for (header, crypto) in &pairs {
+    for ((header, crypto), proxy) in pairs.iter().zip(proxies) {
         trace!(?header, "Writing headers to stream");
         preamble::send_upgrade(&mut stream, crate::STREAM_IO_TIMEOUT, crypto)
             .await
@@ -68,8 +146,10 @@ pub async fn establish(
                 source: e,
                 upstream_addr: addr.clone(),
             })?;
+        if let Some(payload_crypto) = &proxy.payload_crypto {
+            stream = PayloadCryptoConn::wrap(stream, payload_crypto);
+        }
     }
-
     Ok(ConnAndAddr {
         stream,
         addr,
@@ -201,24 +281,24 @@ pub async fn probe_rtt(
     if proxies.is_empty() {
         return Ok(Duration::from_secs(0));
     }
-
     let (mut stream, _addr, _sock_addr) = {
         let proxy_addr = &proxies[0].address;
         let (stream, sock_addr) =
             connect_with_pool(proxy_addr, stream_context, true, crate::STREAM_IO_TIMEOUT).await?;
         (stream, proxy_addr.clone(), sock_addr)
     };
-
     let pairs = convert_proxies_to_header_crypto_pairs(proxies, None);
-
     let start = Instant::now();
-
-    for (header, crypto) in &pairs {
+    for (index, ((header, crypto), proxy)) in pairs.iter().zip(proxies).enumerate() {
         preamble::send_upgrade(&mut stream, crate::STREAM_IO_TIMEOUT, crypto).await?;
         timed_write_header_async(&mut stream, header, *crypto.key(), crate::STREAM_IO_TIMEOUT)
             .await?;
+        if index + 1 < proxies.len()
+            && let Some(payload_crypto) = &proxy.payload_crypto
+        {
+            stream = PayloadCryptoConn::wrap(stream, payload_crypto);
+        }
     }
-
     let validator = ValidatorRef::Replay(&stream_context.replay_validator);
     let resp: RouteResponse = timed_read_header_async(
         &mut stream,
@@ -230,9 +310,7 @@ pub async fn probe_rtt(
     if let Err(err) = resp.result {
         return Err(TraceError::Response { err });
     }
-
     let end = Instant::now();
-
     counter!("stream.rtt_probes").increment(1);
     Ok(end.duration_since(start))
 }

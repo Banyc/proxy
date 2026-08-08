@@ -261,18 +261,13 @@ async fn proxy(ctx: &ProxyContext, upgraded: Upgraded) -> Result<(), ProxyError>
         address: ctx.dst_addr.clone(),
         protocol: ConcreteStreamType::Tcp.to_string().into(),
     };
-    let (chain, payload_crypto) = match &ctx.conn_selector.as_ref() {
-        common::route::ConnSelector::Empty => ([].into(), None),
+    let chain = match &ctx.conn_selector.as_ref() {
+        common::route::ConnSelector::Empty => [].into(),
         common::route::ConnSelector::Some(non_empty_conn_selector) => {
-            let proxy_chain = non_empty_conn_selector.choose_chain();
-            (
-                proxy_chain.chain.clone(),
-                proxy_chain.payload_crypto.clone(),
-            )
+            non_empty_conn_selector.choose_chain().chain.clone()
         }
     };
     let upstream = establish(&chain, destination.clone(), &ctx.stream_context).await?;
-
     let conn_context = ConnContext {
         start: (std::time::Instant::now(), std::time::SystemTime::now()),
         upstream_remote: upstream.addr,
@@ -289,7 +284,7 @@ async fn proxy(ctx: &ProxyContext, upgraded: Upgraded) -> Result<(), ProxyError>
     let io_copy = CopyBidirectional {
         downstream: TokioIo::new(upgraded),
         upstream: upstream.stream,
-        payload_crypto,
+        payload_crypto: None,
         speed_limiter: ctx.speed_limiter.clone(),
         conn_context,
         retention,

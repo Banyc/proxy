@@ -65,24 +65,37 @@ mod tests {
     }
 
     async fn spawn_proxy(join_set: &mut tokio::task::JoinSet<()>, addr: &str) -> ConnConfig {
-        spawn_proxy_(join_set, addr, true).await
+        spawn_proxy_(join_set, addr, true, false).await
+    }
+
+    async fn spawn_encrypted_proxy(
+        join_set: &mut tokio::task::JoinSet<()>,
+        addr: &str,
+    ) -> ConnConfig {
+        spawn_proxy_(join_set, addr, true, true).await
     }
 
     async fn spawn_guarded_proxy(
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
     ) -> ConnConfig {
-        spawn_proxy_(join_set, addr, false).await
+        spawn_proxy_(join_set, addr, false, false).await
     }
 
     async fn spawn_proxy_(
         join_set: &mut tokio::task::JoinSet<()>,
         addr: &str,
         allow_loopback: bool,
+        encrypt_payload: bool,
     ) -> ConnConfig {
         let crypto = create_random_crypto();
-        let proxy =
-            UdpProxyConnHandler::new(crypto.clone(), None, udp_context(join_set), allow_loopback);
+        let payload_crypto = encrypt_payload.then(create_random_crypto);
+        let proxy = UdpProxyConnHandler::new(
+            crypto.clone(),
+            payload_crypto.clone(),
+            udp_context(join_set),
+            allow_loopback,
+        );
         let server = proxy.build(addr).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
         join_set.spawn(async move {
@@ -93,7 +106,7 @@ mod tests {
         ConnConfig {
             address: common::proto::addr::RouteAddr::udp(proxy_addr.into()),
             header_crypto: crypto,
-            payload_crypto: None,
+            payload_crypto,
         }
     }
 
@@ -178,6 +191,41 @@ mod tests {
         .expect("timed out probing the UDP proxy chain")
         .unwrap();
         assert!(rtt > Duration::from_secs(0));
+        assert!(rtt < Duration::from_secs(1));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn multiple_payload_keys_layer_each_udp_hop() {
+        let mut join_set = tokio::task::JoinSet::new();
+        let context = udp_context(&mut join_set);
+        let proxies: Arc<[_]> = vec![
+            spawn_encrypted_proxy(&mut join_set, "127.0.0.1:0").await,
+            spawn_encrypted_proxy(&mut join_set, "127.0.0.1:0").await,
+            spawn_encrypted_proxy(&mut join_set, "127.0.0.1:0").await,
+        ]
+        .into();
+        let request = b"hello through three encrypted UDP hops";
+        let response = b"goodbye through three encrypted UDP hops";
+        let destination = spawn_greet(&mut join_set, "127.0.0.1:0", request, response, 1).await;
+        let client = tokio::time::timeout(
+            Duration::from_secs(30),
+            UdpProxyClient::establish(proxies.clone(), destination, &context),
+        )
+        .await
+        .expect("timed out establishing the encrypted UDP proxy chain")
+        .unwrap();
+        let (mut client_read, mut client_write) = client.into_split();
+        client_write.send(request).await.unwrap();
+        read_response(&mut client_read, response).await.unwrap();
+        let mut packet_buf = BytesMut::with_capacity(PACKET_BUFFER_LENGTH);
+        let rtt = tokio::time::timeout(
+            Duration::from_secs(30),
+            probe_rtt(&mut packet_buf, &proxies, &context),
+        )
+        .await
+        .expect("timed out probing the encrypted UDP proxy chain")
+        .unwrap();
+        assert!(rtt > Duration::ZERO);
         assert!(rtt < Duration::from_secs(1));
     }
 

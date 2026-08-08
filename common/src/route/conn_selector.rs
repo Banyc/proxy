@@ -265,7 +265,6 @@ mod tests {
         WeightedConnChain {
             weight,
             chain: Arc::from(Vec::<ConnConfig>::new()),
-            payload_crypto: None,
         }
     }
     #[test]

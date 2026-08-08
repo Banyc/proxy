@@ -25,7 +25,7 @@ use common::{
         client::stream::establish,
         log::stream::{LOGGER, StreamLogWithoutByteCounts, StreamProxyLogWithoutByteCounts},
         metrics::stream::StreamSession,
-        relay::{DEAD_SESSION_RETENTION_DURATION, same_key_nonce_ciphertext},
+        relay::DEAD_SESSION_RETENTION_DURATION,
     },
     retention::RetentionActorSender,
     route::{ConnSelector, RouteAction},
@@ -195,15 +195,10 @@ async fn proxy(
     reporter: HttpFailureReporter,
 ) -> HttpResult {
     let start = (std::time::Instant::now(), std::time::SystemTime::now());
-
-    let (chain, payload_crypto) = match conn_selector {
-        common::route::ConnSelector::Empty => ([].into(), None),
+    let chain = match conn_selector {
+        common::route::ConnSelector::Empty => [].into(),
         common::route::ConnSelector::Some(non_empty_conn_selector) => {
-            let proxy_chain = non_empty_conn_selector.choose_chain();
-            (
-                proxy_chain.chain.clone(),
-                proxy_chain.payload_crypto.clone(),
-            )
+            non_empty_conn_selector.choose_chain().chain.clone()
         }
     };
     let upstream = match establish(&chain, dst_addr.clone(), &ctx.stream_context).await {
@@ -216,7 +211,6 @@ async fn proxy(
         }
     };
     let upstream_addr = upstream.addr.clone();
-
     let dn_remote = reporter.downstream.remote;
     let session_guard = ctx.stream_context.session_table.as_ref().map(|s| {
         s.set_scope_owned(StreamSession {
@@ -231,34 +225,15 @@ async fn proxy(
             dn_gauge: None,
         })
     });
-    let res = match &payload_crypto {
-        Some(crypto) => {
-            let (r, w) = tokio::io::split(upstream.stream);
-            let (r, w) = same_key_nonce_ciphertext(crypto.key(), r, w);
-            let upstream = tokio_chacha20::stream::DuplexStream::new(r, w);
-            tls_http(
-                upstream,
-                req,
-                session_guard,
-                &reporter,
-                &ctx.stream_context.session_spawner,
-                &ctx.stream_context.retention,
-            )
-            .await
-        }
-        None => {
-            tls_http(
-                upstream.stream,
-                req,
-                session_guard,
-                &reporter,
-                &ctx.stream_context.session_spawner,
-                &ctx.stream_context.retention,
-            )
-            .await
-        }
-    };
-
+    let res = tls_http(
+        upstream.stream,
+        req,
+        session_guard,
+        &reporter,
+        &ctx.stream_context.session_spawner,
+        &ctx.stream_context.retention,
+    )
+    .await;
     let end = std::time::Instant::now();
     let timing = Timing { start, end };
     let log = HttpProxyLog {
@@ -271,7 +246,6 @@ async fn proxy(
         uri,
     };
     common::info_println!("HTTP proxy: Finished {log}");
-
     let record = (&StreamProxyLogWithoutByteCounts {
         stream: StreamLogWithoutByteCounts {
             timing: timing.clone(),
@@ -285,7 +259,6 @@ async fn proxy(
     if let Some(x) = LOGGER.lock().unwrap().as_ref() {
         x.write(&record);
     }
-
     res
 }
 

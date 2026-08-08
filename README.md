@@ -31,6 +31,8 @@ A private-side initiator can establish an outbound tunnel to a public-side respo
 - `revtunrtp://private-a` uses a bidirectional `rtp_mux` session. Its physical responder address is written as `rtpmux://public.example.org:7000`; the RTP listener also uses the following UDP port (`7001`) for its bulk lane.
 - The initiator and responder use the same `header_key` to authenticate tunnel registration. A chain entry for the virtual hop uses that key for its normal proxy request header as well. See `server/config.toml` for configuration examples.
 - Optional payload encryption terminates at the public proxy-chain entry and the private initiator, which must share the exact same `payload_key`. The virtual chain entry (`revtuntcp://name` / `revtunrtp://name`) carries that key as its payload key; the responder is transport-only and intentionally accepts no `payload_key`.
+Every hop in a stream or UDP proxy chain may define its own payload_key
+- The access client nests those payload layers in chain order, and each matching proxy server removes exactly its own layer before forwarding traffic to the next hop. A hop's upstream entry and its proxy server must use the same key.
 
 ## Protocol
 

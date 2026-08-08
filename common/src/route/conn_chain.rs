@@ -67,20 +67,9 @@ impl WeightedConnChainBuilder {
                 SharableConfig::Private(c) => Ok(c),
             })
             .collect::<Result<Arc<_>, _>>()?;
-        let mut payload_crypto = None;
-        for proxy_config in chain.iter() {
-            let Some(p) = &proxy_config.payload_crypto else {
-                continue;
-            };
-            if payload_crypto.is_some() {
-                return Err(WeightedConnChainBuildError::MultiplePayloadKeys);
-            }
-            payload_crypto = Some(p.clone());
-        }
         Ok(WeightedConnChain {
             weight: self.weight,
             chain,
-            payload_crypto,
         })
     }
 }
@@ -90,15 +79,11 @@ pub enum WeightedConnChainBuildError {
     ProxyServer(#[from] ConnConfigBuildError),
     #[error("Proxy server key not found: {0}")]
     ProxyServerKeyNotFound(Arc<str>),
-    #[error("Multiple payload keys")]
-    MultiplePayloadKeys,
 }
-
 #[derive(Debug)]
 pub struct WeightedConnChain {
     pub weight: usize,
     pub chain: Arc<ConnChain>,
-    pub payload_crypto: Option<tokio_chacha20::config::Config>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,7 +260,6 @@ mod tests {
             WeightedConnChain {
                 weight: 1,
                 chain: Arc::from(Vec::<crate::route::ConnConfig>::new()),
-                payload_crypto: None,
             },
             Some(Arc::new(CountingTracer(counter.clone())) as Arc<dyn ProbeRtt + Send + Sync>),
             CancellationToken::new(),
@@ -322,7 +306,6 @@ mod tests {
             WeightedConnChain {
                 weight: 1,
                 chain: Arc::from(Vec::<crate::route::ConnConfig>::new()),
-                payload_crypto: None,
             },
             Some(Arc::new(PanickingTracer) as Arc<dyn ProbeRtt + Send + Sync>),
             CancellationToken::new(),
@@ -346,7 +329,6 @@ mod tests {
             WeightedConnChain {
                 weight: 1,
                 chain: Arc::from(Vec::<crate::route::ConnConfig>::new()),
-                payload_crypto: None,
             },
             Some(Arc::new(CountingTracer(Arc::new(AtomicUsize::new(0))))
                 as Arc<dyn ProbeRtt + Send + Sync>),
@@ -388,7 +370,6 @@ mod tests {
             WeightedConnChain {
                 weight: 1,
                 chain: Arc::from(Vec::<crate::route::ConnConfig>::new()),
-                payload_crypto: None,
             },
             None,
             CancellationToken::new(),

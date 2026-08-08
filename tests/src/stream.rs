@@ -90,7 +90,15 @@ mod tests {
         addr: &Arc<str>,
         ty: ConcreteStreamType,
     ) -> ConnConfig {
-        spawn_proxy_(join_set, addr, ty, true).await
+        spawn_proxy_(join_set, addr, ty, true, false).await
+    }
+
+    async fn spawn_encrypted_proxy(
+        join_set: &mut tokio::task::JoinSet<()>,
+        addr: &Arc<str>,
+        ty: ConcreteStreamType,
+    ) -> ConnConfig {
+        spawn_proxy_(join_set, addr, ty, true, true).await
     }
 
     async fn spawn_guarded_proxy(
@@ -98,7 +106,7 @@ mod tests {
         addr: &Arc<str>,
         ty: ConcreteStreamType,
     ) -> ConnConfig {
-        spawn_proxy_(join_set, addr, ty, false).await
+        spawn_proxy_(join_set, addr, ty, false, false).await
     }
 
     async fn spawn_proxy_(
@@ -106,13 +114,15 @@ mod tests {
         addr: &Arc<str>,
         ty: ConcreteStreamType,
         allow_loopback: bool,
+        encrypt_payload: bool,
     ) -> ConnConfig {
         let crypto = create_random_crypto();
+        let payload_crypto = encrypt_payload.then(create_random_crypto);
         let stream_context = stream_context(join_set);
         let session_spawner = stream_context.session_spawner.clone();
         let proxy = StreamProxyConnHandler::new(
             crypto.clone(),
-            None,
+            payload_crypto.clone(),
             stream_context,
             Arc::clone(addr),
             allow_loopback,
@@ -209,7 +219,7 @@ mod tests {
                 protocol: ty.to_string().into(),
             },
             header_crypto: crypto,
-            payload_crypto: None,
+            payload_crypto,
         }
     }
 
@@ -305,6 +315,39 @@ mod tests {
         .expect("timed out probing the proxy chain")
         .unwrap();
         assert!(rtt > Duration::from_secs(0));
+        assert!(rtt < Duration::from_secs(1));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn multiple_payload_keys_layer_each_stream_hop() {
+        let mut join_set = tokio::task::JoinSet::new();
+        let stream_context = stream_context(&mut join_set);
+        let addr = Arc::from("0.0.0.0:0");
+        let proxies = vec![
+            spawn_encrypted_proxy(&mut join_set, &addr, ConcreteStreamType::Tcp).await,
+            spawn_encrypted_proxy(&mut join_set, &addr, ConcreteStreamType::Tcp).await,
+            spawn_encrypted_proxy(&mut join_set, &addr, ConcreteStreamType::Tcp).await,
+        ];
+        let request = b"hello through three encrypted hops";
+        let response = b"goodbye through three encrypted hops";
+        let destination = spawn_greet(&mut join_set, "[::]:0", request, response, 1).await;
+        let ConnAndAddr { mut stream, .. } = tokio::time::timeout(
+            Duration::from_secs(30),
+            establish(&proxies, destination, &stream_context),
+        )
+        .await
+        .expect("timed out establishing the encrypted proxy chain")
+        .unwrap();
+        stream.write_all(request).await.unwrap();
+        read_response(&mut stream, response).await.unwrap();
+        let rtt = tokio::time::timeout(
+            Duration::from_secs(30),
+            probe_rtt(&proxies, &stream_context),
+        )
+        .await
+        .expect("timed out probing the encrypted proxy chain")
+        .unwrap();
+        assert!(rtt > Duration::ZERO);
         assert!(rtt < Duration::from_secs(1));
     }
 

@@ -1,23 +1,18 @@
-use std::{
-    io::{self, Write},
-    net::SocketAddr,
-    num::NonZeroUsize,
-    sync::Arc,
-    time::{Duration, Instant},
-};
-
 use crate::{
     addr::InternetAddr,
     anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     error::AnyError,
     header::{
-        codec::{CodecError, MAX_HEADER_LEN, read_header, write_header},
+        codec::{CodecError, read_header, write_header},
         route::{RouteError, RouteRequest, RouteResponse},
     },
     proto::{
         addr::RouteAddr,
         context::UdpRuntime,
-        relay::udp::{UdpRecv, UdpSend},
+        relay::{
+            decrypt_packet_payload, encrypt_packet_payload,
+            udp::{UdpRecv, UdpSend},
+        },
     },
     route::{ConnChain, ProbeRtt, convert_proxies_to_header_crypto_pairs},
     ttl_cell::RegeneratingHeader,
@@ -27,6 +22,13 @@ use ae::anti_replay::{TimeValidator, ValidatorRef};
 use bytes::BytesMut;
 use metrics::counter;
 use primitive::arena::obj_pool::ArcObjPool;
+use std::{
+    io::{self, Write},
+    net::SocketAddr,
+    num::NonZeroUsize,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
 use tokio::net::UdpSocket;
 use tracing::{instrument, trace, warn};
@@ -44,7 +46,6 @@ impl UdpProxyClient {
         destination: InternetAddr,
         context: &UdpRuntime,
     ) -> Result<UdpProxyClient, EstablishError> {
-        // If there are no proxy configs, just connect to the destination
         if proxies.is_empty() {
             let addr = *destination
                 .to_socket_addrs()
@@ -61,18 +62,15 @@ impl UdpProxyClient {
                     sock_addr: addr,
                 }
             })?;
-
             let upstream = Arc::new(upstream);
-            let write = UdpProxyClientWriteHalf::new(upstream.clone(), None);
-            let read = UdpProxyClientReadHalf::new(upstream, 0, proxies);
+            let write = UdpProxyClientWriteHalf::new(upstream.clone(), Vec::new());
+            let read = UdpProxyClientReadHalf::new(upstream, proxies);
             return Ok(UdpProxyClient {
                 write,
                 read,
                 upstream_addr: destination,
             });
         }
-
-        // Connect to upstream
         let proxy_addr = proxies[0].address.clone();
         let addr = *proxy_addr
             .address
@@ -90,8 +88,6 @@ impl UdpProxyClient {
                 sock_addr: addr,
             }
         })?;
-
-        // Convert addresses to headers (UDP wires carry the bare InternetAddr)
         let pairs =
             convert_proxies_to_header_crypto_pairs(&proxies, Some(RouteAddr::udp(destination)));
         let pairs = pairs
@@ -105,28 +101,26 @@ impl UdpProxyClient {
                 )
             })
             .collect::<Vec<(RouteRequest<InternetAddr>, &tokio_chacha20::config::Config)>>();
-
-        // Save headers to buffer
-        let request_header = {
-            let pairs = pairs
-                .into_iter()
-                .map(|(header, crypto)| (header, crypto.clone()))
-                .collect::<Vec<_>>();
-            move || {
-                let mut buf = Vec::new();
-                let mut writer = io::Cursor::new(&mut buf);
-                for (header, crypto) in &pairs {
+        let request_layers = pairs
+            .into_iter()
+            .zip(proxies.iter())
+            .map(|((header, header_crypto), proxy)| {
+                let header_crypto = header_crypto.clone();
+                let regenerate = Box::new(move || {
+                    let mut buf = Vec::new();
                     trace!(?header, "Writing header to buffer");
-                    write_header(&mut writer, header, *crypto.key()).unwrap();
+                    write_header(&mut buf, &header, *header_crypto.key()).unwrap();
+                    buf.into()
+                });
+                UdpRequestLayer {
+                    header: RegeneratingHeader::new(regenerate, VALIDATOR_UDP_HDR_TTL),
+                    payload_crypto: proxy.payload_crypto.clone(),
                 }
-                buf.into()
-            }
-        };
-
-        // Return stream
+            })
+            .collect();
         let upstream = Arc::new(upstream);
-        let write = UdpProxyClientWriteHalf::new(upstream.clone(), Some(Box::new(request_header)));
-        let read = UdpProxyClientReadHalf::new(upstream, MAX_HEADER_LEN, proxies);
+        let write = UdpProxyClientWriteHalf::new(upstream.clone(), request_layers);
+        let read = UdpProxyClientReadHalf::new(upstream, proxies);
         Ok(UdpProxyClient {
             write,
             read,
@@ -172,10 +166,16 @@ pub enum EstablishError {
     },
 }
 
+struct UdpRequestLayer {
+    header: RegeneratingHeader,
+    payload_crypto: Option<tokio_chacha20::config::Config>,
+}
+
 pub struct UdpProxyClientWriteHalf {
     upstream: Arc<UdpSocket>,
-    request_header: Option<RegeneratingHeader>,
+    request_layers: Vec<UdpRequestLayer>,
     write_buf: Vec<u8>,
+    transform_buf: Vec<u8>,
 }
 impl core::fmt::Debug for UdpProxyClientWriteHalf {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -191,32 +191,60 @@ impl UdpSend for UdpProxyClientWriteHalf {
     }
 }
 impl UdpProxyClientWriteHalf {
-    pub fn new(
-        upstream: Arc<UdpSocket>,
-        request_header: Option<Box<dyn Fn() -> Arc<[u8]> + Send>>,
-    ) -> Self {
+    fn new(upstream: Arc<UdpSocket>, request_layers: Vec<UdpRequestLayer>) -> Self {
         Self {
             upstream,
-            request_header: request_header
-                .map(|f| RegeneratingHeader::new(f, VALIDATOR_UDP_HDR_TTL)),
-            write_buf: vec![],
+            request_layers,
+            write_buf: Vec::with_capacity(PACKET_BUFFER_LENGTH),
+            transform_buf: Vec::with_capacity(PACKET_BUFFER_LENGTH),
         }
     }
 
     #[instrument(skip_all)]
     pub async fn send(&mut self, buf: &[u8]) -> Result<usize, SendError> {
         self.write_buf.clear();
-
-        if let Some(request_header) = &mut self.request_header {
-            let hdr = request_header.get();
-            // Write header
-            self.write_buf.write_all(hdr).unwrap();
-        }
-
-        // Write payload
         self.write_buf.write_all(buf).unwrap();
-
-        // Send data
+        for layer in self.request_layers.iter_mut().rev() {
+            if let Some(payload_crypto) = &layer.payload_crypto {
+                self.transform_buf.resize(PACKET_BUFFER_LENGTH, 0);
+                let encrypted = encrypt_packet_payload(
+                    &self.write_buf,
+                    &mut self.transform_buf,
+                    payload_crypto,
+                )
+                .map_err(|source| SendError {
+                    source,
+                    sock_addr: self.upstream.peer_addr().ok(),
+                })?;
+                let encrypted_len = encrypted.len();
+                self.transform_buf.truncate(encrypted_len);
+                std::mem::swap(&mut self.write_buf, &mut self.transform_buf);
+            }
+            let header = layer.header.get();
+            let encoded_len = header
+                .len()
+                .checked_add(self.write_buf.len())
+                .ok_or_else(|| SendError {
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "UDP packet length overflow",
+                    ),
+                    sock_addr: self.upstream.peer_addr().ok(),
+                })?;
+            if encoded_len > PACKET_BUFFER_LENGTH {
+                return Err(SendError {
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "encoded UDP proxy packet is too large",
+                    ),
+                    sock_addr: self.upstream.peer_addr().ok(),
+                });
+            }
+            self.transform_buf.clear();
+            self.transform_buf.extend_from_slice(header);
+            self.transform_buf.extend_from_slice(&self.write_buf);
+            std::mem::swap(&mut self.write_buf, &mut self.transform_buf);
+        }
         self.upstream.send(&self.write_buf).await.map_err(|e| {
             let peer_addr = self.upstream.peer_addr().ok();
             SendError {
@@ -224,7 +252,6 @@ impl UdpProxyClientWriteHalf {
                 sock_addr: peer_addr,
             }
         })?;
-
         Ok(buf.len())
     }
 
@@ -247,9 +274,9 @@ fn time_validator() -> TimeValidator {
 #[derive(Debug)]
 pub struct UdpProxyClientReadHalf {
     upstream: Arc<UdpSocket>,
-    max_response_header_size: usize,
     proxies: Arc<ConnChain>,
     read_buf: Vec<u8>,
+    transform_buf: Vec<u8>,
     time_validator: TimeValidator,
 }
 impl UdpRecv for UdpProxyClientReadHalf {
@@ -258,24 +285,19 @@ impl UdpRecv for UdpProxyClientReadHalf {
     }
 }
 impl UdpProxyClientReadHalf {
-    pub fn new(
-        upstream: Arc<UdpSocket>,
-        max_response_header_size: usize,
-        proxies: Arc<ConnChain>,
-    ) -> Self {
+    pub fn new(upstream: Arc<UdpSocket>, proxies: Arc<ConnChain>) -> Self {
         Self {
             upstream,
-            max_response_header_size,
             proxies,
-            read_buf: vec![],
+            read_buf: Vec::with_capacity(PACKET_BUFFER_LENGTH),
+            transform_buf: Vec::with_capacity(PACKET_BUFFER_LENGTH),
             time_validator: time_validator(),
         }
     }
 
     #[instrument(skip_all)]
     pub async fn recv(&mut self, buf: &mut [u8]) -> Result<usize, RecvError> {
-        let cap = self.max_response_header_size + buf.len();
-        self.read_buf.resize(cap, 0);
+        self.read_buf.resize(PACKET_BUFFER_LENGTH, 0);
         let n = self.upstream.recv(&mut self.read_buf).await.map_err(|e| {
             let peer_addr = self.upstream.peer_addr().ok();
             RecvError::RecvUpstream {
@@ -283,12 +305,22 @@ impl UdpProxyClientReadHalf {
                 sock_addr: peer_addr,
             }
         })?;
-        let mut reader = io::Cursor::new(&self.read_buf[..n]);
+        let mut in_read_buf = true;
+        let mut start = 0;
+        let mut end = n;
         for node in self.proxies.iter() {
             trace!(?node.address, "Reading response");
             let validator = ValidatorRef::Time(&self.time_validator);
-            let resp: RouteResponse =
-                read_header(&mut reader, *node.header_crypto.key(), &validator)?;
+            let (resp, consumed): (RouteResponse, usize) = {
+                let packet = if in_read_buf {
+                    &self.read_buf[start..end]
+                } else {
+                    &self.transform_buf[start..end]
+                };
+                let mut reader = io::Cursor::new(packet);
+                let response = read_header(&mut reader, *node.header_crypto.key(), &validator)?;
+                (response, usize::try_from(reader.position()).unwrap())
+            };
             if let Err(err) = resp.result {
                 warn!(?err, %node.address, "Upstream responded with an error");
                 return Err(RecvError::Response {
@@ -296,8 +328,42 @@ impl UdpProxyClientReadHalf {
                     addr: node.address.address.clone(),
                 });
             }
+            start += consumed;
+            if let Some(payload_crypto) = &node.payload_crypto {
+                if in_read_buf {
+                    self.transform_buf.resize(PACKET_BUFFER_LENGTH, 0);
+                    let decrypted = decrypt_packet_payload(
+                        &self.read_buf[start..end],
+                        &mut self.transform_buf,
+                        payload_crypto,
+                    )
+                    .map_err(|source| RecvError::PayloadCrypto {
+                        source,
+                        addr: node.address.address.clone(),
+                    })?;
+                    end = decrypted.len();
+                } else {
+                    self.read_buf.resize(PACKET_BUFFER_LENGTH, 0);
+                    let decrypted = decrypt_packet_payload(
+                        &self.transform_buf[start..end],
+                        &mut self.read_buf,
+                        payload_crypto,
+                    )
+                    .map_err(|source| RecvError::PayloadCrypto {
+                        source,
+                        addr: node.address.address.clone(),
+                    })?;
+                    end = decrypted.len();
+                }
+                in_read_buf = !in_read_buf;
+                start = 0;
+            }
         }
-        let payload = &reader.get_ref()[reader.position() as usize..];
+        let payload = if in_read_buf {
+            &self.read_buf[start..end]
+        } else {
+            &self.transform_buf[start..end]
+        };
         let payload_size = payload.len().min(buf.len());
         buf[..payload_size].copy_from_slice(&payload[..payload_size]);
         Ok(payload_size)
@@ -317,6 +383,12 @@ pub enum RecvError {
     },
     #[error("Failed to read response from upstream: {0}")]
     Header(#[from] CodecError),
+    #[error("Failed to decrypt UDP payload from {addr}: {source}")]
+    PayloadCrypto {
+        #[source]
+        source: io::Error,
+        addr: InternetAddr,
+    },
     #[error("Upstream responded with an error: {err}, {addr}")]
     Response { err: RouteError, addr: InternetAddr },
 }
@@ -367,13 +439,9 @@ pub async fn probe_rtt(
     if proxies.is_empty() {
         return Ok(Duration::from_secs(0));
     }
-
-    // Connect to upstream
     let proxy_addr = &proxies[0].address;
     let addr = *proxy_addr.address.to_socket_addrs().await?.first();
     let upstream = context.connector.connect(addr).await?;
-
-    // Convert addresses to headers (UDP wires carry the bare InternetAddr)
     let pairs = convert_proxies_to_header_crypto_pairs(proxies, None);
     let pairs = pairs
         .into_iter()
@@ -386,29 +454,45 @@ pub async fn probe_rtt(
             )
         })
         .collect::<Vec<(RouteRequest<InternetAddr>, &tokio_chacha20::config::Config)>>();
-
-    // Save headers to buffer
-    let mut buf = Vec::new();
-    let mut writer = io::Cursor::new(&mut buf);
-    for (header, crypto) in &pairs {
-        write_header(&mut writer, header, *crypto.key()).unwrap();
+    let mut packet = Vec::new();
+    let mut transform_buf = vec![0; PACKET_BUFFER_LENGTH];
+    for (index, ((header, header_crypto), proxy)) in pairs.iter().zip(proxies).enumerate().rev() {
+        if index + 1 < proxies.len()
+            && let Some(payload_crypto) = &proxy.payload_crypto
+        {
+            transform_buf.resize(PACKET_BUFFER_LENGTH, 0);
+            let encrypted = encrypt_packet_payload(&packet, &mut transform_buf, payload_crypto)?;
+            let encrypted_len = encrypted.len();
+            transform_buf.truncate(encrypted_len);
+            std::mem::swap(&mut packet, &mut transform_buf);
+            transform_buf.resize(PACKET_BUFFER_LENGTH, 0);
+        }
+        let mut header_buf = Vec::new();
+        write_header(&mut header_buf, header, *header_crypto.key())?;
+        let encoded_len = header_buf.len().checked_add(packet.len()).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "UDP packet length overflow")
+        })?;
+        if encoded_len > PACKET_BUFFER_LENGTH {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "encoded UDP proxy probe is too large",
+            )
+            .into());
+        }
+        transform_buf.clear();
+        transform_buf.extend_from_slice(&header_buf);
+        transform_buf.extend_from_slice(&packet);
+        std::mem::swap(&mut packet, &mut transform_buf);
     }
-
     let start = Instant::now();
-
-    // Send request
-    upstream.send(&buf).await?;
-
-    // Recv response
+    upstream.send(&packet).await?;
     let n = upstream.recv_buf(pkt_buf).await?;
-
     let end = Instant::now();
-
-    // Decode and check headers
-    let mut reader = io::Cursor::new(&pkt_buf[..n]);
-    for node in proxies.iter() {
+    let mut packet = pkt_buf[..n].to_vec();
+    for (index, node) in proxies.iter().enumerate() {
         trace!(?node.address, "Reading response");
         let validator = ValidatorRef::Time(&context.time_validator);
+        let mut reader = io::Cursor::new(&packet);
         let resp: RouteResponse = read_header(&mut reader, *node.header_crypto.key(), &validator)?;
         if let Err(err) = resp.result {
             warn!(?err, %node.address, "Upstream responded with an error");
@@ -417,8 +501,18 @@ pub async fn probe_rtt(
                 addr: node.address.address.clone(),
             });
         }
+        let consumed = usize::try_from(reader.position()).unwrap();
+        let remaining = &packet[consumed..];
+        if index + 1 < proxies.len()
+            && let Some(payload_crypto) = &node.payload_crypto
+        {
+            transform_buf.resize(PACKET_BUFFER_LENGTH, 0);
+            let decrypted = decrypt_packet_payload(remaining, &mut transform_buf, payload_crypto)?;
+            packet = decrypted.to_vec();
+        } else {
+            packet = remaining.to_vec();
+        }
     }
-
     counter!("udp.traces").increment(1);
     Ok(end.duration_since(start))
 }
@@ -442,7 +536,7 @@ mod tests {
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         client.connect(peer.local_addr().unwrap()).await.unwrap();
         peer.connect(client.local_addr().unwrap()).await.unwrap();
-        let mut read = UdpProxyClientReadHalf::new(Arc::new(client), MAX_HEADER_LEN, [].into());
+        let mut read = UdpProxyClientReadHalf::new(Arc::new(client), [].into());
         let mut buf = [0u8; 64];
         peer.send(&vec![0xab; buf.len() + 1]).await.unwrap();
         let n = read.recv(&mut buf).await.unwrap();

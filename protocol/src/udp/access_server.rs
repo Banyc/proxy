@@ -128,23 +128,16 @@ impl UdpAccessConnHandler {
     }
 
     async fn proxy(&self, conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), AccessProxyError> {
-        // Connect to upstream
-        let (chain, payload_crypto) = match &self.conn_selector {
-            common::route::ConnSelector::Empty => ([].into(), None),
+        let chain = match &self.conn_selector {
+            common::route::ConnSelector::Empty => [].into(),
             common::route::ConnSelector::Some(non_empty_conn_selector) => {
-                let proxy_chain = non_empty_conn_selector.choose_chain();
-                (
-                    proxy_chain.chain.clone(),
-                    proxy_chain.payload_crypto.clone(),
-                )
+                non_empty_conn_selector.choose_chain().chain.clone()
             }
         };
         let upstream =
             UdpProxyClient::establish(chain, self.destination.clone(), &self.udp_runtime).await?;
         let upstream_remote = upstream.remote_addr().clone();
-
         let (upstream_read, upstream_write) = upstream.into_split();
-
         let speed_limiter = self.speed_limiter.clone();
         let session_table = self.udp_runtime.session_table.clone();
         let retention = self.udp_runtime.retention.clone();
@@ -162,7 +155,7 @@ impl UdpAccessConnHandler {
                 write: dn_write,
             },
             speed_limiter,
-            payload_crypto,
+            payload_crypto: None,
             response_header: None,
             retention,
         };
