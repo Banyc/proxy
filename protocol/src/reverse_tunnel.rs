@@ -67,6 +67,8 @@ pub struct ReverseTunnelInitiatorConfig {
     pub responder_addr: RouteAddrStr,
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     #[serde(default)]
+    pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
+    #[serde(default)]
     pub allow_loopback: bool,
     #[serde(default)]
     pub fec: bool,
@@ -645,9 +647,10 @@ impl ReverseTunnelInitiatorBuilder {
             .header_key
             .build()
             .map_err(|error| BuildError::HeaderCrypto(error.source.to_string()))?;
+        let payload_crypto = build_payload_crypto(self.config.payload_key)?;
         let stream_proxy = Arc::new(StreamProxyConnHandler::new(
             registration_crypto.clone(),
-            None,
+            payload_crypto,
             self.runtime.stream.clone(),
             self.key.clone(),
             self.config.allow_loopback,
@@ -662,6 +665,15 @@ impl ReverseTunnelInitiatorBuilder {
             fec: self.config.fec,
         })
     }
+}
+
+fn build_payload_crypto(
+    payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
+) -> Result<Option<tokio_chacha20::config::Config>, BuildError> {
+    payload_key
+        .map(|key| key.build())
+        .transpose()
+        .map_err(|error| BuildError::PayloadCrypto(error.source.to_string()))
 }
 impl loading::Build for ReverseTunnelInitiatorBuilder {
     type ConnHandler = ReverseTunnelInitiatorHandler;
@@ -769,6 +781,8 @@ pub enum BuildError {
     UnsupportedPhysicalTransport(Arc<str>),
     #[error("header crypto: {0}")]
     HeaderCrypto(String),
+    #[error("payload crypto: {0}")]
+    PayloadCrypto(String),
     #[error("failed to bind reverse tunnel responder: {0}")]
     Bind(#[from] io::Error),
     #[error("duplicate reverse tunnel configuration key `{0}`")]
@@ -877,21 +891,28 @@ pub async fn prepare(
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
-    use ae::anti_replay::ReplayValidator;
+    use ae::anti_replay::{ReplayValidator, TimeValidator};
     use common::{
         anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         connect::{ConnectorConfig, ConnectorResetSignal},
         loading::Serve,
         notify::Notify,
-        proto::client::stream,
+        proto::{
+            client::stream,
+            connect::udp::UdpConnector,
+            context::{Runtime, UdpRuntime},
+            relay::same_key_nonce_ciphertext,
+        },
         route::ConnConfig,
         stream::pool::StreamConnPool,
     };
+    use std::sync::RwLock;
     use swap::Swap;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
+    use tokio_chacha20::config::ConfigBuilder;
 
     use crate::stream::connect::build_concrete_stream_connector_table;
 
@@ -918,6 +939,33 @@ mod tests {
             initiator_transport(&addr),
             Err(BuildError::UnsupportedPhysicalTransport(_))
         ));
+    }
+
+    #[test]
+    fn responder_rejects_payload_key() {
+        let error = serde_json::from_str::<ReverseTunnelConfig>(
+            r#"{
+                "responder": [{ "listen_addr": "tcp://127.0.0.1:7000", "header_key": "aGVsbG8", "payload_key": "aGVsbG8" }]
+            }"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("payload_key"), "{error}");
+    }
+
+    fn initiator_config(
+        name: &str,
+        responder_addr: RouteAddr,
+        header_key: ConfigBuilder,
+        payload_key: Option<ConfigBuilder>,
+    ) -> ReverseTunnelInitiatorConfig {
+        ReverseTunnelInitiatorConfig {
+            name: name.into(),
+            responder_addr: RouteAddrStr(responder_addr),
+            header_key,
+            payload_key,
+            allow_loopback: true,
+            fec: false,
+        }
     }
 
     async fn test_stream_runtime(
@@ -970,6 +1018,24 @@ mod tests {
         )
     }
 
+    async fn test_runtime(tasks: &mut JoinSet<()>) -> (Runtime, common::session::SessionSpawner) {
+        let (stream, session_spawner) = test_stream_runtime(tasks).await;
+        let runtime = Runtime {
+            stream: stream.clone(),
+            udp: UdpRuntime {
+                session_table: None,
+                time_validator: Arc::new(TimeValidator::new(VALIDATOR_TIME_FRAME)),
+                connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
+                    ConnectorConfig::default(),
+                )))),
+                session_spawner: session_spawner.clone(),
+                retention: stream.retention.clone(),
+            },
+            session_spawner: session_spawner.clone(),
+        };
+        (runtime, session_spawner)
+    }
+
     async fn origin(tasks: &mut JoinSet<()>) -> SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1006,6 +1072,123 @@ mod tests {
             stream_runtime: runtime,
             fec: false,
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn invalid_payload_key_is_reported_as_payload_crypto() {
+        let mut tasks = JoinSet::new();
+        let (runtime, _session_spawner) = test_runtime(&mut tasks).await;
+        let config = initiator_config(
+            "private-a",
+            "tcp://127.0.0.1:7000".parse().unwrap(),
+            ConfigBuilder("aGVsbG8".into()),
+            Some(ConfigBuilder("c2VjcmV0LXByb3h5LWtleQ!!".into())),
+        );
+        let error = ReverseTunnelInitiatorBuilder::new(config, runtime)
+            .unwrap()
+            .handler()
+            .unwrap_err();
+        assert!(matches!(error, BuildError::PayloadCrypto(_)), "{error}");
+        assert!(!matches!(error, BuildError::HeaderCrypto(_)), "{error}");
+    }
+
+    async fn verify_reverse_proxy_hop_with_payload(transport: ReverseTunnelTransport) {
+        let mut tasks = JoinSet::new();
+        let (runtime, session_spawner) = test_runtime(&mut tasks).await;
+        let header_key = "aGVsbG8";
+        let payload_key = "cGF5bG9hZA";
+        let header_crypto = ConfigBuilder(header_key.into()).build().unwrap();
+        let payload_crypto = ConfigBuilder(payload_key.into()).build().unwrap();
+        let responder_handler = ReverseTunnelResponderHandler {
+            registration_crypto: header_crypto.clone(),
+            stream_runtime: runtime.stream.clone(),
+        };
+        let responder_addr = match transport {
+            ReverseTunnelTransport::Tcp => {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+                let server = TcpReverseTunnelResponder {
+                    listener,
+                    handler: responder_handler,
+                };
+                tasks.spawn(async move {
+                    let (_tx, rx) = loading::replace_conn_handler_channel();
+                    server.serve(rx).await.unwrap();
+                });
+                format!("tcp://{addr}").parse().unwrap()
+            }
+            ReverseTunnelTransport::Rtp => {
+                let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0", false)
+                    .await
+                    .unwrap();
+                let addr = server.listener().local_addr();
+                let server = RtpReverseTunnelResponder {
+                    server,
+                    handler: responder_handler,
+                    session_spawner,
+                };
+                tasks.spawn(async move {
+                    let (_tx, rx) = loading::replace_conn_handler_channel();
+                    server.serve(rx).await.unwrap();
+                });
+                format!("rtpmux://{addr}").parse().unwrap()
+            }
+        };
+        let config = initiator_config(
+            "private-a",
+            responder_addr,
+            ConfigBuilder(header_key.into()),
+            Some(ConfigBuilder(payload_key.into())),
+        );
+        let initiator = ReverseTunnelInitiator {
+            handler: ReverseTunnelInitiatorBuilder::new(config, runtime.clone())
+                .unwrap()
+                .handler()
+                .unwrap(),
+        };
+        tasks.spawn(async move {
+            let (_tx, rx) = loading::replace_conn_handler_channel();
+            initiator.serve(rx).await.unwrap();
+        });
+        let origin_addr = origin(&mut tasks).await;
+        let reverse_addr: RouteAddr = format!("{}://private-a", transport.protocol())
+            .parse()
+            .unwrap();
+        let chain = [ConnConfig {
+            address: reverse_addr,
+            header_crypto: header_crypto.clone(),
+            payload_crypto: Some(payload_crypto.clone()),
+        }];
+        let destination: RouteAddr = format!("tcp://{origin_addr}").parse().unwrap();
+        let stream = tokio::time::timeout(
+            Duration::from_secs(10),
+            stream::establish(&chain, destination, &runtime.stream),
+        )
+        .await
+        .expect("reverse tunnel did not register")
+        .unwrap()
+        .stream;
+        let (reader, writer) = tokio::io::split(stream);
+        let (reader, writer) = same_key_nonce_ciphertext(payload_crypto.key(), reader, writer);
+        let mut stream = tokio_chacha20::stream::DuplexStream::new(reader, writer);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            stream.write_all(b"ping").await.unwrap();
+            let mut response = [0; 4];
+            stream.read_exact(&mut response).await.unwrap();
+            assert_eq!(&response, b"pong");
+        })
+        .await
+        .expect("encrypted reverse proxy stream stalled");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tcp_reverse_tunnel_encrypts_payload() {
+        verify_reverse_proxy_hop_with_payload(ReverseTunnelTransport::Tcp).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rtp_reverse_tunnel_encrypts_payload() {
+        verify_reverse_proxy_hop_with_payload(ReverseTunnelTransport::Rtp).await;
     }
 
     async fn verify_reverse_proxy_hop(transport: ReverseTunnelTransport) {

@@ -8,8 +8,10 @@
 
 # A public proxy chain can reference a tunnel registered by a private initiator.
 # Choose the virtual scheme that matches the initiator's physical transport.
-# "private-a" = { address = "revtuntcp://private-a", header_key = "base64" }
-# "private-b" = { address = "revtunrtp://private-b", header_key = "base64" }
+# Payload encryption terminates at the public chain entry and the private initiator,
+# so the chain entry repeats the same payload_key as the initiator.
+# "private-a" = { address = "revtuntcp://private-a", header_key = "base64", payload_key = "base64" }
+# "private-b" = { address = "revtunrtp://private-b", header_key = "base64", payload_key = "base64" }
 
 [stream]
 pool = ["tcp1", "mptcp1"]
@@ -114,6 +116,7 @@ header_key = "base64"
 # name = "private-a"
 # responder_addr = "tcp://public.example.org:7000"
 # header_key = "base64"
+# payload_key = "base64"
 # allow_loopback = false
 
 # Private side over RTP: use rtpmux:// for the physical responder address.
@@ -121,6 +124,7 @@ header_key = "base64"
 # name = "private-b"
 # responder_addr = "rtpmux://public.example.org:7100"
 # header_key = "base64"
+# payload_key = "base64"
 # fec = false
 
 # Public side: accepts named registrations; there is no name or destination here.
