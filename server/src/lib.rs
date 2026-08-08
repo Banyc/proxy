@@ -29,6 +29,7 @@ use config::ReadConfig;
 use protocol::{
     access_server::{self, PreparedAccessServer},
     proxy_server::{self, PreparedProxyServer, ProxyServerConfig, ProxyServerLoader},
+    reverse_tunnel::{self, PreparedReverseTunnel, ReverseTunnelConfig, ReverseTunnelLoader},
     stream::connect::build_concrete_stream_connector_table,
 };
 use serde::Deserialize;
@@ -63,6 +64,7 @@ where
     let mut server_loader = ServerLoader {
         access_server: AccessServerLoader::new(),
         proxy_server: ProxyServerLoader::new(),
+        reverse_tunnel: ReverseTunnelLoader::new(),
     };
     let mut server_tasks = tokio::task::JoinSet::new();
 
@@ -108,7 +110,6 @@ where
         runtime.clone(),
     )
     .await?;
-    // No live state exists yet — commit immediately.
     let (guard, commit_error) =
         commit_reload(&mut server_tasks, &mut server_loader, prepared, &runtime);
     if let Some(e) = commit_error {
@@ -133,7 +134,6 @@ where
             _ = config_changed.notified() => {
                 info!("Config file changed");
 
-                // Wait for file change to settle
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
                 let cancellation = CancellationToken::new();
@@ -144,13 +144,6 @@ where
                     runtime.clone(),
                 ).await {
                     Ok(new_prepared) => {
-                        // Commit: atomically swap global state, hot-swap handlers,
-                        // spawn new listener tasks, and ALWAYS install the new
-                        // generation's guard — dropping the previous guard cancels
-                        // the previous generation's token, so obsolete probe tasks
-                        // stop even when the listener commit partially failed. The
-                        // new generation is live either way and keeps its probe
-                        // tasks.
                         let (guard, commit_error) = commit_reload(
                             &mut server_tasks,
                             &mut server_loader,
@@ -159,11 +152,6 @@ where
                         );
                         _cancellation_guard = guard;
                         if let Some(e) = commit_error {
-                            // A listener died between prepare and commit, so its handler
-                            // update could not be delivered. The global state was already
-                            // swapped and the new generation (with its probe tasks) is now
-                            // live; the old generation's probes were cancelled by the guard
-                            // swap. Log the lost update and keep serving — no retry.
                             error!(
                                 ?e,
                                 "Reload commit partially failed: a listener died; \
@@ -172,11 +160,6 @@ where
                         }
                     }
                     Err(e) => {
-                        // `prepare_reload` already dropped the failed
-                        // `PreparedReload` (cancelling its candidate token and
-                        // aborting its probe tasks via `JoinSet` drop), so the
-                        // live configuration is untouched. Keep serving with the
-                        // existing generation.
                         error!(?e, "Failed to prepare reload; live config unchanged");
                         continue;
                     }
@@ -186,41 +169,23 @@ where
     }
 }
 
-/// Spawn and kill servers given a new config
 pub struct ServerLoader {
     pub access_server: AccessServerLoader,
     pub proxy_server: ProxyServerLoader,
+    pub reverse_tunnel: ReverseTunnelLoader,
 }
 
-/// A fully-prepared, not-yet-committed reload.
-///
-/// Everything that can fail — config parsing, route/selector resolution
-/// (which spawns probe tasks tied to `cancellation`), and listener socket
-/// binding — is resolved and held here without touching live state. Commit
-/// via [`commit_reload`] atomically swaps global state and hot-swaps
-/// listener handlers.
-///
-/// Dropping a `PreparedReload` without committing cancels its `cancellation`
-/// token (aborting the probe tasks spawned during resolution) and drops the
-/// prepared `PreparedAccessServer`/`PreparedProxyServer` (which aborts their
-/// inner probe-task `JoinSet`s and drops bound sockets). No live state is
-/// mutated, no listener task is spawned, and no candidate token survives a
-/// failed or abandoned prepare.
 pub struct PreparedReload {
     cancellation: CancellationToken,
     stream_pool: StreamConnPool,
     connector_config: ConnectorConfig,
     access_server: PreparedAccessServer,
     proxy_server: PreparedProxyServer,
+    reverse_tunnel: PreparedReverseTunnel,
 }
 
 impl PreparedReload {
-    /// Consume `self`, disarming drop-cancellation, and return the parts.
-    /// Used by [`commit_reload`] to move every field out without running
-    /// `Drop` (so the new generation's token stays live).
     fn into_parts(self) -> PreparedReloadParts {
-        // Wrap in ManuallyDrop so this struct's `Drop` (which would cancel
-        // the token) does not run when the fields are moved out.
         let me = std::mem::ManuallyDrop::new(self);
         PreparedReloadParts {
             cancellation: unsafe { std::ptr::read(&me.cancellation) },
@@ -228,18 +193,13 @@ impl PreparedReload {
             connector_config: unsafe { std::ptr::read(&me.connector_config) },
             access_server: unsafe { std::ptr::read(&me.access_server) },
             proxy_server: unsafe { std::ptr::read(&me.proxy_server) },
+            reverse_tunnel: unsafe { std::ptr::read(&me.reverse_tunnel) },
         }
     }
 }
 
 impl Drop for PreparedReload {
     fn drop(&mut self) {
-        // Cancel the candidate token so any probe futures collected during
-        // prepare observe cancellation promptly once they are spawned at
-        // commit. The `PreparedAccessServer`'s probe futures are UNSPAWNED
-        // during prepare, so dropping them here starts nothing and aborts
-        // nothing — no candidate task survives a failed or abandoned prepare
-        // because none was ever started.
         self.cancellation.cancel();
     }
 }
@@ -250,13 +210,9 @@ struct PreparedReloadParts {
     connector_config: ConnectorConfig,
     access_server: PreparedAccessServer,
     proxy_server: PreparedProxyServer,
+    reverse_tunnel: PreparedReverseTunnel,
 }
 
-/// Phase 1 — prepare: read config, resolve routes/selectors (spawning probe
-/// tasks tied to `cancellation`), bind every new listener, and build every
-/// handler, all without touching live state. On any error the in-progress
-/// `PreparedReload` is dropped, which cancels the candidate token and aborts
-/// the probe tasks.
 async fn prepare_reload<CR>(
     config_reader: &CR,
     server_loader: &ServerLoader,
@@ -266,10 +222,6 @@ async fn prepare_reload<CR>(
 where
     CR: ReadConfig<Config = ServerConfig>,
 {
-    // `guard` cancels `cancellation` on drop — including every error path
-    // below — so no candidate probe task survives a failed prepare. On
-    // success the guard is disarmed (`disarm`) before returning, leaving the
-    // token live for the new generation.
     let mut guard = CancelOnDrop(Some(cancellation.clone()));
     let config = config_reader
         .read_config()
@@ -315,6 +267,13 @@ where
     )
     .await
     .map_err(ServerServeError::Load)?;
+    let reverse_tunnel = reverse_tunnel::prepare(
+        config.reverse_tunnel,
+        &server_loader.reverse_tunnel,
+        runtime.clone(),
+    )
+    .await
+    .map_err(ServerServeError::Load)?;
 
     guard.disarm();
     Ok(PreparedReload {
@@ -323,12 +282,10 @@ where
         connector_config,
         access_server,
         proxy_server,
+        reverse_tunnel,
     })
 }
 
-/// Cancels a `CancellationToken` on drop unless [`Self::disarm`]ed. Used to
-/// guarantee the candidate token is cancelled on every error path of
-/// [`prepare_reload`].
 struct CancelOnDrop(Option<CancellationToken>);
 impl CancelOnDrop {
     fn disarm(&mut self) {
@@ -343,17 +300,6 @@ impl Drop for CancelOnDrop {
     }
 }
 
-/// Phase 2 — commit: atomically swap the global pool/connector config,
-/// hot-swap listener handlers, spawn new listener tasks, and drop removed
-/// listener handles. Consumes `prepared` (so its `Drop` does *not* run — the
-/// token stays live for the new generation).
-///
-/// The global state is swapped before the listener commit. Returns the new
-/// generation's `DropGuard` unconditionally, so the caller always installs it
-/// (dropping the previous guard cancels the previous generation's token). A
-/// listener-commit error is surfaced as an error summary so the lost handler
-/// update is never silent, but the new generation stays live with its probe
-/// tasks.
 fn commit_reload(
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
@@ -366,20 +312,14 @@ fn commit_reload(
         connector_config,
         access_server,
         proxy_server,
+        reverse_tunnel,
     } = prepared.into_parts();
-    // Swap global state first.
     runtime.stream.pool.replaced_by(stream_pool);
     runtime
         .stream
         .connector_table
         .replaced_by(connector_config.clone());
     *runtime.udp.connector.config().write().unwrap() = connector_config;
-    // Commit listener handlers / tasks. A closed receiver (listener died
-    // since prepare) surfaces an error instead of silently losing the
-    // handler update. The new generation is live either way — its probe
-    // drivers were already reaped into `server_tasks` and must keep running;
-    // the old generation is cancelled by dropping the old guard, not by
-    // cancelling the new token.
     let commit_error: Option<AnyError> = (|| {
         server_loader
             .access_server
@@ -387,12 +327,12 @@ fn commit_reload(
         server_loader
             .proxy_server
             .commit(server_tasks, proxy_server)?;
+        server_loader
+            .reverse_tunnel
+            .commit(server_tasks, reverse_tunnel)?;
         Ok::<(), AnyError>(())
     })()
     .err();
-    // Return the guard unconditionally so the caller installs it, cancelling
-    // the previous generation via drop; the next reload (or `serve`
-    // returning) cancels this generation's probe tasks.
     (cancellation.drop_guard(), commit_error)
 }
 
@@ -459,6 +399,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub proxy_server: ProxyServerConfig,
     #[serde(default)]
+    pub reverse_tunnel: ReverseTunnelConfig,
+    #[serde(default)]
     pub stream: StreamConfig,
     #[serde(default)]
     pub udp: UdpConfig,
@@ -473,11 +415,13 @@ impl Merge for ServerConfig {
         let connector = self.connector.merge(other.connector)?;
         let access_server = self.access_server.merge(other.access_server)?;
         let proxy_server = self.proxy_server.merge(other.proxy_server)?;
+        let reverse_tunnel = self.reverse_tunnel.merge(other.reverse_tunnel)?;
         let stream = self.stream.merge(other.stream)?;
         let udp = self.udp.merge(other.udp)?;
         Ok(Self {
             access_server,
             proxy_server,
+            reverse_tunnel,
             stream,
             udp,
             connector,

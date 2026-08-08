@@ -96,6 +96,13 @@ impl tokio_conn_pool::Connect for PoolConnector {
     type Connection = Box<dyn ConnParts>;
     async fn connect(&self) -> Option<Self::Connection> {
         let addr = self.conn.address.clone();
+        if let Some((_, name)) = addr.reverse_tunnel() {
+            return self
+                .connector_table
+                .timed_connect_named(&addr.protocol, name, HEARTBEAT_INTERVAL)
+                .await
+                .ok();
+        }
         let sock_addrs = addr.address.to_socket_addrs().await.ok()?;
         let (stream, _sock_addr) = self
             .connector_table
@@ -134,6 +141,23 @@ pub async fn connect_with_pool(
     let stream = stream_context.pool.inner().pull(addr);
     let sock_addr = stream.as_ref().and_then(|s| s.peer_addr().ok());
     if let (Some(stream), Some(sock_addr)) = (stream, sock_addr) {
+        return Ok((stream, sock_addr));
+    }
+    if let Some((_, name)) = addr.reverse_tunnel() {
+        let stream = stream_context
+            .connector_table
+            .timed_connect_named(&addr.protocol, name, timeout)
+            .await
+            .map_err(|source| ConnectError::ConnectNamed {
+                source,
+                addr: addr.clone(),
+            })?;
+        let sock_addr = stream
+            .peer_addr()
+            .map_err(|source| ConnectError::ConnectNamed {
+                source,
+                addr: addr.clone(),
+            })?;
         return Ok((stream, sock_addr));
     }
     let sock_addrs =
@@ -184,6 +208,12 @@ pub enum ConnectError {
         source: io::Error,
         addr: RouteAddr,
         sock_addrs: Vec<SocketAddr>,
+    },
+    #[error("Failed to connect to named stream: {source}, {addr}")]
+    ConnectNamed {
+        #[source]
+        source: io::Error,
+        addr: RouteAddr,
     },
 }
 
@@ -345,7 +375,6 @@ mod tests {
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].key, stream_addr("127.0.0.1:1", "tcp"));
         assert_eq!(entries[1].key, stream_addr("127.0.0.1:2", "tcp"));
-        // The same address with a different stream type is a distinct key.
         assert_ne!(entries[0].key, entries[2].key);
         assert_eq!(entries[2].key, stream_addr("127.0.0.1:1", "udp"));
     }

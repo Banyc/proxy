@@ -22,7 +22,6 @@ pub async fn establish(
     destination: RouteAddr,
     stream_context: &StreamRuntime,
 ) -> Result<ConnAndAddr, StreamEstablishError> {
-    // If there are no proxy configs, just connect to the destination
     if proxies.is_empty() {
         let (stream, sock_addr) =
             connect_with_pool(&destination, stream_context, true, crate::STREAM_IO_TIMEOUT)
@@ -39,7 +38,6 @@ pub async fn establish(
         });
     }
 
-    // Connect to the first proxy
     let (mut stream, addr, sock_addr) = {
         let proxy_addr = &proxies[0].address;
         let (stream, sock_addr) =
@@ -54,10 +52,8 @@ pub async fn establish(
 
     stream.set_stream_name(&destination.address.to_string());
 
-    // Convert addresses to headers
     let pairs = convert_proxies_to_header_crypto_pairs(proxies, Some(destination));
 
-    // Write headers to stream
     for (header, crypto) in &pairs {
         trace!(?header, "Writing headers to stream");
         preamble::send_upgrade(&mut stream, crate::STREAM_IO_TIMEOUT, crypto)
@@ -74,7 +70,6 @@ pub async fn establish(
             })?;
     }
 
-    // Return stream
     Ok(ConnAndAddr {
         stream,
         addr,
@@ -140,6 +135,9 @@ impl ProbeRtt for StreamTracer {
         let protocol = first.address.protocol.clone();
         let connector_table = self.stream_context.connector_table.clone();
         Box::pin(async move {
+            if addr.reverse_tunnel().is_some() {
+                return;
+            }
             let Ok(sock_addrs) = addr.address.to_socket_addrs().await else {
                 return;
             };
@@ -159,6 +157,9 @@ impl ProbeRtt for StreamTracer {
         let protocol = first.address.protocol.clone();
         let connector_table = self.stream_context.connector_table.clone();
         Box::pin(async move {
+            if addr.reverse_tunnel().is_some() {
+                return;
+            }
             let Ok(sock_addrs) = addr.address.to_socket_addrs().await else {
                 return;
             };
@@ -178,6 +179,9 @@ impl ProbeRtt for StreamTracer {
         let stream_type = first.address.protocol.clone();
         let connector_table = self.stream_context.connector_table.clone();
         Box::pin(async move {
+            if let Some((_, name)) = addr.reverse_tunnel() {
+                return connector_table.named_session_stats(&stream_type, name);
+            }
             if !connector_table.reports_session_stats(stream_type.as_ref()) {
                 return None;
             }
@@ -198,7 +202,6 @@ pub async fn probe_rtt(
         return Ok(Duration::from_secs(0));
     }
 
-    // Connect to the first proxy
     let (mut stream, _addr, _sock_addr) = {
         let proxy_addr = &proxies[0].address;
         let (stream, sock_addr) =
@@ -206,19 +209,16 @@ pub async fn probe_rtt(
         (stream, proxy_addr.clone(), sock_addr)
     };
 
-    // Convert addresses to headers
     let pairs = convert_proxies_to_header_crypto_pairs(proxies, None);
 
     let start = Instant::now();
 
-    // Write headers to stream
     for (header, crypto) in &pairs {
         preamble::send_upgrade(&mut stream, crate::STREAM_IO_TIMEOUT, crypto).await?;
         timed_write_header_async(&mut stream, header, *crypto.key(), crate::STREAM_IO_TIMEOUT)
             .await?;
     }
 
-    // Read response
     let validator = ValidatorRef::Replay(&stream_context.replay_validator);
     let resp: RouteResponse = timed_read_header_async(
         &mut stream,

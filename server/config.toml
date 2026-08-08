@@ -6,6 +6,11 @@
 "rtp1" = { address = "rtp://proxy.example.org:81", header_key = "base64", payload_key = "base64" }
 "rtpmux1" = { address = "rtpmux://proxy.example.org:82", header_key = "base64", payload_key = "base64" }
 
+# A public proxy chain can reference a tunnel registered by a private initiator.
+# Choose the virtual scheme that matches the initiator's physical transport.
+# "private-a" = { address = "revtuntcp://private-a", header_key = "base64" }
+# "private-b" = { address = "revtunrtp://private-b", header_key = "base64" }
+
 [stream]
 pool = ["tcp1", "mptcp1"]
 
@@ -103,3 +108,27 @@ header_key = "base64"
 listen_addr = "0.0.0.0:80"
 header_key = "base64"
 # payload_key = "base64"
+
+# Private side: establishes a tunnel only; there is intentionally no destination.
+# [[reverse_tunnel.initiator]]
+# name = "private-a"
+# responder_addr = "tcp://public.example.org:7000"
+# header_key = "base64"
+# allow_loopback = false
+
+# Private side over RTP: use rtpmux:// for the physical responder address.
+# [[reverse_tunnel.initiator]]
+# name = "private-b"
+# responder_addr = "rtpmux://public.example.org:7100"
+# header_key = "base64"
+# fec = false
+
+# Public side: accepts named registrations; there is no name or destination here.
+# [[reverse_tunnel.responder]]
+# listen_addr = "tcp://0.0.0.0:7000"
+# header_key = "base64"
+
+# [[reverse_tunnel.responder]]
+# listen_addr = "rtpmux://0.0.0.0:7100"
+# header_key = "base64"
+# fec = false

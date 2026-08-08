@@ -29,7 +29,7 @@ pub fn server_mux_config() -> MuxConfig {
     }
 }
 
-fn client_mux_config() -> MuxConfig {
+pub(crate) fn client_mux_config() -> MuxConfig {
     MuxConfig {
         initiation: Initiation::Client,
         heartbeat_interval: Duration::from_secs(5),
@@ -68,7 +68,6 @@ pub async fn run_mux_connector<R, W, Fut>(
     let mut reset_notified = reset.0.subscription();
     loop {
         tokio::select! {
-            // TCP conns don't survive suspend; abort, don't drain
             () = reset_notified.notified() => {
                 openers.clear();
                 mux_spawner = JoinSet::new();
@@ -88,7 +87,8 @@ pub async fn run_mux_connector<R, W, Fut>(
                             continue;
                         }
                     };
-                    let opener = build_opener(message.listen_addr, reader, writer, &mut mux_spawner).await;
+                    let opener =
+                        build_opener(message.listen_addr, reader, writer, &mut mux_spawner).await;
                     entry.insert((opener, addr));
                 }
                 let (opener, addr) = openers.get(&message.listen_addr).unwrap();

@@ -23,6 +23,14 @@ Proxy may select TCP or RTP as the transport beneath mux, but transport-independ
   - as an traffic proxy, it:
     - is only responsible to a fragment of the stream (TCP) or a datagram (UDP), so that those responsibilities can be stacked and form a proxy chain
 
+## Named reverse tunnels
+
+A private-side initiator can establish an outbound tunnel to a public-side responder and register it under a name. Neither endpoint has a destination: the destination still comes from the normal proxy-chain request header. The public side can use the registered tunnel as a regular stream hop:
+
+- `revtuntcp://private-a` uses a TCP tunnel with the base mux.
+- `revtunrtp://private-a` uses a bidirectional `rtp_mux` session. Its physical responder address is written as `rtpmux://public.example.org:7000`; the RTP listener also uses the following UDP port (`7001`) for its bulk lane.
+- The initiator and responder use the same `header_key` to authenticate tunnel registration. A chain entry for the virtual hop uses that key for its normal proxy request header as well. See `server/config.toml` for configuration examples.
+
 ## Protocol
 
 ### TCP variant

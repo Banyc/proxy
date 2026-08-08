@@ -5,8 +5,31 @@ use serde::{Deserialize, Serialize};
 
 use crate::addr::{InternetAddr, InternetAddrHdv, ParseInternetAddrError};
 
-/// A route address: an internet address tagged with the stream protocol used
-/// to reach it. UDP routes carry the fixed `"udp"` tag.
+pub const REVERSE_TUNNEL_TCP_PROTOCOL: &str = "revtuntcp";
+pub const REVERSE_TUNNEL_RTP_PROTOCOL: &str = "revtunrtp";
+pub const MAX_REVERSE_TUNNEL_NAME_LEN: usize = 128;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ReverseTunnelTransport {
+    Tcp,
+    Rtp,
+}
+impl ReverseTunnelTransport {
+    pub fn from_protocol(protocol: &str) -> Option<Self> {
+        match protocol {
+            REVERSE_TUNNEL_TCP_PROTOCOL => Some(Self::Tcp),
+            REVERSE_TUNNEL_RTP_PROTOCOL => Some(Self::Rtp),
+            _ => None,
+        }
+    }
+    pub fn protocol(self) -> &'static str {
+        match self {
+            Self::Tcp => REVERSE_TUNNEL_TCP_PROTOCOL,
+            Self::Rtp => REVERSE_TUNNEL_RTP_PROTOCOL,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct RouteAddr {
     pub address: InternetAddr,
@@ -14,16 +37,25 @@ pub struct RouteAddr {
 }
 impl Display for RouteAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some((_, name)) = self.reverse_tunnel() {
+            return write!(f, "{}://{name}", self.protocol);
+        }
         write!(f, "{}://{}", self.protocol, self.address)
     }
 }
 impl RouteAddr {
-    /// Wrap an address with the fixed `"udp"` protocol tag used by UDP tables.
     pub fn udp(address: InternetAddr) -> Self {
         Self {
             address,
             protocol: Arc::from("udp"),
         }
+    }
+    pub fn reverse_tunnel(&self) -> Option<(ReverseTunnelTransport, &str)> {
+        let transport = ReverseTunnelTransport::from_protocol(&self.protocol)?;
+        let crate::addr::InternetAddrKind::DomainName { addr, port: 0 } = &*self.address else {
+            return None;
+        };
+        Some((transport, addr))
     }
 }
 impl FromStr for RouteAddr {
@@ -31,15 +63,32 @@ impl FromStr for RouteAddr {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Some((protocol, address)) = s.split_once("://") {
+            if ReverseTunnelTransport::from_protocol(protocol).is_some() {
+                validate_reverse_tunnel_name(address)?;
+                return Ok(RouteAddr {
+                    protocol: protocol.into(),
+                    address: InternetAddr::from_host_and_port(address, 0)?,
+                });
+            }
             return Ok(RouteAddr {
                 protocol: protocol.into(),
                 address: address.parse()?,
             });
         }
-        // No `protocol://` prefix: default to the fixed UDP tag, matching the
-        // plain-address spelling of UDP route configs.
         Ok(RouteAddr::udp(s.parse()?))
     }
+}
+
+pub fn validate_reverse_tunnel_name(name: &str) -> Result<(), ParseInternetAddrError> {
+    if name.is_empty()
+        || name.len() > MAX_REVERSE_TUNNEL_NAME_LEN
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return Err(ParseInternetAddrError);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, HdvSerde)]
@@ -109,6 +158,33 @@ mod tests {
                 protocol: "tcp".to_string().into(),
             }
         );
+    }
+
+    #[test]
+    fn reverse_tunnel_names_round_trip_without_a_fake_port() {
+        for address in ["revtuntcp://private-a", "revtunrtp://private.a_1"] {
+            let parsed: RouteAddr = address.parse().unwrap();
+            assert_eq!(parsed.to_string(), address);
+            assert_eq!(parsed.address.port(), 0);
+            assert_eq!(parsed.reverse_tunnel().unwrap().1, &address[12..]);
+        }
+    }
+
+    #[test]
+    fn invalid_reverse_tunnel_names_are_rejected() {
+        for address in [
+            "revtuntcp://",
+            "revtuntcp://name:1",
+            "revtuntcp://name/path",
+            "revtunrtp://white space",
+        ] {
+            assert!(address.parse::<RouteAddr>().is_err(), "{address}");
+        }
+        let too_long = format!(
+            "revtuntcp://{}",
+            "a".repeat(MAX_REVERSE_TUNNEL_NAME_LEN + 1)
+        );
+        assert!(too_long.parse::<RouteAddr>().is_err());
     }
 
     #[test]
