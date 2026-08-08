@@ -109,9 +109,12 @@ where
     )
     .await?;
     // No live state exists yet — commit immediately.
-    let mut _cancellation_guard =
-        commit_reload(&mut server_tasks, &mut server_loader, prepared, &runtime)
-            .map_err(ServerServeError::Commit)?;
+    let (guard, commit_error) =
+        commit_reload(&mut server_tasks, &mut server_loader, prepared, &runtime);
+    if let Some(e) = commit_error {
+        return Err(ServerServeError::Commit(e));
+    }
+    let mut _cancellation_guard = guard;
     let mut config_changed = serve_context.config_changed.0.subscription();
 
     loop {
@@ -142,29 +145,30 @@ where
                 ).await {
                     Ok(new_prepared) => {
                         // Commit: atomically swap global state, hot-swap handlers,
-                        // spawn new listener tasks, and cancel the previous
-                        // generation's token. Reassigning `_cancellation_guard`
-                        // drops the old guard, cancelling the old token.
-                        match commit_reload(
+                        // spawn new listener tasks, and ALWAYS install the new
+                        // generation's guard — dropping the previous guard cancels
+                        // the previous generation's token, so obsolete probe tasks
+                        // stop even when the listener commit partially failed. The
+                        // new generation is live either way and keeps its probe
+                        // tasks.
+                        let (guard, commit_error) = commit_reload(
                             &mut server_tasks,
                             &mut server_loader,
                             new_prepared,
                             &runtime,
-                        ) {
-                            Ok(guard) => _cancellation_guard = guard,
-                            Err(e) => {
-                                // A listener died between prepare and commit, so
-                                // its handler update could not be delivered.
-                                // The global state was already swapped; install
-                                // the new generation's guard (canceling the old
-                                // probe tasks) and surface the lost update.
-                                error!(
-                                    ?e,
-                                    "Reload commit partially failed: a listener \
-                                     died; its handler update was lost"
-                                );
-                                continue;
-                            }
+                        );
+                        _cancellation_guard = guard;
+                        if let Some(e) = commit_error {
+                            // A listener died between prepare and commit, so its handler
+                            // update could not be delivered. The global state was already
+                            // swapped and the new generation (with its probe tasks) is now
+                            // live; the old generation's probes were cancelled by the guard
+                            // swap. Log the lost update and keep serving — no retry.
+                            error!(
+                                ?e,
+                                "Reload commit partially failed: a listener died; \
+                                 its handler update was lost; new generation installed"
+                            );
                         }
                     }
                     Err(e) => {
@@ -342,20 +346,20 @@ impl Drop for CancelOnDrop {
 /// Phase 2 — commit: atomically swap the global pool/connector config,
 /// hot-swap listener handlers, spawn new listener tasks, and drop removed
 /// listener handles. Consumes `prepared` (so its `Drop` does *not* run — the
-/// token stays live for the new generation). Returns a `DropGuard` for the
-/// new generation's `cancellation` token; dropping the previous guard
-/// cancels the previous generation's token.
+/// token stays live for the new generation).
 ///
-/// Returns an error if a listener died between prepare and commit, so a
-/// handler update is never silently lost. The global state is already
-/// swapped at that point, but the lost update is surfaced rather than
-/// swallowed.
+/// The global state is swapped before the listener commit. Returns the new
+/// generation's `DropGuard` unconditionally, so the caller always installs it
+/// (dropping the previous guard cancels the previous generation's token). A
+/// listener-commit error is surfaced as an error summary so the lost handler
+/// update is never silent, but the new generation stays live with its probe
+/// tasks.
 fn commit_reload(
     server_tasks: &mut tokio::task::JoinSet<AnyResult>,
     server_loader: &mut ServerLoader,
     prepared: PreparedReload,
     runtime: &Runtime,
-) -> Result<tokio_util::sync::DropGuard, AnyError> {
+) -> (tokio_util::sync::DropGuard, Option<AnyError>) {
     let PreparedReloadParts {
         cancellation,
         stream_pool,
@@ -372,9 +376,11 @@ fn commit_reload(
     *runtime.udp.connector.config().write().unwrap() = connector_config;
     // Commit listener handlers / tasks. A closed receiver (listener died
     // since prepare) surfaces an error instead of silently losing the
-    // handler update. On failure the new generation's token is cancelled so
-    // its probe tasks do not leak.
-    let commit_result = (|| {
+    // handler update. The new generation is live either way — its probe
+    // drivers were already reaped into `server_tasks` and must keep running;
+    // the old generation is cancelled by dropping the old guard, not by
+    // cancelling the new token.
+    let commit_error: Option<AnyError> = (|| {
         server_loader
             .access_server
             .commit(server_tasks, access_server)?;
@@ -382,14 +388,12 @@ fn commit_reload(
             .proxy_server
             .commit(server_tasks, proxy_server)?;
         Ok::<(), AnyError>(())
-    })();
-    if let Err(e) = commit_result {
-        cancellation.cancel();
-        return Err(e);
-    }
-    // Return a guard so the next reload (or `serve` returning) cancels this
-    // generation's probe tasks.
-    Ok(cancellation.drop_guard())
+    })()
+    .err();
+    // Return the guard unconditionally so the caller installs it, cancelling
+    // the previous generation via drop; the next reload (or `serve`
+    // returning) cancels this generation's probe tasks.
+    (cancellation.drop_guard(), commit_error)
 }
 
 #[derive(Debug, Error)]
