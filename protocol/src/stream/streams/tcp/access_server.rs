@@ -11,7 +11,7 @@ use common::{
         log::stream::IoCopyFinished,
         relay::stream::{ConnContext, CopyBidirectional},
     },
-    route::{ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, Registries},
+    route::{ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, ProbeFutures, Registries},
     stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 use serde::{Deserialize, Serialize};
@@ -47,14 +47,14 @@ impl TcpAccessServerConfig {
         conn_selector: &HashMap<Arc<str>, ConnSelector>,
         registries: &Registries<'_>,
         stream_runtime: StreamRuntime,
-        generation: &mut tokio::task::JoinSet<()>,
+        probes: &mut ProbeFutures,
     ) -> Result<TcpAccessServerBuilder, TcpAccessBuildError> {
         let conn_selector = match self.conn_selector {
             SharableConfig::SharingKey(key) => conn_selector
                 .get(&key)
                 .ok_or_else(|| TcpAccessBuildError::ProxyGroupKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.resolve(registries, generation)?,
+            SharableConfig::Private(x) => x.resolve(registries, probes)?,
         };
 
         Ok(TcpAccessServerBuilder {

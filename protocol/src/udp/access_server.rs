@@ -11,7 +11,7 @@ use common::{
         context::UdpRuntime,
         relay::udp::{CopyBiError, CopyBidirectional, DownstreamParts, UpstreamParts},
     },
-    route::{ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, Registries},
+    route::{ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, ProbeFutures, Registries},
     udp::{
         Packet,
         server::{UdpServer, UdpServerHandleConn},
@@ -37,14 +37,14 @@ impl UdpAccessServerConfig {
         conn_selector: &HashMap<Arc<str>, ConnSelector>,
         registries: &Registries<'_>,
         udp_runtime: UdpRuntime,
-        generation: &mut tokio::task::JoinSet<()>,
+        probes: &mut ProbeFutures,
     ) -> Result<UdpAccessServerBuilder, UdpAccessBuildError> {
         let conn_selector = match self.conn_selector {
             SharableConfig::SharingKey(key) => conn_selector
                 .get(&key)
                 .ok_or_else(|| UdpAccessBuildError::ProxyGroupKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.resolve(registries, generation)?,
+            SharableConfig::Private(x) => x.resolve(registries, probes)?,
         };
 
         Ok(UdpAccessServerBuilder {

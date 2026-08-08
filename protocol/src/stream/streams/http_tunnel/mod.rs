@@ -16,7 +16,7 @@ use common::{
     config::SharableConfig,
     loading,
     proto::{client::stream::StreamEstablishError, context::StreamRuntime},
-    route::{Registries, RouteTable, RouteTableBuildError, RouteTableBuilder},
+    route::{ProbeFutures, Registries, RouteTable, RouteTableBuildError, RouteTableBuilder},
     stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
@@ -92,14 +92,14 @@ impl HttpAccessServerConfig {
         route_tables: &HashMap<Arc<str>, RouteTable>,
         registries: &Registries<'_>,
         stream_context: StreamRuntime,
-        generation: &mut tokio::task::JoinSet<()>,
+        probes: &mut ProbeFutures,
     ) -> Result<HttpAccessServerBuilder, HttpBuildError> {
         let route_table = match self.route_table {
             SharableConfig::SharingKey(key) => route_tables
                 .get(&key)
                 .ok_or_else(|| HttpBuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.resolve(registries, generation)?,
+            SharableConfig::Private(x) => x.resolve(registries, probes)?,
         };
 
         Ok(HttpAccessServerBuilder {

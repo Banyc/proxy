@@ -10,7 +10,7 @@ use common::{
         context::UdpRuntime,
         relay::udp::{CopyBidirectional, DownstreamParts, UpstreamParts},
     },
-    route::{ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, Registries},
+    route::{ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, ProbeFutures, Registries},
     udp::{
         Packet,
         server::{UdpServer, UdpServerHandleConn},
@@ -37,14 +37,14 @@ impl Socks5ServerUdpAccessServerConfig {
         conn_selector: &HashMap<Arc<str>, ConnSelector>,
         registries: &Registries<'_>,
         udp_runtime: UdpRuntime,
-        generation: &mut tokio::task::JoinSet<()>,
+        probes: &mut ProbeFutures,
     ) -> Result<Socks5ServerUdpAccessServerBuilder, Socks5UdpBuildError> {
         let conn_selector = match self.conn_selector {
             SharableConfig::SharingKey(key) => conn_selector
                 .get(&key)
                 .ok_or_else(|| Socks5UdpBuildError::ProxyGroupKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.resolve(registries, generation)?,
+            SharableConfig::Private(x) => x.resolve(registries, probes)?,
         };
 
         Ok(Socks5ServerUdpAccessServerBuilder {

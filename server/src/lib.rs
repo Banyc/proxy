@@ -234,12 +234,12 @@ impl PreparedReload {
 
 impl Drop for PreparedReload {
     fn drop(&mut self) {
-        // Cancel the candidate token so any probe tasks spawned during
-        // prepare observe cancellation promptly. The probe-driver `JoinSet`
-        // owned by the prepared `PreparedAccessServer` (its `probe_drivers`
-        // field) is also dropped here, forcefully aborting the probe tasks.
-        // Together this guarantees no candidate task survives a failed or
-        // abandoned prepare.
+        // Cancel the candidate token so any probe futures collected during
+        // prepare observe cancellation promptly once they are spawned at
+        // commit. The `PreparedAccessServer`'s probe futures are UNSPAWNED
+        // during prepare, so dropping them here starts nothing and aborts
+        // nothing — no candidate task survives a failed or abandoned prepare
+        // because none was ever started.
         self.cancellation.cancel();
     }
 }

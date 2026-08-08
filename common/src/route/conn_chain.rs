@@ -11,7 +11,8 @@ use tokio_util::sync::CancellationToken;
 use crate::{config::SharableConfig, header::route::RouteRequest, proto::addr::RouteAddr};
 
 use super::{
-    ConnConfig, ConnConfigBuildError, ProbeRtt, Registries, prober::probe_task, rtt_stats::RttStats,
+    ConnConfig, ConnConfigBuildError, ProbeFutures, ProbeRtt, Registries, prober::probe_task,
+    rtt_stats::RttStats,
 };
 
 pub const PROBE_ROUND_INTERVAL: Duration = Duration::from_secs(30);
@@ -137,17 +138,18 @@ pub struct GaugedConnChain {
 impl GaugedConnChain {
     /// Return the chain handle.
     ///
-    /// The probe task is spawned directly into the caller-owned, generation
-    /// `JoinSet` (`generation`), which is drained at the server boundary with
-    /// `result.unwrap()` so panics propagate instead of being downgraded to a
-    /// watch state. Dropping the generation `JoinSet` aborts the probe task.
-    /// The chain retains only the `probe_state` watch receiver for state
-    /// observation.
+    /// The probe future is collected into the caller-owned [`ProbeFutures`]
+    /// collector (`probes`) rather than spawned: it is started only at the
+    /// commit boundary, when the collected futures are spawned into the
+    /// server-owned `JoinSet`, which is drained with `result.unwrap()` so
+    /// panics propagate instead of being downgraded to a watch state. A
+    /// failed or abandoned prepare drops only unspawned futures. The chain
+    /// retains only the `probe_state` watch receiver for state observation.
     pub fn new(
         weighted: WeightedConnChain,
         tracer: Option<Arc<dyn ProbeRtt + Send + Sync>>,
         cancellation: CancellationToken,
-        generation: &mut tokio::task::JoinSet<()>,
+        probes: &mut ProbeFutures,
     ) -> Self {
         let rtt_stats = Arc::new(RwLock::new(RttStats::default()));
         let loss = Arc::new(RwLock::new(None));
@@ -159,12 +161,12 @@ impl GaugedConnChain {
             let chain = weighted.chain.clone();
             let rtt_stats = rtt_stats.clone();
             let loss = loss.clone();
-            generation.spawn(async move {
+            probes.push(async move {
                 probe_task(tracer, chain, rtt_stats, loss, probe_cancellation.clone()).await;
                 // `probe_task` only returns after its cancellation token
                 // fires, so reaching here means the generation was cancelled.
                 // Any panic inside `probe_task` propagates out of this future
-                // and surfaces at the generation `JoinSet` reap (which
+                // and surfaces at the commit-time `JoinSet` reap (which
                 // unwraps), rather than being downgraded to a watch state.
                 probe_state_tx.send(ProbeTaskState::Cancelled).ok();
             });
@@ -268,7 +270,7 @@ mod tests {
     #[tokio::test]
     async fn dropping_the_chain_aborts_the_probe_task() {
         let counter = Arc::new(AtomicUsize::new(0));
-        let mut generation = tokio::task::JoinSet::new();
+        let mut probes = ProbeFutures::new();
         let chain = GaugedConnChain::new(
             WeightedConnChain {
                 weight: 1,
@@ -277,8 +279,14 @@ mod tests {
             },
             Some(Arc::new(CountingTracer(counter.clone())) as Arc<dyn ProbeRtt + Send + Sync>),
             CancellationToken::new(),
-            &mut generation,
+            &mut probes,
         );
+        // The probe future is collected during prepare; spawn it into a local
+        // JoinSet (as commit does) so the probe actually runs.
+        let mut generation = tokio::task::JoinSet::new();
+        for fut in probes.into_futures() {
+            generation.spawn(fut);
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
         let before = counter.load(Ordering::SeqCst);
         assert!(before >= 1, "the probe task should have run");
@@ -309,7 +317,7 @@ mod tests {
     #[tokio::test]
     #[should_panic(expected = "synthetic probe panic")]
     async fn probe_panic_is_observed_at_the_generation_boundary() {
-        let mut generation = tokio::task::JoinSet::new();
+        let mut probes = ProbeFutures::new();
         let _chain = GaugedConnChain::new(
             WeightedConnChain {
                 weight: 1,
@@ -318,17 +326,22 @@ mod tests {
             },
             Some(Arc::new(PanickingTracer) as Arc<dyn ProbeRtt + Send + Sync>),
             CancellationToken::new(),
-            &mut generation,
+            &mut probes,
         );
-        // The probe task is spawned synchronously by `new`; joining it
-        // re-raises the probe panic with its original message.
+        // The probe task is spawned at the commit boundary from the
+        // collected future; joining it re-raises the probe panic with its
+        // original message.
+        let mut generation = tokio::task::JoinSet::new();
+        for fut in probes.into_futures() {
+            generation.spawn(fut);
+        }
         generation.join_next().await.unwrap().unwrap();
     }
 
     #[tokio::test]
     async fn probe_cancellation_is_classified() {
         let cancellation = CancellationToken::new();
-        let mut generation = tokio::task::JoinSet::new();
+        let mut probes = ProbeFutures::new();
         let chain = GaugedConnChain::new(
             WeightedConnChain {
                 weight: 1,
@@ -338,8 +351,14 @@ mod tests {
             Some(Arc::new(CountingTracer(Arc::new(AtomicUsize::new(0))))
                 as Arc<dyn ProbeRtt + Send + Sync>),
             cancellation.clone(),
-            &mut generation,
+            &mut probes,
         );
+        // Spawn the collected future so the probe task runs and can observe
+        // cancellation.
+        let mut generation = tokio::task::JoinSet::new();
+        for fut in probes.into_futures() {
+            generation.spawn(fut);
+        }
         cancellation.cancel();
         let deadline = std::time::Instant::now() + Duration::from_secs(1);
         while chain.probe_state() != ProbeTaskState::Cancelled {
@@ -364,7 +383,7 @@ mod tests {
 
     #[test]
     fn probe_healthy_reflects_injected_state() {
-        let mut generation = tokio::task::JoinSet::new();
+        let mut probes = ProbeFutures::new();
         let chain = GaugedConnChain::new(
             WeightedConnChain {
                 weight: 1,
@@ -373,7 +392,7 @@ mod tests {
             },
             None,
             CancellationToken::new(),
-            &mut generation,
+            &mut probes,
         );
         assert!(chain.probe_healthy(), "Disabled is healthy");
         chain.set_probe_state_for_test(ProbeTaskState::Panicked);

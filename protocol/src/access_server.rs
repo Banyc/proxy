@@ -34,7 +34,8 @@ use common::{
         context::Runtime,
     },
     route::{
-        ConnSelector, ConnSelectorBuilder, ProbeRtt, Registries, RouteTable, RouteTableBuilder,
+        ConnSelector, ConnSelectorBuilder, ProbeFutures, ProbeRtt, Registries, RouteTable,
+        RouteTableBuilder,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -182,16 +183,14 @@ impl AccessServerLoader {
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         prepared: PreparedAccessServer,
     ) -> AnyResult {
-        // Reap this generation's probe drivers into the server's
-        // actively-reaped task set, unwrapping so panics propagate instead of
-        // being swallowed. Dropping an uncommitted `PreparedReload` drops the
-        // drivers, aborting the probe tasks.
-        let mut probe_drivers = prepared.probe_drivers;
-        if !probe_drivers.is_empty() {
+        // Spawn this generation's probe futures into the server-owned,
+        // actively-reaped task set ONLY at commit: nothing runs during
+        // prepare, so a failed or abandoned prepare cannot lose a probe
+        // panic. Unwrapping surfaces panics via the join set.
+        let probe_futures = prepared.probe_futures;
+        for fut in probe_futures.into_futures() {
             join_set.spawn(async move {
-                while let Some(result) = probe_drivers.join_next().await {
-                    result.unwrap();
-                }
+                fut.await;
                 Ok(())
             });
         }
@@ -209,21 +208,23 @@ impl AccessServerLoader {
 /// A fully-prepared access-server reload: resolved route selectors/tables,
 /// bound listener sockets, and built handlers for every access-server kind,
 /// ready to commit. Dropping it without [`AccessServerLoader::commit`] drops
-/// the bound sockets and probe tasks — live state is untouched.
+/// the bound sockets and the unspawned probe futures — nothing has started
+/// running yet — so live state is untouched.
 pub struct PreparedAccessServer {
     tcp_server: loading::PreparedOps<TcpAccessConnHandler>,
     udp_server: loading::PreparedOps<UdpAccessConnHandler>,
     http_server: loading::PreparedOps<HttpAccessConnHandler>,
     socks5_tcp_server: loading::PreparedOps<Socks5ServerTcpAccessConnHandler>,
     socks5_udp_server: loading::PreparedOps<Socks5ServerUdpAccessConnHandler>,
-    probe_drivers: tokio::task::JoinSet<()>,
+    probe_futures: ProbeFutures,
 }
 
 /// Prepare an access-server reload: resolve conn selectors and route tables
-/// (spawning probe tasks tied to `cancellation`), bind every new listener, and
-/// build every handler — all without touching live state. On any failure the
-/// returned `Err` drops everything already prepared (bound sockets, probe
-/// tasks), leaving the live configuration untouched.
+/// (collecting probe futures tied to `cancellation`), bind every new
+/// listener, and build every handler — all without touching live state. On
+/// any failure the returned `Err` drops everything already prepared (bound
+/// sockets and unspawned probe futures — nothing has started running),
+/// leaving the live configuration untouched.
 pub async fn prepare(
     config: AccessServerConfig,
     loader: &AccessServerLoader,
@@ -243,17 +244,19 @@ pub async fn prepare(
         connector_table: &context.stream.connector_table,
         cancellation: cancellation.clone(),
     };
-    let mut probe_drivers = tokio::task::JoinSet::new();
+    // Probe futures are collected during prepare (still tied to
+    // `cancellation` via the captured token) and spawned only at commit.
+    let mut probe_futures = common::route::ProbeFutures::new();
     let stream_conn_selector = stream_conn_selector(
         &stream_registries,
         config.stream.conn_selector,
-        &mut probe_drivers,
+        &mut probe_futures,
     )?;
     stream_registries.conn_selector = &stream_conn_selector;
     let stream_route_tables = stream_route_tables(
         &stream_registries,
         config.stream.route_table,
-        &mut probe_drivers,
+        &mut probe_futures,
     )?;
     let udp_tracer: Arc<dyn ProbeRtt + Send + Sync> = Arc::new(UdpTracer::new(context.udp.clone()));
     let mut udp_registries = Registries {
@@ -267,7 +270,7 @@ pub async fn prepare(
     let udp_conn_selector = udp_conn_selector(
         &udp_registries,
         config.udp.conn_selector,
-        &mut probe_drivers,
+        &mut probe_futures,
     )?;
     udp_registries.conn_selector = &udp_conn_selector;
     deny_udp_route_table_key(&config.udp.route_table)?;
@@ -277,7 +280,7 @@ pub async fn prepare(
         &stream_registries,
         &context,
         &loader.tcp_server,
-        &mut probe_drivers,
+        &mut probe_futures,
     )
     .await?;
     let udp_server = udp_prepare(
@@ -286,7 +289,7 @@ pub async fn prepare(
         &udp_registries,
         &context,
         &loader.udp_server,
-        &mut probe_drivers,
+        &mut probe_futures,
     )
     .await?;
     let http_server = http_prepare(
@@ -295,7 +298,7 @@ pub async fn prepare(
         &stream_registries,
         &context,
         &loader.http_server,
-        &mut probe_drivers,
+        &mut probe_futures,
     )
     .await?;
     let socks5_tcp_server = socks5_tcp_prepare(
@@ -304,7 +307,7 @@ pub async fn prepare(
         &stream_registries,
         &context,
         &loader.socks5_tcp_server,
-        &mut probe_drivers,
+        &mut probe_futures,
     )
     .await?;
     let socks5_udp_server = socks5_udp_prepare(
@@ -313,7 +316,7 @@ pub async fn prepare(
         &udp_registries,
         &context,
         &loader.socks5_udp_server,
-        &mut probe_drivers,
+        &mut probe_futures,
     )
     .await?;
     Ok(PreparedAccessServer {
@@ -322,7 +325,7 @@ pub async fn prepare(
         http_server,
         socks5_tcp_server,
         socks5_udp_server,
-        probe_drivers,
+        probe_futures,
     })
 }
 fn deny_udp_route_table_key<T>(config: &HashMap<Arc<str>, T>) -> Result<(), AnyError> {
@@ -345,13 +348,13 @@ fn forbid_reserved_selector_name(name: Arc<str>) -> Result<(), AnyError> {
 fn stream_conn_selector(
     registries: &Registries<'_>,
     config: HashMap<Arc<str>, ConnSelectorBuilder>,
-    generation: &mut tokio::task::JoinSet<()>,
+    probes: &mut ProbeFutures,
 ) -> Result<HashMap<Arc<str>, ConnSelector>, AnyError> {
     let stream_conn_selector = config
         .into_iter()
         .map(|(k, v)| -> Result<(Arc<str>, ConnSelector), AnyError> {
             forbid_reserved_selector_name(k.clone())?;
-            let selector = v.resolve(registries, generation)?;
+            let selector = v.resolve(registries, probes)?;
             Ok((k, selector))
         })
         .collect::<Result<HashMap<_, _>, _>>()?;
@@ -360,13 +363,13 @@ fn stream_conn_selector(
 fn udp_conn_selector(
     registries: &Registries<'_>,
     config: HashMap<Arc<str>, ConnSelectorBuilder>,
-    generation: &mut tokio::task::JoinSet<()>,
+    probes: &mut ProbeFutures,
 ) -> Result<HashMap<Arc<str>, ConnSelector>, AnyError> {
     let udp_conn_selector = config
         .into_iter()
         .map(|(k, v)| -> Result<(Arc<str>, ConnSelector), AnyError> {
             forbid_reserved_selector_name(k.clone())?;
-            let selector = v.resolve(registries, generation)?;
+            let selector = v.resolve(registries, probes)?;
             Ok((k, selector))
         })
         .collect::<Result<HashMap<_, _>, _>>()?;
@@ -375,12 +378,12 @@ fn udp_conn_selector(
 fn stream_route_tables(
     registries: &Registries<'_>,
     config: HashMap<Arc<str>, RouteTableBuilder>,
-    generation: &mut tokio::task::JoinSet<()>,
+    probes: &mut ProbeFutures,
 ) -> Result<HashMap<Arc<str>, RouteTable>, AnyError> {
     let stream_route_tables = config
         .into_iter()
         .map(|(k, v)| -> Result<(Arc<str>, RouteTable), AnyError> {
-            let table = v.resolve(registries, generation)?;
+            let table = v.resolve(registries, probes)?;
             Ok((k, table))
         })
         .collect::<Result<HashMap<_, _>, _>>()?;
@@ -392,7 +395,7 @@ async fn tcp_prepare(
     registries: &Registries<'_>,
     context: &Runtime,
     loader: &loading::Loader<TcpAccessConnHandler>,
-    generation: &mut tokio::task::JoinSet<()>,
+    probes: &mut ProbeFutures,
 ) -> Result<loading::PreparedOps<TcpAccessConnHandler>, AnyError> {
     let builders = config
         .into_iter()
@@ -401,7 +404,7 @@ async fn tcp_prepare(
                 stream_conn_selector,
                 registries,
                 context.stream.clone(),
-                generation,
+                probes,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -414,17 +417,12 @@ async fn udp_prepare(
     registries: &Registries<'_>,
     context: &Runtime,
     loader: &loading::Loader<UdpAccessConnHandler>,
-    generation: &mut tokio::task::JoinSet<()>,
+    probes: &mut ProbeFutures,
 ) -> Result<loading::PreparedOps<UdpAccessConnHandler>, AnyError> {
     let builders = config
         .into_iter()
         .map(|c| -> Result<UdpAccessServerBuilder, UdpAccessBuildError> {
-            c.into_builder(
-                udp_conn_selector,
-                registries,
-                context.udp.clone(),
-                generation,
-            )
+            c.into_builder(udp_conn_selector, registries, context.udp.clone(), probes)
         })
         .collect::<Result<Vec<_>, _>>()?;
     let prepared = loader.prepare(builders).await?;
@@ -436,7 +434,7 @@ async fn http_prepare(
     registries: &Registries<'_>,
     context: &Runtime,
     loader: &loading::Loader<HttpAccessConnHandler>,
-    generation: &mut tokio::task::JoinSet<()>,
+    probes: &mut ProbeFutures,
 ) -> Result<loading::PreparedOps<HttpAccessConnHandler>, AnyError> {
     let builders = config
         .into_iter()
@@ -445,7 +443,7 @@ async fn http_prepare(
                 stream_route_tables,
                 registries,
                 context.stream.clone(),
-                generation,
+                probes,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -458,7 +456,7 @@ async fn socks5_tcp_prepare(
     registries: &Registries<'_>,
     context: &Runtime,
     loader: &loading::Loader<Socks5ServerTcpAccessConnHandler>,
-    generation: &mut tokio::task::JoinSet<()>,
+    probes: &mut ProbeFutures,
 ) -> Result<loading::PreparedOps<Socks5ServerTcpAccessConnHandler>, AnyError> {
     let builders = config
         .into_iter()
@@ -468,7 +466,7 @@ async fn socks5_tcp_prepare(
                     stream_route_tables,
                     registries,
                     context.stream.clone(),
-                    generation,
+                    probes,
                 )
             },
         )
@@ -482,18 +480,13 @@ async fn socks5_udp_prepare(
     registries: &Registries<'_>,
     context: &Runtime,
     loader: &loading::Loader<Socks5ServerUdpAccessConnHandler>,
-    generation: &mut tokio::task::JoinSet<()>,
+    probes: &mut ProbeFutures,
 ) -> Result<loading::PreparedOps<Socks5ServerUdpAccessConnHandler>, AnyError> {
     let builders = config
         .into_iter()
         .map(
             |c| -> Result<Socks5ServerUdpAccessServerBuilder, Socks5UdpBuildError> {
-                c.into_builder(
-                    udp_conn_selector,
-                    registries,
-                    context.udp.clone(),
-                    generation,
-                )
+                c.into_builder(udp_conn_selector, registries, context.udp.clone(), probes)
             },
         )
         .collect::<Result<Vec<_>, _>>()?;

@@ -19,7 +19,8 @@ use common::{
         relay::stream::{ConnContext, CopyBidirectional},
     },
     route::{
-        ConnSelector, Registries, RouteAction, RouteTable, RouteTableBuildError, RouteTableBuilder,
+        ConnSelector, ProbeFutures, Registries, RouteAction, RouteTable, RouteTableBuildError,
+        RouteTableBuilder,
     },
     stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
     udp::UDP_FLOW_TIMEOUT,
@@ -61,14 +62,14 @@ impl Socks5ServerTcpAccessServerConfig {
         route_table: &HashMap<Arc<str>, RouteTable>,
         registries: &Registries<'_>,
         stream_context: StreamRuntime,
-        generation: &mut tokio::task::JoinSet<()>,
+        probes: &mut ProbeFutures,
     ) -> Result<Socks5ServerTcpAccessServerBuilder, Socks5TcpBuildError> {
         let route_table = match self.route_table {
             SharableConfig::SharingKey(key) => route_table
                 .get(&key)
                 .ok_or_else(|| Socks5TcpBuildError::ProxyTableKeyNotFound(key.clone()))?
                 .clone(),
-            SharableConfig::Private(x) => x.resolve(registries, generation)?,
+            SharableConfig::Private(x) => x.resolve(registries, probes)?,
         };
         let users = self
             .users

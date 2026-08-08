@@ -14,7 +14,7 @@ use tracing::info;
 use crate::{proto::connect::stream::StreamConnectorTable, ttl_cell::TtlCell};
 
 use super::{
-    ConnConfig, GaugedConnChain, PROBE_ROUND_INTERVAL, ProbeRtt, WeightedConnChain,
+    ConnConfig, GaugedConnChain, PROBE_ROUND_INTERVAL, ProbeFutures, ProbeRtt, WeightedConnChain,
     WeightedConnChainBuildError, WeightedConnChainBuilder,
     chain_selection::{EligibilityGate, ScoredChain, chain_score, pick_weighted},
 };
@@ -57,7 +57,7 @@ impl ConnSelectorBuilder {
     pub fn resolve(
         self,
         registries: &Registries<'_>,
-        generation: &mut tokio::task::JoinSet<()>,
+        probes: &mut ProbeFutures,
     ) -> Result<ConnSelector, ConnSelectorBuildError> {
         let chains = self
             .chains
@@ -75,7 +75,7 @@ impl ConnSelectorBuilder {
             self.active_chains,
             self.max_rtt_ratio,
             registries.cancellation.clone(),
-            generation,
+            probes,
         )
         .map_err(Into::into)
     }
@@ -96,17 +96,18 @@ pub enum ConnSelector {
 impl ConnSelector {
     /// Build the selector.
     ///
-    /// Probe tasks are spawned directly into the caller-owned, generation
-    /// `JoinSet` (`generation`), which is drained at the server boundary with
-    /// `result.unwrap()` so probe panics propagate. Dropping the generation
-    /// set aborts the probe tasks.
+    /// Probe futures are collected into the caller-owned [`ProbeFutures`]
+    /// collector (`probes`) rather than spawned: they are started only at the
+    /// commit boundary, when they are spawned into the server-owned `JoinSet`,
+    /// which is drained with `result.unwrap()` so probe panics propagate. A
+    /// failed or abandoned prepare drops only unspawned futures.
     pub fn new(
         chains: Vec<WeightedConnChain>,
         tracer: Option<Arc<dyn ProbeRtt + Send + Sync>>,
         active_chains: Option<NonZeroUsize>,
         max_rtt_ratio: Option<f64>,
         cancellation: CancellationToken,
-        generation: &mut tokio::task::JoinSet<()>,
+        probes: &mut ProbeFutures,
     ) -> Result<Self, ConnSelectorError> {
         if chains.is_empty() {
             return Ok(Self::Empty);
@@ -117,7 +118,7 @@ impl ConnSelector {
             active_chains,
             max_rtt_ratio,
             cancellation,
-            generation,
+            probes,
         )?;
         Ok(Self::Some(selector))
     }
@@ -134,16 +135,17 @@ pub struct NonEmptyConnSelector {
 impl NonEmptyConnSelector {
     /// Build the selector.
     ///
-    /// Each chain's probe supervision task is spawned directly into the
-    /// caller-owned, generation `JoinSet` (`generation`), so the caller only
-    /// needs to reap that single set.
+    /// Each chain's probe supervision future is collected into the
+    /// caller-owned [`ProbeFutures`] collector (`probes`) rather than
+    /// spawned; the futures are spawned into the server-owned `JoinSet` only
+    /// at the commit boundary.
     pub fn new(
         chains: Vec<WeightedConnChain>,
         tracer: Option<Arc<dyn ProbeRtt + Send + Sync>>,
         active_chains: Option<NonZeroUsize>,
         max_rtt_ratio: Option<f64>,
         cancellation: CancellationToken,
-        generation: &mut tokio::task::JoinSet<()>,
+        probes: &mut ProbeFutures,
     ) -> Result<Self, ConnSelectorError> {
         let cum_weight = chains.iter().map(|c| c.weight).sum();
         if cum_weight == 0 {
@@ -168,7 +170,7 @@ impl NonEmptyConnSelector {
 
         let chains = chains
             .into_iter()
-            .map(|c| GaugedConnChain::new(c, tracer.clone(), cancellation.clone(), generation))
+            .map(|c| GaugedConnChain::new(c, tracer.clone(), cancellation.clone(), probes))
             .collect::<Arc<[_]>>();
         let score_store = Arc::new(RwLock::new(ScoreStore::new(None, PROBE_ROUND_INTERVAL)));
         Ok(Self {
@@ -268,14 +270,14 @@ mod tests {
     }
     #[test]
     fn a_zero_sum_falls_back_within_the_eligible_set() {
-        let mut generation = tokio::task::JoinSet::new();
+        let mut probes = ProbeFutures::new();
         let selector = NonEmptyConnSelector::new(
             vec![chain(0), chain(5)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,
             Some(1.5),
             CancellationToken::new(),
-            &mut generation,
+            &mut probes,
         )
         .unwrap();
         selector.chains[0].set_gauges_for_test(Some(Duration::from_millis(10)), Some(0.));
@@ -291,14 +293,14 @@ mod tests {
 
     #[test]
     fn a_dead_probe_chain_is_excluded_regardless_of_stale_gauges() {
-        let mut generation = tokio::task::JoinSet::new();
+        let mut probes = ProbeFutures::new();
         let selector = NonEmptyConnSelector::new(
             vec![chain(1), chain(2)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,
             Some(1.5),
             CancellationToken::new(),
-            &mut generation,
+            &mut probes,
         )
         .unwrap();
         selector.chains[0].set_gauges_for_test(Some(Duration::from_millis(10)), Some(0.));
@@ -315,14 +317,14 @@ mod tests {
 
     #[test]
     fn all_dead_probes_fall_back_to_uniform_selection() {
-        let mut generation = tokio::task::JoinSet::new();
+        let mut probes = ProbeFutures::new();
         let selector = NonEmptyConnSelector::new(
             vec![chain(1), chain(2)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,
             None,
             CancellationToken::new(),
-            &mut generation,
+            &mut probes,
         )
         .unwrap();
         selector.chains[0].set_gauges_for_test(Some(Duration::from_millis(10)), Some(0.));
@@ -340,14 +342,14 @@ mod tests {
 
     #[test]
     fn cancelled_probe_is_treated_as_healthy() {
-        let mut generation = tokio::task::JoinSet::new();
+        let mut probes = ProbeFutures::new();
         let selector = NonEmptyConnSelector::new(
             vec![chain(1), chain(2)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,
             Some(1.5),
             CancellationToken::new(),
-            &mut generation,
+            &mut probes,
         )
         .unwrap();
         selector.chains[0].set_gauges_for_test(Some(Duration::from_millis(10)), Some(0.));

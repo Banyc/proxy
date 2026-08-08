@@ -9,7 +9,8 @@ use thiserror::Error;
 use crate::{addr::InternetAddr, config::SharableConfig, matcher::Matcher};
 
 use super::{
-    ConnConfigBuildError, ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, Registries,
+    ConnConfigBuildError, ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, ProbeFutures,
+    Registries,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,11 +24,11 @@ impl RouteTableBuilder {
     pub fn resolve(
         self,
         registries: &Registries<'_>,
-        generation: &mut tokio::task::JoinSet<()>,
+        probes: &mut ProbeFutures,
     ) -> Result<RouteTable, RouteTableBuildError> {
         let mut built = vec![];
         for entry in self.entries {
-            let e = entry.resolve(registries, generation)?;
+            let e = entry.resolve(registries, probes)?;
             built.push(e);
         }
         Ok(RouteTable::new(built, registries.matcher.clone()))
@@ -74,7 +75,7 @@ impl RouteTableEntryBuilder {
     pub fn resolve(
         self,
         registries: &Registries<'_>,
-        generation: &mut tokio::task::JoinSet<()>,
+        probes: &mut ProbeFutures,
     ) -> Result<RouteTableEntry, RouteTableBuildError> {
         let (name, matcher) = match self.matcher {
             SharableConfig::SharingKey(k) => (
@@ -87,7 +88,7 @@ impl RouteTableEntryBuilder {
             ),
             SharableConfig::Private(v) => (None, v),
         };
-        let action = self.action.resolve(registries, generation)?;
+        let action = self.action.resolve(registries, probes)?;
         Ok(RouteTableEntry::new(name, matcher, action))
     }
 }
@@ -145,7 +146,7 @@ impl RouteActionBuilder {
     pub fn resolve(
         self,
         registries: &Registries<'_>,
-        generation: &mut tokio::task::JoinSet<()>,
+        probes: &mut ProbeFutures,
     ) -> Result<RouteAction, RouteTableBuildError> {
         let action = match self {
             RouteActionBuilder::Tagged(RouteActionTagBuilder::Direct) => RouteAction::Direct,
@@ -173,7 +174,7 @@ impl RouteActionBuilder {
             RouteActionBuilder::ConnSelector(RouteActionSelector::Sharable(
                 SharableConfig::Private(p),
             )) => {
-                let selector = p.resolve(registries, generation)?;
+                let selector = p.resolve(registries, probes)?;
                 RouteAction::ConnSelector(Arc::new(selector))
             }
         };
@@ -372,14 +373,14 @@ mod tests {
 
     #[test]
     fn a_conn_selector_action_is_preserved_when_selected() {
-        let mut generation = tokio::task::JoinSet::new();
+        let mut probes = ProbeFutures::new();
         let selector = ConnSelector::new(
             vec![chain(1)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,
             None,
             CancellationToken::new(),
-            &mut generation,
+            &mut probes,
         )
         .unwrap();
         let table = RouteTable::new(
