@@ -2,13 +2,13 @@ use std::net::SocketAddr;
 
 use hdv_derive::HdvSerde;
 
-use crate::addr::{InternetAddr, InternetAddrHdv};
+use crate::{addr::InternetAddrHdv, proto::addr::RouteAddr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DownstreamAddr(pub SocketAddr);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct UpstreamAddr(pub InternetAddr);
+pub struct UpstreamAddr(pub RouteAddr);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Flow {
@@ -22,7 +22,7 @@ pub struct FlowHdv {
 }
 impl From<&Flow> for FlowHdv {
     fn from(value: &Flow) -> Self {
-        let upstream = value.upstream.as_ref().map(|x| (&x.0).into());
+        let upstream = value.upstream.as_ref().map(|x| (&x.0.address).into());
         let downstream = value.downstream.0.into();
         Self {
             upstream,

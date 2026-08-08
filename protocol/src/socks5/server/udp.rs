@@ -120,21 +120,21 @@ impl Socks5ServerUdpAccessConnHandler {
     async fn proxy(&self, conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), AccessProxyError> {
         let chain = match &self.conn_selector {
             common::route::ConnSelector::Empty => [].into(),
-            common::route::ConnSelector::Some(conn_selector1) => {
-                conn_selector1.choose_chain().chain.clone()
+            common::route::ConnSelector::Some(conn_selector) => {
+                conn_selector.choose_chain().chain.clone()
             }
         };
         let flow = conn.conn_key().clone();
         let upstream = UdpProxyClient::establish(
             chain,
-            flow.upstream.as_ref().unwrap().0.clone(),
+            flow.upstream.as_ref().unwrap().0.address.clone(),
             &self.udp_runtime,
         )
         .await?;
         let upstream_remote = upstream.remote_addr().clone();
         let (upstream_read, upstream_write) = upstream.into_split();
         let response_header = {
-            let destination = flow.upstream.as_ref().unwrap().0.clone();
+            let destination = flow.upstream.as_ref().unwrap().0.address.clone();
             move || {
                 let mut wtr = Vec::new();
                 let udp_request_header = UdpRequestHeader {
@@ -150,7 +150,7 @@ impl Socks5ServerUdpAccessConnHandler {
         let speed_limiter = self.speed_limiter.clone();
         let session_table = self.udp_runtime.session_table.clone();
         let retention = self.udp_runtime.retention.clone();
-        let upstream_local = upstream_read.inner().local_addr().ok();
+        let upstream_local = upstream_read.local_addr();
         let (dn_read, dn_write) = conn.split();
         let io_copy = CopyBidirectional {
             flow,
@@ -192,7 +192,9 @@ impl UdpServerHandleConn for Socks5ServerUdpAccessConnHandler {
             return None;
         }
 
-        Some(Some(UpstreamAddr(request_header.destination)))
+        Some(Some(UpstreamAddr(common::proto::addr::RouteAddr::udp(
+            request_header.destination,
+        ))))
     }
 
     async fn handle_flow(&self, accepted: Conn<UdpSocket, Flow, Packet>) {

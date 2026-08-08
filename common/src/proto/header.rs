@@ -1,9 +1,9 @@
-use crate::{addr::InternetAddr, header::route::RouteRequest};
+use crate::header::route::RouteRequest;
 
 use super::addr::RouteAddr;
 
 pub type StreamRequestHeader = RouteRequest<RouteAddr>;
-pub type UdpRequestHeader = RouteRequest<InternetAddr>;
+pub type UdpRequestHeader = RouteRequest<RouteAddr>;
 
 #[cfg(test)]
 mod tests {
@@ -30,10 +30,10 @@ mod tests {
         let mut stream = io::Cursor::new(&mut buf[..]);
         let crypto = create_random_crypto();
         let time_validator = TimeValidator::new(VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL);
-
-        // Encode header
         let original_header: UdpRequestHeader = RouteRequest {
-            upstream: Some("1.1.1.1:8080".parse::<SocketAddr>().unwrap().into()),
+            upstream: Some(RouteAddr::udp(
+                "1.1.1.1:8080".parse::<SocketAddr>().unwrap().into(),
+            )),
         };
         write_header_async(&mut stream, &original_header, *crypto.key())
             .await
@@ -41,8 +41,6 @@ mod tests {
         let len = stream.position();
         let buf = &buf[..len as usize];
         trace!(?original_header, ?len, "Encoded header");
-
-        // Decode header
         let mut stream = io::Cursor::new(buf);
         let validator = ValidatorRef::Time(&time_validator);
         let decoded_header = read_header_async(&mut stream, *crypto.key(), &validator)

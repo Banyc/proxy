@@ -8,6 +8,7 @@ use crate::{
     },
     proto::{
         addr::RouteAddr,
+        connect::udp::{UdpConnectionRead, UdpConnectionWrite},
         context::UdpRuntime,
         relay::{
             decrypt_packet_payload, encrypt_packet_payload,
@@ -30,7 +31,6 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use tokio::net::UdpSocket;
 use tracing::{instrument, trace, warn};
 
 #[derive(Debug)]
@@ -62,9 +62,12 @@ impl UdpProxyClient {
                     sock_addr: addr,
                 }
             })?;
-            let upstream = Arc::new(upstream);
-            let write = UdpProxyClientWriteHalf::new(upstream.clone(), Vec::new());
-            let read = UdpProxyClientReadHalf::new(upstream, proxies);
+            let upstream = crate::proto::connect::udp::UdpConnection::socket(upstream);
+            let local_addr = upstream.local_addr();
+            let peer_addr = upstream.peer_addr();
+            let (upstream_read, upstream_write) = upstream.into_split();
+            let write = UdpProxyClientWriteHalf::new(upstream_write, peer_addr, Vec::new());
+            let read = UdpProxyClientReadHalf::new(upstream_read, local_addr, peer_addr, proxies);
             return Ok(UdpProxyClient {
                 write,
                 read,
@@ -72,35 +75,19 @@ impl UdpProxyClient {
             });
         }
         let proxy_addr = proxies[0].address.clone();
-        let addr = *proxy_addr
-            .address
-            .to_socket_addrs()
+        let upstream = context
+            .connector
+            .connect_route(&proxy_addr, crate::STREAM_IO_TIMEOUT)
             .await
-            .map_err(|e| EstablishError::ResolveFirstProxy {
-                source: e,
-                addr: proxy_addr.address.clone(),
-            })?
-            .first();
-        let upstream = context.connector.connect(addr).await.map_err(|e| {
-            EstablishError::ConnectFirstProxy {
-                source: e,
-                addr: proxy_addr.address.clone(),
-                sock_addr: addr,
-            }
-        })?;
+            .map_err(|source| EstablishError::ConnectFirstProxy {
+                source,
+                addr: proxy_addr.clone(),
+            })?;
         let pairs =
             convert_proxies_to_header_crypto_pairs(&proxies, Some(RouteAddr::udp(destination)));
         let pairs = pairs
             .into_iter()
-            .map(|(header, crypto)| {
-                (
-                    RouteRequest {
-                        upstream: header.upstream.map(|addr| addr.address),
-                    },
-                    crypto,
-                )
-            })
-            .collect::<Vec<(RouteRequest<InternetAddr>, &tokio_chacha20::config::Config)>>();
+            .collect::<Vec<(RouteRequest<RouteAddr>, &tokio_chacha20::config::Config)>>();
         let request_layers = pairs
             .into_iter()
             .zip(proxies.iter())
@@ -118,9 +105,11 @@ impl UdpProxyClient {
                 }
             })
             .collect();
-        let upstream = Arc::new(upstream);
-        let write = UdpProxyClientWriteHalf::new(upstream.clone(), request_layers);
-        let read = UdpProxyClientReadHalf::new(upstream, proxies);
+        let local_addr = upstream.local_addr();
+        let peer_addr = upstream.peer_addr();
+        let (upstream_read, upstream_write) = upstream.into_split();
+        let write = UdpProxyClientWriteHalf::new(upstream_write, peer_addr, request_layers);
+        let read = UdpProxyClientReadHalf::new(upstream_read, local_addr, peer_addr, proxies);
         Ok(UdpProxyClient {
             write,
             read,
@@ -151,18 +140,11 @@ pub enum EstablishError {
         addr: InternetAddr,
         sock_addr: SocketAddr,
     },
-    #[error("Failed to resolve first proxy address: {source}, {addr}")]
-    ResolveFirstProxy {
-        #[source]
-        source: io::Error,
-        addr: InternetAddr,
-    },
-    #[error("Failed to connect to first proxy: {source}, {addr}, {sock_addr}")]
+    #[error("Failed to connect to first proxy: {source}, {addr}")]
     ConnectFirstProxy {
         #[source]
         source: io::Error,
-        addr: InternetAddr,
-        sock_addr: SocketAddr,
+        addr: RouteAddr,
     },
 }
 
@@ -172,7 +154,8 @@ struct UdpRequestLayer {
 }
 
 pub struct UdpProxyClientWriteHalf {
-    upstream: Arc<UdpSocket>,
+    upstream: UdpConnectionWrite,
+    peer_addr: Option<SocketAddr>,
     request_layers: Vec<UdpRequestLayer>,
     write_buf: Vec<u8>,
     transform_buf: Vec<u8>,
@@ -191,9 +174,14 @@ impl UdpSend for UdpProxyClientWriteHalf {
     }
 }
 impl UdpProxyClientWriteHalf {
-    fn new(upstream: Arc<UdpSocket>, request_layers: Vec<UdpRequestLayer>) -> Self {
+    fn new(
+        upstream: UdpConnectionWrite,
+        peer_addr: Option<SocketAddr>,
+        request_layers: Vec<UdpRequestLayer>,
+    ) -> Self {
         Self {
             upstream,
+            peer_addr,
             request_layers,
             write_buf: Vec::with_capacity(PACKET_BUFFER_LENGTH),
             transform_buf: Vec::with_capacity(PACKET_BUFFER_LENGTH),
@@ -214,7 +202,7 @@ impl UdpProxyClientWriteHalf {
                 )
                 .map_err(|source| SendError {
                     source,
-                    sock_addr: self.upstream.peer_addr().ok(),
+                    sock_addr: self.peer_addr,
                 })?;
                 let encrypted_len = encrypted.len();
                 self.transform_buf.truncate(encrypted_len);
@@ -229,7 +217,7 @@ impl UdpProxyClientWriteHalf {
                         io::ErrorKind::InvalidInput,
                         "UDP packet length overflow",
                     ),
-                    sock_addr: self.upstream.peer_addr().ok(),
+                    sock_addr: self.peer_addr,
                 })?;
             if encoded_len > PACKET_BUFFER_LENGTH {
                 return Err(SendError {
@@ -237,7 +225,7 @@ impl UdpProxyClientWriteHalf {
                         io::ErrorKind::InvalidInput,
                         "encoded UDP proxy packet is too large",
                     ),
-                    sock_addr: self.upstream.peer_addr().ok(),
+                    sock_addr: self.peer_addr,
                 });
             }
             self.transform_buf.clear();
@@ -245,18 +233,17 @@ impl UdpProxyClientWriteHalf {
             self.transform_buf.extend_from_slice(&self.write_buf);
             std::mem::swap(&mut self.write_buf, &mut self.transform_buf);
         }
-        self.upstream.send(&self.write_buf).await.map_err(|e| {
-            let peer_addr = self.upstream.peer_addr().ok();
-            SendError {
-                source: e,
-                sock_addr: peer_addr,
-            }
-        })?;
+        self.upstream
+            .trait_send(&self.write_buf)
+            .await
+            .map_err(|e| {
+                let peer_addr = self.peer_addr;
+                SendError {
+                    source: io::Error::other(e),
+                    sock_addr: peer_addr,
+                }
+            })?;
         Ok(buf.len())
-    }
-
-    pub fn inner(&self) -> &Arc<UdpSocket> {
-        &self.upstream
     }
 }
 #[derive(Debug, Error)]
@@ -273,7 +260,9 @@ fn time_validator() -> TimeValidator {
 
 #[derive(Debug)]
 pub struct UdpProxyClientReadHalf {
-    upstream: Arc<UdpSocket>,
+    upstream: UdpConnectionRead,
+    local_addr: Option<SocketAddr>,
+    peer_addr: Option<SocketAddr>,
     proxies: Arc<ConnChain>,
     read_buf: Vec<u8>,
     transform_buf: Vec<u8>,
@@ -285,9 +274,16 @@ impl UdpRecv for UdpProxyClientReadHalf {
     }
 }
 impl UdpProxyClientReadHalf {
-    pub fn new(upstream: Arc<UdpSocket>, proxies: Arc<ConnChain>) -> Self {
+    pub fn new(
+        upstream: UdpConnectionRead,
+        local_addr: Option<SocketAddr>,
+        peer_addr: Option<SocketAddr>,
+        proxies: Arc<ConnChain>,
+    ) -> Self {
         Self {
             upstream,
+            local_addr,
+            peer_addr,
             proxies,
             read_buf: Vec::with_capacity(PACKET_BUFFER_LENGTH),
             transform_buf: Vec::with_capacity(PACKET_BUFFER_LENGTH),
@@ -298,13 +294,17 @@ impl UdpProxyClientReadHalf {
     #[instrument(skip_all)]
     pub async fn recv(&mut self, buf: &mut [u8]) -> Result<usize, RecvError> {
         self.read_buf.resize(PACKET_BUFFER_LENGTH, 0);
-        let n = self.upstream.recv(&mut self.read_buf).await.map_err(|e| {
-            let peer_addr = self.upstream.peer_addr().ok();
-            RecvError::RecvUpstream {
-                source: e,
-                sock_addr: peer_addr,
-            }
-        })?;
+        let n = self
+            .upstream
+            .trait_recv(&mut self.read_buf)
+            .await
+            .map_err(|e| {
+                let peer_addr = self.peer_addr;
+                RecvError::RecvUpstream {
+                    source: io::Error::other(e),
+                    sock_addr: peer_addr,
+                }
+            })?;
         let mut in_read_buf = true;
         let mut start = 0;
         let mut end = n;
@@ -369,8 +369,8 @@ impl UdpProxyClientReadHalf {
         Ok(payload_size)
     }
 
-    pub fn inner(&self) -> &Arc<UdpSocket> {
-        &self.upstream
+    pub fn local_addr(&self) -> Option<SocketAddr> {
+        self.local_addr
     }
 }
 #[derive(Debug, Error)]
@@ -440,20 +440,12 @@ pub async fn probe_rtt(
         return Ok(Duration::from_secs(0));
     }
     let proxy_addr = &proxies[0].address;
-    let addr = *proxy_addr.address.to_socket_addrs().await?.first();
-    let upstream = context.connector.connect(addr).await?;
+    let upstream = context
+        .connector
+        .connect_route(proxy_addr, crate::STREAM_IO_TIMEOUT)
+        .await?;
+    let (mut upstream_read, mut upstream_write) = upstream.into_split();
     let pairs = convert_proxies_to_header_crypto_pairs(proxies, None);
-    let pairs = pairs
-        .into_iter()
-        .map(|(header, crypto)| {
-            (
-                RouteRequest {
-                    upstream: header.upstream.map(|addr| addr.address),
-                },
-                crypto,
-            )
-        })
-        .collect::<Vec<(RouteRequest<InternetAddr>, &tokio_chacha20::config::Config)>>();
     let mut packet = Vec::new();
     let mut transform_buf = vec![0; PACKET_BUFFER_LENGTH];
     for (index, ((header, header_crypto), proxy)) in pairs.iter().zip(proxies).enumerate().rev() {
@@ -475,7 +467,7 @@ pub async fn probe_rtt(
         if encoded_len > PACKET_BUFFER_LENGTH {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "encoded UDP proxy probe is too large",
+                "encoded UDP probe packet is too large",
             )
             .into());
         }
@@ -485,8 +477,16 @@ pub async fn probe_rtt(
         std::mem::swap(&mut packet, &mut transform_buf);
     }
     let start = Instant::now();
-    upstream.send(&packet).await?;
-    let n = upstream.recv_buf(pkt_buf).await?;
+    upstream_write
+        .trait_send(&packet)
+        .await
+        .map_err(io::Error::other)?;
+    pkt_buf.resize(PACKET_BUFFER_LENGTH, 0);
+    let n = upstream_read
+        .trait_recv(pkt_buf)
+        .await
+        .map_err(io::Error::other)?;
+    pkt_buf.truncate(n);
     let end = Instant::now();
     let mut packet = pkt_buf[..n].to_vec();
     for (index, node) in proxies.iter().enumerate() {
@@ -529,6 +529,7 @@ pub enum TraceError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::UdpSocket;
 
     #[tokio::test]
     async fn a_response_longer_than_the_callers_buffer_is_capped_not_a_panic() {
@@ -536,7 +537,11 @@ mod tests {
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         client.connect(peer.local_addr().unwrap()).await.unwrap();
         peer.connect(client.local_addr().unwrap()).await.unwrap();
-        let mut read = UdpProxyClientReadHalf::new(Arc::new(client), [].into());
+        let connection = crate::proto::connect::udp::UdpConnection::socket(client);
+        let local_addr = connection.local_addr();
+        let peer_addr = connection.peer_addr();
+        let (upstream, _write) = connection.into_split();
+        let mut read = UdpProxyClientReadHalf::new(upstream, local_addr, peer_addr, [].into());
         let mut buf = [0u8; 64];
         peer.send(&vec![0xab; buf.len() + 1]).await.unwrap();
         let n = read.recv(&mut buf).await.unwrap();

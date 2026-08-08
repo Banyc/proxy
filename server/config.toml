@@ -19,6 +19,9 @@ pool = ["tcp1", "mptcp1"]
 
 [udp.upstream]
 "udp1" = { address = "proxy.example.org:80", header_key = "base64", payload_key = "base64" }
+# Named reverse tunnels are also valid UDP hops. UDP datagrams for each access flow share one framed mux substream in both directions.
+# "private-a" = { address = "revtuntcp://private-a", header_key = "base64", payload_key = "base64" }
+# "private-b" = { address = "revtunrtp://private-b", header_key = "base64", payload_key = "base64" }
 
 [access_server.matcher]
 "localhost" = [

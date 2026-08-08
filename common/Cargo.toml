@@ -20,6 +20,7 @@ hdv_derive = { workspace = true }
 metrics = { workspace = true }
 mitsein = { workspace = true }
 monitor_table = { workspace = true, features = ["hdv"] }
+mux = { workspace = true }
 pin-project-lite = { workspace = true }
 postcard = { workspace = true }
 primitive = { workspace = true }

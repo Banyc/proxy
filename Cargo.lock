@@ -474,6 +474,7 @@ dependencies = [
  "metrics",
  "mitsein",
  "monitor_table",
+ "mux",
  "pin-project-lite",
  "postcard",
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",

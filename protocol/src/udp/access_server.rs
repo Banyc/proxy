@@ -141,7 +141,7 @@ impl UdpAccessConnHandler {
         let speed_limiter = self.speed_limiter.clone();
         let session_table = self.udp_runtime.session_table.clone();
         let retention = self.udp_runtime.retention.clone();
-        let upstream_local = upstream_read.inner().local_addr().ok();
+        let upstream_local = upstream_read.local_addr();
         let flow = conn.conn_key().clone();
         let (dn_read, dn_write) = conn.split();
         let io_copy = CopyBidirectional {
@@ -174,7 +174,9 @@ pub enum AccessProxyError {
 }
 impl UdpServerHandleConn for UdpAccessConnHandler {
     fn parse_upstream_addr(&self, _buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
-        Some(Some(UpstreamAddr(self.destination.clone())))
+        Some(Some(UpstreamAddr(common::proto::addr::RouteAddr::udp(
+            self.destination.clone(),
+        ))))
     }
 
     async fn handle_flow(&self, accepted: Conn<UdpSocket, Flow, Packet>) {

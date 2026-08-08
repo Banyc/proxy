@@ -1,20 +1,20 @@
-use std::{io, net::SocketAddr, sync::Arc};
+use std::{io, net::SocketAddr};
 
 use crate::{
-    addr::InternetAddr,
+    error::AnyError,
     header::{
         codec::write_header,
         route::{RouteErrorKind, RouteResponse},
     },
     loading,
     proto::{
-        conn::udp::{Flow, UpstreamAddr},
+        conn::udp::{DownstreamAddr, Flow, UpstreamAddr},
         context::UdpRuntime,
-        relay::udp::{CopyBidirectional, DownstreamParts, UpstreamParts},
+        relay::udp::{CopyBidirectional, DownstreamParts, UdpRecv, UdpSend, UpstreamParts},
         route_header::udp::{decode_route_header, echo},
     },
     udp::{
-        Packet,
+        PACKET_BUFFER_LENGTH, Packet,
         respond::respond_with_error,
         server::{UdpServer, UdpServerHandleConn},
     },
@@ -68,35 +68,48 @@ impl UdpProxyConnHandler {
             echo(pkt.slice(), conn.write(), &self.header_crypto).await;
             return Ok(());
         }
-        let resolved_upstream = *flow
-            .upstream
-            .as_ref()
-            .unwrap()
-            .0
-            .to_socket_addrs()
-            .await
-            .map_err(|e| UdpProxyError::Resolve {
-                source: e,
-                addr: flow.upstream.as_ref().unwrap().0.clone(),
-            })?
-            .first();
-        if !self.allow_loopback && crate::addr::reaches_loopback(&resolved_upstream.ip()) {
-            return Err(UdpProxyError::Loopback {
-                addr: flow.upstream.as_ref().unwrap().0.clone(),
-                sock_addr: resolved_upstream,
-            });
+        let (dn_read, dn_write) = conn.split();
+        self.proxy_parts(flow, dn_read, dn_write).await?;
+        Ok(())
+    }
+
+    async fn proxy_parts<DownstreamRead, DownstreamWrite>(
+        &self,
+        flow: Flow,
+        dn_read: DownstreamRead,
+        dn_write: DownstreamWrite,
+    ) -> Result<(), UdpProxyError>
+    where
+        DownstreamRead: UdpRecv + Send + 'static,
+        DownstreamWrite: UdpSend + Send + 'static,
+    {
+        let upstream_route = &flow.upstream.as_ref().unwrap().0;
+        if upstream_route.reverse_tunnel().is_none() {
+            let resolved_upstream = *upstream_route
+                .address
+                .to_socket_addrs()
+                .await
+                .map_err(|e| UdpProxyError::Resolve {
+                    source: e,
+                    addr: upstream_route.clone(),
+                })?
+                .first();
+            if !self.allow_loopback && crate::addr::reaches_loopback(&resolved_upstream.ip()) {
+                return Err(UdpProxyError::Loopback {
+                    addr: upstream_route.clone(),
+                    sock_addr: resolved_upstream,
+                });
+            }
         }
         let upstream = self
             .udp_context
             .connector
-            .connect(resolved_upstream)
+            .connect_route(upstream_route, crate::STREAM_IO_TIMEOUT)
             .await
             .map_err(|e| UdpProxyError::ConnectUpstream {
                 source: e,
-                addr: flow.upstream.as_ref().unwrap().0.clone(),
-                sock_addr: resolved_upstream,
+                addr: upstream_route.clone(),
             })?;
-        let upstream = Arc::new(upstream);
         let header_crypto = self.header_crypto.clone();
         let response_header = move || {
             let mut wtr = Vec::new();
@@ -104,34 +117,75 @@ impl UdpProxyConnHandler {
             write_header(&mut wtr, &header, *header_crypto.key()).unwrap();
             wtr.into()
         };
-        let header_crypto = self.header_crypto.clone();
         let payload_crypto = self.payload_crypto.clone();
         let session_table = self.udp_context.session_table.clone();
         let retention = self.udp_context.retention.clone();
-        let upstream_local = upstream.local_addr().ok();
-        let (dn_read, dn_write) = conn.split();
+        let upstream_local = upstream.local_addr();
+        let (upstream_read, upstream_write) = upstream.into_split();
         let io_copy = CopyBidirectional {
             flow,
             upstream: UpstreamParts {
-                read: upstream.clone(),
-                write: upstream,
+                read: upstream_read,
+                write: upstream_write,
             },
             downstream: DownstreamParts {
                 read: dn_read,
-                write: dn_write.clone(),
+                write: dn_write,
             },
             speed_limiter: Limiter::new(f64::INFINITY),
             payload_crypto,
             response_header: Some(Box::new(response_header)),
             retention,
         };
-        let res = io_copy
+        io_copy
             .serve_as_proxy_server(session_table, upstream_local, "UDP")
-            .await;
-        if res.is_err() {
-            let _ = respond_with_error(&dn_write, RouteErrorKind::Io, &header_crypto).await;
-        }
+            .await
+            .map_err(UdpProxyError::Copy)?;
         Ok(())
+    }
+
+    pub async fn handle_tunnel_flow<Read, Write>(
+        &self,
+        read: Read,
+        mut write: Write,
+        downstream: SocketAddr,
+    ) -> Result<(), UdpProxyError>
+    where
+        Read: UdpRecv + Send + 'static,
+        Write: UdpSend + Send + 'static,
+    {
+        let mut read = RouteDecodingRecv::new(
+            read,
+            self.header_crypto.clone(),
+            self.udp_context.time_validator.clone(),
+        );
+        let upstream = read.prime().await.map_err(UdpProxyError::Tunnel)?;
+        if upstream.is_none() {
+            let mut payload = [0; PACKET_BUFFER_LENGTH];
+            loop {
+                let n = read
+                    .trait_recv(&mut payload)
+                    .await
+                    .map_err(UdpProxyError::Tunnel)?;
+                let mut response = Vec::new();
+                write_header(
+                    &mut response,
+                    &RouteResponse { result: Ok(()) },
+                    *self.header_crypto.key(),
+                )
+                .map_err(|error| UdpProxyError::Tunnel(Box::new(error)))?;
+                response.extend_from_slice(&payload[..n]);
+                write
+                    .trait_send(&response)
+                    .await
+                    .map_err(UdpProxyError::Tunnel)?;
+            }
+        }
+        let flow = Flow {
+            upstream,
+            downstream: DownstreamAddr(downstream),
+        };
+        self.proxy_parts(flow, read, write).await
     }
 
     async fn handle_proxy_result(
@@ -158,25 +212,93 @@ pub enum UdpProxyError {
     Resolve {
         #[source]
         source: io::Error,
-        addr: InternetAddr,
+        addr: crate::proto::addr::RouteAddr,
     },
     #[error("Refused to connect to a loopback address: {addr}, {sock_addr}")]
     Loopback {
-        addr: InternetAddr,
+        addr: crate::proto::addr::RouteAddr,
         sock_addr: SocketAddr,
     },
-    #[error("Failed to connect to upstream: {source}, {addr}, {sock_addr}")]
+    #[error("Failed to connect to upstream: {source}, {addr}")]
     ConnectUpstream {
         #[source]
         source: io::Error,
-        addr: InternetAddr,
-        sock_addr: SocketAddr,
+        addr: crate::proto::addr::RouteAddr,
     },
+    #[error("reverse-tunnel UDP flow: {0}")]
+    Tunnel(#[source] AnyError),
+    #[error("UDP relay: {0}")]
+    Copy(#[source] crate::proto::relay::udp::CopyBiError),
 }
 fn error_kind_from_proxy_error(e: UdpProxyError) -> RouteErrorKind {
     match e {
         UdpProxyError::Resolve { .. } | UdpProxyError::ConnectUpstream { .. } => RouteErrorKind::Io,
         UdpProxyError::Loopback { .. } => RouteErrorKind::Loopback,
+        UdpProxyError::Tunnel(_) | UdpProxyError::Copy(_) => RouteErrorKind::Io,
+    }
+}
+
+struct RouteDecodingRecv<Read> {
+    inner: Read,
+    header_crypto: tokio_chacha20::config::Config,
+    time_validator: std::sync::Arc<ae::anti_replay::TimeValidator>,
+    expected: Option<Option<UpstreamAddr>>,
+    first_payload: Option<Vec<u8>>,
+    packet: Vec<u8>,
+}
+impl<Read> RouteDecodingRecv<Read>
+where
+    Read: UdpRecv,
+{
+    fn new(
+        inner: Read,
+        header_crypto: tokio_chacha20::config::Config,
+        time_validator: std::sync::Arc<ae::anti_replay::TimeValidator>,
+    ) -> Self {
+        Self {
+            inner,
+            header_crypto,
+            time_validator,
+            expected: None,
+            first_payload: None,
+            packet: vec![0; PACKET_BUFFER_LENGTH],
+        }
+    }
+    async fn prime(&mut self) -> Result<Option<UpstreamAddr>, AnyError> {
+        let (upstream, payload) = self.recv_decoded().await?;
+        self.expected = Some(upstream.clone());
+        self.first_payload = Some(payload);
+        Ok(upstream)
+    }
+    async fn recv_decoded(&mut self) -> Result<(Option<UpstreamAddr>, Vec<u8>), AnyError> {
+        let n = self.inner.trait_recv(&mut self.packet).await?;
+        let mut cursor = io::Cursor::new(&self.packet[..n]);
+        let upstream = decode_route_header(&mut cursor, &self.header_crypto, &self.time_validator)?;
+        let payload = self.packet[usize::try_from(cursor.position()).unwrap()..n].to_vec();
+        Ok((upstream, payload))
+    }
+}
+impl<Read> UdpRecv for RouteDecodingRecv<Read>
+where
+    Read: UdpRecv + Send,
+{
+    async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
+        let payload = if let Some(payload) = self.first_payload.take() {
+            payload
+        } else {
+            let (upstream, payload) = self.recv_decoded().await?;
+            if self.expected.as_ref() != Some(&upstream) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "UDP mux flow changed its upstream route",
+                )
+                .into());
+            }
+            payload
+        };
+        let copied = payload.len().min(buf.len());
+        buf[..copied].copy_from_slice(&payload[..copied]);
+        Ok(copied)
     }
 }
 

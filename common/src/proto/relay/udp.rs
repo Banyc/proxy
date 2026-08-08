@@ -51,26 +51,26 @@ pub struct UpstreamParts<R, W> {
     pub read: R,
     pub write: W,
 }
-
-pub struct DownstreamParts {
-    pub read: ConnRead<Packet>,
-    pub write: ConnWrite<UdpSocket>,
+pub struct DownstreamParts<R, W> {
+    pub read: R,
+    pub write: W,
 }
-
-pub struct CopyBidirectional<R, W> {
+pub struct CopyBidirectional<R, W, DownstreamRead, DownstreamWrite> {
     pub flow: Flow,
     pub upstream: UpstreamParts<R, W>,
-    pub downstream: DownstreamParts,
+    pub downstream: DownstreamParts<DownstreamRead, DownstreamWrite>,
     pub speed_limiter: Limiter,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
     pub response_header: Option<Box<dyn Fn() -> Arc<[u8]> + Send>>,
     pub retention: crate::retention::RetentionActorSender,
 }
 
-impl<R, W> CopyBidirectional<R, W>
+impl<R, W, DownstreamRead, DownstreamWrite> CopyBidirectional<R, W, DownstreamRead, DownstreamWrite>
 where
     R: UdpRecv + Send + 'static,
     W: UdpSend + Send + 'static,
+    DownstreamRead: UdpRecv + Send + 'static,
+    DownstreamWrite: UdpSend + Send + 'static,
 {
     pub async fn serve_as_proxy_server(
         self,
@@ -83,13 +83,12 @@ where
             let (dn_handle, dn) = tokio_throughput::gauge();
             let r = ReadGauge(up);
             let w = WriteGauge(dn);
-
             let session = UdpSession {
                 start: SystemTime::now(),
                 end: None,
                 destination: None,
                 upstream_local,
-                upstream_remote: self.flow.upstream.as_ref().unwrap().0.clone(),
+                upstream_remote: self.flow.upstream.as_ref().unwrap().0.address.clone(),
                 downstream_remote: self.flow.downstream.0,
                 up_gauge: Mutex::new(up_handle),
                 dn_gauge: Mutex::new(dn_handle),
@@ -97,7 +96,6 @@ where
             let session = s.set_scope_owned(session);
             (session, r, w)
         });
-
         self.serve(session, log_prefix, EncryptionDirection::Decrypt)
             .await
     }
@@ -114,11 +112,10 @@ where
             let (dn_handle, dn) = tokio_throughput::gauge();
             let r = ReadGauge(up);
             let w = WriteGauge(dn);
-
             let session = UdpSession {
                 start: SystemTime::now(),
                 end: None,
-                destination: Some(self.flow.upstream.as_ref().unwrap().0.clone()),
+                destination: Some(self.flow.upstream.as_ref().unwrap().0.address.clone()),
                 upstream_local,
                 upstream_remote,
                 downstream_remote: self.flow.downstream.0,
@@ -128,7 +125,6 @@ where
             let session = s.set_scope_owned(session);
             (session, r, w)
         });
-
         self.serve(session, log_prefix, EncryptionDirection::Encrypt)
             .await
     }
@@ -195,9 +191,12 @@ where
     }
 }
 
-pub async fn copy_bidirectional<R, W>(
+pub async fn copy_bidirectional<R, W, DownstreamRead, DownstreamWrite>(
     flow: Flow,
-    streams: (UpstreamParts<R, W>, DownstreamParts),
+    streams: (
+        UpstreamParts<R, W>,
+        DownstreamParts<DownstreamRead, DownstreamWrite>,
+    ),
     speed_limiter: Limiter,
     payload_crypto: Option<tokio_chacha20::config::Config>,
     response_header: Option<Box<dyn Fn() -> Arc<[u8]> + Send>>,
@@ -207,32 +206,26 @@ pub async fn copy_bidirectional<R, W>(
 where
     R: UdpRecv + Send + 'static,
     W: UdpSend + Send + 'static,
+    DownstreamRead: UdpRecv + Send + 'static,
+    DownstreamWrite: UdpSend + Send + 'static,
 {
     counter!("udp.io_copies").increment(1);
     gauge!("udp.current_io_copies").increment(1.);
     defer!(gauge!("udp.current_io_copies").decrement(1.));
-
     let start = (std::time::Instant::now(), std::time::SystemTime::now());
-
     let (mut upstream, mut downstream) = streams;
-
-    // Periodic check if the flow is still alive
     let mut activity_check = tokio::time::interval(ACTIVITY_CHECK_INTERVAL);
     let last_uplink_packet = Arc::new(RwLock::new(std::time::Instant::now()));
     let last_downlink_packet = Arc::new(RwLock::new(std::time::Instant::now()));
     let last_crypto_fail_warn = Arc::new(RwLock::new(std::time::Instant::now()));
-
     let bytes_uplink = Arc::new(AtomicU64::new(0));
     let bytes_downlink = Arc::new(AtomicU64::new(0));
     let packets_uplink = Arc::new(AtomicU64::new(0));
     let packets_downlink = Arc::new(AtomicU64::new(0));
-
     let mut send_dyn_buf = [0; PACKET_BUFFER_LENGTH];
-
     let (up_gauge, dn_gauge) = gauges
         .map(|(r, w)| (Some(r.0), Some(w.0)))
         .unwrap_or((None, None));
-
     let mut io_copy_tasks = tokio::task::JoinSet::<Result<(), CopyBiError>>::new();
     io_copy_tasks.spawn({
         let flow = flow.clone();
@@ -243,48 +236,41 @@ where
         let speed_limiter = speed_limiter.clone();
         let payload_crypto = payload_crypto.clone();
         async move {
+            let mut downstream_buf = [0; PACKET_BUFFER_LENGTH];
             loop {
-                let res = downstream.read.read_half().recv().await;
+                let res = downstream.read.trait_recv(&mut downstream_buf).await;
                 trace!("Received packet from downstream");
-                let mut packet = match res {
-                    Some(packet) => packet,
-                    None => {
-                        // Channel closed
+                let n = match res {
+                    Ok(n) => n,
+                    Err(error)
+                        if error
+                            .downcast_ref::<io::Error>()
+                            .is_some_and(|error| error.kind() == io::ErrorKind::UnexpectedEof) =>
+                    {
                         break;
                     }
+                    Err(error) => return Err(CopyBiError::RecvDownstream(error)),
                 };
-
-                // Limit speed
-                speed_limiter.consume(packet.slice().len()).await;
-
-                // Gauge
+                let packet = &mut downstream_buf[..n];
+                speed_limiter.consume(packet.len()).await;
                 if let Some(g) = &up_gauge {
-                    g.add(packet.slice().len() as u64);
+                    g.add(packet.len() as u64);
                 }
-
-                // Encrypt/Decrypt payload
                 let packet = if let Some(payload_crypto) = &payload_crypto {
-                    let Some(pkt) = send_dyn(
-                        packet.slice_mut(),
-                        &mut send_dyn_buf,
-                        payload_crypto,
-                        en_dir,
-                    ) else {
+                    let Some(pkt) = send_dyn(packet, &mut send_dyn_buf, payload_crypto, en_dir)
+                    else {
                         log_crypto_drop(&flow, &last_crypto_fail_warn);
                         continue;
                     };
                     pkt
                 } else {
-                    packet.slice()
+                    packet
                 };
-
-                // Send packet to upstream
                 upstream
                     .write
                     .trait_send(packet)
                     .await
                     .map_err(CopyBiError::SendUpstream)?;
-
                 bytes_uplink.fetch_add(packet.len() as u64, Ordering::Relaxed);
                 packets_uplink.fetch_add(1, Ordering::Relaxed);
                 *last_uplink_packet.write().unwrap() = std::time::Instant::now();
@@ -309,10 +295,7 @@ where
                 trace!("Received packet from upstream");
                 let n = res.map_err(CopyBiError::RecvUpstream)?;
                 let pkt = &mut downlink_buf[..n];
-
-                // Limit speed
                 speed_limiter.consume(pkt.len()).await;
-
                 if n == PACKET_BUFFER_LENGTH {
                     warn!(
                         ?flow,
@@ -321,13 +304,9 @@ where
                     );
                     continue;
                 }
-
-                // Gauge
                 if let Some(g) = &dn_gauge {
                     g.add(pkt.len() as u64);
                 }
-
-                // Encrypt/Decrypt payload
                 let pkt = if let Some(payload_crypto) = &payload_crypto {
                     let Some(pkt) = send_dyn(pkt, &mut send_dyn_buf, payload_crypto, en_dir.flip())
                     else {
@@ -338,63 +317,26 @@ where
                 } else {
                     pkt
                 };
-
-                let downlink_n =
-                    if let Some(response_header) = &mut response_header_ttl {
-                        let hdr = response_header.get();
-                        downlink_protocol_buf.clear();
-                        downlink_protocol_buf.extend_from_slice(hdr);
-                        downlink_protocol_buf.extend_from_slice(pkt);
-                        downstream
-                            .write
-                            .send(&downlink_protocol_buf)
-                            .await
-                            .map_err(|e| CopyBiError::SendDownstream {
-                                source: e,
-                                downstream: downstream.write.clone(),
-                            })?
-                    } else {
-                        downstream.write.send(pkt).await.map_err(|e| {
-                            CopyBiError::SendDownstream {
-                                source: e,
-                                downstream: downstream.write.clone(),
-                            }
-                        })?
-                    };
-
+                let downlink_n = if let Some(response_header) = &mut response_header_ttl {
+                    let hdr = response_header.get();
+                    downlink_protocol_buf.clear();
+                    downlink_protocol_buf.extend_from_slice(hdr);
+                    downlink_protocol_buf.extend_from_slice(pkt);
+                    downstream.write.trait_send(&downlink_protocol_buf).await
+                } else {
+                    downstream.write.trait_send(pkt).await
+                }
+                .map_err(CopyBiError::SendDownstream)?;
                 bytes_downlink.fetch_add(downlink_n as u64, Ordering::Relaxed);
                 packets_downlink.fetch_add(1, Ordering::Relaxed);
                 *last_downlink_packet.write().unwrap() = std::time::Instant::now();
             }
         }
     });
-
-    // Forward packets
     loop {
         trace!("Waiting for packet");
-        tokio::select! {
-            res = io_copy_tasks.join_next() => {
-                let Some(res) = res else { break; };
-                // A panicked or cancelled copy task propagates instead of
-                // silently breaking the flow loop.
-                let res = res.unwrap();
-                res?;
-            }
-            _ = activity_check.tick() => {
-                trace!("Checking if flow is still alive");
-                let now = std::time::Instant::now();
-                let last_uplink_packet = *last_uplink_packet.read().unwrap();
-                let last_downlink_packet = *last_downlink_packet.read().unwrap();
-
-                if now.duration_since(last_uplink_packet) > UDP_FLOW_TIMEOUT && now.duration_since(last_downlink_packet) > UDP_FLOW_TIMEOUT {
-                    trace!(?flow, "Flow timed out");
-                    io_copy_tasks.abort_all();
-                    break;
-                }
-            }
-        }
+        tokio::select! { res = io_copy_tasks.join_next() => { let Some(res) = res else { break; }; let res = res.unwrap(); res?; } _ = activity_check.tick() => { trace!("Checking if flow is still alive"); let now = std::time::Instant::now(); let last_uplink_packet = *last_uplink_packet.read().unwrap(); let last_downlink_packet = *last_downlink_packet.read().unwrap(); if now.duration_since(last_uplink_packet) > UDP_FLOW_TIMEOUT && now.duration_since(last_downlink_packet) > UDP_FLOW_TIMEOUT { trace!(?flow, "Flow timed out"); io_copy_tasks.abort_all(); break; } } }
     }
-
     let last_packet = std::time::Instant::max(
         *last_downlink_packet.read().unwrap(),
         *last_uplink_packet.read().unwrap(),
@@ -429,12 +371,28 @@ pub enum CopyBiError {
     SendUpstream(#[source] AnyError),
     #[error("Failed to recv from upstream: {0}")]
     RecvUpstream(#[source] AnyError),
-    #[error("Failed to send to downstream: {source}, {downstream:?}")]
-    SendDownstream {
-        #[source]
-        source: io::Error,
-        downstream: ConnWrite<UdpSocket>,
-    },
+    #[error("Failed to recv from downstream: {0}")]
+    RecvDownstream(#[source] AnyError),
+    #[error("Failed to send to downstream: {0}")]
+    SendDownstream(#[source] AnyError),
+}
+
+impl UdpRecv for ConnRead<Packet> {
+    async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
+        let packet = self
+            .read_half()
+            .recv()
+            .await
+            .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "UDP flow closed"))?;
+        let copied = packet.slice().len().min(buf.len());
+        buf[..copied].copy_from_slice(&packet.slice()[..copied]);
+        Ok(copied)
+    }
+}
+impl UdpSend for ConnWrite<UdpSocket> {
+    async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
+        self.send(buf).await.map_err(Into::into)
+    }
 }
 
 impl UdpSend for Arc<UdpSocket> {

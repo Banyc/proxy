@@ -19,9 +19,12 @@ use common::{
             REVERSE_TUNNEL_RTP_PROTOCOL, REVERSE_TUNNEL_TCP_PROTOCOL, ReverseTunnelTransport,
             RouteAddr, RouteAddrStr, validate_reverse_tunnel_name,
         },
-        conn_handler::stream::StreamProxyConnHandler,
-        connect::stream::NamedStreamConnect,
-        context::{Runtime, StreamRuntime},
+        conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
+        connect::{
+            stream::NamedStreamConnect,
+            udp::{NamedUdpConnect, UdpConnection},
+        },
+        context::{Runtime, StreamRuntime, UdpRuntime},
     },
     session::log_rejection,
     stream::{ConnParts, HasIoAddr, StreamServerHandleConn},
@@ -30,7 +33,11 @@ use metrics::{counter, gauge};
 use mux::{LaneClass, MuxError, spawn_mux_no_reconnection};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{net::TcpListener, task::JoinSet};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+    task::JoinSet,
+};
 use tracing::{info, warn};
 
 use crate::stream::streams::{
@@ -38,7 +45,9 @@ use crate::stream::streams::{
     tcp::proxy_server::AddressedTcpStream,
 };
 
-const REGISTER_VERSION: u16 = 1;
+const REGISTER_VERSION: u16 = 2;
+const STREAM_FLOW_KIND: u8 = 0;
+const UDP_FLOW_KIND: u8 = 1;
 const INITIAL_RECONNECT_DELAY: Duration = Duration::from_millis(250);
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
 const STABLE_SESSION: Duration = Duration::from_secs(30);
@@ -104,10 +113,25 @@ enum RegisterError {
     InvalidName,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum RegisteredOpener {
     Tcp(mux::StreamOpener),
     Rtp(mux::DualStreamOpener),
+}
+
+impl RegisteredOpener {
+    async fn open(&self) -> io::Result<(mux::StreamReader, mux::StreamWriter)> {
+        match self {
+            Self::Tcp(opener) => opener
+                .open()
+                .await
+                .map_err(|error| io::Error::other(format!("{error:?}"))),
+            Self::Rtp(opener) => opener
+                .open(LaneClass::Interactive)
+                .await
+                .map_err(|error| io::Error::other(format!("{error:?}"))),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -116,19 +140,18 @@ struct RegisteredTunnel {
     addr: SocketAddrPair,
     connected_at: Instant,
 }
+
+#[derive(Debug)]
+struct RegisteredUdpTunnel {
+    opener: RegisteredOpener,
+    addr: SocketAddrPair,
+    connected_at: Instant,
+}
 #[async_trait]
 impl NamedStreamConnect for RegisteredTunnel {
     async fn connect(&self) -> io::Result<Box<dyn ConnParts>> {
-        let (reader, writer) = match &self.opener {
-            RegisteredOpener::Tcp(opener) => opener
-                .open()
-                .await
-                .map_err(|error| io::Error::other(format!("{error:?}")))?,
-            RegisteredOpener::Rtp(opener) => opener
-                .open(LaneClass::Interactive)
-                .await
-                .map_err(|error| io::Error::other(format!("{error:?}")))?,
-        };
+        let (reader, mut writer) = self.opener.open().await?;
+        writer.write_all(&[STREAM_FLOW_KIND]).await?;
         counter!("revtun.stream.opened").increment(1);
         let stream = AddressedMuxStream::new(
             tokio_chacha20::stream::DuplexStream::new(reader, writer),
@@ -145,6 +168,28 @@ impl NamedStreamConnect for RegisteredTunnel {
     }
 }
 
+#[async_trait]
+impl NamedUdpConnect for RegisteredUdpTunnel {
+    async fn connect(&self) -> io::Result<UdpConnection> {
+        let (reader, mut writer) = self.opener.open().await?;
+        writer.write_all(&[UDP_FLOW_KIND]).await?;
+        counter!("revtun.udp.opened").increment(1);
+        Ok(UdpConnection::mux(
+            reader,
+            writer,
+            self.addr.local_addr,
+            self.addr.peer_addr,
+        ))
+    }
+    fn session_stats(&self) -> Option<String> {
+        Some(format!(
+            "peer={}, uptime={:?}",
+            self.addr.peer_addr,
+            self.connected_at.elapsed()
+        ))
+    }
+}
+
 #[derive(Debug)]
 pub struct ReverseTunnelInitiatorHandler {
     name: Arc<str>,
@@ -152,6 +197,7 @@ pub struct ReverseTunnelInitiatorHandler {
     transport: ReverseTunnelTransport,
     registration_crypto: tokio_chacha20::config::Config,
     stream_proxy: Arc<StreamProxyConnHandler>,
+    udp_proxy: Arc<UdpProxyConnHandler>,
     stream_runtime: StreamRuntime,
     fec: bool,
 }
@@ -161,6 +207,7 @@ impl loading::HandleConn for ReverseTunnelInitiatorHandler {}
 pub struct ReverseTunnelResponderHandler {
     registration_crypto: tokio_chacha20::config::Config,
     stream_runtime: StreamRuntime,
+    udp_runtime: UdpRuntime,
 }
 impl loading::HandleConn for ReverseTunnelResponderHandler {}
 
@@ -320,7 +367,7 @@ async fn run_tcp_accepter(
             accepted = accepter.accept() => {
                 let (reader, writer) =
                     accepted.map_err(|_| ReverseTunnelSessionError::Closed)?;
-                dispatch_proxy_stream(reader, writer, addr, &handler);
+                dispatch_tunnel_flow(reader, writer, addr, &handler);
             }
             result = supervisor.join_next() => {
                 return Err(ReverseTunnelSessionError::Mux(format!(
@@ -343,7 +390,7 @@ async fn run_rtp_accepter(
             accepted = accepter.accept() => {
                 let (reader, writer, _) =
                     accepted.map_err(|_| ReverseTunnelSessionError::Closed)?;
-                dispatch_proxy_stream(reader, writer, addr, &handler);
+                dispatch_tunnel_flow(reader, writer, addr, &handler);
             }
             error = &mut driver => {
                 return Err(ReverseTunnelSessionError::Mux(format!("{error:?}")));
@@ -352,22 +399,55 @@ async fn run_rtp_accepter(
     }
 }
 
-fn dispatch_proxy_stream(
+fn dispatch_tunnel_flow(
     reader: mux::StreamReader,
     writer: mux::StreamWriter,
     addr: SocketAddrPair,
-    handler: &ReverseTunnelInitiatorHandler,
+    handler: &Arc<ReverseTunnelInitiatorHandler>,
 ) {
-    let stream = AddressedMuxStream::new(
-        tokio_chacha20::stream::DuplexStream::new(reader, writer),
-        addr,
-    );
     let stream_proxy = Arc::clone(&handler.stream_proxy);
+    let udp_proxy = Arc::clone(&handler.udp_proxy);
     if let Err(error) = handler
         .stream_runtime
         .session_spawner
         .try_spawn(async move {
-            stream_proxy.handle_stream(stream).await;
+            let mut reader = reader;
+            let kind = tokio::time::timeout(common::STREAM_IO_TIMEOUT, reader.read_u8())
+                .await
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::TimedOut, "tunnel flow kind timed out")
+                })??;
+            match kind {
+                STREAM_FLOW_KIND => {
+                    let stream = AddressedMuxStream::new(
+                        tokio_chacha20::stream::DuplexStream::new(reader, writer),
+                        addr,
+                    );
+                    stream_proxy.handle_stream(stream).await;
+                }
+                UDP_FLOW_KIND => {
+                    let connection =
+                        UdpConnection::mux(reader, writer, addr.local_addr, addr.peer_addr);
+                    let (reader, writer) = connection.into_split();
+                    if let Err(error) = udp_proxy
+                        .handle_tunnel_flow(reader, writer, addr.peer_addr)
+                        .await
+                    {
+                        warn!(
+                            ?error,
+                            peer = %addr.peer_addr,
+                            "Reverse-tunnel UDP flow failed"
+                        );
+                    }
+                }
+                kind => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("unsupported reverse-tunnel flow kind {kind}"),
+                    )
+                    .into());
+                }
+            }
             Ok(())
         })
     {
@@ -447,15 +527,27 @@ impl ReverseTunnelResponderHandler {
         let mut supervisor = JoinSet::new();
         let (opener, _accepter) =
             spawn_mux_no_reconnection(reader, writer, server_mux_config(), &mut supervisor);
+        let opener = RegisteredOpener::Tcp(opener);
+        let connected_at = Instant::now();
         let connector = Arc::new(RegisteredTunnel {
-            opener: RegisteredOpener::Tcp(opener),
+            opener: opener.clone(),
             addr,
-            connected_at: Instant::now(),
+            connected_at,
         });
         let _registration = self.stream_runtime.connector_table.register_named(
             REVERSE_TUNNEL_TCP_PROTOCOL.into(),
             Arc::clone(&name),
             connector,
+        );
+        let udp_connector = Arc::new(RegisteredUdpTunnel {
+            opener,
+            addr,
+            connected_at,
+        });
+        let _udp_registration = self.udp_runtime.connector.register_named(
+            REVERSE_TUNNEL_TCP_PROTOCOL.into(),
+            Arc::clone(&name),
+            udp_connector,
         );
         let _active = registered(&name, ReverseTunnelTransport::Tcp);
         let error = mux_result(supervisor.join_next().await);
@@ -475,15 +567,28 @@ impl ReverseTunnelResponderHandler {
         let name = self.register(&mut registration).await?;
         drop(registration);
         drop(accepter);
+        let addr: SocketAddrPair = addr.into();
+        let opener = RegisteredOpener::Rtp(opener);
+        let connected_at = Instant::now();
         let connector = Arc::new(RegisteredTunnel {
-            opener: RegisteredOpener::Rtp(opener),
-            addr: addr.into(),
-            connected_at: Instant::now(),
+            opener: opener.clone(),
+            addr,
+            connected_at,
         });
         let _registration = self.stream_runtime.connector_table.register_named(
             REVERSE_TUNNEL_RTP_PROTOCOL.into(),
             Arc::clone(&name),
             connector,
+        );
+        let udp_connector = Arc::new(RegisteredUdpTunnel {
+            opener,
+            addr,
+            connected_at,
+        });
+        let _udp_registration = self.udp_runtime.connector.register_named(
+            REVERSE_TUNNEL_RTP_PROTOCOL.into(),
+            Arc::clone(&name),
+            udp_connector,
         );
         let _active = registered(&name, ReverseTunnelTransport::Rtp);
         let error = (&mut driver).await;
@@ -650,9 +755,15 @@ impl ReverseTunnelInitiatorBuilder {
         let payload_crypto = build_payload_crypto(self.config.payload_key)?;
         let stream_proxy = Arc::new(StreamProxyConnHandler::new(
             registration_crypto.clone(),
-            payload_crypto,
+            payload_crypto.clone(),
             self.runtime.stream.clone(),
             self.key.clone(),
+            self.config.allow_loopback,
+        ));
+        let udp_proxy = Arc::new(UdpProxyConnHandler::new(
+            registration_crypto.clone(),
+            payload_crypto,
+            self.runtime.udp,
             self.config.allow_loopback,
         ));
         Ok(ReverseTunnelInitiatorHandler {
@@ -661,6 +772,7 @@ impl ReverseTunnelInitiatorBuilder {
             transport,
             registration_crypto,
             stream_proxy,
+            udp_proxy,
             stream_runtime: self.runtime.stream,
             fec: self.config.fec,
         })
@@ -758,6 +870,7 @@ fn responder_handler(
     Ok(ReverseTunnelResponderHandler {
         registration_crypto,
         stream_runtime: runtime.stream,
+        udp_runtime: runtime.udp,
     })
 }
 
@@ -898,11 +1011,11 @@ mod tests {
         loading::Serve,
         notify::Notify,
         proto::{
-            client::stream,
+            client::{stream, udp::UdpProxyClient},
             connect::udp::UdpConnector,
             context::{Runtime, UdpRuntime},
         },
-        route::ConnConfig,
+        route::{ConnChain, ConnConfig},
         stream::pool::StreamConnPool,
     };
     use std::sync::RwLock;
@@ -1121,7 +1234,7 @@ mod tests {
         responder_addr: RouteAddr,
         transport: ReverseTunnelTransport,
         crypto: tokio_chacha20::config::Config,
-        runtime: StreamRuntime,
+        runtime: Runtime,
     ) -> ReverseTunnelInitiatorHandler {
         let virtual_addr: Arc<str> = Arc::from(format!("{}://{name}", transport.protocol()));
         ReverseTunnelInitiatorHandler {
@@ -1130,13 +1243,14 @@ mod tests {
             transport,
             registration_crypto: crypto.clone(),
             stream_proxy: Arc::new(StreamProxyConnHandler::new(
-                crypto,
+                crypto.clone(),
                 None,
-                runtime.clone(),
+                runtime.stream.clone(),
                 virtual_addr,
                 true,
             )),
-            stream_runtime: runtime,
+            udp_proxy: Arc::new(UdpProxyConnHandler::new(crypto, None, runtime.udp, true)),
+            stream_runtime: runtime.stream,
             fec: false,
         }
     }
@@ -1173,6 +1287,7 @@ mod tests {
         let responder_handler = ReverseTunnelResponderHandler {
             registration_crypto: header_crypto.clone(),
             stream_runtime: runtime.stream.clone(),
+            udp_runtime: runtime.udp.clone(),
         };
         let responder_addr = match transport {
             ReverseTunnelTransport::Tcp => {
@@ -1231,10 +1346,6 @@ mod tests {
             payload_crypto: Some(payload_crypto.clone()),
         }];
         let destination: RouteAddr = format!("tcp://{origin_addr}").parse().unwrap();
-        // The complete setup (establishing the reverse-tunnel stream) and
-        // the request exchange run inside the actively-reaped body, so a
-        // required actor (runtime, responder, initiator) failing during
-        // setup surfaces immediately instead of being stored until drop.
         scope
             .run(async {
                 let mut stream = tokio::time::timeout(
@@ -1267,13 +1378,158 @@ mod tests {
         verify_reverse_proxy_hop_with_payload(ReverseTunnelTransport::Rtp).await;
     }
 
+    async fn verify_reverse_udp_proxy_hop(
+        transport: ReverseTunnelTransport,
+        behind_regular_udp_hop: bool,
+    ) {
+        let mut scope = TestScope::new();
+        let (runtime, session_spawner) = test_runtime(&mut scope).await;
+        let header_key = "aGVsbG8";
+        let payload_key = "cGF5bG9hZA";
+        let header_crypto = ConfigBuilder(header_key.into()).build().unwrap();
+        let payload_crypto = ConfigBuilder(payload_key.into()).build().unwrap();
+        let responder_handler = ReverseTunnelResponderHandler {
+            registration_crypto: header_crypto.clone(),
+            stream_runtime: runtime.stream.clone(),
+            udp_runtime: runtime.udp.clone(),
+        };
+        let responder_addr = match transport {
+            ReverseTunnelTransport::Tcp => {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+                let server = TcpReverseTunnelResponder {
+                    listener,
+                    handler: responder_handler,
+                };
+                scope.spawn_required("tcp responder server", async move {
+                    let (_tx, rx) = loading::replace_conn_handler_channel();
+                    server.serve(rx).await.unwrap();
+                });
+                format!("tcp://{addr}").parse().unwrap()
+            }
+            ReverseTunnelTransport::Rtp => {
+                let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0", false)
+                    .await
+                    .unwrap();
+                let addr = server.listener().local_addr();
+                let server = RtpReverseTunnelResponder {
+                    server,
+                    handler: responder_handler,
+                    session_spawner,
+                };
+                scope.spawn_required("rtp responder server", async move {
+                    let (_tx, rx) = loading::replace_conn_handler_channel();
+                    server.serve(rx).await.unwrap();
+                });
+                format!("rtpmux://{addr}").parse().unwrap()
+            }
+        };
+        let config = initiator_config(
+            "private-udp",
+            responder_addr,
+            ConfigBuilder(header_key.into()),
+            Some(ConfigBuilder(payload_key.into())),
+        );
+        let initiator = ReverseTunnelInitiator {
+            handler: ReverseTunnelInitiatorBuilder::new(config, runtime.clone())
+                .unwrap()
+                .handler()
+                .unwrap(),
+        };
+        scope.spawn_required("initiator", async move {
+            let (_tx, rx) = loading::replace_conn_handler_channel();
+            initiator.serve(rx).await.unwrap();
+        });
+        let origin = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let origin_addr = origin.local_addr().unwrap();
+        scope.spawn(async move {
+            let mut packet = [0; 64];
+            for (request, response) in
+                [(b"ping".as_slice(), b"pong".as_slice()), (b"next", b"done")]
+            {
+                let (n, peer) = origin.recv_from(&mut packet).await.unwrap();
+                assert_eq!(&packet[..n], request);
+                origin.send_to(response, peer).await.unwrap();
+            }
+        });
+        let reverse_addr: RouteAddr = format!("{}://private-udp", transport.protocol())
+            .parse()
+            .unwrap();
+        let mut chain = Vec::new();
+        if behind_regular_udp_hop {
+            let first_header_crypto = tokio_chacha20::config::Config::new([9; 32].into());
+            let first_payload_crypto = tokio_chacha20::config::Config::new([10; 32].into());
+            let server = UdpProxyConnHandler::new(
+                first_header_crypto.clone(),
+                Some(first_payload_crypto.clone()),
+                runtime.udp.clone(),
+                true,
+            )
+            .build("127.0.0.1:0")
+            .await
+            .unwrap();
+            let server_addr = server.listener().local_addr().unwrap();
+            scope.spawn_required("regular UDP proxy server", async move {
+                let (_tx, rx) = loading::replace_conn_handler_channel();
+                server.serve(rx).await.unwrap();
+            });
+            chain.push(ConnConfig {
+                address: RouteAddr::udp(server_addr.into()),
+                header_crypto: first_header_crypto,
+                payload_crypto: Some(first_payload_crypto),
+            });
+        }
+        chain.push(ConnConfig {
+            address: reverse_addr,
+            header_crypto,
+            payload_crypto: Some(payload_crypto),
+        });
+        let chain: Arc<ConnChain> = chain.into();
+        scope
+            .run(async {
+                let client = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    UdpProxyClient::establish(chain, origin_addr.into(), &runtime.udp),
+                )
+                .await
+                .expect("UDP reverse tunnel did not register")
+                .unwrap();
+                let (mut read, mut write) = client.into_split();
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    write.send(b"ping").await.unwrap();
+                    let mut response = [0; 4];
+                    let n = read.recv(&mut response).await.unwrap();
+                    assert_eq!(n, response.len());
+                    assert_eq!(&response, b"pong");
+                    write.send(b"next").await.unwrap();
+                    let n = read.recv(&mut response).await.unwrap();
+                    assert_eq!(n, response.len());
+                    assert_eq!(&response, b"done");
+                })
+                .await
+                .expect("encrypted UDP reverse proxy flow stalled");
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tcp_reverse_tunnel_carries_udp_with_payload_encryption() {
+        verify_reverse_udp_proxy_hop(ReverseTunnelTransport::Tcp, false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rtp_reverse_tunnel_is_a_later_udp_hop_with_per_hop_payload_encryption() {
+        verify_reverse_udp_proxy_hop(ReverseTunnelTransport::Rtp, true).await;
+    }
+
     async fn verify_reverse_proxy_hop(transport: ReverseTunnelTransport) {
         let mut scope = TestScope::new();
-        let (runtime, session_spawner) = test_stream_runtime(&mut scope).await;
+        let (runtime, session_spawner) = test_runtime(&mut scope).await;
         let crypto = tokio_chacha20::config::Config::new([7; 32].into());
         let responder_handler = ReverseTunnelResponderHandler {
             registration_crypto: crypto.clone(),
-            stream_runtime: runtime.clone(),
+            stream_runtime: runtime.stream.clone(),
+            udp_runtime: runtime.udp.clone(),
         };
         let responder_addr = match transport {
             ReverseTunnelTransport::Tcp => {
@@ -1329,15 +1585,11 @@ mod tests {
             payload_crypto: None,
         }];
         let destination: RouteAddr = format!("tcp://{origin_addr}").parse().unwrap();
-        // The complete setup (establishing the reverse-tunnel stream) and
-        // the request exchange run inside the actively-reaped body, so a
-        // required actor (runtime, responder, initiator) failing during
-        // setup surfaces immediately instead of being stored until drop.
         scope
             .run(async {
                 let mut stream = tokio::time::timeout(
                     Duration::from_secs(10),
-                    stream::establish(&chain, destination, &runtime),
+                    stream::establish(&chain, destination, &runtime.stream),
                 )
                 .await
                 .expect("reverse tunnel did not register")
