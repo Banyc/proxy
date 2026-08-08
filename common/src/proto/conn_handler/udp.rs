@@ -312,8 +312,11 @@ where
     }
 }
 
-/// `true` if the error is a clean EOF from the mux substream, i.e. the
-/// client closed the flow rather than failing mid-datagram.
+/// `true` if the error is a clean EOF at a datagram boundary.
+///
+/// `UdpMuxReader` reports `UnexpectedEof` only when the peer closed its
+/// write half between datagrams; EOF that cuts a length prefix or payload
+/// short is reported as `InvalidData` and must propagate as corruption.
 fn is_udp_eof(error: &AnyError) -> bool {
     error
         .downcast_ref::<io::Error>()
