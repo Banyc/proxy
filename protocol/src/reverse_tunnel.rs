@@ -915,6 +915,70 @@ mod tests {
 
     use crate::stream::connect::build_concrete_stream_connector_table;
 
+    /// Actively-polled scope of test-owned background tasks. The test body
+    /// runs through [`TestScope::run`], which races it against `join_next()`
+    /// on the scope, so a background task that panics fails the test
+    /// immediately instead of being observed only when the scope is dropped.
+    /// A `spawn_required` actor completing before the body does is equally a
+    /// failure (the wrapper turns the completion into a panic); tasks that
+    /// end normally are drained silently (e.g. the origin server finishing
+    /// its single accept). Dropping the scope remains the abort backstop for
+    /// tasks still running when the body completes.
+    struct TestScope {
+        tasks: JoinSet<()>,
+    }
+    impl TestScope {
+        fn new() -> Self {
+            Self {
+                tasks: JoinSet::new(),
+            }
+        }
+        fn spawn(&mut self, task: impl std::future::Future<Output = ()> + Send + 'static) {
+            self.tasks.spawn(task);
+        }
+        /// Spawn a long-lived actor that must stay alive for the whole
+        /// [`TestScope::run`] body (runtime actors, the responder server,
+        /// the initiator). A normal completion while the body is still
+        /// running panics the test with a message naming the task; a panic
+        /// inside the future propagates unchanged.
+        fn spawn_required(
+            &mut self,
+            name: &'static str,
+            task: impl std::future::Future<Output = ()> + Send + 'static,
+        ) {
+            self.tasks.spawn(async move {
+                task.await;
+                panic!("required task '{name}' exited before the test body completed");
+            });
+        }
+        async fn run<F: std::future::Future>(mut self, body: F) -> F::Output {
+            tokio::pin!(body);
+            loop {
+                tokio::select! {
+                    biased;
+                    joined = self.tasks.join_next(), if !self.tasks.is_empty() => {
+                        // A background task exited before the body. Re-raise
+                        // any panic it surfaced immediately; a normal
+                        // completion is a legitimate shutdown (e.g. the
+                        // origin server finishing its single accept) and is
+                        // drained silently.
+                        let joined = joined.expect("background task exists");
+                        joined.unwrap();
+                    }
+                    value = &mut body => {
+                        // The body completed. Drain tasks that exited in the
+                        // same poll cycle so a required actor that ended
+                        // right as the body finished still fails the test.
+                        while let Some(joined) = self.tasks.try_join_next() {
+                            joined.unwrap();
+                        }
+                        return value;
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn config_has_no_destination_field() {
         let config: ReverseTunnelConfig = serde_json::from_str(
@@ -968,10 +1032,10 @@ mod tests {
     }
 
     async fn test_stream_runtime(
-        tasks: &mut JoinSet<()>,
+        tasks: &mut TestScope,
     ) -> (StreamRuntime, common::session::SessionSpawner) {
         let (session_spawner, mut session_rx) = common::session::SessionSpawner::channel();
-        tasks.spawn(async move {
+        tasks.spawn_required("session spawner", async move {
             let mut sessions = JoinSet::new();
             loop {
                 tokio::select! {
@@ -992,13 +1056,13 @@ mod tests {
             reset,
             &mut connector_drivers,
         ));
-        tasks.spawn(async move {
+        tasks.spawn_required("connector drivers", async move {
             while let Some(result) = connector_drivers.join_next().await {
                 result.unwrap().unwrap();
             }
         });
         let (retention_actor, retention) = common::retention::RetentionActor::new();
-        tasks.spawn(async move {
+        tasks.spawn_required("retention actor", async move {
             retention_actor.run().await;
         });
         (
@@ -1017,7 +1081,7 @@ mod tests {
         )
     }
 
-    async fn test_runtime(tasks: &mut JoinSet<()>) -> (Runtime, common::session::SessionSpawner) {
+    async fn test_runtime(tasks: &mut TestScope) -> (Runtime, common::session::SessionSpawner) {
         let (stream, session_spawner) = test_stream_runtime(tasks).await;
         let runtime = Runtime {
             stream: stream.clone(),
@@ -1035,9 +1099,13 @@ mod tests {
         (runtime, session_spawner)
     }
 
-    async fn origin(tasks: &mut JoinSet<()>) -> SocketAddr {
+    async fn origin(tasks: &mut TestScope) -> SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        // Transient actor: it handles ONE ping/pong exchange and then
+        // completes mid-body, so it is a plain spawn (a normal completion is
+        // drained silently) rather than `spawn_required`; a panic inside
+        // still fails the test through the scope's join reaping.
         tasks.spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = [0; 4];
@@ -1075,25 +1143,29 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn invalid_payload_key_is_reported_as_payload_crypto() {
-        let mut tasks = JoinSet::new();
-        let (runtime, _session_spawner) = test_runtime(&mut tasks).await;
+        let mut scope = TestScope::new();
+        let (runtime, _session_spawner) = test_runtime(&mut scope).await;
         let config = initiator_config(
             "private-a",
             "tcp://127.0.0.1:7000".parse().unwrap(),
             ConfigBuilder("aGVsbG8".into()),
             Some(ConfigBuilder("c2VjcmV0LXByb3h5LWtleQ!!".into())),
         );
-        let error = ReverseTunnelInitiatorBuilder::new(config, runtime)
-            .unwrap()
-            .handler()
-            .unwrap_err();
-        assert!(matches!(error, BuildError::PayloadCrypto(_)), "{error}");
-        assert!(!matches!(error, BuildError::HeaderCrypto(_)), "{error}");
+        scope
+            .run(async {
+                let error = ReverseTunnelInitiatorBuilder::new(config, runtime)
+                    .unwrap()
+                    .handler()
+                    .unwrap_err();
+                assert!(matches!(error, BuildError::PayloadCrypto(_)), "{error}");
+                assert!(!matches!(error, BuildError::HeaderCrypto(_)), "{error}");
+            })
+            .await;
     }
 
     async fn verify_reverse_proxy_hop_with_payload(transport: ReverseTunnelTransport) {
-        let mut tasks = JoinSet::new();
-        let (runtime, session_spawner) = test_runtime(&mut tasks).await;
+        let mut scope = TestScope::new();
+        let (runtime, session_spawner) = test_runtime(&mut scope).await;
         let header_key = "aGVsbG8";
         let payload_key = "cGF5bG9hZA";
         let header_crypto = ConfigBuilder(header_key.into()).build().unwrap();
@@ -1110,7 +1182,7 @@ mod tests {
                     listener,
                     handler: responder_handler,
                 };
-                tasks.spawn(async move {
+                scope.spawn_required("tcp responder server", async move {
                     let (_tx, rx) = loading::replace_conn_handler_channel();
                     server.serve(rx).await.unwrap();
                 });
@@ -1126,7 +1198,7 @@ mod tests {
                     handler: responder_handler,
                     session_spawner,
                 };
-                tasks.spawn(async move {
+                scope.spawn_required("rtp responder server", async move {
                     let (_tx, rx) = loading::replace_conn_handler_channel();
                     server.serve(rx).await.unwrap();
                 });
@@ -1145,11 +1217,11 @@ mod tests {
                 .handler()
                 .unwrap(),
         };
-        tasks.spawn(async move {
+        scope.spawn_required("initiator", async move {
             let (_tx, rx) = loading::replace_conn_handler_channel();
             initiator.serve(rx).await.unwrap();
         });
-        let origin_addr = origin(&mut tasks).await;
+        let origin_addr = origin(&mut scope).await;
         let reverse_addr: RouteAddr = format!("{}://private-a", transport.protocol())
             .parse()
             .unwrap();
@@ -1159,22 +1231,30 @@ mod tests {
             payload_crypto: Some(payload_crypto.clone()),
         }];
         let destination: RouteAddr = format!("tcp://{origin_addr}").parse().unwrap();
-        let mut stream = tokio::time::timeout(
-            Duration::from_secs(10),
-            stream::establish(&chain, destination, &runtime.stream),
-        )
-        .await
-        .expect("reverse tunnel did not register")
-        .unwrap()
-        .stream;
-        tokio::time::timeout(Duration::from_secs(10), async {
-            stream.write_all(b"ping").await.unwrap();
-            let mut response = [0; 4];
-            stream.read_exact(&mut response).await.unwrap();
-            assert_eq!(&response, b"pong");
-        })
-        .await
-        .expect("encrypted reverse proxy stream stalled");
+        // The complete setup (establishing the reverse-tunnel stream) and
+        // the request exchange run inside the actively-reaped body, so a
+        // required actor (runtime, responder, initiator) failing during
+        // setup surfaces immediately instead of being stored until drop.
+        scope
+            .run(async {
+                let mut stream = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    stream::establish(&chain, destination, &runtime.stream),
+                )
+                .await
+                .expect("reverse tunnel did not register")
+                .unwrap()
+                .stream;
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    stream.write_all(b"ping").await.unwrap();
+                    let mut response = [0; 4];
+                    stream.read_exact(&mut response).await.unwrap();
+                    assert_eq!(&response, b"pong");
+                })
+                .await
+                .expect("encrypted reverse proxy stream stalled");
+            })
+            .await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1188,8 +1268,8 @@ mod tests {
     }
 
     async fn verify_reverse_proxy_hop(transport: ReverseTunnelTransport) {
-        let mut tasks = JoinSet::new();
-        let (runtime, session_spawner) = test_stream_runtime(&mut tasks).await;
+        let mut scope = TestScope::new();
+        let (runtime, session_spawner) = test_stream_runtime(&mut scope).await;
         let crypto = tokio_chacha20::config::Config::new([7; 32].into());
         let responder_handler = ReverseTunnelResponderHandler {
             registration_crypto: crypto.clone(),
@@ -1203,7 +1283,7 @@ mod tests {
                     listener,
                     handler: responder_handler,
                 };
-                tasks.spawn(async move {
+                scope.spawn_required("tcp responder server", async move {
                     let (_tx, rx) = loading::replace_conn_handler_channel();
                     server.serve(rx).await.unwrap();
                 });
@@ -1219,7 +1299,7 @@ mod tests {
                     handler: responder_handler,
                     session_spawner,
                 };
-                tasks.spawn(async move {
+                scope.spawn_required("rtp responder server", async move {
                     let (_tx, rx) = loading::replace_conn_handler_channel();
                     server.serve(rx).await.unwrap();
                 });
@@ -1235,11 +1315,11 @@ mod tests {
                 runtime.clone(),
             ),
         };
-        tasks.spawn(async move {
+        scope.spawn_required("initiator", async move {
             let (_tx, rx) = loading::replace_conn_handler_channel();
             initiator.serve(rx).await.unwrap();
         });
-        let origin_addr = origin(&mut tasks).await;
+        let origin_addr = origin(&mut scope).await;
         let reverse_addr: RouteAddr = format!("{}://private-a", transport.protocol())
             .parse()
             .unwrap();
@@ -1249,22 +1329,30 @@ mod tests {
             payload_crypto: None,
         }];
         let destination: RouteAddr = format!("tcp://{origin_addr}").parse().unwrap();
-        let mut stream = tokio::time::timeout(
-            Duration::from_secs(10),
-            stream::establish(&chain, destination, &runtime),
-        )
-        .await
-        .expect("reverse tunnel did not register")
-        .unwrap()
-        .stream;
-        tokio::time::timeout(Duration::from_secs(10), async {
-            stream.write_all(b"ping").await.unwrap();
-            let mut response = [0; 4];
-            stream.read_exact(&mut response).await.unwrap();
-            assert_eq!(&response, b"pong");
-        })
-        .await
-        .expect("reverse proxy stream stalled");
+        // The complete setup (establishing the reverse-tunnel stream) and
+        // the request exchange run inside the actively-reaped body, so a
+        // required actor (runtime, responder, initiator) failing during
+        // setup surfaces immediately instead of being stored until drop.
+        scope
+            .run(async {
+                let mut stream = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    stream::establish(&chain, destination, &runtime),
+                )
+                .await
+                .expect("reverse tunnel did not register")
+                .unwrap()
+                .stream;
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    stream.write_all(b"ping").await.unwrap();
+                    let mut response = [0; 4];
+                    stream.read_exact(&mut response).await.unwrap();
+                    assert_eq!(&response, b"pong");
+                })
+                .await
+                .expect("reverse proxy stream stalled");
+            })
+            .await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
