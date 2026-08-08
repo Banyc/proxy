@@ -141,9 +141,9 @@ mod tests {
         let mut pkt_buf = BytesMut::with_capacity(PACKET_BUFFER_LENGTH);
 
         // Start proxy servers
-        let proxy_1_config = spawn_proxy(&mut join_set, "0.0.0.0:0").await;
-        let proxy_2_config = spawn_proxy(&mut join_set, "0.0.0.0:0").await;
-        let proxy_3_config = spawn_proxy(&mut join_set, "0.0.0.0:0").await;
+        let proxy_1_config = spawn_proxy(&mut join_set, "127.0.0.1:0").await;
+        let proxy_2_config = spawn_proxy(&mut join_set, "127.0.0.1:0").await;
+        let proxy_3_config = spawn_proxy(&mut join_set, "127.0.0.1:0").await;
         let proxies: Arc<[_]> = vec![proxy_1_config, proxy_2_config, proxy_3_config].into();
 
         // Message to send
@@ -151,7 +151,7 @@ mod tests {
         let resp_msg = b"goodbye world";
 
         // Start greet server
-        let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
+        let greet_addr = spawn_greet(&mut join_set, "127.0.0.1:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
         let client = tokio::time::timeout(
@@ -187,8 +187,8 @@ mod tests {
         let context = udp_context(&mut join_set);
 
         // Start proxy servers
-        let proxy_1_config = spawn_proxy(&mut join_set, "0.0.0.0:0").await;
-        let proxy_2_config = spawn_proxy(&mut join_set, "0.0.0.0:0").await;
+        let proxy_1_config = spawn_proxy(&mut join_set, "127.0.0.1:0").await;
+        let proxy_2_config = spawn_proxy(&mut join_set, "127.0.0.1:0").await;
         let proxies: Arc<[_]> = vec![proxy_1_config, proxy_2_config].into();
 
         // Message to send
@@ -198,7 +198,8 @@ mod tests {
         let clients = 2;
 
         // Start greet server
-        let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, clients).await;
+        let greet_addr =
+            spawn_greet(&mut join_set, "127.0.0.1:0", req_msg, resp_msg, clients).await;
 
         let mut handles = tokio::task::JoinSet::new();
 
@@ -241,7 +242,7 @@ mod tests {
         // Start proxy servers
         let mut proxies = Vec::new();
         for _ in 0..STRESS_CHAINS {
-            let proxy_config = spawn_proxy(&mut join_set, "0.0.0.0:0").await;
+            let proxy_config = spawn_proxy(&mut join_set, "127.0.0.1:0").await;
             proxies.push(proxy_config);
         }
         let proxies: Arc<[_]> = proxies.into();
@@ -251,7 +252,8 @@ mod tests {
         let resp_msg = b"goodbye world";
 
         // Start greet server
-        let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, usize::MAX).await;
+        let greet_addr =
+            spawn_greet(&mut join_set, "127.0.0.1:0", req_msg, resp_msg, usize::MAX).await;
 
         let mut handles = tokio::task::JoinSet::new();
 
@@ -295,7 +297,7 @@ mod tests {
         let proxy_3_config = spawn_guarded_proxy(&mut join_set, "localhost:0").await;
         let req_msg = b"hello world";
         let resp_msg = b"goodbye world";
-        let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
+        let greet_addr = spawn_greet(&mut join_set, "127.0.0.1:0", req_msg, resp_msg, 1).await;
         let client = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             UdpProxyClient::establish(
@@ -326,7 +328,7 @@ mod tests {
     async fn loopback_spelled_as_ipv6_is_still_refused() {
         let mut join_set = tokio::task::JoinSet::new();
         let context = udp_context(&mut join_set);
-        let proxy_config = spawn_guarded_proxy(&mut join_set, "0.0.0.0:0").await;
+        let proxy_config = spawn_guarded_proxy(&mut join_set, "127.0.0.1:0").await;
         let req_msg = b"hello world";
         let resp_msg = b"goodbye world";
         let greet_addr = spawn_greet(&mut join_set, "127.0.0.1:0", req_msg, resp_msg, 1).await;
@@ -369,10 +371,10 @@ mod tests {
     async fn an_unspecified_destination_is_still_refused() {
         let mut join_set = tokio::task::JoinSet::new();
         let context = udp_context(&mut join_set);
-        let proxy_config = spawn_guarded_proxy(&mut join_set, "0.0.0.0:0").await;
+        let proxy_config = spawn_guarded_proxy(&mut join_set, "127.0.0.1:0").await;
         let req_msg = b"hello world";
         let resp_msg = b"goodbye world";
-        let greet_addr = spawn_greet(&mut join_set, "0.0.0.0:0", req_msg, resp_msg, 1).await;
+        let greet_addr = spawn_greet(&mut join_set, "127.0.0.1:0", req_msg, resp_msg, 1).await;
         let unspecified: InternetAddr =
             std::net::SocketAddr::new(std::net::Ipv4Addr::UNSPECIFIED.into(), greet_addr.port())
                 .into();
@@ -412,7 +414,7 @@ mod tests {
         let resp_msg = b"goodbye world";
 
         // Start greet server
-        let greet_addr = spawn_greet(&mut join_set, "[::]:0", req_msg, resp_msg, 1).await;
+        let greet_addr = spawn_greet(&mut join_set, "127.0.0.1:0", req_msg, resp_msg, 1).await;
 
         // Connect to proxy server
         let client = tokio::time::timeout(
