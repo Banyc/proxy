@@ -6,14 +6,14 @@ use common::{
     loading,
     proto::{
         client::{self, udp::UdpProxyClient},
-        conn::udp::{Flow, UpstreamAddr},
+        conn::udp::{FlowKey, UpstreamAddr},
         context::UdpRuntime,
         relay::udp::{CopyBidirectional, DownstreamParts, UpstreamParts},
     },
     route::{ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, ProbeFutures, Registries},
     udp::{
         Packet,
-        server::{UdpServer, UdpServerHandleConn},
+        server::{UdpPacketRoute, UdpServer, UdpServerHandleConn},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -117,14 +117,18 @@ impl Socks5ServerUdpAccessConnHandler {
         Ok(UdpServer::new(listener, self, session_spawner))
     }
 
-    async fn proxy(&self, conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), AccessProxyError> {
+    async fn proxy(&self, conn: Conn<UdpSocket, FlowKey, Packet>) -> Result<(), AccessProxyError> {
         let chain = match &self.conn_selector {
             common::route::ConnSelector::Empty => [].into(),
             common::route::ConnSelector::Some(conn_selector) => {
                 conn_selector.choose_chain().chain.clone()
             }
         };
-        let flow = conn.conn_key().clone();
+        let flow = conn
+            .conn_key()
+            .routed_flow()
+            .cloned()
+            .ok_or(AccessProxyError::InvalidFlowKey)?;
         let upstream = UdpProxyClient::establish(
             chain,
             flow.upstream.as_ref().unwrap().0.address.clone(),
@@ -177,9 +181,11 @@ impl Socks5ServerUdpAccessConnHandler {
 pub enum AccessProxyError {
     #[error("Failed to establish proxy chain: {0}")]
     Establish(#[from] client::udp::EstablishError),
+    #[error("UDP flow key is not a routed flow")]
+    InvalidFlowKey,
 }
 impl UdpServerHandleConn for Socks5ServerUdpAccessConnHandler {
-    fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
+    fn parse_packet_route(&self, buf: &mut io::Cursor<&[u8]>) -> Option<UdpPacketRoute> {
         let res = futures::executor::block_on(async move { UdpRequestHeader::decode(buf).await });
         let request_header = match res {
             Ok(header) => header,
@@ -192,12 +198,15 @@ impl UdpServerHandleConn for Socks5ServerUdpAccessConnHandler {
             return None;
         }
 
-        Some(Some(UpstreamAddr(common::proto::addr::RouteAddr::udp(
-            request_header.destination,
-        ))))
+        Some(UdpPacketRoute::Routed {
+            flow_id: None,
+            upstream: Some(UpstreamAddr(common::proto::addr::RouteAddr::udp(
+                request_header.destination,
+            ))),
+        })
     }
 
-    async fn handle_flow(&self, accepted: Conn<UdpSocket, Flow, Packet>) {
+    async fn handle_flow(&self, accepted: Conn<UdpSocket, FlowKey, Packet>) {
         let res = self.proxy(accepted).await;
         match res {
             Ok(()) => (),

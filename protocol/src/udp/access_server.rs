@@ -7,14 +7,14 @@ use common::{
     loading,
     proto::{
         client::{self, udp::UdpProxyClient},
-        conn::udp::{Flow, UpstreamAddr},
+        conn::udp::{FlowKey, UpstreamAddr},
         context::UdpRuntime,
         relay::udp::{CopyBiError, CopyBidirectional, DownstreamParts, UpstreamParts},
     },
     route::{ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, ProbeFutures, Registries},
     udp::{
         Packet,
-        server::{UdpServer, UdpServerHandleConn},
+        server::{UdpPacketRoute, UdpServer, UdpServerHandleConn},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -127,7 +127,7 @@ impl UdpAccessConnHandler {
         Ok(UdpServer::new(listener, self, session_spawner))
     }
 
-    async fn proxy(&self, conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), AccessProxyError> {
+    async fn proxy(&self, conn: Conn<UdpSocket, FlowKey, Packet>) -> Result<(), AccessProxyError> {
         let chain = match &self.conn_selector {
             common::route::ConnSelector::Empty => [].into(),
             common::route::ConnSelector::Some(non_empty_conn_selector) => {
@@ -142,7 +142,11 @@ impl UdpAccessConnHandler {
         let session_table = self.udp_runtime.session_table.clone();
         let retention = self.udp_runtime.retention.clone();
         let upstream_local = upstream_read.local_addr();
-        let flow = conn.conn_key().clone();
+        let flow = conn
+            .conn_key()
+            .routed_flow()
+            .cloned()
+            .ok_or(AccessProxyError::InvalidFlowKey)?;
         let (dn_read, dn_write) = conn.split();
         let io_copy = CopyBidirectional {
             flow,
@@ -171,15 +175,20 @@ pub enum AccessProxyError {
     Establish(#[from] client::udp::EstablishError),
     #[error("Failed to copy: {0}")]
     Copy(#[from] CopyBiError),
+    #[error("UDP flow key is not a routed flow")]
+    InvalidFlowKey,
 }
 impl UdpServerHandleConn for UdpAccessConnHandler {
-    fn parse_upstream_addr(&self, _buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
-        Some(Some(UpstreamAddr(common::proto::addr::RouteAddr::udp(
-            self.destination.clone(),
-        ))))
+    fn parse_packet_route(&self, _buf: &mut io::Cursor<&[u8]>) -> Option<UdpPacketRoute> {
+        Some(UdpPacketRoute::Routed {
+            flow_id: None,
+            upstream: Some(UpstreamAddr(common::proto::addr::RouteAddr::udp(
+                self.destination.clone(),
+            ))),
+        })
     }
 
-    async fn handle_flow(&self, accepted: Conn<UdpSocket, Flow, Packet>) {
+    async fn handle_flow(&self, accepted: Conn<UdpSocket, FlowKey, Packet>) {
         let res = self.proxy(accepted).await;
         match res {
             Ok(()) => (),
