@@ -51,4 +51,17 @@ A private-side initiator can establish an outbound tunnel to a public-side respo
 
 ### UDP variant
 
-Instead of directly operating a stream, UDP client treats each UDP datagram as a stream and follows the same steps as TCP variant.
+UDP client treats each UDP datagram as a stream. Each datagram carries a wire kind and a 128-bit flow ID that select the request form:
+
+```
+0: [kind | 128-bit flow ID | encrypted route header | payload]   # routed request
+1: [kind | the same flow ID | payload]                           # compact request
+```
+
+- Kind 0 (routed request) carries the encrypted route header; kind 1 (compact request) omits it and reuses the flow ID.
+- Each nested proxy layer uses the same flow ID and independently consumes exactly one kind/ID/header layer, so a chain of N proxies nests N layers and each proxy strips one.
+- A normal UDP proxy listener keys its conntrack state exactly by (downstream address, wire flow ID); the authenticated upstream route is relay metadata learned from the first routed packet of the flow, not part of the conntrack key. The flow ID is the listener's actual conntrack identity.
+- Access-server and SOCKS5 UDP have no wire flow ID: they remain route-keyed by (downstream address, destination), so one client can address multiple destinations.
+- Compact form is used only after the client successfully decodes every proxy response layer (route confirmation). A compact packet can address an existing flow but cannot create route state: if it arrives after the flow timed out, the new unrouted flow is silently dropped so a later full routed request recreates it.
+- Compact mode stays fresh only while both the monotonic clock (`Instant`) and wall clock (`SystemTime`) elapsed times are below `UDP_FLOW_TIMEOUT`; wall-clock rollback also forces a return to the full routed form. Expiration of either clock restores full routed requests.
+- Inside a reverse tunnel's length-delimited UDP mux flow, each mux datagram carries the same kind/ID/header framing, and the first datagram of a mux flow must be a routed request.
