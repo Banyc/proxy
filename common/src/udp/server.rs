@@ -9,7 +9,7 @@ use thiserror::Error;
 use tokio::net::UdpSocket;
 use tokio::sync::{Notify, watch};
 use tracing::instrument;
-use udp_listener::{Conn, Dispatch, UtpListener};
+use udp_listener::{Classified, Conn, Dispatch, DispatchPolicy, UtpListener};
 
 use crate::{
     error::AnyResult,
@@ -116,10 +116,20 @@ where
         let conn_handler = Arc::new(RwLock::new(Arc::new(self.conn_handler)));
         let dispatch = {
             let conn_handler = Arc::clone(&conn_handler);
-            move |&addr: &SocketAddr, packet: udp_listener::Packet| -> Option<(FlowKey, Packet)> {
+            move |&addr: &SocketAddr,
+                  packet: udp_listener::Packet|
+                  -> Option<Classified<FlowKey, Packet>> {
                 let conn_handler = Arc::clone(&conn_handler.read().unwrap());
                 let mut buf_reader = io::Cursor::new(&packet[..]);
                 let route = conn_handler.parse_packet_route(&mut buf_reader)?;
+                // A compact datagram can only continue a live flow: when its
+                // conntrack key is absent the listener must drop it before
+                // allocating any channel, conntrack entry, or handler task.
+                let policy = if matches!(route, UdpPacketRoute::Compact { .. }) {
+                    DispatchPolicy::ExistingOnly
+                } else {
+                    DispatchPolicy::Create
+                };
                 let downstream = DownstreamAddr(addr);
                 let (flow_key, routed_upstream) = classify_flow(downstream, route);
                 let read = buf_reader.position() as usize;
@@ -128,7 +138,11 @@ where
                 if let Some(upstream) = routed_upstream {
                     packet.set_routed_upstream(upstream);
                 }
-                Some((flow_key, packet))
+                Some(Classified {
+                    key: flow_key,
+                    value: packet,
+                    policy,
+                })
             }
         };
         let addr = self
