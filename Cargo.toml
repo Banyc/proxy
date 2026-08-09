@@ -59,8 +59,8 @@ tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", tag 
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-udp_listener = { path = "../udp_listener" }
 # udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.16" }
+udp_listener = { path = "../udp_listener" }
 common = { path = "common" }
 mitsein = "0.9.0"
 protocol = { path = "protocol" }
@@ -68,21 +68,6 @@ protocol = { path = "protocol" }
 [profile.profiling]
 inherits = "release"
 debug = true
-
-# [patch."https://github.com/Banyc/rtp.git"]
-# rtp = { path = "../rtp" }
-# [patch."https://github.com/Banyc/mux.git"]
-# mux = { path = "../mux" }
-# [patch."https://github.com/Banyc/rtp_mux.git"]
-# rtp_mux = { path = "../rtp_mux" }
-# [patch."https://github.com/Banyc/udp_listener.git"]
-# udp_listener = { path = "../udp_listener" }
-# [patch."https://github.com/Banyc/tokio_udp.git"]
-# tokio_udp = { path = "../tokio_udp" }
-# [patch."https://github.com/Banyc/monitor_table.git"]
-# monitor_table = { path = "../monitor_table" }
-# [patch."https://github.com/Banyc/dfsql.git"]
-# dfsql = { path = "../dfsql" }
 
 [profile.release]
 lto = "thin"
