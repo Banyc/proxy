@@ -14,10 +14,55 @@ use udp_listener::{Conn, Dispatch, UtpListener};
 use crate::{
     error::AnyResult,
     loading,
-    proto::conn::udp::{DownstreamAddr, Flow, UpstreamAddr},
+    proto::conn::udp::{DownstreamAddr, Flow, FlowKey, UdpFlowId, UpstreamAddr},
     session::{SessionSpawner, log_rejection},
     udp::Packet,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UdpPacketRoute {
+    Routed {
+        flow_id: Option<UdpFlowId>,
+        upstream: Option<UpstreamAddr>,
+    },
+    Compact {
+        flow_id: UdpFlowId,
+    },
+}
+fn classify_flow(
+    downstream: DownstreamAddr,
+    route: UdpPacketRoute,
+) -> (FlowKey, Option<Option<UpstreamAddr>>) {
+    match route {
+        UdpPacketRoute::Routed {
+            flow_id: None,
+            upstream,
+        } => (
+            FlowKey::Routed(Flow {
+                upstream,
+                downstream,
+            }),
+            None,
+        ),
+        UdpPacketRoute::Routed {
+            flow_id: Some(flow_id),
+            upstream,
+        } => (
+            FlowKey::Identified {
+                downstream,
+                flow_id,
+            },
+            Some(upstream),
+        ),
+        UdpPacketRoute::Compact { flow_id } => (
+            FlowKey::Identified {
+                downstream,
+                flow_id,
+            },
+            None,
+        ),
+    }
+}
 
 #[derive(Debug)]
 pub struct UdpServer<ConnHandler> {
@@ -71,18 +116,19 @@ where
         let conn_handler = Arc::new(RwLock::new(Arc::new(self.conn_handler)));
         let dispatch = {
             let conn_handler = Arc::clone(&conn_handler);
-            move |&addr: &SocketAddr, packet: udp_listener::Packet| -> Option<(Flow, Packet)> {
+            move |&addr: &SocketAddr, packet: udp_listener::Packet| -> Option<(FlowKey, Packet)> {
                 let conn_handler = Arc::clone(&conn_handler.read().unwrap());
                 let mut buf_reader = io::Cursor::new(&packet[..]);
-                let upstream_addr = conn_handler.parse_upstream_addr(&mut buf_reader)?;
-                let flow = Flow {
-                    upstream: upstream_addr,
-                    downstream: DownstreamAddr(addr),
-                };
+                let route = conn_handler.parse_packet_route(&mut buf_reader)?;
+                let downstream = DownstreamAddr(addr);
+                let (flow_key, routed_upstream) = classify_flow(downstream, route);
                 let read = buf_reader.position() as usize;
                 let mut packet = Packet::new(packet);
                 packet.advance(read).ok()?;
-                Some((flow, packet))
+                if let Some(upstream) = routed_upstream {
+                    packet.set_routed_upstream(upstream);
+                }
+                Some((flow_key, packet))
             }
         };
         let addr = self
@@ -164,7 +210,7 @@ where
                     }
                 }
             },
-            |_: &mut (), flow: Conn<UdpSocket, Flow, Packet>, current: Arc<ConnHandler>| {
+            |_: &mut (), flow: Conn<UdpSocket, FlowKey, Packet>, current: Arc<ConnHandler>| {
                 let session_spawner = session_spawner.clone();
                 Box::pin(async move {
                     if let Err(error) = session_spawner
@@ -202,7 +248,7 @@ where
 /// closes, then return so the socket can be released. New flows are refused by
 /// consuming and dropping the queued connection.
 async fn drain_until_idle(
-    listener: &UtpListener<UdpSocket, Flow, Packet>,
+    listener: &UtpListener<UdpSocket, FlowKey, Packet>,
     idle_rx: &mut watch::Receiver<bool>,
 ) {
     // Drop any queued-but-unaccepted flows so their connection entries close.
@@ -242,35 +288,93 @@ pub enum UdpServerServeError {
 }
 
 pub trait UdpServerHandleConn: loading::HandleConn {
-    fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>>;
+    fn parse_packet_route(&self, buf: &mut io::Cursor<&[u8]>) -> Option<UdpPacketRoute>;
 
-    fn handle_flow(&self, conn: Conn<UdpSocket, Flow, Packet>) -> impl Future<Output = ()> + Send;
+    fn handle_flow(
+        &self,
+        conn: Conn<UdpSocket, FlowKey, Packet>,
+    ) -> impl Future<Output = ()> + Send;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::loading::Serve;
+    use crate::proto::conn::udp::UDP_FLOW_ID_LEN;
+    use crate::{loading::Serve, proto::addr::RouteAddr};
     use std::time::Duration;
     #[derive(Debug)]
     struct TagEcho(u8);
     impl loading::HandleConn for TagEcho {}
     impl UdpServerHandleConn for TagEcho {
-        fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
+        fn parse_packet_route(&self, buf: &mut io::Cursor<&[u8]>) -> Option<UdpPacketRoute> {
             let mut tag = [0; 1];
             std::io::Read::read_exact(buf, &mut tag).ok()?;
             if tag[0] != self.0 {
                 return None;
             }
-            Some(None)
+            Some(UdpPacketRoute::Routed {
+                flow_id: None,
+                upstream: None,
+            })
         }
-        async fn handle_flow(&self, conn: Conn<UdpSocket, Flow, Packet>) {
+        async fn handle_flow(&self, conn: Conn<UdpSocket, FlowKey, Packet>) {
             let (mut read, write) = conn.split();
             while let Some(packet) = read.read_half().recv().await {
                 let _ = write.send(packet.slice()).await;
             }
         }
     }
+
+    #[test]
+    fn routed_and_compact_proxy_packets_share_a_conntrack_key() {
+        let downstream = DownstreamAddr("127.0.0.1:4000".parse().unwrap());
+        let flow_id = UdpFlowId::from_bytes([3; UDP_FLOW_ID_LEN]);
+        let upstream = Some(UpstreamAddr(RouteAddr::udp(
+            "127.0.0.1:9".parse::<SocketAddr>().unwrap().into(),
+        )));
+        let (routed_key, routed_metadata) = classify_flow(
+            downstream,
+            UdpPacketRoute::Routed {
+                flow_id: Some(flow_id),
+                upstream: upstream.clone(),
+            },
+        );
+        let (compact_key, compact_metadata) =
+            classify_flow(downstream, UdpPacketRoute::Compact { flow_id });
+        assert_eq!(routed_key, compact_key);
+        assert!(matches!(routed_key, FlowKey::Identified { .. }));
+        assert_eq!(routed_metadata, Some(upstream));
+        assert_eq!(compact_metadata, None);
+    }
+
+    #[test]
+    fn route_keyed_flows_keep_the_upstream_in_their_identity() {
+        let downstream = DownstreamAddr("127.0.0.1:4000".parse().unwrap());
+        let a = Some(UpstreamAddr(RouteAddr::udp(
+            "127.0.0.1:9".parse::<SocketAddr>().unwrap().into(),
+        )));
+        let b = Some(UpstreamAddr(RouteAddr::udp(
+            "127.0.0.1:10".parse::<SocketAddr>().unwrap().into(),
+        )));
+        let (key_a, metadata_a) = classify_flow(
+            downstream,
+            UdpPacketRoute::Routed {
+                flow_id: None,
+                upstream: a,
+            },
+        );
+        let (key_b, metadata_b) = classify_flow(
+            downstream,
+            UdpPacketRoute::Routed {
+                flow_id: None,
+                upstream: b,
+            },
+        );
+        assert_ne!(key_a, key_b);
+        assert_eq!(metadata_a, None);
+        assert_eq!(metadata_b, None);
+    }
+
     #[tokio::test]
     async fn a_hot_reload_reaches_the_dispatcher() {
         let listener = UdpSocket::bind("127.0.0.1:0").await.unwrap();

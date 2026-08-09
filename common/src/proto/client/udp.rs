@@ -8,6 +8,7 @@ use crate::{
     },
     proto::{
         addr::RouteAddr,
+        conn::udp::UdpFlowId,
         connect::udp::{UdpConnectionRead, UdpConnectionWrite},
         context::UdpRuntime,
         relay::{
@@ -17,7 +18,7 @@ use crate::{
     },
     route::{ConnChain, ProbeRtt, convert_proxies_to_header_crypto_pairs},
     ttl_cell::RegeneratingHeader,
-    udp::PACKET_BUFFER_LENGTH,
+    udp::{PACKET_BUFFER_LENGTH, UDP_FLOW_TIMEOUT},
 };
 use ae::anti_replay::{TimeValidator, ValidatorRef};
 use bytes::BytesMut;
@@ -27,11 +28,42 @@ use std::{
     io::{self, Write},
     net::SocketAddr,
     num::NonZeroUsize,
-    sync::Arc,
-    time::{Duration, Instant},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime},
 };
 use thiserror::Error;
 use tracing::{instrument, trace, warn};
+
+#[derive(Debug, Default)]
+struct RouteConfirmation {
+    last_response: Mutex<Option<ConfirmationTime>>,
+}
+#[derive(Debug)]
+struct ConfirmationTime {
+    monotonic: Instant,
+    wall: SystemTime,
+}
+impl RouteConfirmation {
+    fn confirm(&self) {
+        *self.last_response.lock().unwrap() = Some(ConfirmationTime {
+            monotonic: Instant::now(),
+            wall: SystemTime::now(),
+        });
+    }
+    fn is_fresh(&self) -> bool {
+        self.last_response
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|confirmed| {
+                confirmed.monotonic.elapsed() < UDP_FLOW_TIMEOUT
+                    && confirmed
+                        .wall
+                        .elapsed()
+                        .is_ok_and(|elapsed| elapsed < UDP_FLOW_TIMEOUT)
+            })
+    }
+}
 
 #[derive(Debug)]
 pub struct UdpProxyClient {
@@ -46,6 +78,8 @@ impl UdpProxyClient {
         destination: InternetAddr,
         context: &UdpRuntime,
     ) -> Result<UdpProxyClient, EstablishError> {
+        let route_confirmation = Arc::new(RouteConfirmation::default());
+        let flow_id = UdpFlowId::random();
         if proxies.is_empty() {
             let addr = *destination
                 .to_socket_addrs()
@@ -66,8 +100,20 @@ impl UdpProxyClient {
             let local_addr = upstream.local_addr();
             let peer_addr = upstream.peer_addr();
             let (upstream_read, upstream_write) = upstream.into_split();
-            let write = UdpProxyClientWriteHalf::new(upstream_write, peer_addr, Vec::new());
-            let read = UdpProxyClientReadHalf::new(upstream_read, local_addr, peer_addr, proxies);
+            let write = UdpProxyClientWriteHalf::new(
+                upstream_write,
+                peer_addr,
+                Vec::new(),
+                flow_id,
+                route_confirmation.clone(),
+            );
+            let read = UdpProxyClientReadHalf::new(
+                upstream_read,
+                local_addr,
+                peer_addr,
+                proxies,
+                route_confirmation,
+            );
             return Ok(UdpProxyClient {
                 write,
                 read,
@@ -108,8 +154,20 @@ impl UdpProxyClient {
         let local_addr = upstream.local_addr();
         let peer_addr = upstream.peer_addr();
         let (upstream_read, upstream_write) = upstream.into_split();
-        let write = UdpProxyClientWriteHalf::new(upstream_write, peer_addr, request_layers);
-        let read = UdpProxyClientReadHalf::new(upstream_read, local_addr, peer_addr, proxies);
+        let write = UdpProxyClientWriteHalf::new(
+            upstream_write,
+            peer_addr,
+            request_layers,
+            flow_id,
+            route_confirmation.clone(),
+        );
+        let read = UdpProxyClientReadHalf::new(
+            upstream_read,
+            local_addr,
+            peer_addr,
+            proxies,
+            route_confirmation,
+        );
         Ok(UdpProxyClient {
             write,
             read,
@@ -157,6 +215,8 @@ pub struct UdpProxyClientWriteHalf {
     upstream: UdpConnectionWrite,
     peer_addr: Option<SocketAddr>,
     request_layers: Vec<UdpRequestLayer>,
+    flow_id: UdpFlowId,
+    route_confirmation: Arc<RouteConfirmation>,
     write_buf: Vec<u8>,
     transform_buf: Vec<u8>,
 }
@@ -178,11 +238,15 @@ impl UdpProxyClientWriteHalf {
         upstream: UdpConnectionWrite,
         peer_addr: Option<SocketAddr>,
         request_layers: Vec<UdpRequestLayer>,
+        flow_id: UdpFlowId,
+        route_confirmation: Arc<RouteConfirmation>,
     ) -> Self {
         Self {
             upstream,
             peer_addr,
             request_layers,
+            flow_id,
+            route_confirmation,
             write_buf: Vec::with_capacity(PACKET_BUFFER_LENGTH),
             transform_buf: Vec::with_capacity(PACKET_BUFFER_LENGTH),
         }
@@ -192,6 +256,7 @@ impl UdpProxyClientWriteHalf {
     pub async fn send(&mut self, buf: &[u8]) -> Result<usize, SendError> {
         self.write_buf.clear();
         self.write_buf.write_all(buf).unwrap();
+        let use_compact = self.route_confirmation.is_fresh();
         for layer in self.request_layers.iter_mut().rev() {
             if let Some(payload_crypto) = &layer.payload_crypto {
                 self.transform_buf.resize(PACKET_BUFFER_LENGTH, 0);
@@ -208,8 +273,15 @@ impl UdpProxyClientWriteHalf {
                 self.transform_buf.truncate(encrypted_len);
                 std::mem::swap(&mut self.write_buf, &mut self.transform_buf);
             }
-            let header = layer.header.get();
-            let encoded_len = header
+            self.transform_buf.clear();
+            if use_compact {
+                self.flow_id.write_compact(&mut self.transform_buf);
+            } else {
+                self.flow_id.write_routed(&mut self.transform_buf);
+                self.transform_buf.extend_from_slice(layer.header.get());
+            }
+            let encoded_len = self
+                .transform_buf
                 .len()
                 .checked_add(self.write_buf.len())
                 .ok_or_else(|| SendError {
@@ -228,8 +300,6 @@ impl UdpProxyClientWriteHalf {
                     sock_addr: self.peer_addr,
                 });
             }
-            self.transform_buf.clear();
-            self.transform_buf.extend_from_slice(header);
             self.transform_buf.extend_from_slice(&self.write_buf);
             std::mem::swap(&mut self.write_buf, &mut self.transform_buf);
         }
@@ -267,6 +337,7 @@ pub struct UdpProxyClientReadHalf {
     read_buf: Vec<u8>,
     transform_buf: Vec<u8>,
     time_validator: TimeValidator,
+    route_confirmation: Arc<RouteConfirmation>,
 }
 impl UdpRecv for UdpProxyClientReadHalf {
     async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
@@ -274,11 +345,12 @@ impl UdpRecv for UdpProxyClientReadHalf {
     }
 }
 impl UdpProxyClientReadHalf {
-    pub fn new(
+    fn new(
         upstream: UdpConnectionRead,
         local_addr: Option<SocketAddr>,
         peer_addr: Option<SocketAddr>,
         proxies: Arc<ConnChain>,
+        route_confirmation: Arc<RouteConfirmation>,
     ) -> Self {
         Self {
             upstream,
@@ -288,6 +360,7 @@ impl UdpProxyClientReadHalf {
             read_buf: Vec::with_capacity(PACKET_BUFFER_LENGTH),
             transform_buf: Vec::with_capacity(PACKET_BUFFER_LENGTH),
             time_validator: time_validator(),
+            route_confirmation,
         }
     }
 
@@ -366,6 +439,9 @@ impl UdpProxyClientReadHalf {
         };
         let payload_size = payload.len().min(buf.len());
         buf[..payload_size].copy_from_slice(&payload[..payload_size]);
+        if !self.proxies.is_empty() {
+            self.route_confirmation.confirm();
+        }
         Ok(payload_size)
     }
 
@@ -460,6 +536,7 @@ pub async fn probe_rtt(
             transform_buf.resize(PACKET_BUFFER_LENGTH, 0);
         }
         let mut header_buf = Vec::new();
+        UdpFlowId::random().write_routed(&mut header_buf);
         write_header(&mut header_buf, header, *header_crypto.key())?;
         let encoded_len = header_buf.len().checked_add(packet.len()).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "UDP packet length overflow")
@@ -541,11 +618,151 @@ mod tests {
         let local_addr = connection.local_addr();
         let peer_addr = connection.peer_addr();
         let (upstream, _write) = connection.into_split();
-        let mut read = UdpProxyClientReadHalf::new(upstream, local_addr, peer_addr, [].into());
+        let mut read = UdpProxyClientReadHalf::new(
+            upstream,
+            local_addr,
+            peer_addr,
+            [].into(),
+            Arc::new(RouteConfirmation::default()),
+        );
         let mut buf = [0u8; 64];
         peer.send(&vec![0xab; buf.len() + 1]).await.unwrap();
         let n = read.recv(&mut buf).await.unwrap();
         assert_eq!(n, buf.len(), "a payload that does not fit must be capped");
         assert_eq!(buf, [0xab; 64]);
+    }
+
+    #[tokio::test]
+    async fn a_valid_response_switches_later_requests_to_compact_form() {
+        use crate::proto::conn::udp::UDP_FLOW_ID_LEN;
+        use crate::proto::route_header::udp::{UdpRequestRoute, decode_request_route};
+
+        let mut pkt = [0u8; 2048];
+
+        let peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client.connect(peer.local_addr().unwrap()).await.unwrap();
+        peer.connect(client.local_addr().unwrap()).await.unwrap();
+        let connection = crate::proto::connect::udp::UdpConnection::socket(client);
+        let local_addr = connection.local_addr();
+        let peer_addr = connection.peer_addr();
+        let (upstream_read, upstream_write) = connection.into_split();
+
+        let crypto = tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into());
+        let node = crate::route::ConnConfig {
+            address: RouteAddr::udp("127.0.0.1:9".parse::<SocketAddr>().unwrap().into()),
+            header_crypto: crypto.clone(),
+            payload_crypto: None,
+        };
+        let proxies: Arc<ConnChain> = Arc::new([node]);
+        let layer_crypto = crypto.clone();
+        let layer = UdpRequestLayer {
+            header: RegeneratingHeader::new(
+                Box::new(move || {
+                    let mut buf = Vec::new();
+                    write_header(
+                        &mut buf,
+                        &RouteRequest {
+                            upstream: Some(RouteAddr::udp(
+                                "127.0.0.1:9".parse::<SocketAddr>().unwrap().into(),
+                            )),
+                        },
+                        *layer_crypto.key(),
+                    )
+                    .unwrap();
+                    buf.into()
+                }),
+                VALIDATOR_UDP_HDR_TTL,
+            ),
+            payload_crypto: None,
+        };
+        let route_confirmation = Arc::new(RouteConfirmation::default());
+        let flow_id = UdpFlowId::from_bytes([5; UDP_FLOW_ID_LEN]);
+        let mut write = UdpProxyClientWriteHalf::new(
+            upstream_write,
+            peer_addr,
+            vec![layer],
+            flow_id,
+            route_confirmation.clone(),
+        );
+        let mut read = UdpProxyClientReadHalf::new(
+            upstream_read,
+            local_addr,
+            peer_addr,
+            proxies,
+            route_confirmation.clone(),
+        );
+        let decode = |pkt: &[u8]| -> (UdpRequestRoute, Vec<u8>) {
+            let mut cursor = io::Cursor::new(pkt);
+            let route = decode_request_route(&mut cursor, &crypto, &time_validator()).unwrap();
+            let payload = pkt[cursor.position() as usize..].to_vec();
+            (route, payload)
+        };
+
+        // (a) Before any response, requests are routed with the full header.
+        write.send(b"first").await.unwrap();
+        let n = peer.recv(&mut pkt).await.unwrap();
+        let (route, payload) = decode(&pkt[..n]);
+        match route {
+            UdpRequestRoute::Routed { flow_id: id, .. } => assert_eq!(id, flow_id),
+            other => panic!("expected a routed request, got {other:?}"),
+        }
+        assert_eq!(payload, b"first");
+
+        // (b) A valid layered response confirms the route.
+        let mut resp = Vec::new();
+        write_header(&mut resp, &RouteResponse { result: Ok(()) }, *crypto.key()).unwrap();
+        resp.extend_from_slice(b"pong");
+        peer.send(&resp).await.unwrap();
+        let mut out = [0u8; 64];
+        let n = read.recv(&mut out).await.unwrap();
+        assert_eq!(&out[..n], b"pong");
+
+        // (c) Later requests switch to compact form on the same flow id.
+        write.send(b"second").await.unwrap();
+        let n = peer.recv(&mut pkt).await.unwrap();
+        let (route, payload) = decode(&pkt[..n]);
+        match route {
+            UdpRequestRoute::Compact { flow_id: id } => assert_eq!(id, flow_id),
+            other => panic!("expected a compact request, got {other:?}"),
+        }
+        assert_eq!(payload, b"second");
+
+        // (d) Aging only the monotonic clock forces routed form again.
+        {
+            let mut guard = route_confirmation.last_response.lock().unwrap();
+            let confirmed = guard.take().unwrap();
+            *guard = Some(ConfirmationTime {
+                monotonic: confirmed.monotonic - UDP_FLOW_TIMEOUT,
+                wall: confirmed.wall,
+            });
+        }
+        assert!(!route_confirmation.is_fresh());
+        write.send(b"third").await.unwrap();
+        let n = peer.recv(&mut pkt).await.unwrap();
+        let (route, payload) = decode(&pkt[..n]);
+        match route {
+            UdpRequestRoute::Routed { flow_id: id, .. } => assert_eq!(id, flow_id),
+            other => panic!("expected a routed request after monotonic aging, got {other:?}"),
+        }
+        assert_eq!(payload, b"third");
+
+        // (e) Aging only the wall clock also forces routed form again.
+        {
+            let mut guard = route_confirmation.last_response.lock().unwrap();
+            *guard = Some(ConfirmationTime {
+                monotonic: Instant::now(),
+                wall: SystemTime::now() - UDP_FLOW_TIMEOUT,
+            });
+        }
+        assert!(!route_confirmation.is_fresh());
+        write.send(b"fourth").await.unwrap();
+        let n = peer.recv(&mut pkt).await.unwrap();
+        let (route, payload) = decode(&pkt[..n]);
+        match route {
+            UdpRequestRoute::Routed { flow_id: id, .. } => assert_eq!(id, flow_id),
+            other => panic!("expected a routed request after wall-clock aging, got {other:?}"),
+        }
+        assert_eq!(payload, b"fourth");
     }
 }

@@ -8,22 +8,22 @@ use crate::{
     },
     loading,
     proto::{
-        conn::udp::{DownstreamAddr, Flow, UpstreamAddr},
+        conn::udp::{DownstreamAddr, Flow, FlowKey, UdpFlowId, UpstreamAddr},
         context::UdpRuntime,
         relay::udp::{CopyBidirectional, DownstreamParts, UdpRecv, UdpSend, UpstreamParts},
-        route_header::udp::{decode_route_header, echo},
+        route_header::udp::{UdpRequestRoute, decode_request_route, echo},
     },
     udp::{
         PACKET_BUFFER_LENGTH, Packet,
         respond::respond_with_error,
-        server::{UdpServer, UdpServerHandleConn},
+        server::{UdpPacketRoute, UdpServer, UdpServerHandleConn},
     },
 };
 use async_speed_limit::Limiter;
 use thiserror::Error;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tracing::{instrument, trace, warn};
-use udp_listener::{Conn, ConnWrite};
+use udp_listener::{Conn, ConnRead, ConnWrite};
 
 use super::ListenerBindError;
 
@@ -61,14 +61,29 @@ impl UdpProxyConnHandler {
     }
 
     #[instrument(skip(self, conn))]
-    async fn proxy(&self, mut conn: Conn<UdpSocket, Flow, Packet>) -> Result<(), UdpProxyError> {
-        let flow = conn.conn_key().clone();
-        if flow.upstream.is_none() {
-            let pkt = conn.read_half().read_half().try_recv().unwrap();
-            echo(pkt.slice(), conn.write(), &self.header_crypto).await;
+    async fn proxy(&self, mut conn: Conn<UdpSocket, FlowKey, Packet>) -> Result<(), UdpProxyError> {
+        let downstream = match conn.conn_key() {
+            FlowKey::Identified { downstream, .. } => *downstream,
+            FlowKey::Routed(_) => return Err(UdpProxyError::InvalidFlowKey),
+        };
+        let first = conn
+            .read_half()
+            .read_half()
+            .try_recv()
+            .map_err(|error| UdpProxyError::InitialPacket(io::Error::other(error)))?;
+        let Some(upstream) = first.routed_upstream().cloned() else {
+            return Err(UdpProxyError::RouteUnavailable);
+        };
+        let flow = Flow {
+            upstream: upstream.clone(),
+            downstream,
+        };
+        if upstream.is_none() {
+            echo(first.slice(), conn.write(), &self.header_crypto).await;
             return Ok(());
         }
         let (dn_read, dn_write) = conn.split();
+        let dn_read = RouteBoundRecv::new(dn_read, upstream, first);
         self.proxy_parts(flow, dn_read, dn_write).await?;
         Ok(())
     }
@@ -207,6 +222,10 @@ impl UdpProxyConnHandler {
             Ok(()) => (),
             Err(e) => {
                 let peer_addr = dn_write.peer_addr();
+                if matches!(e, UdpProxyError::RouteUnavailable) {
+                    trace!(?e, ?peer_addr, "Dropping unrouted compact flow");
+                    return;
+                }
                 warn!(?e, ?peer_addr, "Proxy failed");
                 let kind = error_kind_from_proxy_error(e);
                 if let Err(e) = respond_with_error(dn_write, kind, &self.header_crypto).await {
@@ -239,12 +258,64 @@ pub enum UdpProxyError {
     Tunnel(#[source] AnyError),
     #[error("UDP relay: {0}")]
     Copy(#[source] crate::proto::relay::udp::CopyBiError),
+    #[error("UDP flow key is not a routed flow")]
+    InvalidFlowKey,
+    #[error("Failed to receive the initial packet: {0}")]
+    InitialPacket(#[source] io::Error),
+    #[error("UDP flow has no authenticated upstream route")]
+    RouteUnavailable,
 }
 fn error_kind_from_proxy_error(e: UdpProxyError) -> RouteErrorKind {
     match e {
         UdpProxyError::Resolve { .. } | UdpProxyError::ConnectUpstream { .. } => RouteErrorKind::Io,
         UdpProxyError::Loopback { .. } => RouteErrorKind::Loopback,
-        UdpProxyError::Tunnel(_) | UdpProxyError::Copy(_) => RouteErrorKind::Io,
+        UdpProxyError::Tunnel(_)
+        | UdpProxyError::Copy(_)
+        | UdpProxyError::InvalidFlowKey
+        | UdpProxyError::InitialPacket(_)
+        | UdpProxyError::RouteUnavailable => RouteErrorKind::Io,
+    }
+}
+
+struct RouteBoundRecv {
+    inner: ConnRead<Packet>,
+    expected_upstream: Option<UpstreamAddr>,
+    first: Option<Packet>,
+}
+impl RouteBoundRecv {
+    fn new(
+        inner: ConnRead<Packet>,
+        expected_upstream: Option<UpstreamAddr>,
+        first: Packet,
+    ) -> Self {
+        Self {
+            inner,
+            expected_upstream,
+            first: Some(first),
+        }
+    }
+}
+impl UdpRecv for RouteBoundRecv {
+    async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
+        let packet =
+            match self.first.take() {
+                Some(packet) => packet,
+                None => self.inner.read_half().recv().await.ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::UnexpectedEof, "UDP flow closed")
+                })?,
+            };
+        if let Some(upstream) = packet.routed_upstream()
+            && upstream != &self.expected_upstream
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "UDP flow changed its upstream route",
+            )
+            .into());
+        }
+        let copied = packet.slice().len().min(buf.len());
+        buf[..copied].copy_from_slice(&packet.slice()[..copied]);
+        Ok(copied)
     }
 }
 
@@ -252,7 +323,7 @@ struct RouteDecodingRecv<Read> {
     inner: Read,
     header_crypto: tokio_chacha20::config::Config,
     time_validator: std::sync::Arc<ae::anti_replay::TimeValidator>,
-    expected: Option<Option<UpstreamAddr>>,
+    expected: Option<(UdpFlowId, Option<UpstreamAddr>)>,
     first_payload: Option<Vec<u8>>,
     packet: Vec<u8>,
 }
@@ -275,17 +346,24 @@ where
         }
     }
     async fn prime(&mut self) -> Result<Option<UpstreamAddr>, AnyError> {
-        let (upstream, payload) = self.recv_decoded().await?;
-        self.expected = Some(upstream.clone());
+        let (route, payload) = self.recv_decoded().await?;
+        let UdpRequestRoute::Routed { flow_id, upstream } = route else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "UDP mux flow used compact form before establishing its route",
+            )
+            .into());
+        };
+        self.expected = Some((flow_id, upstream.clone()));
         self.first_payload = Some(payload);
         Ok(upstream)
     }
-    async fn recv_decoded(&mut self) -> Result<(Option<UpstreamAddr>, Vec<u8>), AnyError> {
+    async fn recv_decoded(&mut self) -> Result<(UdpRequestRoute, Vec<u8>), AnyError> {
         let n = self.inner.trait_recv(&mut self.packet).await?;
         let mut cursor = io::Cursor::new(&self.packet[..n]);
-        let upstream = decode_route_header(&mut cursor, &self.header_crypto, &self.time_validator)?;
+        let route = decode_request_route(&mut cursor, &self.header_crypto, &self.time_validator)?;
         let payload = self.packet[usize::try_from(cursor.position()).unwrap()..n].to_vec();
-        Ok((upstream, payload))
+        Ok((route, payload))
     }
 }
 impl<Read> UdpRecv for RouteDecodingRecv<Read>
@@ -296,11 +374,21 @@ where
         let payload = if let Some(payload) = self.first_payload.take() {
             payload
         } else {
-            let (upstream, payload) = self.recv_decoded().await?;
-            if self.expected.as_ref() != Some(&upstream) {
+            let (route, payload) = self.recv_decoded().await?;
+            let mismatched = match (&self.expected, route) {
+                (Some((expected_flow_id, _)), UdpRequestRoute::Compact { flow_id }) => {
+                    flow_id != *expected_flow_id
+                }
+                (
+                    Some((expected_flow_id, expected_upstream)),
+                    UdpRequestRoute::Routed { flow_id, upstream },
+                ) => flow_id != *expected_flow_id || upstream != *expected_upstream,
+                (None, _) => true,
+            };
+            if mismatched {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "UDP mux flow changed its upstream route",
+                    "UDP mux flow changed its flow ID or upstream route",
                 )
                 .into());
             }
@@ -325,12 +413,20 @@ fn is_udp_eof(error: &AnyError) -> bool {
 
 impl loading::HandleConn for UdpProxyConnHandler {}
 impl UdpServerHandleConn for UdpProxyConnHandler {
-    fn parse_upstream_addr(&self, buf: &mut io::Cursor<&[u8]>) -> Option<Option<UpstreamAddr>> {
-        let res = decode_route_header(buf, &self.header_crypto, &self.udp_context.time_validator);
-        res.ok()
+    fn parse_packet_route(&self, buf: &mut io::Cursor<&[u8]>) -> Option<UdpPacketRoute> {
+        let route =
+            decode_request_route(buf, &self.header_crypto, &self.udp_context.time_validator)
+                .ok()?;
+        Some(match route {
+            UdpRequestRoute::Routed { flow_id, upstream } => UdpPacketRoute::Routed {
+                flow_id: Some(flow_id),
+                upstream,
+            },
+            UdpRequestRoute::Compact { flow_id } => UdpPacketRoute::Compact { flow_id },
+        })
     }
 
-    async fn handle_flow(&self, accepted: Conn<UdpSocket, Flow, Packet>) {
+    async fn handle_flow(&self, accepted: Conn<UdpSocket, FlowKey, Packet>) {
         let dn_write = accepted.write().clone();
         let res = self.proxy(accepted).await;
         self.handle_proxy_result(&dn_write, res).await;

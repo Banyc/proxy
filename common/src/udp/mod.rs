@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+use crate::proto::conn::udp::UpstreamAddr;
+
 pub mod respond;
 pub mod server;
 
@@ -11,11 +13,23 @@ pub const UDP_FLOW_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct Packet {
     buf: udp_listener::Packet,
     pos: usize,
+    routed_upstream: Option<Option<UpstreamAddr>>,
 }
 
 impl Packet {
     pub fn new(buf: udp_listener::Packet) -> Self {
-        Self { buf, pos: 0 }
+        Self {
+            buf,
+            pos: 0,
+            routed_upstream: None,
+        }
+    }
+
+    pub fn set_routed_upstream(&mut self, upstream: Option<UpstreamAddr>) {
+        self.routed_upstream = Some(upstream);
+    }
+    pub fn routed_upstream(&self) -> Option<&Option<UpstreamAddr>> {
+        self.routed_upstream.as_ref()
     }
 
     pub fn advance(&mut self, bytes: usize) -> Result<(), PacketPositionAdvancesOutOfRange> {

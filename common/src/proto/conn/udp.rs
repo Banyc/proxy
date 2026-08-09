@@ -4,6 +4,21 @@ use hdv_derive::HdvSerde;
 
 use crate::{addr::InternetAddrHdv, proto::addr::RouteAddr};
 
+pub const UDP_FLOW_ID_LEN: usize = 16;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UdpFlowId([u8; UDP_FLOW_ID_LEN]);
+impl UdpFlowId {
+    pub fn random() -> Self {
+        Self(rand::random())
+    }
+    pub(crate) fn from_bytes(bytes: [u8; UDP_FLOW_ID_LEN]) -> Self {
+        Self(bytes)
+    }
+    pub(crate) fn as_bytes(&self) -> &[u8; UDP_FLOW_ID_LEN] {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DownstreamAddr(pub SocketAddr);
 
@@ -14,6 +29,28 @@ pub struct UpstreamAddr(pub RouteAddr);
 pub struct Flow {
     pub upstream: Option<UpstreamAddr>,
     pub downstream: DownstreamAddr,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum FlowKey {
+    Routed(Flow),
+    Identified {
+        downstream: DownstreamAddr,
+        flow_id: UdpFlowId,
+    },
+}
+impl FlowKey {
+    pub fn downstream(&self) -> DownstreamAddr {
+        match self {
+            Self::Routed(flow) => flow.downstream,
+            Self::Identified { downstream, .. } => *downstream,
+        }
+    }
+    pub fn routed_flow(&self) -> Option<&Flow> {
+        match self {
+            Self::Routed(flow) => Some(flow),
+            Self::Identified { .. } => None,
+        }
+    }
 }
 #[derive(Debug, Clone, HdvSerde)]
 pub struct FlowHdv {
