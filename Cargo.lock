@@ -491,7 +491,7 @@ dependencies = [
  "tokio_conn_pool",
  "tokio_throughput",
  "tracing",
- "udp_listener 0.1.0",
+ "udp_listener 0.1.0 (git+https://github.com/Banyc/udp_listener.git?tag=v0.0.17)",
 ]
 
 [[package]]
@@ -1640,9 +1640,9 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "portable-atomic"
-version = "1.14.0"
+version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d20d5497ef88037a52ff98267d066e7f11fcc5e99bbfbd58a42336193aacec3"
+checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "portable-atomic-util"
@@ -1765,7 +1765,7 @@ dependencies = [
  "tokio_chacha20",
  "tokio_kcp",
  "tracing",
- "udp_listener 0.1.0",
+ "udp_listener 0.1.0 (git+https://github.com/Banyc/udp_listener.git?tag=v0.0.17)",
 ]
 
 [[package]]
@@ -2029,7 +2029,7 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.83#025460f2ad2b65259e42fee65b474db3927d37bc"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.84#28cbc4d1209d9339af12fe9718f2d0efc0d48fbf"
 dependencies = [
  "async-trait",
  "async_async_io",
@@ -2047,13 +2047,13 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tokio_udp",
- "udp_listener 0.1.0 (git+https://github.com/Banyc/udp_listener.git?tag=v0.0.16)",
+ "udp_listener 0.1.0 (git+https://github.com/Banyc/udp_listener.git?tag=v0.0.17)",
 ]
 
 [[package]]
 name = "rtp_mux"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp_mux.git?tag=v0.0.7#c28bdf949be3c3fc5be4f0ce786ef0c1813aac1d"
+source = "git+https://github.com/Banyc/rtp_mux.git?tag=v0.0.8#1f8feb78290f81d47972ab57eab8e08bb3926957"
 dependencies = [
  "futures",
  "metrics",
@@ -2743,17 +2743,6 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "udp_listener"
 version = "0.1.0"
-dependencies = [
- "bytes",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
- "tokio",
- "tokio_udp",
- "tracing",
-]
-
-[[package]]
-name = "udp_listener"
-version = "0.1.0"
 source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.13#076920b9a83f9472e7d6209502f1fecb58f7d665"
 dependencies = [
  "bytes",
@@ -2764,7 +2753,7 @@ dependencies = [
 [[package]]
 name = "udp_listener"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.16#070e63c2d05ae0bf9a8cb2130ae1e87551988e49"
+source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.17#6457402c0de6f2c042e923c33f75738bca49b3f7"
 dependencies = [
  "bytes",
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",

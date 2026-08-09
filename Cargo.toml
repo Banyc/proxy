@@ -40,9 +40,9 @@ postcard = "1"
 primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.59" }
 rand = "0.10"
 regex = "1"
-rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.83" }
+rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.84" }
 # rtp = { path = "../rtp" }
-rtp_mux = { git = "https://github.com/Banyc/rtp_mux.git", tag = "v0.0.7" }
+rtp_mux = { git = "https://github.com/Banyc/rtp_mux.git", tag = "v0.0.8" }
 # rtp_mux = { path = "../rtp_mux" }
 scopeguard = "1"
 serde = "1"
@@ -59,8 +59,8 @@ tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", tag 
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-# udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.16" }
-udp_listener = { path = "../udp_listener" }
+udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.17" }
+# udp_listener = { path = "../udp_listener" }
 common = { path = "common" }
 mitsein = "0.9.0"
 protocol = { path = "protocol" }
