@@ -15,8 +15,8 @@ use common::{
 use super::{
     protos::STREAM_PROTOS,
     streams::{
-        kcp::KcpConnector, mptcp::MptcpConnector, rtp::RtpConnector, rtp_mux::RtpMuxConnector,
-        tcp::proxy_server::TcpConnector, tcp_mux::TcpMuxConnector,
+        kcp::KcpConnector, mptcp::MptcpConnector, mux::MuxConnectorDriver, rtp::RtpConnector,
+        rtp_mux::RtpMuxConnector, tcp::proxy_server::TcpConnector, tcp_mux::TcpMuxConnector,
     },
 };
 
@@ -66,18 +66,7 @@ pub fn build_tcp_mux_connector(
     drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     let (connector, driver) = TcpMuxConnector::new(config.clone(), reset);
-    let connector = Arc::new(connector);
-    drivers.spawn(async move {
-        // A connector driver exiting is fatal — the connector is inert.
-        // Surface the typed error instead of converting completion to Ok(()),
-        // so `server_tasks` tears the server down rather than continuing.
-        let error = driver.await;
-        Err(Box::new(error) as AnyError)
-    });
-    (
-        Arc::clone(&connector) as Arc<dyn StreamConnect>,
-        Some(connector as Arc<dyn UdpMuxDialer>),
-    )
+    spawn_mux_connector(connector, driver, drivers)
 }
 pub fn build_kcp_connector(
     config: Arc<RwLock<ConnectorConfig>>,
@@ -121,11 +110,27 @@ fn build_rtp_mux_connector_with_fec(
     fec: bool,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     let (connector, driver) = RtpMuxConnector::new(config.clone(), reset, fec);
+    spawn_mux_connector(connector, driver, drivers)
+}
+
+/// Wrap a mux connector (handle + driver) as the stream connector and UDP
+/// dialer pair, spawning the driver into the actively-reaped `drivers` set.
+///
+/// A connector driver exiting is fatal — the connector is inert. Surface
+/// the typed error instead of converting completion to `Ok(())`, so
+/// `server_tasks` tears the server down rather than continuing. The single
+/// connector instance is shared by both the stream and UDP paths, so both
+/// kinds of flows reuse the same mux sessions.
+fn spawn_mux_connector<C>(
+    connector: C,
+    driver: MuxConnectorDriver,
+    drivers: &mut tokio::task::JoinSet<AnyResult>,
+) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>)
+where
+    C: StreamConnect + UdpMuxDialer + 'static,
+{
     let connector = Arc::new(connector);
     drivers.spawn(async move {
-        // A connector driver exiting is fatal — the connector is inert.
-        // Surface the typed error instead of converting completion to Ok(()),
-        // so `server_tasks` tears the server down rather than continuing.
         let error = driver.await;
         Err(Box::new(error) as AnyError)
     });

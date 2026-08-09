@@ -33,17 +33,13 @@ use metrics::{counter, gauge};
 use mux::{LaneClass, MuxError, spawn_mux_no_reconnection};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
-    task::JoinSet,
-};
+use tokio::{net::TcpListener, task::JoinSet};
 use tracing::{info, warn};
 
 use crate::stream::streams::{
     mux::{
-        AddressedMuxStream, STREAM_FLOW_KIND, SocketAddrPair, UDP_FLOW_KIND, client_mux_config,
-        server_mux_config,
+        AddressedMuxStream, MuxFlowKind, MuxProxyConnHandler, SocketAddrPair, client_mux_config,
+        dispatch_mux_flow, server_mux_config, write_flow_kind,
     },
     tcp::proxy_server::AddressedTcpStream,
 };
@@ -152,7 +148,7 @@ struct RegisteredUdpTunnel {
 impl NamedStreamConnect for RegisteredTunnel {
     async fn connect(&self) -> io::Result<Box<dyn ConnParts>> {
         let (reader, mut writer) = self.opener.open().await?;
-        writer.write_all(&[STREAM_FLOW_KIND]).await?;
+        write_flow_kind(&mut writer, MuxFlowKind::Stream).await?;
         counter!("revtun.stream.opened").increment(1);
         let stream = AddressedMuxStream::new(
             tokio_chacha20::stream::DuplexStream::new(reader, writer),
@@ -173,9 +169,9 @@ impl NamedStreamConnect for RegisteredTunnel {
 impl NamedUdpConnect for RegisteredUdpTunnel {
     async fn connect(&self) -> io::Result<UdpConnection> {
         let (reader, mut writer) = self.opener.open().await?;
-        writer.write_all(&[UDP_FLOW_KIND]).await?;
+        write_flow_kind(&mut writer, MuxFlowKind::Udp).await?;
         counter!("revtun.udp.opened").increment(1);
-        Ok(UdpConnection::mux(
+        Ok(UdpConnection::mux_io(
             reader,
             writer,
             self.addr.local_addr,
@@ -406,53 +402,51 @@ fn dispatch_tunnel_flow(
     addr: SocketAddrPair,
     handler: &Arc<ReverseTunnelInitiatorHandler>,
 ) {
-    let stream_proxy = Arc::clone(&handler.stream_proxy);
-    let udp_proxy = Arc::clone(&handler.udp_proxy);
+    let conn_handler = Arc::new(TunnelMuxFlowHandler {
+        stream: Arc::clone(&handler.stream_proxy),
+        udp: Arc::clone(&handler.udp_proxy),
+    });
     if let Err(error) = handler
         .stream_runtime
         .session_spawner
         .try_spawn(async move {
-            let mut reader = reader;
-            let kind = tokio::time::timeout(common::STREAM_IO_TIMEOUT, reader.read_u8())
-                .await
-                .map_err(|_| {
-                    io::Error::new(io::ErrorKind::TimedOut, "tunnel flow kind timed out")
-                })??;
-            match kind {
-                STREAM_FLOW_KIND => {
-                    let stream = AddressedMuxStream::new(
-                        tokio_chacha20::stream::DuplexStream::new(reader, writer),
-                        addr,
-                    );
-                    stream_proxy.handle_stream(stream).await;
-                }
-                UDP_FLOW_KIND => {
-                    let connection =
-                        UdpConnection::mux(reader, writer, addr.local_addr, addr.peer_addr);
-                    let (reader, writer) = connection.into_split();
-                    if let Err(error) = udp_proxy
-                        .handle_tunnel_flow(reader, writer, addr.peer_addr)
-                        .await
-                    {
-                        warn!(
-                            ?error,
-                            peer = %addr.peer_addr,
-                            "Reverse-tunnel UDP flow failed"
-                        );
-                    }
-                }
-                kind => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("unsupported reverse-tunnel flow kind {kind}"),
-                    )
-                    .into());
-                }
-            }
+            let stream = tokio_chacha20::stream::DuplexStream::new(reader, writer);
+            dispatch_mux_flow(
+                stream,
+                addr,
+                conn_handler,
+                AddressedMuxStream::new,
+                "revtun.udp.flows",
+            )
+            .await;
             Ok(())
         })
     {
         log_rejection("reverse_tunnel", error);
+    }
+}
+
+/// The mux flow handler for a reverse-tunnel session: dispatches accepted
+/// streams to the initiator's stream/UDP proxy handlers exactly like the
+/// mux proxy listeners do, so the wire format is identical on every mux
+/// transport.
+#[derive(Debug)]
+struct TunnelMuxFlowHandler {
+    stream: Arc<StreamProxyConnHandler>,
+    udp: Arc<UdpProxyConnHandler>,
+}
+impl loading::HandleConn for TunnelMuxFlowHandler {}
+impl StreamServerHandleConn for TunnelMuxFlowHandler {
+    async fn handle_stream<Stream>(&self, stream: Stream)
+    where
+        Stream: ConnParts + std::fmt::Debug,
+    {
+        self.stream.handle_stream(stream).await;
+    }
+}
+impl MuxProxyConnHandler for TunnelMuxFlowHandler {
+    fn udp_proxy(&self) -> Option<&UdpProxyConnHandler> {
+        Some(&self.udp)
     }
 }
 
@@ -612,15 +606,6 @@ struct ActiveSessionGauge;
 impl Drop for ActiveSessionGauge {
     fn drop(&mut self) {
         gauge!("revtun.active_sessions").decrement(1.);
-    }
-}
-
-impl From<rtp_mux::SocketAddrPair> for SocketAddrPair {
-    fn from(value: rtp_mux::SocketAddrPair) -> Self {
-        Self {
-            local_addr: value.local_addr,
-            peer_addr: value.peer_addr,
-        }
     }
 }
 

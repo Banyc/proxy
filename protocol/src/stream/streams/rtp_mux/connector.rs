@@ -16,59 +16,14 @@ use std::{
     sync::Arc,
     task::{Context, Poll},
 };
-use thiserror::Error;
-use tokio::{
-    io::AsyncWriteExt,
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::stream::streams::mux::{STREAM_FLOW_KIND, UDP_FLOW_KIND};
+use crate::stream::streams::mux::{
+    ConnectorDriverError, MuxConnectorDriver, MuxFlowKind, write_flow_kind,
+};
 #[derive(Debug)]
 pub struct RtpMuxConnector {
     inner: Arc<::rtp_mux::RtpMuxConnector>,
-}
-
-/// A fatal error from a connector driver.
-///
-/// A connector driver is a process-lifetime task: it only exits when its
-/// command loop or reset listener terminates, which leaves the connector
-/// inert. Such an exit is fatal — the owning `server_tasks` `JoinSet` must
-/// surface it so the server does not continue running with a dead
-/// connector.
-#[derive(Debug, Error)]
-pub enum ConnectorDriverError {
-    /// The inner [`rtp_mux::RtpMuxConnector`] command loop exited. It only
-    /// returns when its command sender is dropped, i.e. every
-    /// [`RtpMuxConnector`] handle has gone away — the connector is inert.
-    #[error("rtp_mux connector command loop exited; connector is inert")]
-    ConnectorExited,
-    /// The proxy reset listener exited after a [`ConnectorResetSignal`]
-    /// reset failed, i.e. the connector refused or failed a reset.
-    #[error("rtp_mux connector reset listener exited after a failed reset")]
-    ResetListenerExited,
-}
-
-/// The driver for a proxy [`RtpMuxConnector`].
-///
-/// It concurrently runs the inner [`rtp_mux::RtpMuxConnector`]'s connector
-/// loop and the proxy reset listener that tears down sessions on a
-/// [`ConnectorResetSignal`]. Spawn it into the parent runtime's
-/// actively-reaped `JoinSet` so its exit is observed and its drop aborts
-/// both child tasks.
-///
-/// Its [`Future::Output`] is a [`ConnectorDriverError`]: the driver only
-/// exits when one of its children terminates, which is fatal — the
-/// connector is left inert and must not continue serving.
-#[must_use = "the connector is inert until the driver is spawned"]
-pub struct RtpMuxConnectorDriver(
-    Pin<Box<dyn std::future::Future<Output = ConnectorDriverError> + Send + 'static>>,
-);
-
-impl std::future::Future for RtpMuxConnectorDriver {
-    type Output = ConnectorDriverError;
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.0.as_mut().poll(cx)
-    }
 }
 
 impl RtpMuxConnector {
@@ -76,7 +31,7 @@ impl RtpMuxConnector {
         config: Arc<std::sync::RwLock<ConnectorConfig>>,
         reset: ConnectorResetSignal,
         fec: bool,
-    ) -> (Self, RtpMuxConnectorDriver) {
+    ) -> (Self, MuxConnectorDriver) {
         let bind = Arc::new(move |addr: SocketAddr| {
             config
                 .read()
@@ -100,12 +55,12 @@ impl RtpMuxConnector {
                 }
             }
         };
-        let driver = RtpMuxConnectorDriver(Box::pin(async move {
+        let driver = MuxConnectorDriver::new(async move {
             tokio::select! {
                 () = inner_driver => ConnectorDriverError::ConnectorExited,
                 () = reset_driver => ConnectorDriverError::ResetListenerExited,
             }
-        }));
+        });
         (Self { inner }, driver)
     }
 }
@@ -113,7 +68,7 @@ impl RtpMuxConnector {
 impl StreamConnect for RtpMuxConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
         let mut stream = self.inner.connect_stream(addr).await?;
-        stream.write_all(&[STREAM_FLOW_KIND]).await?;
+        write_flow_kind(&mut stream, MuxFlowKind::Stream).await?;
         Ok(Box::new(ProxyRtpMuxClientStream(stream)))
     }
     fn reset_addr(&self, addr: SocketAddr) {
@@ -139,7 +94,7 @@ impl UdpMuxDialer for RtpMuxConnector {
             .inner
             .connect_stream_with_lane(addr, LaneClass::Interactive)
             .await?;
-        stream.write_all(&[UDP_FLOW_KIND]).await?;
+        write_flow_kind(&mut stream, MuxFlowKind::Udp).await?;
         let addr = stream.addr();
         let (reader, writer) = tokio::io::split(stream);
         Ok(UdpConnection::mux_io(

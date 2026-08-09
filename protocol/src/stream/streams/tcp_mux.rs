@@ -1,7 +1,6 @@
 use std::{
     io,
     net::SocketAddr,
-    pin::Pin,
     sync::{Arc, RwLock},
 };
 
@@ -27,21 +26,20 @@ use common::{
     stream::ConnParts,
 };
 use metrics::counter;
-use mux::{MuxError, StreamReader, StreamWriter, spawn_mux_no_reconnection};
+use mux::{MuxError, spawn_mux_no_reconnection};
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::{
-    io::AsyncWriteExt,
     net::{TcpListener, TcpSocket, TcpStream, ToSocketAddrs},
     task::JoinSet,
 };
 use tracing::{instrument, warn};
 
 use crate::stream::streams::mux::{
-    AddressedMuxStream, ConnectRequestTx, MuxFlowKind, MuxProxyConnHandler, MuxProxyHandler,
-    MuxProxyUdpBuildError, STREAM_FLOW_KIND, SocketAddrPair, UDP_FLOW_KIND,
-    build_udp_proxy_handler, connect_request_channel, read_flow_kind, run_mux_accepter,
-    run_mux_connector, server_mux_config,
+    AddressedMuxStream, ConnectRequestTx, ConnectorDriverError, MuxConnectorDriver, MuxFlowKind,
+    MuxProxyConnHandler, MuxProxyHandler, MuxProxyUdpBuildError, SocketAddrPair,
+    build_udp_proxy_handler, connect_request_channel, dispatch_mux_flow, run_mux_accepter,
+    run_mux_connector, server_mux_config, write_flow_kind,
 };
 
 struct MuxState {
@@ -130,8 +128,16 @@ where
                         Box::pin(async move {
                             if let Err(error) = session_spawner
                                 .spawn(async move {
-                                    dispatch_tcp_mux_stream(reader, writer, addr, conn_handler)
-                                        .await;
+                                    let stream =
+                                        tokio_chacha20::stream::DuplexStream::new(reader, writer);
+                                    dispatch_mux_flow(
+                                        stream,
+                                        addr,
+                                        conn_handler,
+                                        AddressedMuxStream::new,
+                                        "stream.tcp_mux.udp.flows",
+                                    )
+                                    .await;
                                     Ok(())
                                 })
                                 .await
@@ -170,58 +176,6 @@ where
 }
 pub use common::serve_loop::ServeLoopError;
 
-/// Dispatch one accepted mux stream by its flow-kind byte.
-///
-/// `STREAM_FLOW_KIND` flows are wrapped as addressed streams and handed to
-/// the stream proxy handler; `UDP_FLOW_KIND` flows are framed with the same
-/// `udp_mux` layout the reverse tunnel uses and handed to the UDP proxy
-/// handler. The wire format on the stream is therefore identical to reverse
-/// tunneling.
-async fn dispatch_tcp_mux_stream<ConnHandler>(
-    reader: StreamReader,
-    writer: StreamWriter,
-    addr: SocketAddrPair,
-    conn_handler: Arc<ConnHandler>,
-) where
-    ConnHandler: MuxProxyConnHandler,
-{
-    let mut reader = reader;
-    let kind = match read_flow_kind(&mut reader).await {
-        Ok(kind) => kind,
-        Err(error) => {
-            warn!(?error, ?addr, "Failed to read mux flow kind");
-            return;
-        }
-    };
-    match kind {
-        MuxFlowKind::Stream => {
-            let stream = AddressedMuxStream::new(
-                tokio_chacha20::stream::DuplexStream::new(reader, writer),
-                addr,
-            );
-            conn_handler.handle_stream(stream).await;
-        }
-        MuxFlowKind::Udp => {
-            let Some(udp_proxy) = conn_handler.udp_proxy() else {
-                warn!(
-                    ?addr,
-                    "UDP mux flow received but the proxy has no UDP handler"
-                );
-                return;
-            };
-            counter!("stream.tcp_mux.udp.flows").increment(1);
-            let connection = UdpConnection::mux(reader, writer, addr.local_addr, addr.peer_addr);
-            let (reader, writer) = connection.into_split();
-            if let Err(error) = udp_proxy
-                .handle_tunnel_flow(reader, writer, addr.peer_addr)
-                .await
-            {
-                warn!(?error, ?addr, "TCP-mux UDP flow failed");
-            }
-        }
-    }
-}
-
 /// Injectable query for a stream's local/peer address pair.
 ///
 /// [`TcpStream`] answers from the live socket. A fake can stand in for tests
@@ -248,40 +202,11 @@ fn socket_addr_pair(query: &impl SocketAddrQuery) -> io::Result<SocketAddrPair> 
 pub struct TcpMuxConnector {
     connect_request_tx: ConnectRequestTx,
 }
-/// The driver for a [`TcpMuxConnector`].
-///
-/// It runs the `run_mux_connector` loop that dials TCP peers and manages
-/// per-address mux openers (reaping the inner mux task `JoinSet` on
-/// errors and clearing it on reset). Spawn it into the parent runtime's
-/// actively-reaped `JoinSet` so its exit is observed and its drop aborts
-/// the connector task.
-///
-/// Its [`Future::Output`] is a [`ConnectorDriverError`]: the driver only
-/// exits when the connector loop returns, which is fatal — the connector
-/// is left inert and must not continue serving.
-#[must_use = "the connector is inert until the driver is spawned"]
-pub struct TcpMuxConnectorDriver(
-    Pin<
-        Box<
-            dyn std::future::Future<Output = super::rtp_mux::ConnectorDriverError> + Send + 'static,
-        >,
-    >,
-);
-
-impl std::future::Future for TcpMuxConnectorDriver {
-    type Output = super::rtp_mux::ConnectorDriverError;
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        self.0.as_mut().poll(cx)
-    }
-}
 impl TcpMuxConnector {
     pub fn new(
         config: Arc<RwLock<ConnectorConfig>>,
         reset: ConnectorResetSignal,
-    ) -> (Self, TcpMuxConnectorDriver) {
+    ) -> (Self, MuxConnectorDriver) {
         let (connect_request_tx, connect_request_rx) = connect_request_channel();
         let driver = async move {
             run_mux_connector(reset, connect_request_rx, move |addr| {
@@ -307,13 +232,13 @@ impl TcpMuxConnector {
                 }
             })
             .await;
-            super::rtp_mux::ConnectorDriverError::ConnectorExited
+            ConnectorDriverError::ConnectorExited
         };
-        (
-            Self { connect_request_tx },
-            TcpMuxConnectorDriver(Box::pin(driver)),
-        )
+        (Self { connect_request_tx }, MuxConnectorDriver::new(driver))
     }
+}
+#[async_trait]
+impl UdpMuxDialer for TcpMuxConnector {
     /// Open a UDP datagram flow to a remote mux proxy.
     ///
     /// Opens a fresh mux stream, writes the UDP flow-kind byte, and frames
@@ -322,8 +247,8 @@ impl TcpMuxConnector {
     async fn dial_udp(&self, addr: SocketAddr) -> io::Result<UdpConnection> {
         let ((reader, mut writer), addr) = self.connect_request_tx.send(addr).await?;
         counter!("stream.tcp_mux.mux.connects").increment(1);
-        writer.write_all(&[UDP_FLOW_KIND]).await?;
-        Ok(UdpConnection::mux(
+        write_flow_kind(&mut writer, MuxFlowKind::Udp).await?;
+        Ok(UdpConnection::mux_io(
             reader,
             writer,
             addr.local_addr,
@@ -336,18 +261,11 @@ impl StreamConnect for TcpMuxConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
         let ((reader, mut writer), addr) = self.connect_request_tx.send(addr).await?;
         counter!("stream.tcp_mux.mux.connects").increment(1);
-        writer.write_all(&[STREAM_FLOW_KIND]).await?;
+        write_flow_kind(&mut writer, MuxFlowKind::Stream).await?;
         let stream = tokio_chacha20::stream::DuplexStream::new(reader, writer);
         Ok(Box::new(AddressedMuxStream::new(stream, addr)))
     }
 }
-#[async_trait]
-impl UdpMuxDialer for TcpMuxConnector {
-    async fn dial_udp(&self, addr: SocketAddr) -> io::Result<UdpConnection> {
-        self.dial_udp(addr).await
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TcpMuxProxyServerConfig {

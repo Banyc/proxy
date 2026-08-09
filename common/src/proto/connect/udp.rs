@@ -8,7 +8,7 @@ use crate::{
     },
 };
 use async_trait::async_trait;
-use mux::{StreamReader, StreamWriter, UdpMuxReader, UdpMuxWriter, udp_mux};
+use mux::{UdpMuxReader, UdpMuxWriter, udp_mux};
 use std::{
     collections::HashMap,
     fmt, io,
@@ -43,25 +43,11 @@ impl UdpConnection {
             peer_addr,
         }
     }
-    pub fn mux(
-        reader: StreamReader,
-        writer: StreamWriter,
-        local_addr: SocketAddr,
-        peer_addr: SocketAddr,
-    ) -> Self {
-        let (reader, writer) = udp_mux(reader, writer);
-        Self {
-            read: UdpConnectionRead::Mux(reader),
-            write: UdpConnectionWrite::Mux(writer),
-            local_addr: Some(local_addr),
-            peer_addr: Some(peer_addr),
-        }
-    }
-    /// A datagram flow over an arbitrary byte stream, framed exactly like
-    /// [`Self::mux`] (2-byte big-endian length prefix + payload per
-    /// datagram). The read/write halves are boxed so any `AsyncRead` +
-    /// `AsyncWrite` pair (e.g. an `rtp_mux` client stream that cannot be
-    /// split into raw mux halves) can carry a UDP flow.
+    /// A datagram flow over a multiplexed byte stream, framed with
+    /// `udp_mux` (2-byte big-endian length prefix + payload per datagram)
+    /// exactly like reverse tunneling. The read/write halves are boxed so
+    /// any `AsyncRead` + `AsyncWrite` pair (a `mux` stream, an `rtp_mux`
+    /// client stream, ...) can carry a UDP flow with the same wire format.
     pub fn mux_io<R, W>(reader: R, writer: W, local_addr: SocketAddr, peer_addr: SocketAddr) -> Self
     where
         R: AsyncRead + Unpin + Send + 'static,
@@ -90,14 +76,12 @@ impl UdpConnection {
 }
 pub enum UdpConnectionRead {
     Socket(Arc<UdpSocket>),
-    Mux(UdpMuxReader<StreamReader>),
     Io(UdpMuxReader<Box<dyn AsyncRead + Unpin + Send>>),
 }
 impl fmt::Debug for UdpConnectionRead {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Socket(socket) => f.debug_tuple("Socket").field(socket).finish(),
-            Self::Mux(reader) => f.debug_tuple("Mux").field(reader).finish(),
             Self::Io(_) => f.debug_tuple("Io").field(&"<boxed io>").finish(),
         }
     }
@@ -106,21 +90,18 @@ impl UdpRecv for UdpConnectionRead {
     async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
         match self {
             Self::Socket(socket) => socket.recv(buf).await.map_err(Into::into),
-            Self::Mux(reader) => reader.recv(buf).await.map_err(Into::into),
             Self::Io(reader) => reader.recv(buf).await.map_err(Into::into),
         }
     }
 }
 pub enum UdpConnectionWrite {
     Socket(Arc<UdpSocket>),
-    Mux(UdpMuxWriter<StreamWriter>),
     Io(UdpMuxWriter<Box<dyn AsyncWrite + Unpin + Send>>),
 }
 impl fmt::Debug for UdpConnectionWrite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Socket(socket) => f.debug_tuple("Socket").field(socket).finish(),
-            Self::Mux(writer) => f.debug_tuple("Mux").field(writer).finish(),
             Self::Io(_) => f.debug_tuple("Io").field(&"<boxed io>").finish(),
         }
     }
@@ -129,7 +110,6 @@ impl UdpSend for UdpConnectionWrite {
     async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
         match self {
             Self::Socket(socket) => socket.send(buf).await.map_err(Into::into),
-            Self::Mux(writer) => writer.send(buf).await.map_err(Into::into),
             Self::Io(writer) => writer.send(buf).await.map_err(Into::into),
         }
     }

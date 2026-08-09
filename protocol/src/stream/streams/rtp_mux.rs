@@ -18,10 +18,11 @@ use thiserror::Error;
 use tokio::net::ToSocketAddrs;
 mod connector;
 mod server;
+pub use super::mux::{ConnectorDriverError, MuxConnectorDriver};
 use crate::stream::streams::mux::{
     MuxProxyHandler, MuxProxyUdpBuildError, build_udp_proxy_handler,
 };
-pub use connector::{ConnectorDriverError, RtpMuxConnector, RtpMuxConnectorDriver};
+pub use connector::RtpMuxConnector;
 pub use server::{RtpMuxServer, ServeError};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
