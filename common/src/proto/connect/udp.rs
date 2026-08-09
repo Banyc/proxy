@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use mux::{StreamReader, StreamWriter, UdpMuxReader, UdpMuxWriter, udp_mux};
 use std::{
     collections::HashMap,
-    io,
+    fmt, io,
     net::SocketAddr,
     sync::{
         Arc, RwLock, Weak,
@@ -19,7 +19,10 @@ use std::{
     },
     time::Duration,
 };
-use tokio::net::UdpSocket;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::UdpSocket,
+};
 
 #[derive(Debug)]
 pub struct UdpConnection {
@@ -54,6 +57,27 @@ impl UdpConnection {
             peer_addr: Some(peer_addr),
         }
     }
+    /// A datagram flow over an arbitrary byte stream, framed exactly like
+    /// [`Self::mux`] (2-byte big-endian length prefix + payload per
+    /// datagram). The read/write halves are boxed so any `AsyncRead` +
+    /// `AsyncWrite` pair (e.g. an `rtp_mux` client stream that cannot be
+    /// split into raw mux halves) can carry a UDP flow.
+    pub fn mux_io<R, W>(reader: R, writer: W, local_addr: SocketAddr, peer_addr: SocketAddr) -> Self
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        let (reader, writer) = udp_mux(
+            Box::new(reader) as Box<dyn AsyncRead + Unpin + Send>,
+            Box::new(writer) as Box<dyn AsyncWrite + Unpin + Send>,
+        );
+        Self {
+            read: UdpConnectionRead::Io(reader),
+            write: UdpConnectionWrite::Io(writer),
+            local_addr: Some(local_addr),
+            peer_addr: Some(peer_addr),
+        }
+    }
     pub fn into_split(self) -> (UdpConnectionRead, UdpConnectionWrite) {
         (self.read, self.write)
     }
@@ -64,31 +88,62 @@ impl UdpConnection {
         self.peer_addr
     }
 }
-#[derive(Debug)]
 pub enum UdpConnectionRead {
     Socket(Arc<UdpSocket>),
     Mux(UdpMuxReader<StreamReader>),
+    Io(UdpMuxReader<Box<dyn AsyncRead + Unpin + Send>>),
+}
+impl fmt::Debug for UdpConnectionRead {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Socket(socket) => f.debug_tuple("Socket").field(socket).finish(),
+            Self::Mux(reader) => f.debug_tuple("Mux").field(reader).finish(),
+            Self::Io(_) => f.debug_tuple("Io").field(&"<boxed io>").finish(),
+        }
+    }
 }
 impl UdpRecv for UdpConnectionRead {
     async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
         match self {
             Self::Socket(socket) => socket.recv(buf).await.map_err(Into::into),
             Self::Mux(reader) => reader.recv(buf).await.map_err(Into::into),
+            Self::Io(reader) => reader.recv(buf).await.map_err(Into::into),
         }
     }
 }
-#[derive(Debug)]
 pub enum UdpConnectionWrite {
     Socket(Arc<UdpSocket>),
     Mux(UdpMuxWriter<StreamWriter>),
+    Io(UdpMuxWriter<Box<dyn AsyncWrite + Unpin + Send>>),
+}
+impl fmt::Debug for UdpConnectionWrite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Socket(socket) => f.debug_tuple("Socket").field(socket).finish(),
+            Self::Mux(writer) => f.debug_tuple("Mux").field(writer).finish(),
+            Self::Io(_) => f.debug_tuple("Io").field(&"<boxed io>").finish(),
+        }
+    }
 }
 impl UdpSend for UdpConnectionWrite {
     async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
         match self {
             Self::Socket(socket) => socket.send(buf).await.map_err(Into::into),
             Self::Mux(writer) => writer.send(buf).await.map_err(Into::into),
+            Self::Io(writer) => writer.send(buf).await.map_err(Into::into),
         }
     }
+}
+
+/// A dialer that opens a UDP datagram flow over a multiplexed byte stream.
+///
+/// Implemented by the `tcpmux`/`rtpmux` stream connectors: they dial the
+/// remote mux proxy, open a fresh mux stream, write the UDP flow-kind byte,
+/// and frame datagrams with the same `udp_mux` layout the reverse tunnel
+/// uses, so the wire format on the stream is identical in both cases.
+#[async_trait]
+pub trait UdpMuxDialer: std::fmt::Debug + Sync + Send + 'static {
+    async fn dial_udp(&self, addr: SocketAddr) -> io::Result<UdpConnection>;
 }
 #[async_trait]
 pub trait NamedUdpConnect: std::fmt::Debug + Sync + Send + 'static {
@@ -98,6 +153,7 @@ pub trait NamedUdpConnect: std::fmt::Debug + Sync + Send + 'static {
     }
 }
 type NamedUdpKey = (Arc<str>, Arc<str>);
+type UdpMuxDialerMap = HashMap<Arc<str>, Arc<dyn UdpMuxDialer>>;
 #[derive(Debug)]
 struct NamedUdpEntry {
     generation: u64,
@@ -198,16 +254,24 @@ impl Drop for NamedUdpRegistration {
 pub struct UdpConnector {
     config: Arc<RwLock<ConnectorConfig>>,
     named: Arc<NamedUdpRegistry>,
+    /// Per-protocol dialers that carry datagram flows over a multiplexed
+    /// byte stream (`tcpmux`, `rtpmux`, `rtpmuxfec`). Registered once at
+    /// runtime build time, alongside the stream connector table.
+    dialers: Arc<RwLock<UdpMuxDialerMap>>,
 }
 impl UdpConnector {
     pub fn new(config: Arc<RwLock<ConnectorConfig>>) -> Self {
         Self {
             config,
             named: Arc::new(NamedUdpRegistry::new()),
+            dialers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
     pub fn config(&self) -> &Arc<RwLock<ConnectorConfig>> {
         &self.config
+    }
+    pub fn register_dialer(&self, protocol: Arc<str>, dialer: Arc<dyn UdpMuxDialer>) {
+        self.dialers.write().unwrap().insert(protocol, dialer);
     }
     pub async fn connect(&self, addr: SocketAddr) -> io::Result<UdpSocket> {
         let bind = self
@@ -229,6 +293,16 @@ impl UdpConnector {
     ) -> io::Result<UdpConnection> {
         if let Some((_, name)) = addr.reverse_tunnel() {
             return tokio::time::timeout(timeout, self.named.connect(&addr.protocol, name))
+                .await
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "timed out"))?;
+        }
+        let dialer = {
+            let dialers = self.dialers.read().unwrap();
+            dialers.get(&addr.protocol).cloned()
+        };
+        if let Some(dialer) = dialer {
+            let sock_addr = *addr.address.to_socket_addrs().await?.first();
+            return tokio::time::timeout(timeout, dialer.dial_udp(sock_addr))
                 .await
                 .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "timed out"))?;
         }

@@ -2,9 +2,13 @@ use async_trait::async_trait;
 use common::{
     addr::any_addr,
     connect::{ConnectorConfig, ConnectorResetSignal},
-    proto::connect::stream::StreamConnect,
+    proto::connect::{
+        stream::StreamConnect,
+        udp::{UdpConnection, UdpMuxDialer},
+    },
     stream::{ConnParts, HasIoAddr, OwnIoStream},
 };
+use mux::LaneClass;
 use std::{
     io,
     net::SocketAddr,
@@ -13,7 +17,12 @@ use std::{
     task::{Context, Poll},
 };
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::{
+    io::AsyncWriteExt,
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+};
+
+use crate::stream::streams::mux::{STREAM_FLOW_KIND, UDP_FLOW_KIND};
 #[derive(Debug)]
 pub struct RtpMuxConnector {
     inner: Arc<::rtp_mux::RtpMuxConnector>,
@@ -103,11 +112,9 @@ impl RtpMuxConnector {
 #[async_trait]
 impl StreamConnect for RtpMuxConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
-        self.inner
-            .connect_stream(addr)
-            .await
-            .map(ProxyRtpMuxClientStream)
-            .map(|stream| Box::new(stream) as Box<dyn ConnParts>)
+        let mut stream = self.inner.connect_stream(addr).await?;
+        stream.write_all(&[STREAM_FLOW_KIND]).await?;
+        Ok(Box::new(ProxyRtpMuxClientStream(stream)))
     }
     fn reset_addr(&self, addr: SocketAddr) {
         self.inner.force_redial(addr);
@@ -123,6 +130,24 @@ impl StreamConnect for RtpMuxConnector {
     }
     fn reports_session_stats(&self) -> bool {
         true
+    }
+}
+#[async_trait]
+impl UdpMuxDialer for RtpMuxConnector {
+    async fn dial_udp(&self, addr: SocketAddr) -> io::Result<UdpConnection> {
+        let mut stream = self
+            .inner
+            .connect_stream_with_lane(addr, LaneClass::Interactive)
+            .await?;
+        stream.write_all(&[UDP_FLOW_KIND]).await?;
+        let addr = stream.addr();
+        let (reader, writer) = tokio::io::split(stream);
+        Ok(UdpConnection::mux_io(
+            reader,
+            writer,
+            addr.local_addr,
+            addr.peer_addr,
+        ))
     }
 }
 #[derive(Debug)]

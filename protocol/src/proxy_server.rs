@@ -2,9 +2,9 @@ use std::convert::Infallible;
 
 use crate::{
     stream::streams::{
-        kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, rtp::RtpProxyServerConfig,
-        rtp_mux::RtpMuxProxyServerConfig, tcp::proxy_server::TcpProxyServerConfig,
-        tcp_mux::TcpMuxProxyServerConfig,
+        kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, mux::MuxProxyHandler,
+        rtp::RtpProxyServerConfig, rtp_mux::RtpMuxProxyServerConfig,
+        tcp::proxy_server::TcpProxyServerConfig, tcp_mux::TcpMuxProxyServerConfig,
     },
     udp::proxy_server::{UdpProxyServerBuilder, UdpProxyServerConfig},
 };
@@ -79,12 +79,12 @@ impl Merge for ProxyServerConfig {
 #[derive(Debug)]
 pub struct ProxyServerLoader {
     pub tcp_server: loading::Loader<StreamProxyConnHandler>,
-    pub tcp_mux_server: loading::Loader<StreamProxyConnHandler>,
+    pub tcp_mux_server: loading::Loader<MuxProxyHandler>,
     pub udp_server: loading::Loader<UdpProxyConnHandler>,
     pub kcp_server: loading::Loader<StreamProxyConnHandler>,
     pub mptcp_server: loading::Loader<StreamProxyConnHandler>,
     pub rtp_server: loading::Loader<StreamProxyConnHandler>,
-    pub rtp_mux_server: loading::Loader<StreamProxyConnHandler>,
+    pub rtp_mux_server: loading::Loader<MuxProxyHandler>,
 }
 impl ProxyServerLoader {
     pub fn new() -> Self {
@@ -132,12 +132,12 @@ impl Default for ProxyServerLoader {
 /// untouched.
 pub struct PreparedProxyServer {
     tcp_server: loading::PreparedOps<StreamProxyConnHandler>,
-    tcp_mux_server: loading::PreparedOps<StreamProxyConnHandler>,
+    tcp_mux_server: loading::PreparedOps<MuxProxyHandler>,
     udp_server: loading::PreparedOps<UdpProxyConnHandler>,
     kcp_server: loading::PreparedOps<StreamProxyConnHandler>,
     mptcp_server: loading::PreparedOps<StreamProxyConnHandler>,
     rtp_server: loading::PreparedOps<StreamProxyConnHandler>,
-    rtp_mux_server: loading::PreparedOps<StreamProxyConnHandler>,
+    rtp_mux_server: loading::PreparedOps<MuxProxyHandler>,
 }
 
 /// Prepare a proxy-server reload: build every listener (binding sockets) and
@@ -184,14 +184,14 @@ async fn tcp_prepare(
 }
 async fn tcp_mux_prepare(
     config: Vec<TcpMuxProxyServerConfig>,
-    loader: &loading::Loader<StreamProxyConnHandler>,
+    loader: &loading::Loader<MuxProxyHandler>,
     context: &Runtime,
-) -> Result<loading::PreparedOps<StreamProxyConnHandler>, AnyError> {
+) -> Result<loading::PreparedOps<MuxProxyHandler>, AnyError> {
     loader
         .prepare(
             config
                 .into_iter()
-                .map(|s| s.into_builder(context.stream.clone()))
+                .map(|s| s.into_builder(context.clone()))
                 .collect(),
         )
         .await
@@ -257,14 +257,14 @@ async fn rtp_prepare(
 }
 async fn rtp_mux_prepare(
     config: Vec<RtpMuxProxyServerConfig>,
-    loader: &loading::Loader<StreamProxyConnHandler>,
+    loader: &loading::Loader<MuxProxyHandler>,
     context: &Runtime,
-) -> Result<loading::PreparedOps<StreamProxyConnHandler>, AnyError> {
+) -> Result<loading::PreparedOps<MuxProxyHandler>, AnyError> {
     loader
         .prepare(
             config
                 .into_iter()
-                .map(|s| s.into_builder(context.stream.clone()))
+                .map(|s| s.into_builder(context.clone()))
                 .collect(),
         )
         .await

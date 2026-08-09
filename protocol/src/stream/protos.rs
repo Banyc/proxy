@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use common::{
     connect::{ConnectorConfig, ConnectorResetSignal},
     error::AnyResult,
-    proto::connect::stream::StreamConnect,
+    proto::connect::{stream::StreamConnect, udp::UdpMuxDialer},
 };
 
 use super::{
@@ -19,7 +19,7 @@ type StreamConnectorBuilder = fn(
     Arc<RwLock<ConnectorConfig>>,
     ConnectorResetSignal,
     &mut tokio::task::JoinSet<AnyResult>,
-) -> Arc<dyn StreamConnect>;
+) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>);
 type StreamProtoTable = [(ConcreteStreamType, &'static str, StreamConnectorBuilder)];
 pub const STREAM_PROTOS: &StreamProtoTable = &[
     (

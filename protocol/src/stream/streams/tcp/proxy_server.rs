@@ -191,7 +191,10 @@ mod tests {
         header::{codec::write_header_async, preamble},
         loading::Serve,
         notify::Notify,
-        proto::{addr::RouteAddr, context::StreamRuntime, header::StreamRequestHeader},
+        proto::{
+            addr::RouteAddr, connect::udp::UdpConnector, context::StreamRuntime,
+            header::StreamRequestHeader,
+        },
         stream::pool::StreamConnPool,
     };
     use swap::Swap;
@@ -225,10 +228,13 @@ mod tests {
                 bind: BothVerIp { v4: None, v6: None },
             };
             let mut connector_drivers = tokio::task::JoinSet::new();
+            let udp_connector =
+                UdpConnector::new(Arc::new(RwLock::new(ConnectorConfig::default())));
             let connector_table = Arc::new(build_concrete_stream_connector_table(
                 connector_config,
                 connector_reset,
                 &mut connector_drivers,
+                &udp_connector,
             ));
             test_tasks.spawn(async move {
                 while let Some(result) = connector_drivers.join_next().await {

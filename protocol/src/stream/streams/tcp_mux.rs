@@ -6,16 +6,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-use metrics::counter;
-use mux::{MuxError, spawn_mux_no_reconnection};
-use serde::Deserialize;
-use thiserror::Error;
-use tokio::{
-    net::{TcpListener, TcpSocket, TcpStream, ToSocketAddrs},
-    task::JoinSet,
-};
-use tracing::{instrument, warn};
-
 use common::{
     addr::any_addr,
     connect::{ConnectorConfig, ConnectorResetSignal},
@@ -24,23 +14,34 @@ use common::{
     proto::{
         conn_handler::{
             ListenerBindError,
-            stream::{
-                StreamProxyConnHandler, StreamProxyConnHandlerBuilder,
-                StreamProxyConnHandlerConfig, StreamProxyServerBuildError,
-            },
+            stream::StreamProxyServerBuildError,
+            stream::{StreamProxyConnHandlerBuilder, StreamProxyConnHandlerConfig},
         },
-        connect::stream::StreamConnect,
-        context::StreamRuntime,
+        connect::{
+            stream::StreamConnect,
+            udp::{UdpConnection, UdpMuxDialer},
+        },
+        context::Runtime,
     },
     session::{SessionSpawner, log_rejection},
-    stream::{ConnParts, StreamServerHandleConn},
+    stream::ConnParts,
 };
+use metrics::counter;
+use mux::{MuxError, StreamReader, StreamWriter, spawn_mux_no_reconnection};
+use serde::Deserialize;
+use thiserror::Error;
+use tokio::{
+    io::AsyncWriteExt,
+    net::{TcpListener, TcpSocket, TcpStream, ToSocketAddrs},
+    task::JoinSet,
+};
+use tracing::{instrument, warn};
 
-use crate::stream::streams::mux::{run_mux_accepter, server_mux_config};
-
-use super::mux::{
-    AddressedMuxStream, ConnectRequestTx, SocketAddrPair, connect_request_channel,
-    run_mux_connector,
+use crate::stream::streams::mux::{
+    AddressedMuxStream, ConnectRequestTx, MuxFlowKind, MuxProxyConnHandler, MuxProxyHandler,
+    MuxProxyUdpBuildError, STREAM_FLOW_KIND, SocketAddrPair, UDP_FLOW_KIND,
+    build_udp_proxy_handler, connect_request_channel, read_flow_kind, run_mux_accepter,
+    run_mux_connector, server_mux_config,
 };
 
 struct MuxState {
@@ -74,7 +75,7 @@ impl<ConnHandler> TcpMuxServer<ConnHandler> {
 }
 impl<ConnHandler> loading::Serve for TcpMuxServer<ConnHandler>
 where
-    ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
+    ConnHandler: MuxProxyConnHandler,
 {
     type ConnHandler = ConnHandler;
 
@@ -87,7 +88,7 @@ where
 }
 impl<ConnHandler> TcpMuxServer<ConnHandler>
 where
-    ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
+    ConnHandler: MuxProxyConnHandler,
 {
     #[instrument(skip_all)]
     async fn serve_(
@@ -122,14 +123,15 @@ where
                     spawn_mux_no_reconnection(r, w, server_mux_config(), &mut state.mux);
                 let session_spawner = session_spawner.clone();
                 state.accepting.spawn(async move {
-                    run_mux_accepter(accepter, addr, |stream| {
+                    run_mux_accepter(accepter, addr, |(reader, writer)| {
                         counter!("stream.tcp_mux.mux.accepts").increment(1);
                         let conn_handler = Arc::clone(&conn_handler);
                         let session_spawner = session_spawner.clone();
                         Box::pin(async move {
                             if let Err(error) = session_spawner
                                 .spawn(async move {
-                                    conn_handler.handle_stream(stream).await;
+                                    dispatch_tcp_mux_stream(reader, writer, addr, conn_handler)
+                                        .await;
                                     Ok(())
                                 })
                                 .await
@@ -167,6 +169,58 @@ where
     }
 }
 pub use common::serve_loop::ServeLoopError;
+
+/// Dispatch one accepted mux stream by its flow-kind byte.
+///
+/// `STREAM_FLOW_KIND` flows are wrapped as addressed streams and handed to
+/// the stream proxy handler; `UDP_FLOW_KIND` flows are framed with the same
+/// `udp_mux` layout the reverse tunnel uses and handed to the UDP proxy
+/// handler. The wire format on the stream is therefore identical to reverse
+/// tunneling.
+async fn dispatch_tcp_mux_stream<ConnHandler>(
+    reader: StreamReader,
+    writer: StreamWriter,
+    addr: SocketAddrPair,
+    conn_handler: Arc<ConnHandler>,
+) where
+    ConnHandler: MuxProxyConnHandler,
+{
+    let mut reader = reader;
+    let kind = match read_flow_kind(&mut reader).await {
+        Ok(kind) => kind,
+        Err(error) => {
+            warn!(?error, ?addr, "Failed to read mux flow kind");
+            return;
+        }
+    };
+    match kind {
+        MuxFlowKind::Stream => {
+            let stream = AddressedMuxStream::new(
+                tokio_chacha20::stream::DuplexStream::new(reader, writer),
+                addr,
+            );
+            conn_handler.handle_stream(stream).await;
+        }
+        MuxFlowKind::Udp => {
+            let Some(udp_proxy) = conn_handler.udp_proxy() else {
+                warn!(
+                    ?addr,
+                    "UDP mux flow received but the proxy has no UDP handler"
+                );
+                return;
+            };
+            counter!("stream.tcp_mux.udp.flows").increment(1);
+            let connection = UdpConnection::mux(reader, writer, addr.local_addr, addr.peer_addr);
+            let (reader, writer) = connection.into_split();
+            if let Err(error) = udp_proxy
+                .handle_tunnel_flow(reader, writer, addr.peer_addr)
+                .await
+            {
+                warn!(?error, ?addr, "TCP-mux UDP flow failed");
+            }
+        }
+    }
+}
 
 /// Injectable query for a stream's local/peer address pair.
 ///
@@ -260,14 +314,37 @@ impl TcpMuxConnector {
             TcpMuxConnectorDriver(Box::pin(driver)),
         )
     }
+    /// Open a UDP datagram flow to a remote mux proxy.
+    ///
+    /// Opens a fresh mux stream, writes the UDP flow-kind byte, and frames
+    /// datagrams exactly like reverse tunneling: `[kind=1]` followed by
+    /// `udp_mux` length-prefixed datagrams.
+    async fn dial_udp(&self, addr: SocketAddr) -> io::Result<UdpConnection> {
+        let ((reader, mut writer), addr) = self.connect_request_tx.send(addr).await?;
+        counter!("stream.tcp_mux.mux.connects").increment(1);
+        writer.write_all(&[UDP_FLOW_KIND]).await?;
+        Ok(UdpConnection::mux(
+            reader,
+            writer,
+            addr.local_addr,
+            addr.peer_addr,
+        ))
+    }
 }
 #[async_trait]
 impl StreamConnect for TcpMuxConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
-        let ((r, w), addr) = self.connect_request_tx.send(addr).await?;
+        let ((reader, mut writer), addr) = self.connect_request_tx.send(addr).await?;
         counter!("stream.tcp_mux.mux.connects").increment(1);
-        let stream = tokio_chacha20::stream::DuplexStream::new(r, w);
+        writer.write_all(&[STREAM_FLOW_KIND]).await?;
+        let stream = tokio_chacha20::stream::DuplexStream::new(reader, writer);
         Ok(Box::new(AddressedMuxStream::new(stream, addr)))
+    }
+}
+#[async_trait]
+impl UdpMuxDialer for TcpMuxConnector {
+    async fn dial_udp(&self, addr: SocketAddr) -> io::Result<UdpConnection> {
+        self.dial_udp(addr).await
     }
 }
 
@@ -279,12 +356,13 @@ pub struct TcpMuxProxyServerConfig {
     pub inner: StreamProxyConnHandlerConfig,
 }
 impl TcpMuxProxyServerConfig {
-    pub fn into_builder(self, stream_context: StreamRuntime) -> TcpMuxProxyServerBuilder {
+    pub fn into_builder(self, runtime: Runtime) -> TcpMuxProxyServerBuilder {
         let listen_addr = Arc::clone(&self.listen_addr);
-        let inner = self.inner.into_builder(stream_context, listen_addr);
+        let inner = self.inner.into_builder(runtime.stream, listen_addr);
         TcpMuxProxyServerBuilder {
             listen_addr: self.listen_addr,
             inner,
+            udp_context: runtime.udp,
         }
     }
 }
@@ -293,23 +371,36 @@ impl TcpMuxProxyServerConfig {
 pub struct TcpMuxProxyServerBuilder {
     pub listen_addr: Arc<str>,
     pub inner: StreamProxyConnHandlerBuilder,
+    pub udp_context: common::proto::context::UdpRuntime,
 }
 impl loading::Build for TcpMuxProxyServerBuilder {
-    type ConnHandler = StreamProxyConnHandler;
+    type ConnHandler = MuxProxyHandler;
     type Server = TcpMuxServer<Self::ConnHandler>;
     type Err = TcpMuxProxyServerBuildError;
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let session_spawner = self.inner.stream_context.session_spawner.clone();
-        let stream_proxy = self.build_conn_handler()?;
-        build_tcp_mux_proxy_server(listen_addr.as_ref(), stream_proxy, session_spawner)
+        let handler = self.build_conn_handler()?;
+        build_tcp_mux_proxy_server(listen_addr.as_ref(), handler, session_spawner)
             .await
             .map_err(|e| e.into())
     }
 
     fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
-        self.inner.build().map_err(|e| e.into())
+        let stream = self
+            .inner
+            .clone()
+            .build()
+            .map_err(TcpMuxProxyServerBuildError::Hook)?;
+        let udp = build_udp_proxy_handler(
+            self.inner.header_key,
+            self.inner.payload_key,
+            self.udp_context,
+            self.inner.allow_loopback,
+        )
+        .map_err(TcpMuxProxyServerBuildError::Udp)?;
+        Ok(MuxProxyHandler { stream, udp })
     }
 
     fn key(&self) -> &Arc<str> {
@@ -321,17 +412,19 @@ pub enum TcpMuxProxyServerBuildError {
     #[error("{0}")]
     Hook(#[from] StreamProxyServerBuildError),
     #[error("{0}")]
+    Udp(#[from] MuxProxyUdpBuildError),
+    #[error("{0}")]
     Server(#[from] ListenerBindError),
 }
 pub async fn build_tcp_mux_proxy_server(
     listen_addr: impl ToSocketAddrs,
-    stream_proxy: StreamProxyConnHandler,
+    handler: MuxProxyHandler,
     session_spawner: SessionSpawner,
-) -> Result<TcpMuxServer<StreamProxyConnHandler>, ListenerBindError> {
+) -> Result<TcpMuxServer<MuxProxyHandler>, ListenerBindError> {
     let listener = TcpListener::bind(listen_addr)
         .await
         .map_err(ListenerBindError)?;
-    let server = TcpMuxServer::new(listener, stream_proxy, session_spawner);
+    let server = TcpMuxServer::new(listener, handler, session_spawner);
     Ok(server)
 }
 #[cfg(test)]

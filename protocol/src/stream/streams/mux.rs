@@ -9,17 +9,123 @@ use std::{
 
 use common::{
     connect::ConnectorResetSignal,
-    stream::{ConnParts, HasIoAddr, OwnIoStream},
+    proto::{
+        conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
+        context::UdpRuntime,
+    },
+    stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
 };
 use mux::{
     DeadControl, Initiation, MuxConfig, MuxError, StreamAccepter, StreamOpener, StreamReader,
     StreamWriter, spawn_mux_no_reconnection,
 };
+use thiserror::Error;
 use tokio::{
-    io::{AsyncRead, AsyncWrite},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite},
     task::JoinSet,
 };
 use tracing::{debug, warn};
+
+/// First byte of every mux stream opened against a mux proxy: `0` marks a
+/// stream (TCP) flow, `1` marks a UDP datagram flow. Identical to the flow
+/// kinds the reverse tunnel writes, so the wire format on a stream is the
+/// same everywhere.
+pub const STREAM_FLOW_KIND: u8 = 0;
+pub const UDP_FLOW_KIND: u8 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MuxFlowKind {
+    Stream,
+    Udp,
+}
+
+/// Read the flow-kind byte that starts every mux-proxy stream.
+///
+/// The byte is required, so EOF or a timeout before it is an error; an
+/// unknown kind is `InvalidData`. Datagram-flow peers that close before
+/// sending anything surface their close on the first datagram read instead.
+pub async fn read_flow_kind<Stream>(stream: &mut Stream) -> io::Result<MuxFlowKind>
+where
+    Stream: AsyncRead + Unpin,
+{
+    let kind = tokio::time::timeout(common::STREAM_IO_TIMEOUT, stream.read_u8())
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "mux flow kind timed out"))??;
+    match kind {
+        STREAM_FLOW_KIND => Ok(MuxFlowKind::Stream),
+        UDP_FLOW_KIND => Ok(MuxFlowKind::Udp),
+        kind => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unsupported mux flow kind {kind}"),
+        )),
+    }
+}
+
+/// The combined stream + optional UDP proxy handler behind a mux proxy
+/// listener. The two handlers share the listener's header/payload keys, and
+/// bundling them lets a reload hot-swap both at once.
+#[derive(Debug)]
+pub struct MuxProxyHandler {
+    pub stream: StreamProxyConnHandler,
+    pub udp: Option<UdpProxyConnHandler>,
+}
+impl common::loading::HandleConn for MuxProxyHandler {}
+impl StreamServerHandleConn for MuxProxyHandler {
+    async fn handle_stream<Stream>(&self, stream: Stream)
+    where
+        Stream: ConnParts + std::fmt::Debug,
+    {
+        self.stream.handle_stream(stream).await;
+    }
+}
+impl MuxProxyConnHandler for MuxProxyHandler {
+    fn udp_proxy(&self) -> Option<&UdpProxyConnHandler> {
+        self.udp.as_ref()
+    }
+}
+
+/// The handler a mux proxy listener dispatches accepted streams to.
+///
+/// Implemented by [`MuxProxyHandler`]; generic over `ConnHandler` so the
+/// mux servers stay independent of the concrete handler type.
+pub trait MuxProxyConnHandler: StreamServerHandleConn + Send + Sync + 'static {
+    fn udp_proxy(&self) -> Option<&UdpProxyConnHandler>;
+}
+
+/// Build the UDP proxy handler for a mux proxy listener from the same
+/// header/payload keys as its stream handler, so both sides of the flow
+/// share one wire-format/crypto config.
+pub fn build_udp_proxy_handler(
+    header_key: tokio_chacha20::config::ConfigBuilder,
+    payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
+    udp_context: UdpRuntime,
+    allow_loopback: bool,
+) -> Result<Option<UdpProxyConnHandler>, MuxProxyUdpBuildError> {
+    let header_crypto = header_key
+        .build()
+        .map_err(|e| MuxProxyUdpBuildError::HeaderCrypto(e.source.to_string()))?;
+    let payload_crypto = match payload_key {
+        Some(key) => Some(
+            key.build()
+                .map_err(|e| MuxProxyUdpBuildError::PayloadCrypto(e.source.to_string()))?,
+        ),
+        None => None,
+    };
+    Ok(Some(UdpProxyConnHandler::new(
+        header_crypto,
+        payload_crypto,
+        udp_context,
+        allow_loopback,
+    )))
+}
+
+#[derive(Debug, Error)]
+pub enum MuxProxyUdpBuildError {
+    #[error("HeaderCrypto: {0}")]
+    HeaderCrypto(String),
+    #[error("PayloadCrypto: {0}")]
+    PayloadCrypto(String),
+}
 
 pub fn server_mux_config() -> MuxConfig {
     MuxConfig {
@@ -39,9 +145,9 @@ pub(crate) fn client_mux_config() -> MuxConfig {
 
 pub async fn run_mux_accepter(
     mut accepter: StreamAccepter,
-    addr: SocketAddrPair,
+    _addr: SocketAddrPair,
     mut handle_conn: impl FnMut(
-        AddressedMuxStream<StreamReader, StreamWriter>,
+        (StreamReader, StreamWriter),
     ) -> Pin<Box<dyn Future<Output = ()> + Send>>,
 ) {
     loop {
@@ -49,8 +155,7 @@ pub async fn run_mux_accepter(
             Ok(stream) => stream,
             Err(DeadControl {}) => break,
         };
-        let stream = tokio_chacha20::stream::DuplexStream::new(reader, writer);
-        handle_conn(AddressedMuxStream::new(stream, addr)).await;
+        handle_conn((reader, writer)).await;
     }
 }
 

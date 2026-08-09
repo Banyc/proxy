@@ -6,7 +6,10 @@ use std::{
 use common::{
     connect::{ConnectorConfig, ConnectorResetSignal},
     error::{AnyError, AnyResult},
-    proto::connect::stream::{StreamConnect, StreamConnectorTable},
+    proto::connect::{
+        stream::{StreamConnect, StreamConnectorTable},
+        udp::{UdpConnector, UdpMuxDialer},
+    },
 };
 
 use super::{
@@ -24,16 +27,25 @@ use super::{
 /// server's `server_tasks`. Spawned connector drivers observe the
 /// connector command loops and reset listeners; their completion is
 /// surfaced by reaping `drivers`, and dropping it aborts them.
+///
+/// The mux connectors (`tcpmux`/`rtpmux`/`rtpmuxfec`) double as
+/// [`UdpMuxDialer`]s: they are registered into `udp_connector` so UDP proxy
+/// chains can open datagram flows over the same mux sessions, using the
+/// same wire format as reverse tunneling.
 pub fn build_concrete_stream_connector_table(
     config: ConnectorConfig,
     reset: ConnectorResetSignal,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
+    udp_connector: &UdpConnector,
 ) -> StreamConnectorTable {
     let config = Arc::new(RwLock::new(config));
     let init: Vec<(&'static str, Arc<dyn StreamConnect>)> = STREAM_PROTOS
         .iter()
         .map(|(_, ty, build)| {
-            let connector = build(config.clone(), reset.clone(), drivers);
+            let (connector, dialer) = build(config.clone(), reset.clone(), drivers);
+            if let Some(dialer) = dialer {
+                udp_connector.register_dialer((*ty).into(), dialer);
+            }
             (*ty, connector)
         })
         .collect();
@@ -45,15 +57,16 @@ pub fn build_tcp_connector(
     config: Arc<RwLock<ConnectorConfig>>,
     _reset: ConnectorResetSignal,
     _drivers: &mut tokio::task::JoinSet<AnyResult>,
-) -> Arc<dyn StreamConnect> {
-    Arc::new(TcpConnector::new(config.clone()))
+) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
+    (Arc::new(TcpConnector::new(config.clone())), None)
 }
 pub fn build_tcp_mux_connector(
     config: Arc<RwLock<ConnectorConfig>>,
     reset: ConnectorResetSignal,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
-) -> Arc<dyn StreamConnect> {
+) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     let (connector, driver) = TcpMuxConnector::new(config.clone(), reset);
+    let connector = Arc::new(connector);
     drivers.spawn(async move {
         // A connector driver exiting is fatal — the connector is inert.
         // Surface the typed error instead of converting completion to Ok(()),
@@ -61,41 +74,44 @@ pub fn build_tcp_mux_connector(
         let error = driver.await;
         Err(Box::new(error) as AnyError)
     });
-    Arc::new(connector)
+    (
+        Arc::clone(&connector) as Arc<dyn StreamConnect>,
+        Some(connector as Arc<dyn UdpMuxDialer>),
+    )
 }
 pub fn build_kcp_connector(
     config: Arc<RwLock<ConnectorConfig>>,
     _reset: ConnectorResetSignal,
     _drivers: &mut tokio::task::JoinSet<AnyResult>,
-) -> Arc<dyn StreamConnect> {
-    Arc::new(KcpConnector::new(config.clone()))
+) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
+    (Arc::new(KcpConnector::new(config.clone())), None)
 }
 pub fn build_mptcp_connector(
     _config: Arc<RwLock<ConnectorConfig>>,
     _reset: ConnectorResetSignal,
     _drivers: &mut tokio::task::JoinSet<AnyResult>,
-) -> Arc<dyn StreamConnect> {
-    Arc::new(MptcpConnector)
+) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
+    (Arc::new(MptcpConnector), None)
 }
 pub fn build_rtp_connector(
     config: Arc<RwLock<ConnectorConfig>>,
     _reset: ConnectorResetSignal,
     _drivers: &mut tokio::task::JoinSet<AnyResult>,
-) -> Arc<dyn StreamConnect> {
-    Arc::new(RtpConnector::new(config.clone(), false))
+) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
+    (Arc::new(RtpConnector::new(config.clone(), false)), None)
 }
 pub fn build_rtp_mux_connector(
     config: Arc<RwLock<ConnectorConfig>>,
     reset: ConnectorResetSignal,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
-) -> Arc<dyn StreamConnect> {
+) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     build_rtp_mux_connector_with_fec(config, reset, drivers, false)
 }
 pub fn build_rtp_mux_fec_connector(
     config: Arc<RwLock<ConnectorConfig>>,
     reset: ConnectorResetSignal,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
-) -> Arc<dyn StreamConnect> {
+) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     build_rtp_mux_connector_with_fec(config, reset, drivers, true)
 }
 fn build_rtp_mux_connector_with_fec(
@@ -103,8 +119,9 @@ fn build_rtp_mux_connector_with_fec(
     reset: ConnectorResetSignal,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
     fec: bool,
-) -> Arc<dyn StreamConnect> {
+) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     let (connector, driver) = RtpMuxConnector::new(config.clone(), reset, fec);
+    let connector = Arc::new(connector);
     drivers.spawn(async move {
         // A connector driver exiting is fatal — the connector is inert.
         // Surface the typed error instead of converting completion to Ok(()),
@@ -112,5 +129,8 @@ fn build_rtp_mux_connector_with_fec(
         let error = driver.await;
         Err(Box::new(error) as AnyError)
     });
-    Arc::new(connector)
+    (
+        Arc::clone(&connector) as Arc<dyn StreamConnect>,
+        Some(connector as Arc<dyn UdpMuxDialer>),
+    )
 }

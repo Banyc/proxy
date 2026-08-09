@@ -77,16 +77,21 @@ where
         VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
     ));
     let connector_reset = ConnectorResetSignal(serve_context.system_suspended.0);
+    let udp_connector = Arc::new(UdpConnector::new(Arc::new(RwLock::new(
+        ConnectorConfig::default(),
+    ))));
+    let stream_connector_table = Arc::new(build_concrete_stream_connector_table(
+        ConnectorConfig::default(),
+        connector_reset,
+        &mut server_tasks,
+        &udp_connector,
+    ));
     let runtime = Runtime {
         session_spawner: session_spawner.clone(),
         stream: StreamRuntime {
             session_table: serve_context.stream_session_table,
             pool: stream_pool,
-            connector_table: Arc::new(build_concrete_stream_connector_table(
-                ConnectorConfig::default(),
-                connector_reset,
-                &mut server_tasks,
-            )),
+            connector_table: stream_connector_table,
             replay_validator: Arc::clone(&stream_validator),
             session_spawner: session_spawner.clone(),
             retention: serve_context.retention.clone(),
@@ -94,9 +99,7 @@ where
         udp: UdpRuntime {
             session_table: serve_context.udp_session_table,
             time_validator: Arc::clone(&udp_validator),
-            connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
-                ConnectorConfig::default(),
-            )))),
+            connector: udp_connector,
             session_spawner: session_spawner.clone(),
             retention: serve_context.retention.clone(),
         },

@@ -32,6 +32,17 @@ A private-side initiator can establish an outbound tunnel to a public-side respo
 - Optional payload encryption terminates at the public proxy-chain entry and the private initiator, which must share the exact same `payload_key`. The virtual chain entry (`revtuntcp://name` / `revtunrtp://name`) carries that key as its payload key; the responder is transport-only and intentionally accepts no `payload_key`.
 - The access client nests those payload layers in chain order, and each matching proxy server removes exactly its own layer before forwarding traffic to the next hop. A hop's upstream entry and its proxy server must use the same key.
 
+## Mux proxy UDP flows
+
+The `tcpmux` and `rtpmux` proxy servers accept both stream and UDP flows over a single mux connection. Every mux substream starts with a flow-kind byte, and a UDP flow is framed exactly like a reverse-tunnel UDP flow, so the wire format on a stream is the same in both cases:
+
+```
+0: [kind=0 | proxy protocol]                          # stream flow
+1: [kind=1 | u16 datagram length | payload]...        # UDP flow (udp_mux framing)
+```
+
+A `tcpmux://host:port` / `rtpmux://host:port` / `rtpmuxfec://host:port` address therefore works as a hop in a UDP proxy chain: the client dials the mux proxy, opens a UDP-flow substream, and each datagram carries the same routed/compact request framing as any other UDP hop. The proxy server dispatches the flow to its UDP proxy handler, which shares the listener's `header_key`/`payload_key`.
+
 ## Protocol
 
 ### TCP variant

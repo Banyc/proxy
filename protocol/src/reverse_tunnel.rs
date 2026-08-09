@@ -41,13 +41,14 @@ use tokio::{
 use tracing::{info, warn};
 
 use crate::stream::streams::{
-    mux::{AddressedMuxStream, SocketAddrPair, client_mux_config, server_mux_config},
+    mux::{
+        AddressedMuxStream, STREAM_FLOW_KIND, SocketAddrPair, UDP_FLOW_KIND, client_mux_config,
+        server_mux_config,
+    },
     tcp::proxy_server::AddressedTcpStream,
 };
 
 const REGISTER_VERSION: u16 = 2;
-const STREAM_FLOW_KIND: u8 = 0;
-const UDP_FLOW_KIND: u8 = 1;
 const INITIAL_RECONNECT_DELAY: Duration = Duration::from_millis(250);
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
 const STABLE_SESSION: Duration = Duration::from_secs(30);
@@ -1146,6 +1147,7 @@ mod tests {
 
     async fn test_stream_runtime(
         tasks: &mut TestScope,
+        udp_connector: &UdpConnector,
     ) -> (StreamRuntime, common::session::SessionSpawner) {
         let (session_spawner, mut session_rx) = common::session::SessionSpawner::channel();
         tasks.spawn_required("session spawner", async move {
@@ -1168,6 +1170,7 @@ mod tests {
             ConnectorConfig::default(),
             reset,
             &mut connector_drivers,
+            udp_connector,
         ));
         tasks.spawn_required("connector drivers", async move {
             while let Some(result) = connector_drivers.join_next().await {
@@ -1195,15 +1198,16 @@ mod tests {
     }
 
     async fn test_runtime(tasks: &mut TestScope) -> (Runtime, common::session::SessionSpawner) {
-        let (stream, session_spawner) = test_stream_runtime(tasks).await;
+        let udp_connector = Arc::new(UdpConnector::new(Arc::new(RwLock::new(
+            ConnectorConfig::default(),
+        ))));
+        let (stream, session_spawner) = test_stream_runtime(tasks, &udp_connector).await;
         let runtime = Runtime {
             stream: stream.clone(),
             udp: UdpRuntime {
                 session_table: None,
                 time_validator: Arc::new(TimeValidator::new(VALIDATOR_TIME_FRAME)),
-                connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
-                    ConnectorConfig::default(),
-                )))),
+                connector: udp_connector,
                 session_spawner: session_spawner.clone(),
                 retention: stream.retention.clone(),
             },

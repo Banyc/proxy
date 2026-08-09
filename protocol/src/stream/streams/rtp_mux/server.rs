@@ -2,9 +2,11 @@ pub use ::rtp_mux::ServeError;
 use common::{
     error::AnyResult,
     loading,
+    proto::connect::udp::UdpConnection,
     session::{SessionSpawner, log_rejection},
-    stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    stream::{ConnParts, HasIoAddr, OwnIoStream},
 };
+use metrics::counter;
 use std::{
     io,
     net::SocketAddr,
@@ -13,6 +15,10 @@ use std::{
     task::{Context, Poll},
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tracing::warn;
+
+use crate::stream::streams::mux::{MuxFlowKind, MuxProxyConnHandler, read_flow_kind};
+
 #[derive(Debug)]
 pub struct RtpMuxServer<ConnHandler> {
     inner: ::rtp_mux::RtpMuxServer,
@@ -50,7 +56,7 @@ impl<ConnHandler> RtpMuxServer<ConnHandler> {
 }
 impl<ConnHandler> loading::Serve for RtpMuxServer<ConnHandler>
 where
-    ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
+    ConnHandler: MuxProxyConnHandler,
 {
     type ConnHandler = ConnHandler;
     async fn serve(
@@ -78,7 +84,7 @@ where
             let handler = handler_for_stream.read().unwrap().clone();
             let session_spawner = session_spawner.clone();
             match session_spawner.try_spawn(async move {
-                handler.handle_stream(ProxyRtpMuxStream(stream)).await;
+                dispatch_rtp_mux_stream(stream, handler).await;
                 Ok(())
             }) {
                 Ok(()) => {}
@@ -98,6 +104,48 @@ where
                         Err(()) => return Ok(()),
                     }
                 }
+            }
+        }
+    }
+}
+/// Dispatch one accepted rtp_mux stream by its flow-kind byte, with the
+/// same wire format as reverse tunneling: `[kind]` then, for UDP flows,
+/// `udp_mux` length-prefixed datagrams.
+async fn dispatch_rtp_mux_stream<ConnHandler>(
+    mut stream: ::rtp_mux::ServerStream,
+    conn_handler: Arc<ConnHandler>,
+) where
+    ConnHandler: MuxProxyConnHandler,
+{
+    let addr = stream.addr();
+    let kind = match read_flow_kind(&mut stream).await {
+        Ok(kind) => kind,
+        Err(error) => {
+            warn!(?error, ?addr, "Failed to read mux flow kind");
+            return;
+        }
+    };
+    match kind {
+        MuxFlowKind::Stream => {
+            conn_handler.handle_stream(ProxyRtpMuxStream(stream)).await;
+        }
+        MuxFlowKind::Udp => {
+            let Some(udp_proxy) = conn_handler.udp_proxy() else {
+                warn!(
+                    ?addr,
+                    "UDP mux flow received but the proxy has no UDP handler"
+                );
+                return;
+            };
+            counter!("stream.rtp_mux.udp.flows").increment(1);
+            let (reader, writer) = tokio::io::split(stream);
+            let connection = UdpConnection::mux_io(reader, writer, addr.local_addr, addr.peer_addr);
+            let (reader, writer) = connection.into_split();
+            if let Err(error) = udp_proxy
+                .handle_tunnel_flow(reader, writer, addr.peer_addr)
+                .await
+            {
+                warn!(?error, ?addr, "RTP-mux UDP flow failed");
             }
         }
     }

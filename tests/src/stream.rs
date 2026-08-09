@@ -1,6 +1,10 @@
 #[cfg(test)]
 mod tests {
-    use std::{io, sync::Arc, time::Duration};
+    use std::{
+        io,
+        sync::{Arc, RwLock},
+        time::Duration,
+    };
 
     use ae::anti_replay::ReplayValidator;
     use common::{
@@ -13,6 +17,7 @@ mod tests {
             client::stream::{establish, probe_rtt},
             conn::stream::ConnAndAddr,
             conn_handler::stream::StreamProxyConnHandler,
+            connect::udp::UdpConnector,
             context::StreamRuntime,
         },
         route::ConnConfig,
@@ -22,7 +27,7 @@ mod tests {
         addr::ConcreteStreamType,
         connect::build_concrete_stream_connector_table,
         streams::{
-            kcp::build_kcp_proxy_server, mptcp::build_mptcp_proxy_server,
+            kcp::build_kcp_proxy_server, mptcp::build_mptcp_proxy_server, mux::MuxProxyHandler,
             rtp::build_rtp_proxy_server, rtp_mux::build_rtp_mux_proxy_server,
             tcp::proxy_server::build_tcp_proxy_server, tcp_mux::build_tcp_mux_proxy_server,
         },
@@ -58,10 +63,12 @@ mod tests {
         // per-protocol connector loops (e.g. rtp_mux, tcp_mux) and are reaped
         // here for the lifetime of the test runtime.
         let mut connector_drivers = tokio::task::JoinSet::new();
+        let udp_connector = UdpConnector::new(Arc::new(RwLock::new(ConnectorConfig::default())));
         let connector_table = Arc::new(build_concrete_stream_connector_table(
             ConnectorConfig::default(),
             connector_reset,
             &mut connector_drivers,
+            &udp_connector,
         ));
         join_set.spawn(async move {
             while let Some(res) = connector_drivers.join_next().await {
@@ -127,13 +134,14 @@ mod tests {
             Arc::clone(addr),
             allow_loopback,
         );
-        let (set_conn_handler_tx, set_conn_handler_rx) = loading::replace_conn_handler_channel();
         let proxy_addr = match ty {
             ConcreteStreamType::Tcp => {
                 let server = build_tcp_proxy_server(addr.as_ref(), proxy, session_spawner.clone())
                     .await
                     .unwrap();
                 let proxy_addr = server.listener().local_addr().unwrap();
+                let (set_conn_handler_tx, set_conn_handler_rx) =
+                    loading::replace_conn_handler_channel();
                 join_set.spawn(async move {
                     let _set_conn_handler_tx = set_conn_handler_tx;
                     server.serve(set_conn_handler_rx).await.unwrap();
@@ -141,11 +149,19 @@ mod tests {
                 proxy_addr
             }
             ConcreteStreamType::TcpMux => {
-                let server =
-                    build_tcp_mux_proxy_server(addr.as_ref(), proxy, session_spawner.clone())
-                        .await
-                        .unwrap();
+                let server = build_tcp_mux_proxy_server(
+                    addr.as_ref(),
+                    MuxProxyHandler {
+                        stream: proxy,
+                        udp: None,
+                    },
+                    session_spawner.clone(),
+                )
+                .await
+                .unwrap();
                 let proxy_addr = server.listener().local_addr().unwrap();
+                let (set_conn_handler_tx, set_conn_handler_rx) =
+                    loading::replace_conn_handler_channel();
                 join_set.spawn(async move {
                     let _set_conn_handler_tx = set_conn_handler_tx;
                     server.serve(set_conn_handler_rx).await.unwrap();
@@ -157,6 +173,8 @@ mod tests {
                     .await
                     .unwrap();
                 let proxy_addr = server.listener().local_addr().unwrap();
+                let (set_conn_handler_tx, set_conn_handler_rx) =
+                    loading::replace_conn_handler_channel();
                 join_set.spawn(async move {
                     let _set_conn_handler_tx = set_conn_handler_tx;
                     server.serve(set_conn_handler_rx).await.unwrap();
@@ -169,6 +187,8 @@ mod tests {
                         .await
                         .unwrap();
                 let proxy_addr = server.listener().local_addrs().next().unwrap().unwrap();
+                let (set_conn_handler_tx, set_conn_handler_rx) =
+                    loading::replace_conn_handler_channel();
                 join_set.spawn(async move {
                     let _set_conn_handler_tx = set_conn_handler_tx;
                     server.serve(set_conn_handler_rx).await.unwrap();
@@ -180,6 +200,8 @@ mod tests {
                     .await
                     .unwrap();
                 let proxy_addr = server.listener().local_addr();
+                let (set_conn_handler_tx, set_conn_handler_rx) =
+                    loading::replace_conn_handler_channel();
                 join_set.spawn(async move {
                     let _set_conn_handler_tx = set_conn_handler_tx;
                     server.serve(set_conn_handler_rx).await.unwrap();
@@ -188,11 +210,20 @@ mod tests {
             }
             ConcreteStreamType::RtpMux => {
                 let fec = false;
-                let server =
-                    build_rtp_mux_proxy_server(addr.as_ref(), proxy, fec, session_spawner.clone())
-                        .await
-                        .unwrap();
+                let server = build_rtp_mux_proxy_server(
+                    addr.as_ref(),
+                    MuxProxyHandler {
+                        stream: proxy,
+                        udp: None,
+                    },
+                    fec,
+                    session_spawner.clone(),
+                )
+                .await
+                .unwrap();
                 let proxy_addr = server.listener().local_addr();
+                let (set_conn_handler_tx, set_conn_handler_rx) =
+                    loading::replace_conn_handler_channel();
                 join_set.spawn(async move {
                     let _set_conn_handler_tx = set_conn_handler_tx;
                     server.serve(set_conn_handler_rx).await.unwrap();
@@ -201,11 +232,20 @@ mod tests {
             }
             ConcreteStreamType::RtpMuxFec => {
                 let fec = true;
-                let server =
-                    build_rtp_mux_proxy_server(addr.as_ref(), proxy, fec, session_spawner.clone())
-                        .await
-                        .unwrap();
+                let server = build_rtp_mux_proxy_server(
+                    addr.as_ref(),
+                    MuxProxyHandler {
+                        stream: proxy,
+                        udp: None,
+                    },
+                    fec,
+                    session_spawner.clone(),
+                )
+                .await
+                .unwrap();
                 let proxy_addr = server.listener().local_addr();
+                let (set_conn_handler_tx, set_conn_handler_rx) =
+                    loading::replace_conn_handler_channel();
                 join_set.spawn(async move {
                     let _set_conn_handler_tx = set_conn_handler_tx;
                     server.serve(set_conn_handler_rx).await.unwrap();

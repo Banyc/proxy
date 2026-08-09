@@ -5,27 +5,38 @@ mod tests {
         time::Duration,
     };
 
-    use ae::anti_replay::TimeValidator;
+    use ae::anti_replay::{ReplayValidator, TimeValidator};
     use bytes::BytesMut;
     use common::{
         addr::InternetAddr,
-        anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
-        connect::ConnectorConfig,
+        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
+        connect::{ConnectorConfig, ConnectorResetSignal},
         header::route::RouteErrorKind,
         loading::{self, Serve},
+        notify::Notify,
         proto::{
+            addr::RouteAddr,
             client::{
                 self,
                 udp::{UdpProxyClient, UdpProxyClientReadHalf, probe_rtt},
             },
-            conn_handler::udp::UdpProxyConnHandler,
+            conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
             connect::udp::UdpConnector,
-            context::UdpRuntime,
+            context::{Runtime, StreamRuntime, UdpRuntime},
         },
         route::ConnConfig,
+        stream::pool::StreamConnPool,
         udp::PACKET_BUFFER_LENGTH,
     };
+    use protocol::stream::{
+        connect::build_concrete_stream_connector_table,
+        streams::{
+            mux::MuxProxyHandler, rtp_mux::build_rtp_mux_proxy_server,
+            tcp_mux::build_tcp_mux_proxy_server,
+        },
+    };
     use serial_test::serial;
+    use swap::Swap;
     use tokio::net::UdpSocket;
 
     use crate::{STRESS_CHAINS, STRESS_PARALLEL, STRESS_SERIAL};
@@ -479,5 +490,163 @@ mod tests {
 
         // Read response
         read_response(&mut client_read, resp_msg).await.unwrap();
+    }
+
+    /// A full runtime whose `UdpConnector` has the tcpmux/rtpmux/rtpmuxfec
+    /// mux dialers registered, so UDP proxy chains can carry datagrams over
+    /// a mux stream with the reverse-tunnel wire format.
+    async fn mux_udp_runtime(join_set: &mut tokio::task::JoinSet<()>) -> Runtime {
+        let (session_spawner, mut session_rx) = common::session::SessionSpawner::channel();
+        join_set.spawn(async move {
+            let mut sessions = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    Some(fut) = session_rx.recv() => { sessions.spawn(fut); }
+                    Some(res) = sessions.join_next() => { let _ = res.unwrap(); }
+                    else => break,
+                }
+            }
+        });
+        let mut connector_drivers = tokio::task::JoinSet::new();
+        let udp_connector = Arc::new(UdpConnector::new(Arc::new(RwLock::new(
+            ConnectorConfig::default(),
+        ))));
+        let connector_table = Arc::new(build_concrete_stream_connector_table(
+            ConnectorConfig::default(),
+            ConnectorResetSignal(Notify::new()),
+            &mut connector_drivers,
+            &udp_connector,
+        ));
+        join_set.spawn(async move {
+            while let Some(res) = connector_drivers.join_next().await {
+                let _ = res.unwrap();
+            }
+        });
+        let (retention_actor, retention) = common::retention::RetentionActor::new();
+        join_set.spawn(async move {
+            let _ = retention_actor.run().await;
+        });
+        let stream = StreamRuntime {
+            session_table: None,
+            pool: Swap::new(StreamConnPool::empty()),
+            connector_table,
+            replay_validator: Arc::new(ReplayValidator::new(
+                VALIDATOR_TIME_FRAME,
+                VALIDATOR_CAPACITY,
+            )),
+            session_spawner: session_spawner.clone(),
+            retention,
+        };
+        let udp = UdpRuntime {
+            session_table: None,
+            time_validator: Arc::new(TimeValidator::new(
+                VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
+            )),
+            connector: udp_connector,
+            session_spawner: session_spawner.clone(),
+            retention: stream.retention.clone(),
+        };
+        Runtime {
+            stream: stream.clone(),
+            udp,
+            session_spawner,
+        }
+    }
+
+    /// Spawn a tcpmux/rtpmux proxy server whose UDP handler accepts
+    /// datagram flows, and return the chain config pointing at it.
+    async fn spawn_mux_udp_proxy(
+        join_set: &mut tokio::task::JoinSet<()>,
+        runtime: &Runtime,
+        protocol: &str,
+    ) -> ConnConfig {
+        let crypto = create_random_crypto();
+        let payload_crypto = create_random_crypto();
+        let stream_proxy = StreamProxyConnHandler::new(
+            crypto.clone(),
+            Some(payload_crypto.clone()),
+            runtime.stream.clone(),
+            Arc::from(format!("udp-over-{protocol}")),
+            true,
+        );
+        let udp_proxy = UdpProxyConnHandler::new(
+            crypto.clone(),
+            Some(payload_crypto.clone()),
+            runtime.udp.clone(),
+            true,
+        );
+        let handler = MuxProxyHandler {
+            stream: stream_proxy,
+            udp: Some(udp_proxy),
+        };
+        let session_spawner = runtime.session_spawner.clone();
+        let (set_conn_handler_tx, set_conn_handler_rx) = loading::replace_conn_handler_channel();
+        let proxy_addr = match protocol {
+            "tcpmux" => {
+                let server = build_tcp_mux_proxy_server("127.0.0.1:0", handler, session_spawner)
+                    .await
+                    .unwrap();
+                let addr = server.listener().local_addr().unwrap();
+                join_set.spawn(async move {
+                    let _set_conn_handler_tx = set_conn_handler_tx;
+                    server.serve(set_conn_handler_rx).await.unwrap();
+                });
+                addr
+            }
+            "rtpmux" => {
+                let server =
+                    build_rtp_mux_proxy_server("127.0.0.1:0", handler, false, session_spawner)
+                        .await
+                        .unwrap();
+                let addr = server.listener().local_addr();
+                join_set.spawn(async move {
+                    let _set_conn_handler_tx = set_conn_handler_tx;
+                    server.serve(set_conn_handler_rx).await.unwrap();
+                });
+                addr
+            }
+            other => panic!("unsupported mux protocol {other}"),
+        };
+        ConnConfig {
+            address: RouteAddr {
+                address: proxy_addr.into(),
+                protocol: protocol.into(),
+            },
+            header_crypto: crypto,
+            payload_crypto: Some(payload_crypto),
+        }
+    }
+
+    async fn verify_udp_flows_over_mux_proxy(protocol: &str) {
+        let mut join_set = tokio::task::JoinSet::new();
+        let runtime = mux_udp_runtime(&mut join_set).await;
+        let proxy_config = spawn_mux_udp_proxy(&mut join_set, &runtime, protocol).await;
+        let req_msg = b"ping";
+        let resp_msg = b"pong";
+        let greet_addr = spawn_greet(&mut join_set, "127.0.0.1:0", req_msg, resp_msg, 2).await;
+        let client = tokio::time::timeout(
+            Duration::from_secs(30),
+            UdpProxyClient::establish(vec![proxy_config].into(), greet_addr, &runtime.udp),
+        )
+        .await
+        .expect("timed out establishing the UDP session over the mux proxy")
+        .unwrap();
+        let (mut client_read, mut client_write) = client.into_split();
+        // Two datagrams over the same mux UDP flow; the second exercises the
+        // compact request form after the first response confirms the route.
+        client_write.send(req_msg).await.unwrap();
+        read_response(&mut client_read, resp_msg).await.unwrap();
+        client_write.send(req_msg).await.unwrap();
+        read_response(&mut client_read, resp_msg).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn udp_datagrams_flow_over_tcpmux_proxy() {
+        verify_udp_flows_over_mux_proxy("tcpmux").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn udp_datagrams_flow_over_rtpmux_proxy() {
+        verify_udp_flows_over_mux_proxy("rtpmux").await;
     }
 }
