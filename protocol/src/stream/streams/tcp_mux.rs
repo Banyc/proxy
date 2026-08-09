@@ -168,11 +168,26 @@ where
 }
 pub use common::serve_loop::ServeLoopError;
 
-fn socket_addr_pair(stream: &tokio::net::TcpStream) -> io::Result<SocketAddrPair> {
-    Ok(SocketAddrPair {
-        local_addr: stream.local_addr()?,
-        peer_addr: stream.peer_addr()?,
-    })
+/// Injectable query for a stream's local/peer address pair.
+///
+/// [`TcpStream`] answers from the live socket. A fake can stand in for tests
+/// that must deterministically exercise the reset path: dropping a listener
+/// does not guarantee that an established connection is immediately reset,
+/// and the socket's address getters may keep answering afterwards.
+trait SocketAddrQuery {
+    fn socket_addr_pair(&self) -> io::Result<SocketAddrPair>;
+}
+impl SocketAddrQuery for TcpStream {
+    fn socket_addr_pair(&self) -> io::Result<SocketAddrPair> {
+        Ok(SocketAddrPair {
+            local_addr: self.local_addr()?,
+            peer_addr: self.peer_addr()?,
+        })
+    }
+}
+
+fn socket_addr_pair(query: &impl SocketAddrQuery) -> io::Result<SocketAddrPair> {
+    query.socket_addr_pair()
 }
 
 #[derive(Debug)]
@@ -322,16 +337,21 @@ pub async fn build_tcp_mux_proxy_server(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::TcpStream;
 
-    #[tokio::test]
-    async fn a_reset_connection_is_an_error_not_a_panic() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let stream = TcpStream::connect(listener.local_addr().unwrap())
-            .await
-            .unwrap();
-        drop(listener);
-        let _ = stream.try_write(b"x");
-        assert!(socket_addr_pair(&stream).is_err());
+    /// Always fails, as a connection reset does at the address-query layer.
+    struct ResetAddressQuery;
+    impl SocketAddrQuery for ResetAddressQuery {
+        fn socket_addr_pair(&self) -> io::Result<SocketAddrPair> {
+            Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                "connection reset",
+            ))
+        }
+    }
+
+    #[test]
+    fn a_reset_connection_is_an_error_not_a_panic() {
+        let error = socket_addr_pair(&ResetAddressQuery).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
     }
 }
