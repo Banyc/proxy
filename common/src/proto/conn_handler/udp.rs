@@ -614,12 +614,12 @@ mod tests {
     use super::*;
     use crate::{
         anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
-        connect::ConnectorConfig,
+        connect::{ConnectorConfig, ConnectorConfigHandle},
         header::route::RouteRequest,
         proto::{conn::udp::UDP_FLOW_ID_LEN, connect::udp::UdpConnector, context::UdpRuntime},
     };
     use ae::anti_replay::TimeValidator;
-    use std::sync::{Arc, RwLock};
+    use std::sync::Arc;
 
     fn crypto() -> tokio_chacha20::config::Config {
         tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into())
@@ -630,9 +630,9 @@ mod tests {
         let (_retention_actor, retention) = crate::retention::RetentionActor::new();
         let udp_context = UdpRuntime {
             session_table: None,
-            connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
+            connector: Arc::new(UdpConnector::new(ConnectorConfigHandle::new(
                 ConnectorConfig::default(),
-            )))),
+            ))),
             time_validator: Arc::new(TimeValidator::new(
                 VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
             )),

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use common::{
     addr::any_addr,
-    connect::{ConnectorConfig, ConnectorResetSignal},
+    connect::{ConnectorConfigHandle, ConnectorResetSignal},
     proto::connect::{
         stream::StreamConnect,
         udp::{UdpConnection, UdpMuxDialer},
@@ -28,14 +28,13 @@ pub struct RtpMuxConnector {
 
 impl RtpMuxConnector {
     pub fn new(
-        config: Arc<std::sync::RwLock<ConnectorConfig>>,
+        config: ConnectorConfigHandle,
         reset: ConnectorResetSignal,
         fec: bool,
     ) -> (Self, MuxConnectorDriver) {
         let bind = Arc::new(move |addr: SocketAddr| {
             config
-                .read()
-                .unwrap()
+                .current()
                 .bind
                 .get_matched(&addr.ip())
                 .map(|ip| SocketAddr::new(ip, 0))

@@ -1,9 +1,4 @@
-use std::{
-    io,
-    net::SocketAddr,
-    pin::Pin,
-    sync::{Arc, RwLock},
-};
+use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use metrics::counter;
@@ -17,7 +12,7 @@ use tracing::instrument;
 
 use common::{
     addr::any_addr,
-    connect::ConnectorConfig,
+    connect::ConnectorConfigHandle,
     error::AnyResult,
     loading,
     proto::{
@@ -139,11 +134,11 @@ pub use common::serve_loop::ServeLoopError;
 
 #[derive(Debug, Clone)]
 pub struct RtpConnector {
-    config: Arc<RwLock<ConnectorConfig>>,
+    config: ConnectorConfigHandle,
     fec: bool,
 }
 impl RtpConnector {
-    pub fn new(config: Arc<RwLock<ConnectorConfig>>, fec: bool) -> Self {
+    pub fn new(config: ConnectorConfigHandle, fec: bool) -> Self {
         Self { config, fec }
     }
 }
@@ -152,8 +147,7 @@ impl StreamConnect for RtpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
         let bind = self
             .config
-            .read()
-            .unwrap()
+            .current()
             .bind
             .get_matched(&addr.ip())
             .map(|ip| SocketAddr::new(ip, 0))

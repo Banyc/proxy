@@ -82,8 +82,11 @@ pub enum UdpProxyBuildError {
 mod tests {
     use super::*;
     use ae::anti_replay::TimeValidator;
-    use common::{connect::ConnectorConfig, proto::connect::udp::UdpConnector};
-    use std::{sync::RwLock, time::Duration};
+    use common::{
+        connect::{ConnectorConfig, ConnectorConfigHandle},
+        proto::connect::udp::UdpConnector,
+    };
+    use std::time::Duration;
 
     #[test]
     fn a_bad_payload_key_is_not_reported_as_a_bad_header_key() {
@@ -99,9 +102,9 @@ mod tests {
             udp_context: UdpRuntime {
                 session_table: None,
                 time_validator: Arc::new(TimeValidator::new(Duration::from_secs(1))),
-                connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
+                connector: Arc::new(UdpConnector::new(ConnectorConfigHandle::new(
                     ConnectorConfig::default(),
-                )))),
+                ))),
                 session_spawner: {
                     let (spawner, _rx) = common::session::SessionSpawner::channel();
                     spawner

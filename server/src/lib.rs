@@ -79,9 +79,9 @@ where
     // single write, so stream and UDP connectors can never observe different
     // configurations.
     let connector_config = ConnectorConfigHandle::new(ConnectorConfig::default());
-    let udp_connector = Arc::new(UdpConnector::new(connector_config.cell()));
+    let udp_connector = Arc::new(UdpConnector::new(connector_config.clone()));
     let stream_connector_table = Arc::new(build_concrete_stream_connector_table(
-        connector_config.cell(),
+        connector_config.clone(),
         connector_reset,
         &mut server_tasks,
         &udp_connector,

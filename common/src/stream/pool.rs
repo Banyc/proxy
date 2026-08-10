@@ -222,14 +222,13 @@ mod tests {
     use std::{
         collections::HashMap,
         pin::Pin,
-        sync::RwLock,
         task::{Context, Poll},
     };
 
     use super::*;
     use crate::{
         addr::InternetAddrKind,
-        connect::ConnectorConfig,
+        connect::{ConnectorConfig, ConnectorConfigHandle},
         stream::{HasIoAddr, OwnIoStream},
     };
     use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
@@ -335,7 +334,7 @@ mod tests {
 
     fn empty_table() -> Arc<StreamConnectorTable> {
         Arc::new(StreamConnectorTable::new(
-            Arc::new(RwLock::new(ConnectorConfig::default())),
+            ConnectorConfigHandle::new(ConnectorConfig::default()),
             HashMap::new(),
         ))
     }

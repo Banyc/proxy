@@ -1,9 +1,4 @@
-use std::{
-    io,
-    net::SocketAddr,
-    pin::Pin,
-    sync::{Arc, RwLock},
-};
+use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use metrics::counter;
@@ -16,7 +11,7 @@ use tokio::{
 
 use common::{
     addr::any_addr,
-    connect::ConnectorConfig,
+    connect::ConnectorConfigHandle,
     loading,
     proto::{
         conn_handler::{
@@ -37,10 +32,10 @@ use super::listener::TcpServer;
 
 #[derive(Debug, Clone)]
 pub struct TcpConnector {
-    config: Arc<RwLock<ConnectorConfig>>,
+    config: ConnectorConfigHandle,
 }
 impl TcpConnector {
-    pub fn new(config: Arc<RwLock<ConnectorConfig>>) -> Self {
+    pub fn new(config: ConnectorConfigHandle) -> Self {
         Self { config }
     }
 }
@@ -49,8 +44,7 @@ impl StreamConnect for TcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
         let bind = self
             .config
-            .read()
-            .unwrap()
+            .current()
             .bind
             .get_matched(&addr.ip())
             .map(|ip| SocketAddr::new(ip, 0))
@@ -187,7 +181,7 @@ mod tests {
     use common::{
         addr::BothVerIp,
         anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
-        connect::{ConnectorConfig, ConnectorResetSignal},
+        connect::{ConnectorConfig, ConnectorConfigHandle, ConnectorResetSignal},
         header::{codec::write_header_async, preamble},
         loading::Serve,
         notify::Notify,
@@ -224,11 +218,11 @@ mod tests {
         });
         let proxy_addr = {
             let listen_addr = Arc::from("localhost:0");
-            let connector_config = Arc::new(RwLock::new(ConnectorConfig {
+            let connector_config = ConnectorConfigHandle::new(ConnectorConfig {
                 bind: BothVerIp { v4: None, v6: None },
-            }));
+            });
             let mut connector_drivers = tokio::task::JoinSet::new();
-            let udp_connector = UdpConnector::new(Arc::clone(&connector_config));
+            let udp_connector = UdpConnector::new(connector_config.clone());
             let connector_table = Arc::new(build_concrete_stream_connector_table(
                 connector_config,
                 connector_reset,

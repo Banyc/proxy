@@ -1,7 +1,7 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use common::{
-    connect::{ConnectorConfig, ConnectorResetSignal},
+    connect::{ConnectorConfigHandle, ConnectorResetSignal},
     error::AnyResult,
     proto::connect::{stream::StreamConnect, udp::UdpMuxDialer},
 };
@@ -16,7 +16,7 @@ use super::{
 };
 
 type StreamConnectorBuilder = fn(
-    Arc<RwLock<ConnectorConfig>>,
+    ConnectorConfigHandle,
     ConnectorResetSignal,
     &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>);

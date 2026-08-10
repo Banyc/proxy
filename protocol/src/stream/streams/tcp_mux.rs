@@ -1,13 +1,9 @@
-use std::{
-    io,
-    net::SocketAddr,
-    sync::{Arc, RwLock},
-};
+use std::{io, net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
 use common::{
     addr::any_addr,
-    connect::{ConnectorConfig, ConnectorResetSignal},
+    connect::{ConnectorConfigHandle, ConnectorResetSignal},
     error::AnyResult,
     loading::{self, ReloadableHandler},
     proto::{
@@ -234,7 +230,7 @@ pub struct TcpMuxConnector {
 }
 impl TcpMuxConnector {
     pub fn new(
-        config: Arc<RwLock<ConnectorConfig>>,
+        config: ConnectorConfigHandle,
         reset: ConnectorResetSignal,
     ) -> (Self, MuxConnectorDriver) {
         let (connect_request_tx, connect_request_rx) = connect_request_channel();
@@ -243,8 +239,7 @@ impl TcpMuxConnector {
                 let config = config.clone();
                 async move {
                     let bind = config
-                        .read()
-                        .unwrap()
+                        .current()
                         .bind
                         .get_matched(&addr.ip())
                         .map(|ip| SocketAddr::new(ip, 0))

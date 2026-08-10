@@ -1,6 +1,6 @@
 use crate::{
     addr::any_addr,
-    connect::ConnectorConfig,
+    connect::ConnectorConfigHandle,
     error::AnyError,
     proto::{
         addr::RouteAddr,
@@ -232,7 +232,7 @@ impl Drop for NamedUdpRegistration {
 
 #[derive(Debug, Clone)]
 pub struct UdpConnector {
-    config: Arc<RwLock<ConnectorConfig>>,
+    config: ConnectorConfigHandle,
     named: Arc<NamedUdpRegistry>,
     /// Per-protocol dialers that carry datagram flows over a multiplexed
     /// byte stream (`tcpmux`, `rtpmux`, `rtpmuxfec`). Registered once at
@@ -240,15 +240,12 @@ pub struct UdpConnector {
     dialers: Arc<RwLock<UdpMuxDialerMap>>,
 }
 impl UdpConnector {
-    pub fn new(config: Arc<RwLock<ConnectorConfig>>) -> Self {
+    pub fn new(config: ConnectorConfigHandle) -> Self {
         Self {
             config,
             named: Arc::new(NamedUdpRegistry::new()),
             dialers: Arc::new(RwLock::new(HashMap::new())),
         }
-    }
-    pub fn config(&self) -> &Arc<RwLock<ConnectorConfig>> {
-        &self.config
     }
     pub fn register_dialer(&self, protocol: Arc<str>, dialer: Arc<dyn UdpMuxDialer>) {
         self.dialers.write().unwrap().insert(protocol, dialer);
@@ -256,8 +253,7 @@ impl UdpConnector {
     pub async fn connect(&self, addr: SocketAddr) -> io::Result<UdpSocket> {
         let bind = self
             .config
-            .read()
-            .unwrap()
+            .current()
             .bind
             .get_matched(&addr.ip())
             .map(|ip| SocketAddr::new(ip, 0))

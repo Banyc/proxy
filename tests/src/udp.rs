@@ -1,16 +1,13 @@
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{Arc, RwLock},
-        time::Duration,
-    };
+    use std::{sync::Arc, time::Duration};
 
     use ae::anti_replay::{ReplayValidator, TimeValidator};
     use bytes::BytesMut;
     use common::{
         addr::InternetAddr,
         anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
-        connect::{ConnectorConfig, ConnectorResetSignal},
+        connect::{ConnectorConfig, ConnectorConfigHandle, ConnectorResetSignal},
         header::route::RouteErrorKind,
         loading::{self, Serve},
         notify::Notify,
@@ -49,9 +46,9 @@ mod tests {
     fn udp_context(scope: &mut TestRuntimeScope) -> UdpRuntime {
         UdpRuntime {
             session_table: None,
-            connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
+            connector: Arc::new(UdpConnector::new(ConnectorConfigHandle::new(
                 ConnectorConfig::default(),
-            )))),
+            ))),
             time_validator: Arc::new(TimeValidator::new(
                 VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
             )),
@@ -512,8 +509,8 @@ mod tests {
         // rtp_mux, tcp_mux) and are reaped here for the lifetime of the
         // test runtime.
         let mut connector_drivers = tokio::task::JoinSet::new();
-        let connector_config = Arc::new(RwLock::new(ConnectorConfig::default()));
-        let udp_connector = Arc::new(UdpConnector::new(Arc::clone(&connector_config)));
+        let connector_config = ConnectorConfigHandle::new(ConnectorConfig::default());
+        let udp_connector = Arc::new(UdpConnector::new(connector_config.clone()));
         let connector_table = Arc::new(build_concrete_stream_connector_table(
             connector_config,
             ConnectorResetSignal(Notify::new()),

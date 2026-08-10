@@ -1,9 +1,4 @@
-use std::{
-    io,
-    net::SocketAddr,
-    pin::Pin,
-    sync::{Arc, RwLock},
-};
+use std::{io, net::SocketAddr, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use metrics::counter;
@@ -18,7 +13,7 @@ use tracing::instrument;
 
 use common::{
     addr::any_addr,
-    connect::ConnectorConfig,
+    connect::ConnectorConfigHandle,
     error::AnyResult,
     loading,
     proto::{
@@ -143,10 +138,10 @@ pub use common::serve_loop::ServeLoopError;
 
 #[derive(Debug, Clone)]
 pub struct KcpConnector {
-    config: Arc<RwLock<ConnectorConfig>>,
+    config: ConnectorConfigHandle,
 }
 impl KcpConnector {
-    pub fn new(config: Arc<RwLock<ConnectorConfig>>) -> Self {
+    pub fn new(config: ConnectorConfigHandle) -> Self {
         Self { config }
     }
 }
@@ -155,8 +150,7 @@ impl StreamConnect for KcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
         let bind = self
             .config
-            .read()
-            .unwrap()
+            .current()
             .bind
             .get_matched(&addr.ip())
             .map(|ip| SocketAddr::new(ip, 0))
@@ -300,6 +294,7 @@ pub async fn build_kcp_proxy_server(
 mod tests {
     use super::*;
     use common::addr::BothVerIp;
+    use common::connect::ConnectorConfig;
 
     #[tokio::test]
     async fn a_connected_stream_reports_the_address_the_kernel_assigned() {
@@ -312,9 +307,9 @@ mod tests {
             let mut listener = listener;
             let _ = listener.accept().await;
         });
-        let connector = KcpConnector::new(Arc::new(RwLock::new(ConnectorConfig {
+        let connector = KcpConnector::new(ConnectorConfigHandle::new(ConnectorConfig {
             bind: BothVerIp { v4: None, v6: None },
-        })));
+        }));
         let stream = connector.connect(listen_addr).await.unwrap();
         let local_addr = stream.local_addr().unwrap();
         assert_ne!(local_addr.port(), 0, "{local_addr}");

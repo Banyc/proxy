@@ -1,10 +1,7 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use common::{
-    connect::{ConnectorConfig, ConnectorResetSignal},
+    connect::{ConnectorConfigHandle, ConnectorResetSignal},
     error::{AnyError, AnyResult},
     proto::connect::{
         stream::{StreamConnect, StreamConnectorTable},
@@ -37,7 +34,7 @@ use super::{
 /// chains can open datagram flows over the same mux sessions, using the
 /// same wire format as reverse tunneling.
 pub fn build_concrete_stream_connector_table(
-    config: Arc<RwLock<ConnectorConfig>>,
+    config: ConnectorConfigHandle,
     reset: ConnectorResetSignal,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
     udp_connector: &UdpConnector,
@@ -57,14 +54,14 @@ pub fn build_concrete_stream_connector_table(
 }
 
 pub fn build_tcp_connector(
-    config: Arc<RwLock<ConnectorConfig>>,
+    config: ConnectorConfigHandle,
     _reset: ConnectorResetSignal,
     _drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     (Arc::new(TcpConnector::new(config.clone())), None)
 }
 pub fn build_tcp_mux_connector(
-    config: Arc<RwLock<ConnectorConfig>>,
+    config: ConnectorConfigHandle,
     reset: ConnectorResetSignal,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
@@ -72,42 +69,42 @@ pub fn build_tcp_mux_connector(
     spawn_mux_connector(connector, driver, drivers)
 }
 pub fn build_kcp_connector(
-    config: Arc<RwLock<ConnectorConfig>>,
+    config: ConnectorConfigHandle,
     _reset: ConnectorResetSignal,
     _drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     (Arc::new(KcpConnector::new(config.clone())), None)
 }
 pub fn build_mptcp_connector(
-    _config: Arc<RwLock<ConnectorConfig>>,
+    _config: ConnectorConfigHandle,
     _reset: ConnectorResetSignal,
     _drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     (Arc::new(MptcpConnector), None)
 }
 pub fn build_rtp_connector(
-    config: Arc<RwLock<ConnectorConfig>>,
+    config: ConnectorConfigHandle,
     _reset: ConnectorResetSignal,
     _drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     (Arc::new(RtpConnector::new(config.clone(), false)), None)
 }
 pub fn build_rtp_mux_connector(
-    config: Arc<RwLock<ConnectorConfig>>,
+    config: ConnectorConfigHandle,
     reset: ConnectorResetSignal,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     build_rtp_mux_connector_with_fec(config, reset, drivers, false)
 }
 pub fn build_rtp_mux_fec_connector(
-    config: Arc<RwLock<ConnectorConfig>>,
+    config: ConnectorConfigHandle,
     reset: ConnectorResetSignal,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     build_rtp_mux_connector_with_fec(config, reset, drivers, true)
 }
 fn build_rtp_mux_connector_with_fec(
-    config: Arc<RwLock<ConnectorConfig>>,
+    config: ConnectorConfigHandle,
     reset: ConnectorResetSignal,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
     fec: bool,

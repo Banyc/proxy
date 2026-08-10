@@ -43,9 +43,11 @@ fn option_merge<T>(a: Option<T>, b: Option<T>) -> Result<Option<T>, ()> {
 /// A shared handle to the process connector configuration.
 ///
 /// One handle is created per process and shared by the stream connector
-/// table, the UDP connector, and every mux UDP dialer, so a config reload
-/// performs a single replacement and the stream and UDP connectors can
-/// never observe different configurations.
+/// table, the UDP connector, and every mux UDP dialer. Consumers observe the
+/// configuration through [`Self::current`]; only the server reload path
+/// holds replacement authority, via [`Self::replace`]. The underlying
+/// `Arc<RwLock<...>>` cell is never exposed, so no consumer can fork the
+/// configuration into a divergent cell.
 #[derive(Debug, Clone)]
 pub struct ConnectorConfigHandle(Arc<RwLock<ConnectorConfig>>);
 
@@ -55,17 +57,15 @@ impl ConnectorConfigHandle {
         Self(Arc::new(RwLock::new(config)))
     }
 
-    /// Replace the shared configuration in a single write, visible to every
-    /// consumer of this handle.
-    pub fn replace(&self, config: ConnectorConfig) {
-        *self.0.write().unwrap() = config;
+    /// A snapshot of the current configuration.
+    pub fn current(&self) -> ConnectorConfig {
+        self.0.read().unwrap().clone()
     }
 
-    /// The underlying cell, for consumers that take an
-    /// `Arc<RwLock<ConnectorConfig>>` (the connector builders and the
-    /// `UdpConnector`).
-    pub fn cell(&self) -> Arc<RwLock<ConnectorConfig>> {
-        Arc::clone(&self.0)
+    /// Replace the shared configuration in a single write, visible to every
+    /// consumer of this handle. Reserved for the server reload path.
+    pub fn replace(&self, config: ConnectorConfig) {
+        *self.0.write().unwrap() = config;
     }
 }
 
@@ -74,10 +74,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_cell_clone_observes_the_same_replacement() {
+    fn every_handle_clone_observes_the_same_replacement() {
         let handle = ConnectorConfigHandle::new(ConnectorConfig::default());
-        let stream_cell = handle.cell();
-        let udp_cell = handle.cell();
+        let stream_handle = handle.clone();
+        let udp_handle = handle.clone();
         let replaced = ConnectorConfig {
             bind: BothVerIp {
                 v4: Some("192.0.2.1".parse().unwrap()),
@@ -86,11 +86,11 @@ mod tests {
         };
         handle.replace(replaced);
         assert_eq!(
-            stream_cell.read().unwrap().bind.v4,
+            stream_handle.current().bind.v4,
             Some("192.0.2.1".parse().unwrap())
         );
         assert_eq!(
-            udp_cell.read().unwrap().bind.v4,
+            udp_handle.current().bind.v4,
             Some("192.0.2.1".parse().unwrap())
         );
     }

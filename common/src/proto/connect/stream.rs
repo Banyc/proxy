@@ -12,7 +12,7 @@ use std::{
 
 use async_trait::async_trait;
 
-use crate::{connect::ConnectorConfig, stream::ConnParts};
+use crate::{connect::ConnectorConfigHandle, stream::ConnParts};
 
 #[async_trait]
 pub trait StreamConnect: std::fmt::Debug + Sync + Send + 'static {
@@ -157,13 +157,13 @@ impl Drop for NamedStreamRegistration {
 
 #[derive(Debug)]
 pub struct StreamConnectorTable {
-    config: Arc<RwLock<ConnectorConfig>>,
+    config: ConnectorConfigHandle,
     connectors: HashMap<Arc<str>, Arc<dyn StreamConnect>>,
     named: Arc<NamedStreamRegistry>,
 }
 impl StreamConnectorTable {
     pub fn new(
-        config: Arc<RwLock<ConnectorConfig>>,
+        config: ConnectorConfigHandle,
         connectors: HashMap<Arc<str>, Arc<dyn StreamConnect>>,
     ) -> Self {
         Self {
@@ -172,13 +172,9 @@ impl StreamConnectorTable {
             named: Arc::new(NamedStreamRegistry::new()),
         }
     }
-    pub fn replaced_by(&self, config: ConnectorConfig) {
-        *self.config.write().unwrap() = config;
-    }
     pub fn bind_addr_for(&self, peer: SocketAddr) -> SocketAddr {
         self.config
-            .read()
-            .unwrap()
+            .current()
             .bind
             .get_matched(&peer.ip())
             .map(|ip| SocketAddr::new(ip, 0))
@@ -264,6 +260,7 @@ impl StreamConnectorTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connect::ConnectorConfig;
     use crate::stream::{HasIoAddr, OwnIoStream};
     use std::pin::Pin;
     use std::task::{Context, Poll};
@@ -338,7 +335,7 @@ mod tests {
 
     fn empty_table() -> StreamConnectorTable {
         StreamConnectorTable::new(
-            Arc::new(RwLock::new(ConnectorConfig::default())),
+            ConnectorConfigHandle::new(ConnectorConfig::default()),
             HashMap::new(),
         )
     }
@@ -364,7 +361,7 @@ mod tests {
             successful,
         });
         let table = StreamConnectorTable::new(
-            Arc::new(RwLock::new(ConnectorConfig::default())),
+            ConnectorConfigHandle::new(ConnectorConfig::default()),
             HashMap::from([(
                 Arc::from(STREAM_TYPE),
                 connector.clone() as Arc<dyn StreamConnect>,
