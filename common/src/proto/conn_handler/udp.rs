@@ -181,10 +181,10 @@ impl UdpProxyConnHandler {
 
     /// [`Self::handle_tunnel_flow`] with injectable timeouts: `prime_timeout`
     /// bounds the wait for the first routed datagram and `echo_timeout`
-    /// bounds each read of an echo flow, so a stalled peer releases its
-    /// bounded session slot. The public entry point uses
-    /// [`crate::STREAM_IO_TIMEOUT`] / [`UDP_FLOW_TIMEOUT`]; tests pass short
-    /// durations.
+    /// bounds each read and each response write of an echo flow, so a
+    /// stalled peer releases its bounded session slot. The public entry
+    /// point uses [`crate::STREAM_IO_TIMEOUT`] / [`UDP_FLOW_TIMEOUT`];
+    /// tests pass short durations.
     async fn handle_tunnel_flow_with_timeouts<Read, Write>(
         &self,
         read: Read,
@@ -240,10 +240,16 @@ impl UdpProxyConnHandler {
                 )
                 .map_err(|error| UdpProxyError::Tunnel(Box::new(error)))?;
                 response.extend_from_slice(&payload[..n]);
-                write
-                    .trait_send(&response)
-                    .await
-                    .map_err(UdpProxyError::Tunnel)?;
+                match tokio::time::timeout(echo_timeout, write.trait_send(&response)).await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => return Err(UdpProxyError::Tunnel(error)),
+                    // A peer that stops reading its echo responses lets the
+                    // send block forever; time the write out so the slot is
+                    // released.
+                    Err(_) => {
+                        return Err(flow_timed_out("UDP echo flow stalled on response write"));
+                    }
+                }
             }
         }
         let flow = Flow {
@@ -539,6 +545,15 @@ mod tests {
         }
     }
 
+    /// A `UdpSend` that never resolves — modelling a peer that stops
+    /// reading its echo responses, so the response write blocks forever.
+    struct StallingSend;
+    impl UdpSend for StallingSend {
+        async fn trait_send(&mut self, _buf: &[u8]) -> Result<usize, AnyError> {
+            std::future::pending().await
+        }
+    }
+
     /// A valid routed request with no upstream, i.e. an echo flow.
     fn routed_echo_packet() -> Vec<u8> {
         let mut packet = Vec::new();
@@ -596,5 +611,24 @@ mod tests {
             )
             .await;
         assert_timed_out(result, "UDP echo flow idle");
+    }
+
+    /// A peer that keeps sending echo requests but never reads the
+    /// responses must not hold its session slot forever: the response
+    /// write is bounded by [`crate::udp::UDP_FLOW_TIMEOUT`].
+    #[tokio::test]
+    async fn a_stalled_echo_writer_times_out_the_flow() {
+        let result = handler()
+            .handle_tunnel_flow_with_timeouts(
+                StallingRecv {
+                    packet: Some(routed_echo_packet()),
+                },
+                StallingSend,
+                "127.0.0.1:1".parse().unwrap(),
+                Duration::from_millis(50),
+                Duration::from_millis(50),
+            )
+            .await;
+        assert_timed_out(result, "UDP echo flow stalled on response write");
     }
 }
