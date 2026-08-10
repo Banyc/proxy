@@ -150,6 +150,7 @@ impl Drop for TestRuntimeScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn run_returns_the_body_output_when_the_body_finishes_first() {
@@ -199,14 +200,24 @@ mod tests {
     #[should_panic(expected = "background task panicked")]
     async fn a_ready_background_panic_wins_over_a_ready_body() {
         let mut scope = TestRuntimeScope::new();
-        scope.spawn_session(async {
-            panic!("boom");
+        // The spawned task notifies and then panics in the same poll; the
+        // body becomes ready only once that notification arrives, so both
+        // `join_next()` (with the JoinError) and the body are ready at the
+        // same moment when `run` selects. The biased select must surface the
+        // panic instead of returning the body's output.
+        let released = Arc::new(tokio::sync::Notify::new());
+        scope.spawn_session({
+            let released = Arc::clone(&released);
+            async move {
+                released.notify_one();
+                panic!("boom");
+            }
         });
-        // Let the panicking task run to completion first, so both
-        // `join_next()` and the body are ready when `run` selects; the
-        // biased select must surface the panic instead of returning the
-        // body's output.
-        tokio::task::yield_now().await;
-        let _ = scope.run(async { 42 }).await;
+        let _ = scope
+            .run(async {
+                released.notified().await;
+                42
+            })
+            .await;
     }
 }
