@@ -1,3 +1,5 @@
+#[cfg(test)]
+pub mod scope;
 pub mod stream;
 pub mod udp;
 
