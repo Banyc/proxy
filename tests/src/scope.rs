@@ -108,20 +108,24 @@ impl TestRuntimeScope {
         tokio::pin!(body);
         loop {
             tokio::select! {
+                // `biased` with `join_next` first: a background task that
+                // ended before the body (a failure or a panic) always wins
+                // over an already-ready body, instead of being dropped by an
+                // unbiased coin flip.
+                biased;
                 result = self.tasks.join_next() => {
-                    match result {
-                        Some(Err(join_error)) => {
-                            panic!("background task panicked: {join_error}");
-                        }
-                        Some(Ok(TaskEnd::Required(Err(error)))) => {
+                    let end = result
+                        .expect("scope task set closed")
+                        .expect("background task panicked");
+                    match end {
+                        TaskEnd::Required(Err(error)) => {
                             panic!("required background task failed: {error}");
                         }
-                        Some(Ok(TaskEnd::Required(Ok(())))) => {
+                        TaskEnd::Required(Ok(())) => {
                             panic!("required background task exited before the test body");
                         }
                         // A session task ended as expected; keep running.
-                        Some(Ok(TaskEnd::Session)) => continue,
-                        None => panic!("scope task set closed"),
+                        TaskEnd::Session => continue,
                     }
                 }
                 output = &mut body => return output,
@@ -189,5 +193,20 @@ mod tests {
         scope
             .run(async { std::future::pending::<()>().await })
             .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "background task panicked")]
+    async fn a_ready_background_panic_wins_over_a_ready_body() {
+        let mut scope = TestRuntimeScope::new();
+        scope.spawn_session(async {
+            panic!("boom");
+        });
+        // Let the panicking task run to completion first, so both
+        // `join_next()` and the body are ready when `run` selects; the
+        // biased select must surface the panic instead of returning the
+        // body's output.
+        tokio::task::yield_now().await;
+        let _ = scope.run(async { 42 }).await;
     }
 }

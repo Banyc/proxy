@@ -277,20 +277,34 @@ mod tests {
         let resp = resp.to_vec();
         scope.spawn_session(async move {
             let mut join_set = tokio::task::JoinSet::new();
-            for _ in 0..accepts {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let req = req.to_vec();
-                let resp = resp.to_vec();
-                join_set.spawn(async move {
-                    let mut buf = [0; 1024];
-                    let msg_buf = &mut buf[..req.len()];
-                    stream.read_exact(msg_buf).await.unwrap();
-                    assert_eq!(msg_buf, req);
-                    stream.write_all(&resp).await.unwrap();
-                });
+            let mut accepted = 0;
+            while accepted < accepts {
+                // Race accepting against the in-flight handlers so a panicked
+                // handler surfaces immediately instead of being parked until
+                // all accepts are done. Only the accept arm counts towards
+                // `accepts`; handler completions never skip a connection.
+                tokio::select! {
+                    accepted_conn = listener.accept() => {
+                        let (mut stream, _) = accepted_conn.unwrap();
+                        accepted += 1;
+                        let req = req.to_vec();
+                        let resp = resp.to_vec();
+                        join_set.spawn(async move {
+                            let mut buf = [0; 1024];
+                            let msg_buf = &mut buf[..req.len()];
+                            stream.read_exact(msg_buf).await.unwrap();
+                            assert_eq!(msg_buf, req);
+                            stream.write_all(&resp).await.unwrap();
+                        });
+                    }
+                    Some(result) = join_set.join_next() => {
+                        result.unwrap();
+                    }
+                }
             }
-            while let Some(res) = join_set.join_next().await {
-                res.unwrap();
+            // All accepts done; drain the remaining handlers.
+            while let Some(result) = join_set.join_next().await {
+                result.unwrap();
             }
         });
         RouteAddr {
@@ -651,14 +665,13 @@ mod tests {
     }
 
     async fn assert_refused(
-        scope: &mut TestRuntimeScope,
+        stream_context: &StreamRuntime,
         proxies: &[ConnConfig],
         greet_addr: RouteAddr,
     ) {
-        let stream_context = stream_context(scope);
         let mut stream = match tokio::time::timeout(
             Duration::from_secs(30),
-            establish(proxies, greet_addr, &stream_context),
+            establish(proxies, greet_addr, stream_context),
         )
         .await
         .expect("timed out establishing the proxy session")
@@ -685,6 +698,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_bad_proxy() {
         let mut scope = TestRuntimeScope::new();
+        let stream_context = stream_context(&mut scope);
         let addr = Arc::from("0.0.0.0:0");
         let proxy_1_config = spawn_guarded_proxy(&mut scope, &addr, ConcreteStreamType::Tcp).await;
         let proxy_2_config = spawn_guarded_proxy(&mut scope, &addr, ConcreteStreamType::Tcp).await;
@@ -692,17 +706,22 @@ mod tests {
         let req_msg = b"hello world";
         let resp_msg = b"goodbye world";
         let greet_addr = spawn_greet(&mut scope, "[::]:0", req_msg, resp_msg, 1).await;
-        assert_refused(
-            &mut scope,
-            &[proxy_1_config, proxy_2_config, proxy_3_config],
-            greet_addr,
-        )
-        .await;
+        scope
+            .run(async {
+                assert_refused(
+                    &stream_context,
+                    &[proxy_1_config, proxy_2_config, proxy_3_config],
+                    greet_addr,
+                )
+                .await;
+            })
+            .await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn loopback_spelled_as_ipv6_is_still_refused() {
         let mut scope = TestRuntimeScope::new();
+        let stream_context = stream_context(&mut scope);
         let addr = Arc::from("0.0.0.0:0");
         let proxy_config = spawn_guarded_proxy(&mut scope, &addr, ConcreteStreamType::Tcp).await;
         let req_msg = b"hello world";
@@ -719,12 +738,17 @@ mod tests {
             .into(),
             protocol: ConcreteStreamType::Tcp.to_string().into(),
         };
-        assert_refused(&mut scope, &[proxy_config], mapped).await;
+        scope
+            .run(async {
+                assert_refused(&stream_context, &[proxy_config], mapped).await;
+            })
+            .await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn an_unspecified_destination_is_still_refused() {
         let mut scope = TestRuntimeScope::new();
+        let stream_context = stream_context(&mut scope);
         let addr = Arc::from("0.0.0.0:0");
         let proxy_config = spawn_guarded_proxy(&mut scope, &addr, ConcreteStreamType::Tcp).await;
         let req_msg = b"hello world";
@@ -736,7 +760,11 @@ mod tests {
                 .into(),
             protocol: ConcreteStreamType::Tcp.to_string().into(),
         };
-        assert_refused(&mut scope, &[proxy_config], unspecified).await;
+        scope
+            .run(async {
+                assert_refused(&stream_context, &[proxy_config], unspecified).await;
+            })
+            .await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -765,27 +793,39 @@ mod tests {
         scope.spawn_session(async move {
             let mut handlers = tokio::task::JoinSet::new();
             loop {
-                let (mut sock, _) = match listener.accept().await {
-                    Ok(x) => x,
-                    Err(_) => break,
-                };
-                handlers.spawn(async move {
-                    loop {
-                        let mut len_buf = [0u8; 4];
-                        if sock.read_exact(&mut len_buf).await.is_err() {
-                            return;
-                        }
-                        let len = u32::from_be_bytes(len_buf) as usize;
-                        let len = std::cmp::min(len, 1024 * 1024);
-                        let mut data = vec![0u8; len];
-                        if sock.read_exact(&mut data).await.is_err() {
-                            return;
-                        }
-                        let _ = sock.write_all(&len_buf).await;
-                        let _ = sock.write_all(&data).await;
+                // Race accepting against the in-flight handlers so a panicked
+                // handler surfaces immediately instead of being parked until
+                // the listener fails.
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let (mut sock, _) = match accepted {
+                            Ok(x) => x,
+                            Err(_) => break,
+                        };
+                        handlers.spawn(async move {
+                            loop {
+                                let mut len_buf = [0u8; 4];
+                                if sock.read_exact(&mut len_buf).await.is_err() {
+                                    return;
+                                }
+                                let len = u32::from_be_bytes(len_buf) as usize;
+                                let len = std::cmp::min(len, 1024 * 1024);
+                                let mut data = vec![0u8; len];
+                                if sock.read_exact(&mut data).await.is_err() {
+                                    return;
+                                }
+                                let _ = sock.write_all(&len_buf).await;
+                                let _ = sock.write_all(&data).await;
+                            }
+                        });
                     }
-                });
+                    Some(result) = handlers.join_next() => {
+                        result.unwrap();
+                    }
+                }
             }
+            // The listener failed or was dropped; drain the remaining
+            // handlers.
             while let Some(result) = handlers.join_next().await {
                 result.unwrap();
             }
@@ -958,7 +998,8 @@ mod tests {
                 set_conn_handler_tx.send(handler_new).unwrap();
                 tokio::time::timeout(Duration::from_secs(10), generation.changed())
                     .await
-                    .expect("timed out waiting for the handler reload to be installed");
+                    .expect("timed out waiting for the handler reload to be installed")
+                    .expect("reload generation watch closed");
 
                 // Second substream on the same session: must be served by the
                 // reloaded handler, not the one pinned at TCP-accept time.
