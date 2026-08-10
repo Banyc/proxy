@@ -228,7 +228,7 @@ mod tests {
     use super::*;
     use crate::{
         addr::InternetAddrKind,
-        connect::{ConnectorConfig, ConnectorConfigHandle},
+        connect::{ConnectorConfig, connector_config_cell},
         stream::{HasIoAddr, OwnIoStream},
     };
     use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
@@ -334,7 +334,7 @@ mod tests {
 
     fn empty_table() -> Arc<StreamConnectorTable> {
         Arc::new(StreamConnectorTable::new(
-            ConnectorConfigHandle::new(ConnectorConfig::default()),
+            connector_config_cell(ConnectorConfig::default()).0,
             HashMap::new(),
         ))
     }

@@ -23,7 +23,7 @@ protocol = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 swap = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["full", "test-util"] }
 tokio-util = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }

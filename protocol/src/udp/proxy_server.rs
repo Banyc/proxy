@@ -83,7 +83,7 @@ mod tests {
     use super::*;
     use ae::anti_replay::TimeValidator;
     use common::{
-        connect::{ConnectorConfig, ConnectorConfigHandle},
+        connect::{ConnectorConfig, connector_config_cell},
         proto::connect::udp::UdpConnector,
     };
     use std::time::Duration;
@@ -102,9 +102,9 @@ mod tests {
             udp_context: UdpRuntime {
                 session_table: None,
                 time_validator: Arc::new(TimeValidator::new(Duration::from_secs(1))),
-                connector: Arc::new(UdpConnector::new(ConnectorConfigHandle::new(
-                    ConnectorConfig::default(),
-                ))),
+                connector: Arc::new(UdpConnector::new(
+                    connector_config_cell(ConnectorConfig::default()).0,
+                )),
                 session_spawner: {
                     let (spawner, _rx) = common::session::SessionSpawner::channel();
                     spawner

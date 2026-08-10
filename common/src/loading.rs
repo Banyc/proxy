@@ -18,6 +18,17 @@ pub struct Loader<ConnHandler> {
     /// Handles of the listeners using the actor model pattern
     handles: HashMap<Arc<str>, ReplaceConnHandlerTx<ConnHandler>>,
 }
+
+/// An immutable snapshot of a [`Loader`]'s live listener handles, taken by
+/// [`Loader::snapshot`] for preparation. It can resolve and bind builders
+/// against the live listener set, but it cannot commit — replacement
+/// authority stays with the single owning [`Loader`], and the snapshot is
+/// read-only: it has no way to spawn, replace, or drop a listener.
+#[derive(Debug)]
+pub struct LoaderSnapshot<ConnHandler> {
+    handles: HashMap<Arc<str>, ReplaceConnHandlerTx<ConnHandler>>,
+}
+
 impl<ConnHandler> Loader<ConnHandler>
 where
     ConnHandler: HandleConn + std::fmt::Debug + Send + Sync + 'static,
@@ -37,12 +48,60 @@ where
         Server: Serve<ConnHandler = ConnHandler> + Send + 'static,
         Builder: Build<ConnHandler = ConnHandler, Server = Server>,
     {
-        let prepared = self.prepare(builders).await?;
+        let prepared = self.snapshot().prepare(builders).await?;
         self.commit(join_set, prepared)
     }
 
-    /// Resolve and bind every listener in `builders` against the live
-    /// `handles` without mutating live state.
+    /// A read-only snapshot of the live listener handles, for preparation.
+    /// The snapshot shares the [`ReplaceConnHandlerTx`]s, so it resolves
+    /// against the same live listeners, but it cannot commit.
+    pub fn snapshot(&self) -> LoaderSnapshot<ConnHandler> {
+        LoaderSnapshot {
+            handles: self.handles.clone(),
+        }
+    }
+
+    /// Atomically apply a prepared reload: send new handlers to existing
+    /// listeners, spawn new listener tasks, install new handles, and drop
+    /// handles for listeners that are no longer in the config.
+    ///
+    /// Returns an error if a listener died between preparation and commit,
+    /// so the handler update is *never silently lost*. The caller is
+    /// responsible for surfacing the failure (the global state may already
+    /// have been swapped, but the lost update is reported rather than
+    /// swallowed).
+    pub fn commit(
+        &mut self,
+        join_set: &mut tokio::task::JoinSet<AnyResult>,
+        prepared: PreparedOps<ConnHandler>,
+    ) -> Result<(), AnyError> {
+        let PreparedOps { ops, keys } = prepared;
+        for op in ops {
+            match op {
+                PreparedOp::Replace { tx, conn_handler } => {
+                    // A closed receiver means the listener died since prepare.
+                    // The handler update cannot be delivered — fail loudly
+                    // rather than silently dropping it.
+                    tx.send(conn_handler)
+                        .map_err(|_| AnyError::from("listener died before reload commit"))?;
+                }
+                PreparedOp::Spawn { key, tx, spawn } => {
+                    self.handles.insert(key, tx);
+                    join_set.spawn(spawn);
+                }
+            }
+        }
+        self.handles.retain(|cur_key, _| keys.contains(cur_key));
+        Ok(())
+    }
+}
+
+impl<ConnHandler> LoaderSnapshot<ConnHandler>
+where
+    ConnHandler: HandleConn + std::fmt::Debug + Send + Sync + 'static,
+{
+    /// Resolve and bind every listener in `builders` against the snapshot's
+    /// live handles without mutating live state.
     ///
     /// For an existing live listener a [`PreparedOp::Replace`] is produced
     /// carrying the freshly-built handler to send over the existing channel.
@@ -50,9 +109,9 @@ where
     /// bound `Server` and a fresh `ReplaceConnHandlerTx`; the server task is
     /// *not* spawned yet.
     ///
-    /// Dropping the returned [`PreparedOps`] without [`Self::commit`] simply
-    /// drops the bound servers and handlers — no live state is touched and no
-    /// task is spawned.
+    /// Dropping the returned [`PreparedOps`] without a commit simply drops
+    /// the bound servers and handlers — no live state is touched and no task
+    /// is spawned.
     pub async fn prepare<Server, Builder>(
         &self,
         builders: Vec<Builder>,
@@ -89,47 +148,6 @@ where
             });
         }
         Ok(PreparedOps { ops, keys })
-    }
-
-    /// Atomically apply a prepared reload: send new handlers to existing
-    /// listeners, spawn new listener tasks, install new handles, and drop
-    /// handles for listeners that are no longer in the config.
-    ///
-    /// Returns an error if a listener died between [`Self::prepare`] and
-    /// commit, so the handler update is *never silently lost*. The caller is
-    /// responsible for surfacing the failure (the global state may already
-    /// have been swapped, but the lost update is reported rather than
-    /// swallowed).
-    pub fn commit(
-        &mut self,
-        join_set: &mut tokio::task::JoinSet<AnyResult>,
-        prepared: PreparedOps<ConnHandler>,
-    ) -> Result<(), AnyError> {
-        let PreparedOps { ops, keys } = prepared;
-        for op in ops {
-            match op {
-                PreparedOp::Replace { tx, conn_handler } => {
-                    // A closed receiver means the listener died since prepare.
-                    // The handler update cannot be delivered — fail loudly
-                    // rather than silently dropping it.
-                    tx.send(conn_handler)
-                        .map_err(|_| AnyError::from("listener died before reload commit"))?;
-                }
-                PreparedOp::Spawn { key, tx, spawn } => {
-                    self.handles.insert(key, tx);
-                    join_set.spawn(spawn);
-                }
-            }
-        }
-        self.handles.retain(|cur_key, _| keys.contains(cur_key));
-        Ok(())
-    }
-}
-impl<ConnHandler> Clone for Loader<ConnHandler> {
-    fn clone(&self) -> Self {
-        Self {
-            handles: self.handles.clone(),
-        }
     }
 }
 impl<ConnHandler> Default for Loader<ConnHandler>
@@ -402,6 +420,7 @@ mod tests {
             }
         }
         let prepared = loader
+            .snapshot()
             .prepare::<DiesImmediately, FailingBuilder>(vec![FailingBuilder {
                 key: "new_listener".into(),
             }])
@@ -461,6 +480,7 @@ mod tests {
             .commit(
                 &mut join_set,
                 loader
+                    .snapshot()
                     .prepare::<Lingering, LingeringBuilder>(vec![LingeringBuilder {
                         key: "lingering".into(),
                         drop_rx: Arc::clone(&drop_rx),
@@ -472,6 +492,7 @@ mod tests {
         // Prepare a replacement handler for the same key (listener still
         // alive, so prepare builds a Replace op).
         let prepared = loader
+            .snapshot()
             .prepare::<Lingering, LingeringBuilder>(vec![LingeringBuilder {
                 key: "lingering".into(),
                 drop_rx: Arc::clone(&drop_rx),

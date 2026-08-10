@@ -40,33 +40,49 @@ fn option_merge<T>(a: Option<T>, b: Option<T>) -> Result<Option<T>, ()> {
     })
 }
 
-/// A shared handle to the process connector configuration.
+/// The process connector configuration, split into two capabilities:
 ///
-/// One handle is created per process and shared by the stream connector
-/// table, the UDP connector, and every mux UDP dialer. Consumers observe the
-/// configuration through [`Self::current`]; only the server reload path
-/// holds replacement authority, via [`Self::replace`]. The underlying
-/// `Arc<RwLock<...>>` cell is never exposed, so no consumer can fork the
-/// configuration into a divergent cell.
+/// - [`ConnectorConfigReader`] — cloneable, shared by the stream connector
+///   table, the UDP connector, and every mux UDP dialer, exposing only
+///   [`Self::current`].
+/// - [`ConnectorConfigUpdater`] — not cloneable, held solely by the server
+///   reload path, exposing only [`Self::replace`].
+///
+/// Both halves share one `Arc<RwLock<...>>` cell that is never exposed, so
+/// consumers cannot fork the configuration into a divergent cell, and the
+/// replacement authority cannot be duplicated through a clone.
 #[derive(Debug, Clone)]
-pub struct ConnectorConfigHandle(Arc<RwLock<ConnectorConfig>>);
+pub struct ConnectorConfigReader(Arc<RwLock<ConnectorConfig>>);
 
-impl ConnectorConfigHandle {
-    /// A fresh cell holding `config`.
-    pub fn new(config: ConnectorConfig) -> Self {
-        Self(Arc::new(RwLock::new(config)))
-    }
-
+impl ConnectorConfigReader {
     /// A snapshot of the current configuration.
     pub fn current(&self) -> ConnectorConfig {
         self.0.read().unwrap().clone()
     }
+}
 
+#[derive(Debug)]
+pub struct ConnectorConfigUpdater(Arc<RwLock<ConnectorConfig>>);
+
+impl ConnectorConfigUpdater {
     /// Replace the shared configuration in a single write, visible to every
-    /// consumer of this handle. Reserved for the server reload path.
+    /// reader. The sole updater is retained by the server reload path.
     pub fn replace(&self, config: ConnectorConfig) {
         *self.0.write().unwrap() = config;
     }
+}
+
+/// Create the shared connector-configuration cell, handing out the reader
+/// capability (cloneable, for every connector) and the sole updater
+/// capability (for the server reload path).
+pub fn connector_config_cell(
+    config: ConnectorConfig,
+) -> (ConnectorConfigReader, ConnectorConfigUpdater) {
+    let cell = Arc::new(RwLock::new(config));
+    (
+        ConnectorConfigReader(Arc::clone(&cell)),
+        ConnectorConfigUpdater(cell),
+    )
 }
 
 #[cfg(test)]
@@ -74,23 +90,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_handle_clone_observes_the_same_replacement() {
-        let handle = ConnectorConfigHandle::new(ConnectorConfig::default());
-        let stream_handle = handle.clone();
-        let udp_handle = handle.clone();
+    fn every_reader_clone_observes_the_same_replacement() {
+        let (reader, updater) = connector_config_cell(ConnectorConfig::default());
+        let stream_reader = reader.clone();
+        let udp_reader = reader.clone();
         let replaced = ConnectorConfig {
             bind: BothVerIp {
                 v4: Some("192.0.2.1".parse().unwrap()),
                 v6: None,
             },
         };
-        handle.replace(replaced);
+        updater.replace(replaced);
         assert_eq!(
-            stream_handle.current().bind.v4,
+            stream_reader.current().bind.v4,
             Some("192.0.2.1".parse().unwrap())
         );
         assert_eq!(
-            udp_handle.current().bind.v4,
+            udp_reader.current().bind.v4,
             Some("192.0.2.1".parse().unwrap())
         );
     }

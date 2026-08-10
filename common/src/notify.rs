@@ -57,24 +57,6 @@ pub struct Subscription {
     _tx: watch::Sender<u64>,
 }
 impl Subscription {
-    /// Whether a notification has been broadcast since the last poll.
-    ///
-    /// A subscription created *after* a broadcast does not see it; each
-    /// subscription observes only broadcasts that follow its creation (or its
-    /// last consume).
-    pub fn has_notified(&self) -> bool {
-        // Errors only if the channel closed; `_tx` keeps it open for as long
-        // as this subscription exists.
-        self.rx.has_changed().unwrap_or(false)
-    }
-    /// Consume one pending notification, returning whether one was pending.
-    pub fn remove_notified(&mut self) -> bool {
-        let pending = self.has_notified();
-        // Mark the current generation as seen so that only broadcasts made
-        // after this point are reported by later polls.
-        self.rx.mark_unchanged();
-        pending
-    }
     pub async fn notified(&mut self) {
         // unwrap: `self` holds a sender clone through `_tx`, so the channel
         // never closes while this subscription lives.
@@ -86,19 +68,29 @@ impl Subscription {
 mod tests {
     use super::*;
 
+    /// `true` if `notified()` would resolve immediately: a broadcast is
+    /// pending since the last observed generation. Non-consuming — the
+    /// pending notification stays pending for the caller to consume with
+    /// `notified()` — implemented with `watch::Receiver::has_changed`
+    /// rather than awaiting `notified()` under a timeout.
+    fn pending(w: &mut Subscription) -> bool {
+        w.rx.has_changed().unwrap_or(false)
+    }
+
     #[tokio::test]
     async fn fresh_subscription_sees_no_pending_notification() {
         let n = Notify::new();
         let mut w1 = n.subscription();
-        assert!(!w1.has_notified());
+        assert!(!pending(&mut w1));
 
         n.notify_waiters();
         // A subscription created after a broadcast does not observe it.
-        let w2 = n.subscription();
-        assert!(!w2.has_notified());
+        let mut w2 = n.subscription();
+        assert!(!pending(&mut w2));
 
         w1.notified().await;
-        assert!(!w1.has_notified());
+        // Consumed: no second wakeup from the same broadcast.
+        assert!(!pending(&mut w1));
     }
 
     #[tokio::test]
@@ -112,18 +104,18 @@ mod tests {
         w1.notified().await;
         w2.notified().await;
         w3.notified().await;
-        assert!(!w1.has_notified());
-        assert!(!w2.has_notified());
-        assert!(!w3.has_notified());
+        assert!(!pending(&mut w1));
+        assert!(!pending(&mut w2));
+        assert!(!pending(&mut w3));
 
         // A later broadcast wakes them again.
         n.notify_waiters();
         w1.notified().await;
         w2.notified().await;
         w3.notified().await;
-        assert!(!w1.has_notified());
-        assert!(!w2.has_notified());
-        assert!(!w3.has_notified());
+        assert!(!pending(&mut w1));
+        assert!(!pending(&mut w2));
+        assert!(!pending(&mut w3));
     }
 
     #[tokio::test]
@@ -136,19 +128,19 @@ mod tests {
         n.notify_waiters();
         // Three broadcasts between polls collapse into one wakeup.
         w.notified().await;
-        assert!(!w.has_notified());
+        assert!(!pending(&mut w));
     }
 
     #[tokio::test]
-    async fn remove_notified_consumes_a_pending_notification() {
+    async fn notified_consumes_a_pending_notification() {
         let n = Notify::new();
         let mut w = n.subscription();
 
-        assert!(!w.remove_notified());
+        assert!(!pending(&mut w));
         n.notify_waiters();
-        assert!(w.has_notified());
-        assert!(w.remove_notified());
-        assert!(!w.has_notified());
+        assert!(pending(&mut w));
+        w.notified().await;
+        assert!(!pending(&mut w));
     }
 
     #[tokio::test]
@@ -158,8 +150,8 @@ mod tests {
         drop(n.subscription());
 
         n.notify_waiters();
-        assert!(live.has_notified());
+        assert!(pending(&mut live));
         live.notified().await;
-        assert!(!live.has_notified());
+        assert!(!pending(&mut live));
     }
 }

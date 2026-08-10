@@ -52,7 +52,7 @@ mod tests {
     use common::{
         addr::InternetAddr,
         anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
-        connect::{ConnectorConfig, ConnectorConfigHandle, ConnectorResetSignal},
+        connect::{ConnectorConfig, ConnectorResetSignal, connector_config_cell},
         header::{codec::write_header, route::RouteErrorKind},
         loading::{self, Serve},
         notify::Notify,
@@ -93,9 +93,9 @@ mod tests {
     fn udp_context(scope: &mut TestRuntimeScope) -> UdpRuntime {
         UdpRuntime {
             session_table: None,
-            connector: Arc::new(UdpConnector::new(ConnectorConfigHandle::new(
-                ConnectorConfig::default(),
-            ))),
+            connector: Arc::new(UdpConnector::new(
+                connector_config_cell(ConnectorConfig::default()).0,
+            )),
             time_validator: Arc::new(TimeValidator::new(
                 VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
             )),
@@ -556,7 +556,7 @@ mod tests {
         // rtp_mux, tcp_mux) and are reaped here for the lifetime of the
         // test runtime.
         let mut connector_drivers = tokio::task::JoinSet::new();
-        let connector_config = ConnectorConfigHandle::new(ConnectorConfig::default());
+        let connector_config = connector_config_cell(ConnectorConfig::default()).0;
         let udp_connector = Arc::new(UdpConnector::new(connector_config.clone()));
         let connector_table = Arc::new(build_concrete_stream_connector_table(
             connector_config,

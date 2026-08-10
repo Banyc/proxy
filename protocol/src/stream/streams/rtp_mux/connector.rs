@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use common::{
     addr::any_addr,
-    connect::{ConnectorConfigHandle, ConnectorResetSignal},
+    connect::{ConnectorConfigReader, ConnectorResetSignal},
     proto::connect::{
         stream::StreamConnect,
         udp::{UdpConnection, UdpMuxDialer},
@@ -28,7 +28,7 @@ pub struct RtpMuxConnector {
 
 impl RtpMuxConnector {
     pub fn new(
-        config: ConnectorConfigHandle,
+        config: ConnectorConfigReader,
         reset: ConnectorResetSignal,
         fec: bool,
     ) -> (Self, MuxConnectorDriver) {

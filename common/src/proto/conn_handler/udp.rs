@@ -652,7 +652,7 @@ mod tests {
     use super::*;
     use crate::{
         anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
-        connect::{ConnectorConfig, ConnectorConfigHandle},
+        connect::{ConnectorConfig, connector_config_cell},
         header::route::RouteRequest,
         proto::{conn::udp::UDP_FLOW_ID_LEN, connect::udp::UdpConnector, context::UdpRuntime},
     };
@@ -668,9 +668,9 @@ mod tests {
         let (_retention_actor, retention) = crate::retention::RetentionActor::new();
         let udp_context = UdpRuntime {
             session_table: None,
-            connector: Arc::new(UdpConnector::new(ConnectorConfigHandle::new(
-                ConnectorConfig::default(),
-            ))),
+            connector: Arc::new(UdpConnector::new(
+                connector_config_cell(ConnectorConfig::default()).0,
+            )),
             time_validator: Arc::new(TimeValidator::new(
                 VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
             )),

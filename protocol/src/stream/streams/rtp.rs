@@ -12,7 +12,7 @@ use tracing::instrument;
 
 use common::{
     addr::any_addr,
-    connect::ConnectorConfigHandle,
+    connect::ConnectorConfigReader,
     error::AnyResult,
     loading,
     proto::{
@@ -134,11 +134,11 @@ pub use common::serve_loop::ServeLoopError;
 
 #[derive(Debug, Clone)]
 pub struct RtpConnector {
-    config: ConnectorConfigHandle,
+    config: ConnectorConfigReader,
     fec: bool,
 }
 impl RtpConnector {
-    pub fn new(config: ConnectorConfigHandle, fec: bool) -> Self {
+    pub fn new(config: ConnectorConfigReader, fec: bool) -> Self {
         Self { config, fec }
     }
 }

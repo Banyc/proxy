@@ -22,7 +22,7 @@ pub use initiator::{
 };
 pub use loading::{
     BuildError, PreparedReverseTunnel, ReverseTunnelConfig, ReverseTunnelInitiatorConfig,
-    ReverseTunnelLoader, ReverseTunnelResponderConfig, prepare,
+    ReverseTunnelLoader, ReverseTunnelLoaderSnapshot, ReverseTunnelResponderConfig, prepare,
 };
 pub use responder::{
     ReverseTunnelResponderHandler, RtpReverseTunnelResponder, RtpReverseTunnelResponderBuilder,

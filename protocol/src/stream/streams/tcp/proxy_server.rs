@@ -11,7 +11,7 @@ use tokio::{
 
 use common::{
     addr::any_addr,
-    connect::ConnectorConfigHandle,
+    connect::ConnectorConfigReader,
     loading,
     proto::{
         conn_handler::{
@@ -32,10 +32,10 @@ use super::listener::TcpServer;
 
 #[derive(Debug, Clone)]
 pub struct TcpConnector {
-    config: ConnectorConfigHandle,
+    config: ConnectorConfigReader,
 }
 impl TcpConnector {
-    pub fn new(config: ConnectorConfigHandle) -> Self {
+    pub fn new(config: ConnectorConfigReader) -> Self {
         Self { config }
     }
 }
@@ -181,7 +181,7 @@ mod tests {
     use common::{
         addr::BothVerIp,
         anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
-        connect::{ConnectorConfig, ConnectorConfigHandle, ConnectorResetSignal},
+        connect::{ConnectorConfig, ConnectorResetSignal, connector_config_cell},
         header::{codec::write_header_async, preamble},
         loading::Serve,
         notify::Notify,
@@ -218,7 +218,7 @@ mod tests {
         });
         let proxy_addr = {
             let listen_addr = Arc::from("localhost:0");
-            let connector_config = ConnectorConfigHandle::new(ConnectorConfig {
+            let (connector_config, _updater) = connector_config_cell(ConnectorConfig {
                 bind: BothVerIp { v4: None, v6: None },
             });
             let mut connector_drivers = tokio::task::JoinSet::new();

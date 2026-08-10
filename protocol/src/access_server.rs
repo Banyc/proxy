@@ -173,18 +173,30 @@ impl AccessServerLoader {
             socks5_udp_server: loading::Loader::new(),
         }
     }
-}
 
-impl Clone for AccessServerLoader {
-    fn clone(&self) -> Self {
-        Self {
-            tcp_server: self.tcp_server.clone(),
-            udp_server: self.udp_server.clone(),
-            http_server: self.http_server.clone(),
-            socks5_tcp_server: self.socks5_tcp_server.clone(),
-            socks5_udp_server: self.socks5_udp_server.clone(),
+    /// A read-only snapshot of the live loaders, for preparation. The
+    /// snapshot resolves against the same live listeners but cannot commit.
+    pub fn snapshot(&self) -> AccessServerLoaderSnapshot {
+        AccessServerLoaderSnapshot {
+            tcp_server: self.tcp_server.snapshot(),
+            udp_server: self.udp_server.snapshot(),
+            http_server: self.http_server.snapshot(),
+            socks5_tcp_server: self.socks5_tcp_server.snapshot(),
+            socks5_udp_server: self.socks5_udp_server.snapshot(),
         }
     }
+}
+
+/// An immutable snapshot of the live [`AccessServerLoader`]s, taken by
+/// [`AccessServerLoader::snapshot`] for preparation. It can resolve and bind
+/// builders against the live listener set, but it cannot commit —
+/// replacement authority stays with the single owning loader.
+pub struct AccessServerLoaderSnapshot {
+    tcp_server: loading::LoaderSnapshot<TcpAccessConnHandler>,
+    udp_server: loading::LoaderSnapshot<UdpAccessConnHandler>,
+    http_server: loading::LoaderSnapshot<HttpAccessConnHandler>,
+    socks5_tcp_server: loading::LoaderSnapshot<Socks5ServerTcpAccessConnHandler>,
+    socks5_udp_server: loading::LoaderSnapshot<Socks5ServerUdpAccessConnHandler>,
 }
 
 impl AccessServerLoader {
@@ -241,7 +253,7 @@ pub struct PreparedAccessServer {
 /// leaving the live configuration untouched.
 pub async fn prepare(
     config: AccessServerConfig,
-    loader: &AccessServerLoader,
+    loader: &AccessServerLoaderSnapshot,
     cancellation: CancellationToken,
     context: Runtime,
     stream_conn: &HashMap<Arc<str>, common::route::ConnConfig>,
@@ -408,7 +420,7 @@ async fn tcp_prepare(
     stream_conn_selector: &HashMap<Arc<str>, ConnSelector>,
     registries: &Registries<'_>,
     context: &Runtime,
-    loader: &loading::Loader<TcpAccessConnHandler>,
+    loader: &loading::LoaderSnapshot<TcpAccessConnHandler>,
     probes: &mut ProbeFutures,
 ) -> Result<loading::PreparedOps<TcpAccessConnHandler>, AnyError> {
     let builders = config
@@ -430,7 +442,7 @@ async fn udp_prepare(
     udp_conn_selector: &HashMap<Arc<str>, ConnSelector>,
     registries: &Registries<'_>,
     context: &Runtime,
-    loader: &loading::Loader<UdpAccessConnHandler>,
+    loader: &loading::LoaderSnapshot<UdpAccessConnHandler>,
     probes: &mut ProbeFutures,
 ) -> Result<loading::PreparedOps<UdpAccessConnHandler>, AnyError> {
     let builders = config
@@ -447,7 +459,7 @@ async fn http_prepare(
     stream_route_tables: &HashMap<Arc<str>, RouteTable>,
     registries: &Registries<'_>,
     context: &Runtime,
-    loader: &loading::Loader<HttpAccessConnHandler>,
+    loader: &loading::LoaderSnapshot<HttpAccessConnHandler>,
     probes: &mut ProbeFutures,
 ) -> Result<loading::PreparedOps<HttpAccessConnHandler>, AnyError> {
     let builders = config
@@ -469,7 +481,7 @@ async fn socks5_tcp_prepare(
     stream_route_tables: &HashMap<Arc<str>, RouteTable>,
     registries: &Registries<'_>,
     context: &Runtime,
-    loader: &loading::Loader<Socks5ServerTcpAccessConnHandler>,
+    loader: &loading::LoaderSnapshot<Socks5ServerTcpAccessConnHandler>,
     probes: &mut ProbeFutures,
 ) -> Result<loading::PreparedOps<Socks5ServerTcpAccessConnHandler>, AnyError> {
     let builders = config
@@ -493,7 +505,7 @@ async fn socks5_udp_prepare(
     udp_conn_selector: &HashMap<Arc<str>, ConnSelector>,
     registries: &Registries<'_>,
     context: &Runtime,
-    loader: &loading::Loader<Socks5ServerUdpAccessConnHandler>,
+    loader: &loading::LoaderSnapshot<Socks5ServerUdpAccessConnHandler>,
     probes: &mut ProbeFutures,
 ) -> Result<loading::PreparedOps<Socks5ServerUdpAccessConnHandler>, AnyError> {
     let builders = config

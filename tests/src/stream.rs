@@ -12,7 +12,7 @@ mod tests {
     use ae::anti_replay::ReplayValidator;
     use common::{
         anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
-        connect::{ConnectorConfig, ConnectorConfigHandle, ConnectorResetSignal},
+        connect::{ConnectorConfig, ConnectorResetSignal, connector_config_cell},
         loading::{self, ReloadableHandler, Serve},
         notify::Notify,
         proto::{
@@ -62,7 +62,7 @@ mod tests {
         // per-protocol connector loops (e.g. rtp_mux, tcp_mux) and are reaped
         // here for the lifetime of the test runtime.
         let mut connector_drivers = tokio::task::JoinSet::new();
-        let connector_config = ConnectorConfigHandle::new(ConnectorConfig::default());
+        let connector_config = connector_config_cell(ConnectorConfig::default()).0;
         let udp_connector = UdpConnector::new(connector_config.clone());
         let connector_table = Arc::new(build_concrete_stream_connector_table(
             connector_config,

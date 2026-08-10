@@ -108,13 +108,14 @@ impl ReverseTunnelLoader {
         self.rtp_responder.commit(tasks, prepared.rtp_responder)?;
         Ok(())
     }
-}
-impl Clone for ReverseTunnelLoader {
-    fn clone(&self) -> Self {
-        Self {
-            initiator: self.initiator.clone(),
-            tcp_responder: self.tcp_responder.clone(),
-            rtp_responder: self.rtp_responder.clone(),
+
+    /// A read-only snapshot of the live loaders, for preparation. The
+    /// snapshot resolves against the same live listeners but cannot commit.
+    pub fn snapshot(&self) -> ReverseTunnelLoaderSnapshot {
+        ReverseTunnelLoaderSnapshot {
+            initiator: self.initiator.snapshot(),
+            tcp_responder: self.tcp_responder.snapshot(),
+            rtp_responder: self.rtp_responder.snapshot(),
         }
     }
 }
@@ -122,6 +123,16 @@ impl Default for ReverseTunnelLoader {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// An immutable snapshot of the live [`ReverseTunnelLoader`]s, taken by
+/// [`ReverseTunnelLoader::snapshot`] for preparation. It can resolve and
+/// bind builders against the live listener set, but it cannot commit —
+/// replacement authority stays with the single owning loader.
+pub struct ReverseTunnelLoaderSnapshot {
+    initiator: loading::LoaderSnapshot<ReverseTunnelInitiatorHandler>,
+    tcp_responder: loading::LoaderSnapshot<ReverseTunnelResponderHandler>,
+    rtp_responder: loading::LoaderSnapshot<ReverseTunnelResponderHandler>,
 }
 
 pub struct PreparedReverseTunnel {
@@ -132,7 +143,7 @@ pub struct PreparedReverseTunnel {
 
 pub async fn prepare(
     config: ReverseTunnelConfig,
-    loader: &ReverseTunnelLoader,
+    loader: &ReverseTunnelLoaderSnapshot,
     runtime: Runtime,
 ) -> Result<PreparedReverseTunnel, AnyError> {
     let mut keys = HashSet::new();

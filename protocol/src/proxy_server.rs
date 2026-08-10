@@ -119,17 +119,18 @@ impl ProxyServerLoader {
             .commit(join_set, prepared.rtp_mux_server)?;
         Ok(())
     }
-}
-impl Clone for ProxyServerLoader {
-    fn clone(&self) -> Self {
-        Self {
-            tcp_server: self.tcp_server.clone(),
-            tcp_mux_server: self.tcp_mux_server.clone(),
-            udp_server: self.udp_server.clone(),
-            kcp_server: self.kcp_server.clone(),
-            mptcp_server: self.mptcp_server.clone(),
-            rtp_server: self.rtp_server.clone(),
-            rtp_mux_server: self.rtp_mux_server.clone(),
+
+    /// A read-only snapshot of the live loaders, for preparation. The
+    /// snapshot resolves against the same live listeners but cannot commit.
+    pub fn snapshot(&self) -> ProxyServerLoaderSnapshot {
+        ProxyServerLoaderSnapshot {
+            tcp_server: self.tcp_server.snapshot(),
+            tcp_mux_server: self.tcp_mux_server.snapshot(),
+            udp_server: self.udp_server.snapshot(),
+            kcp_server: self.kcp_server.snapshot(),
+            mptcp_server: self.mptcp_server.snapshot(),
+            rtp_server: self.rtp_server.snapshot(),
+            rtp_mux_server: self.rtp_mux_server.snapshot(),
         }
     }
 }
@@ -137,6 +138,20 @@ impl Default for ProxyServerLoader {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// An immutable snapshot of the live [`ProxyServerLoader`]s, taken by
+/// [`ProxyServerLoader::snapshot`] for preparation. It can resolve and bind
+/// builders against the live listener set, but it cannot commit —
+/// replacement authority stays with the single owning loader.
+pub struct ProxyServerLoaderSnapshot {
+    tcp_server: loading::LoaderSnapshot<StreamProxyConnHandler>,
+    tcp_mux_server: loading::LoaderSnapshot<MuxProxyHandler>,
+    udp_server: loading::LoaderSnapshot<UdpProxyConnHandler>,
+    kcp_server: loading::LoaderSnapshot<StreamProxyConnHandler>,
+    mptcp_server: loading::LoaderSnapshot<StreamProxyConnHandler>,
+    rtp_server: loading::LoaderSnapshot<StreamProxyConnHandler>,
+    rtp_mux_server: loading::LoaderSnapshot<MuxProxyHandler>,
 }
 
 /// A fully-prepared proxy-server reload: bound listener sockets and built
@@ -159,7 +174,7 @@ pub struct PreparedProxyServer {
 /// untouched.
 pub async fn prepare(
     config: ProxyServerConfig,
-    loader: &ProxyServerLoader,
+    loader: &ProxyServerLoaderSnapshot,
     context: Runtime,
 ) -> Result<PreparedProxyServer, AnyError> {
     let tcp_server = tcp_prepare(config.tcp_server, &loader.tcp_server, &context).await?;
@@ -183,7 +198,7 @@ pub async fn prepare(
 }
 async fn tcp_prepare(
     config: Vec<TcpProxyServerConfig>,
-    loader: &loading::Loader<StreamProxyConnHandler>,
+    loader: &loading::LoaderSnapshot<StreamProxyConnHandler>,
     context: &Runtime,
 ) -> Result<loading::PreparedOps<StreamProxyConnHandler>, AnyError> {
     loader
@@ -197,7 +212,7 @@ async fn tcp_prepare(
 }
 async fn tcp_mux_prepare(
     config: Vec<TcpMuxProxyServerConfig>,
-    loader: &loading::Loader<MuxProxyHandler>,
+    loader: &loading::LoaderSnapshot<MuxProxyHandler>,
     context: &Runtime,
 ) -> Result<loading::PreparedOps<MuxProxyHandler>, AnyError> {
     loader
@@ -211,7 +226,7 @@ async fn tcp_mux_prepare(
 }
 async fn udp_prepare(
     config: Vec<UdpProxyServerConfig>,
-    loader: &loading::Loader<UdpProxyConnHandler>,
+    loader: &loading::LoaderSnapshot<UdpProxyConnHandler>,
     context: &Runtime,
 ) -> Result<loading::PreparedOps<UdpProxyConnHandler>, AnyError> {
     loader
@@ -228,7 +243,7 @@ async fn udp_prepare(
 }
 async fn kcp_prepare(
     config: Vec<KcpProxyServerConfig>,
-    loader: &loading::Loader<StreamProxyConnHandler>,
+    loader: &loading::LoaderSnapshot<StreamProxyConnHandler>,
     context: &Runtime,
 ) -> Result<loading::PreparedOps<StreamProxyConnHandler>, AnyError> {
     loader
@@ -242,7 +257,7 @@ async fn kcp_prepare(
 }
 async fn mptcp_prepare(
     config: Vec<MptcpProxyServerConfig>,
-    loader: &loading::Loader<StreamProxyConnHandler>,
+    loader: &loading::LoaderSnapshot<StreamProxyConnHandler>,
     context: &Runtime,
 ) -> Result<loading::PreparedOps<StreamProxyConnHandler>, AnyError> {
     loader
@@ -256,7 +271,7 @@ async fn mptcp_prepare(
 }
 async fn rtp_prepare(
     config: Vec<RtpProxyServerConfig>,
-    loader: &loading::Loader<StreamProxyConnHandler>,
+    loader: &loading::LoaderSnapshot<StreamProxyConnHandler>,
     context: &Runtime,
 ) -> Result<loading::PreparedOps<StreamProxyConnHandler>, AnyError> {
     loader
@@ -270,7 +285,7 @@ async fn rtp_prepare(
 }
 async fn rtp_mux_prepare(
     config: Vec<RtpMuxProxyServerConfig>,
-    loader: &loading::Loader<MuxProxyHandler>,
+    loader: &loading::LoaderSnapshot<MuxProxyHandler>,
     context: &Runtime,
 ) -> Result<loading::PreparedOps<MuxProxyHandler>, AnyError> {
     loader

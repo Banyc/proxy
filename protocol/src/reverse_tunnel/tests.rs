@@ -4,7 +4,9 @@ use super::*;
 use ae::anti_replay::{ReplayValidator, TimeValidator};
 use common::{
     anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
-    connect::{ConnectorConfig, ConnectorConfigHandle, ConnectorResetSignal},
+    connect::{
+        ConnectorConfig, ConnectorConfigReader, ConnectorResetSignal, connector_config_cell,
+    },
     loading::{self, Serve},
     notify::Notify,
     proto::{
@@ -147,7 +149,7 @@ fn initiator_config(
 async fn test_stream_runtime(
     tasks: &mut TestScope,
     udp_connector: &UdpConnector,
-    connector_config: ConnectorConfigHandle,
+    connector_config: ConnectorConfigReader,
 ) -> (StreamRuntime, common::session::SessionSpawner) {
     let (session_spawner, mut session_rx) = common::session::SessionSpawner::channel();
     tasks.spawn_required("session spawner", async move {
@@ -198,7 +200,7 @@ async fn test_stream_runtime(
 }
 
 async fn test_runtime(tasks: &mut TestScope) -> (Runtime, common::session::SessionSpawner) {
-    let connector_config = ConnectorConfigHandle::new(ConnectorConfig::default());
+    let (connector_config, _updater) = connector_config_cell(ConnectorConfig::default());
     let udp_connector = Arc::new(UdpConnector::new(connector_config.clone()));
     let (stream, session_spawner) =
         test_stream_runtime(tasks, &udp_connector, connector_config).await;

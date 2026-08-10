@@ -1,6 +1,6 @@
 use crate::{
     addr::any_addr,
-    connect::ConnectorConfigHandle,
+    connect::ConnectorConfigReader,
     error::AnyError,
     proto::{
         addr::RouteAddr,
@@ -241,7 +241,7 @@ impl Drop for NamedUdpRegistration {
 
 #[derive(Debug, Clone)]
 pub struct UdpConnector {
-    config: ConnectorConfigHandle,
+    config: ConnectorConfigReader,
     named: Arc<NamedUdpRegistry>,
     /// Per-protocol dialers that carry datagram flows over a multiplexed
     /// byte stream (`tcpmux`, `rtpmux`, `rtpmuxfec`). Registered once at
@@ -249,7 +249,7 @@ pub struct UdpConnector {
     dialers: Arc<RwLock<UdpMuxDialerMap>>,
 }
 impl UdpConnector {
-    pub fn new(config: ConnectorConfigHandle) -> Self {
+    pub fn new(config: ConnectorConfigReader) -> Self {
         Self {
             config,
             named: Arc::new(NamedUdpRegistry::new()),

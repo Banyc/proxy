@@ -13,7 +13,7 @@ use tracing::instrument;
 
 use common::{
     addr::any_addr,
-    connect::ConnectorConfigHandle,
+    connect::ConnectorConfigReader,
     error::AnyResult,
     loading,
     proto::{
@@ -138,10 +138,10 @@ pub use common::serve_loop::ServeLoopError;
 
 #[derive(Debug, Clone)]
 pub struct KcpConnector {
-    config: ConnectorConfigHandle,
+    config: ConnectorConfigReader,
 }
 impl KcpConnector {
-    pub fn new(config: ConnectorConfigHandle) -> Self {
+    pub fn new(config: ConnectorConfigReader) -> Self {
         Self { config }
     }
 }
@@ -307,9 +307,12 @@ mod tests {
             let mut listener = listener;
             let _ = listener.accept().await;
         });
-        let connector = KcpConnector::new(ConnectorConfigHandle::new(ConnectorConfig {
-            bind: BothVerIp { v4: None, v6: None },
-        }));
+        let connector = KcpConnector::new(
+            common::connect::connector_config_cell(ConnectorConfig {
+                bind: BothVerIp { v4: None, v6: None },
+            })
+            .0,
+        );
         let stream = connector.connect(listen_addr).await.unwrap();
         let local_addr = stream.local_addr().unwrap();
         assert_ne!(local_addr.port(), 0, "{local_addr}");

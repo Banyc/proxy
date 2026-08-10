@@ -2,14 +2,17 @@
 
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use access_server::{AccessServerConfig, AccessServerLoader};
+use access_server::{AccessServerConfig, AccessServerLoader, AccessServerLoaderSnapshot};
 use ae::anti_replay::{ReplayValidator, TimeValidator};
 use common::{
     anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     config::{Merge, merge_map},
-    connect::{ConnectorConfig, ConnectorConfigHandle, ConnectorResetSignal},
+    connect::{
+        ConnectorConfig, ConnectorConfigUpdater, ConnectorResetSignal, connector_config_cell,
+    },
     error::{AnyError, AnyResult},
     matcher::Matcher,
+    notify::Subscription,
     proto::{
         client::stream::StreamTracer,
         connect::udp::UdpConnector,
@@ -25,8 +28,13 @@ use common::{
 use config::ReadConfig;
 use protocol::{
     access_server::{self, PreparedAccessServer},
-    proxy_server::{self, PreparedProxyServer, ProxyServerConfig, ProxyServerLoader},
-    reverse_tunnel::{self, PreparedReverseTunnel, ReverseTunnelConfig, ReverseTunnelLoader},
+    proxy_server::{
+        self, PreparedProxyServer, ProxyServerConfig, ProxyServerLoader, ProxyServerLoaderSnapshot,
+    },
+    reverse_tunnel::{
+        self, PreparedReverseTunnel, ReverseTunnelConfig, ReverseTunnelLoader,
+        ReverseTunnelLoaderSnapshot,
+    },
     stream::connect::build_concrete_stream_connector_table,
 };
 use serde::Deserialize;
@@ -78,11 +86,13 @@ where
     // One connector-configuration cell shared by the stream connector table,
     // the UDP connector, and every mux UDP dialer: a reload replaces it in a
     // single write, so stream and UDP connectors can never observe different
-    // configurations.
-    let connector_config = ConnectorConfigHandle::new(ConnectorConfig::default());
-    let udp_connector = Arc::new(UdpConnector::new(connector_config.clone()));
+    // configurations. The reload path holds the sole updater; every
+    // connector holds a reader clone.
+    let (connector_config_reader, connector_config_updater) =
+        connector_config_cell(ConnectorConfig::default());
+    let udp_connector = Arc::new(UdpConnector::new(connector_config_reader.clone()));
     let stream_connector_table = Arc::new(build_concrete_stream_connector_table(
-        connector_config.clone(),
+        connector_config_reader.clone(),
         connector_reset,
         &mut server_tasks,
         &udp_connector,
@@ -107,32 +117,45 @@ where
     };
 
     let cancellation = CancellationToken::new();
-    let prepared = prepare_reload(
-        Arc::clone(&config_reader),
-        server_loader.clone(),
-        cancellation.clone(),
-        runtime.clone(),
-    )
-    .await?;
+    // Initial configuration preparation: race the first preparation against
+    // the connector drivers already spawned into `server_tasks`, so a
+    // connector-driver panic or failure during startup surfaces immediately
+    // instead of parking until the serve loop begins.
+    let prepared = {
+        let prepare = prepare_reload(
+            Arc::clone(&config_reader),
+            server_loader.snapshot(),
+            cancellation.clone(),
+            runtime.clone(),
+        );
+        tokio::pin!(prepare);
+        loop {
+            tokio::select! {
+                res = &mut prepare => break res?,
+                Some(res) = server_tasks.join_next() => {
+                    // Surface connector-driver failures and panics during
+                    // startup instead of parking them.
+                    res.unwrap().map_err(ServerServeError::ServerTask)?;
+                }
+            }
+        }
+    };
     let (guard, commit_error) = commit_reload(
         &mut server_tasks,
         &mut server_loader,
         prepared,
         &runtime,
-        &connector_config,
+        &connector_config_updater,
     );
     if let Some(e) = commit_error {
         return Err(ServerServeError::Commit(e));
     }
     let mut _cancellation_guard = guard;
     let mut config_changed = serve_context.config_changed.0.subscription();
-    let mut reload = ReloadMachine::new();
+    let mut reload = ServerReloadMachine::new();
 
     loop {
         tokio::select! {
-            Some(res) = server_tasks.join_next() => {
-                res.unwrap().map_err(ServerServeError::ServerTask)?;
-            }
             Some(fut) = session_rx.recv() => {
                 sessions.spawn(fut);
             }
@@ -141,99 +164,55 @@ where
                     error!(?error, "Session task returned an error");
                 }
             }
-            // Idle or Debouncing: a change notification (re)starts the
-            // debounce window, collapsing bursts of watcher events into a
-            // single reload.
-            _ = config_changed.notified(),
-                if matches!(reload.phase, ReloadPhase::Idle | ReloadPhase::Debouncing) =>
-            {
-                info!("Config file changed");
-                reload.phase = ReloadPhase::Debouncing;
-                reload.debounce = Some(Box::pin(tokio::time::sleep(RELOAD_DEBOUNCE)));
-            }
-            // Debouncing: the window expired; start building the next
-            // generation while the current one keeps serving. The prepare
-            // future owns its inputs (an `Arc` config reader and a snapshot
-            // of the loaders), so it is `'static` and never borrows live
-            // state.
-            _ = async {
-                if let Some(debounce) = reload.debounce.as_mut() {
-                    Pin::new(debounce).await;
-                } else {
-                    std::future::pending::<()>().await;
-                }
-            }, if reload.phase == ReloadPhase::Debouncing => {
-                reload.debounce = None;
-                reload.phase = ReloadPhase::Preparing;
-                reload.prepare = Some(Box::pin(prepare_reload(
-                    Arc::clone(&config_reader),
-                    server_loader.clone(),
-                    CancellationToken::new(),
-                    runtime.clone(),
-                )));
-            }
-            // Preparing: the next generation is ready. A failed prepare is
-            // reported and dropped — no retry — and the live generation is
-            // left untouched.
-            result = async {
-                match reload.prepare.as_mut() {
-                    Some(prepare) => Pin::new(prepare).await,
-                    None => std::future::pending().await,
-                }
-            }, if reload.phase == ReloadPhase::Preparing => {
-                reload.prepare = None;
-                match result {
-                    Ok(prepared) => {
-                        reload.phase = ReloadPhase::CommitOnce;
-                        reload.commit_once = Some(prepared);
+            step = drive_reload(&mut reload, &mut server_tasks, &mut config_changed) => {
+                match step {
+                    Ok(ReloadStep::ConfigChanged) => {
+                        info!("Config file changed");
                     }
-                    Err(e) => {
-                        error!(?e, "Failed to prepare reload; live config unchanged");
-                        reload.phase = ReloadPhase::Idle;
+                    Ok(ReloadStep::DebounceElapsed) => {
+                        // The debounce window expired; start building the
+                        // next generation while the current one keeps
+                        // serving. The prepare future owns its inputs (an
+                        // `Arc` config reader and a snapshot of the
+                        // loaders), so it is `'static` and never borrows
+                        // live state.
+                        reload.begin_preparing(Box::pin(prepare_reload(
+                            Arc::clone(&config_reader),
+                            server_loader.snapshot(),
+                            CancellationToken::new(),
+                            runtime.clone(),
+                        )));
                     }
+                    Ok(ReloadStep::Prepared(result)) => match result {
+                        Ok(prepared) => {
+                            // Commit the prepared reload exactly once, then
+                            // return to idle; a failed commit is reported
+                            // and not retried.
+                            let (guard, commit_error) = commit_reload(
+                                &mut server_tasks,
+                                &mut server_loader,
+                                prepared,
+                                &runtime,
+                                &connector_config_updater,
+                            );
+                            _cancellation_guard = guard;
+                            if let Some(e) = commit_error {
+                                error!(
+                                    ?e,
+                                    "Reload commit partially failed: a listener died; \
+                                     its handler update was lost; new generation installed"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            error!(?e, "Failed to prepare reload; live config unchanged");
+                        }
+                    },
+                    Err(e) => return Err(e),
                 }
-            }
-            // CommitOnce: install the prepared generation exactly once, then
-            // return to Idle.
-            _ = std::future::ready(()), if reload.phase == ReloadPhase::CommitOnce => {
-                let prepared = reload
-                    .commit_once
-                    .take()
-                    .expect("CommitOnce holds the prepared reload");
-                let (guard, commit_error) = commit_reload(
-                    &mut server_tasks,
-                    &mut server_loader,
-                    prepared,
-                    &runtime,
-                    &connector_config,
-                );
-                _cancellation_guard = guard;
-                if let Some(e) = commit_error {
-                    error!(
-                        ?e,
-                        "Reload commit partially failed: a listener died; \
-                         its handler update was lost; new generation installed"
-                    );
-                }
-                reload.phase = ReloadPhase::Idle;
             }
         }
     }
-}
-
-/// A config-file change is debounced, the next generation is prepared while
-/// the current one keeps serving, and the prepared reload is committed
-/// exactly once before returning to idle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReloadPhase {
-    /// No reload in flight; a change notification starts a debounce window.
-    Idle,
-    /// Collapsing rapid change notifications; expires into [`ReloadPhase::Preparing`].
-    Debouncing,
-    /// Building the next generation; the current generation keeps serving.
-    Preparing,
-    /// A prepared reload awaits its single commit; commit returns to [`ReloadPhase::Idle`].
-    CommitOnce,
 }
 
 /// The window that collapses bursts of watcher events into one reload.
@@ -245,24 +224,122 @@ const RELOAD_DEBOUNCE: Duration = Duration::from_secs(1);
 type PrepareReloadFuture =
     Pin<Box<dyn Future<Output = Result<PreparedReload, ServerServeError>> + Send + 'static>>;
 
+/// The server's reload machine: [`ReloadMachine`] with the real preparation
+/// future.
+type ServerReloadMachine = ReloadMachine<PrepareReloadFuture>;
+
+/// The reload controller's state, carrying its data: an idle reloader, a
+/// debounce window collapsing watcher bursts, or an in-flight preparation.
+/// The enum makes invalid combinations unrepresentable — there is no separate
+/// phase flag plus a side table of sleeps and futures — and a prepared reload
+/// is handed out for a single commit rather than stored for a later phase.
+enum ReloadState<Prepare> {
+    /// No reload in flight; a change notification starts a debounce window.
+    Idle,
+    /// Collapsing rapid change notifications; expires into [`ReloadState::Preparing`].
+    Debouncing(Pin<Box<tokio::time::Sleep>>),
+    /// Building the next generation; the current generation keeps serving.
+    Preparing(Prepare),
+}
+
 /// The in-flight reload state machine, polled from the main `select!` rather
 /// than a spawned actor so server-task panics keep cascading while a reload
-/// is in progress. The debounce sleep and the prepare future live in their
-/// own fields so the `select!` branches can poll them without borrowing the
-/// whole machine.
-struct ReloadMachine {
-    phase: ReloadPhase,
-    debounce: Option<Pin<Box<tokio::time::Sleep>>>,
-    prepare: Option<PrepareReloadFuture>,
-    commit_once: Option<PreparedReload>,
+/// is in progress.
+struct ReloadMachine<Prepare> {
+    state: ReloadState<Prepare>,
 }
-impl ReloadMachine {
+impl<Prepare> ReloadMachine<Prepare> {
     fn new() -> Self {
         Self {
-            phase: ReloadPhase::Idle,
-            debounce: None,
-            prepare: None,
-            commit_once: None,
+            state: ReloadState::Idle,
+        }
+    }
+    fn is_idle(&self) -> bool {
+        matches!(self.state, ReloadState::Idle)
+    }
+    fn is_debouncing(&self) -> bool {
+        matches!(self.state, ReloadState::Debouncing(_))
+    }
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn is_preparing(&self) -> bool {
+        matches!(self.state, ReloadState::Preparing(_))
+    }
+    /// A config-file change arrived: (re)start the debounce window,
+    /// collapsing bursts of watcher events into a single reload.
+    fn on_config_changed(&mut self) {
+        self.state = ReloadState::Debouncing(Box::pin(tokio::time::sleep(RELOAD_DEBOUNCE)));
+    }
+    /// The debounce window expired; start building the next generation.
+    fn begin_preparing(&mut self, prepare: Prepare) {
+        self.state = ReloadState::Preparing(prepare);
+    }
+}
+/// One resolved step of the reload controller, as driven by the serve loop.
+enum ReloadStep<Prepared> {
+    /// A config-file change (re)started the debounce window.
+    ConfigChanged,
+    /// The debounce window elapsed; begin preparing the next generation.
+    DebounceElapsed,
+    /// The in-flight preparation resolved; commit the reload exactly once.
+    Prepared(Result<Prepared, ServerServeError>),
+}
+
+/// A future that resolves when the machine's current step completes: the
+/// debounce window expires or the in-flight preparation resolves. A resolved
+/// preparation returns the machine to idle before the result is handed out,
+/// so the caller commits exactly once and a failure is not retried. Never
+/// resolves while Idle, so it can race in the select loop without consuming
+/// events meant for other states.
+async fn reload_step<Prepare, Prepared>(
+    machine: &mut ReloadMachine<Prepare>,
+) -> ReloadStep<Prepared>
+where
+    Prepare: Future<Output = Result<Prepared, ServerServeError>> + Unpin,
+{
+    loop {
+        match &mut machine.state {
+            ReloadState::Debouncing(debounce) => {
+                debounce.as_mut().await;
+                return ReloadStep::DebounceElapsed;
+            }
+            ReloadState::Preparing(prepare) => {
+                let result = Pin::new(prepare).await;
+                // The borrow of `machine.state` (through `prepare`) ends at
+                // its last use above; return to idle before handing the
+                // result out for its single commit.
+                machine.state = ReloadState::Idle;
+                return ReloadStep::Prepared(result);
+            }
+            ReloadState::Idle => std::future::pending::<()>().await,
+        }
+    }
+}
+
+/// Race the reload machine's next step against the server-task set, exactly
+/// as the serve loop does: a completed server task surfaces first — its
+/// panic is resurrected, its error returned — so a failure is never parked
+/// while a reload is in progress; otherwise the machine advances and the
+/// resulting step is returned.
+async fn drive_reload<Prepare, Prepared>(
+    machine: &mut ReloadMachine<Prepare>,
+    server_tasks: &mut tokio::task::JoinSet<AnyResult>,
+    config_changed: &mut Subscription,
+) -> Result<ReloadStep<Prepared>, ServerServeError>
+where
+    Prepare: Future<Output = Result<Prepared, ServerServeError>> + Unpin,
+{
+    loop {
+        tokio::select! {
+            Some(res) = server_tasks.join_next() => {
+                res.unwrap().map_err(ServerServeError::ServerTask)?;
+            }
+            _ = config_changed.notified(), if machine.is_idle() || machine.is_debouncing() => {
+                machine.on_config_changed();
+                return Ok(ReloadStep::ConfigChanged);
+            }
+            step = reload_step(machine) => {
+                return Ok(step);
+            }
         }
     }
 }
@@ -272,14 +349,26 @@ pub struct ServerLoader {
     pub proxy_server: ProxyServerLoader,
     pub reverse_tunnel: ReverseTunnelLoader,
 }
-impl Clone for ServerLoader {
-    fn clone(&self) -> Self {
-        Self {
-            access_server: self.access_server.clone(),
-            proxy_server: self.proxy_server.clone(),
-            reverse_tunnel: self.reverse_tunnel.clone(),
+impl ServerLoader {
+    /// A read-only snapshot of the live loaders, for preparation. The
+    /// snapshot resolves against the same live listeners but cannot commit.
+    pub fn snapshot(&self) -> ServerLoaderSnapshot {
+        ServerLoaderSnapshot {
+            access_server: self.access_server.snapshot(),
+            proxy_server: self.proxy_server.snapshot(),
+            reverse_tunnel: self.reverse_tunnel.snapshot(),
         }
     }
+}
+
+/// An immutable snapshot of the live [`ServerLoader`]s, taken by
+/// [`ServerLoader::snapshot`] for preparation. Preparation can resolve and
+/// bind builders against the live listener set, but it cannot commit —
+/// replacement authority stays with the single owning [`ServerLoader`].
+pub struct ServerLoaderSnapshot {
+    pub access_server: AccessServerLoaderSnapshot,
+    pub proxy_server: ProxyServerLoaderSnapshot,
+    pub reverse_tunnel: ReverseTunnelLoaderSnapshot,
 }
 
 pub struct PreparedReload {
@@ -318,12 +407,12 @@ struct PreparedReloadParts {
 }
 
 /// Read the config and build the next generation without touching live
-/// state. Takes its inputs by value — an `Arc` config reader and a snapshot
-/// clone of the loaders — so the returned future is `'static` and can be
+/// state. Takes its inputs by value — an `Arc` config reader and a consumed
+/// [`ServerLoaderSnapshot`] — so the returned future is `'static` and can be
 /// stored in the reload machine without borrowing live state.
 async fn prepare_reload<CR>(
     config_reader: Arc<CR>,
-    server_loader: ServerLoader,
+    server_loader: ServerLoaderSnapshot,
     cancellation: CancellationToken,
     runtime: Runtime,
 ) -> Result<PreparedReload, ServerServeError>
@@ -415,7 +504,7 @@ fn commit_reload(
     server_loader: &mut ServerLoader,
     prepared: PreparedReload,
     runtime: &Runtime,
-    connector_config_handle: &ConnectorConfigHandle,
+    connector_config_updater: &ConnectorConfigUpdater,
 ) -> (tokio_util::sync::DropGuard, Option<AnyError>) {
     let PreparedReloadParts {
         cancellation,
@@ -426,9 +515,9 @@ fn commit_reload(
         reverse_tunnel,
     } = prepared.into_parts();
     runtime.stream.pool.replaced_by(stream_pool);
-    // One replacement: the handle is shared by the stream connector table,
+    // One replacement: the updater is shared by the stream connector table,
     // the UDP connector, and every mux UDP dialer.
-    connector_config_handle.replace(connector_config);
+    connector_config_updater.replace(connector_config);
     let commit_error: Option<AnyError> = (|| {
         server_loader
             .access_server
@@ -535,5 +624,205 @@ impl Merge for ServerConfig {
             udp,
             connector,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::notify::Notify;
+
+    /// A preparation future resolved by the test via a oneshot; the prepared
+    /// type is `()` so tests never need to build a real [`PreparedReload`].
+    type TestPrepare = Pin<Box<dyn Future<Output = Result<(), ServerServeError>> + Send>>;
+
+    fn test_machine() -> ReloadMachine<TestPrepare> {
+        ReloadMachine::new()
+    }
+
+    /// A preparation future that resolves when the test sends a result on
+    /// `rx` (a dropped sender surfaces as a config error).
+    fn controlled_prepare(
+        rx: tokio::sync::oneshot::Receiver<Result<(), ServerServeError>>,
+    ) -> TestPrepare {
+        Box::pin(async move {
+            rx.await
+                .map_err(|_| ServerServeError::Config("prepare sender dropped".into()))?
+        })
+    }
+
+    /// A change signal and its subscription, so tests can both broadcast and
+    /// observe notifications.
+    fn test_signal() -> (Notify, Subscription) {
+        let signal = Notify::new();
+        let subscription = signal.subscription();
+        (signal, subscription)
+    }
+
+    /// A config change during the debounce window resets the window instead
+    /// of letting it expire.
+    #[tokio::test(start_paused = true)]
+    async fn a_change_during_the_debounce_window_resets_it() {
+        let mut machine = test_machine();
+
+        machine.on_config_changed();
+        assert!(machine.is_debouncing());
+
+        // Half the window passes...
+        tokio::time::advance(RELOAD_DEBOUNCE / 2).await;
+        // ...a second change resets the window instead of letting it expire.
+        machine.on_config_changed();
+        assert!(machine.is_debouncing());
+
+        // The original deadline has passed by now, but the reset one has not.
+        tokio::time::advance(RELOAD_DEBOUNCE / 2).await;
+        assert!(
+            machine.is_debouncing(),
+            "the reset window must still be running"
+        );
+
+        // The reset window has now elapsed: the debounce sleep resolves.
+        tokio::time::advance(RELOAD_DEBOUNCE / 2).await;
+        let step = reload_step(&mut machine).await;
+        assert!(matches!(step, ReloadStep::DebounceElapsed));
+    }
+
+    /// A config change arriving while a reload is being prepared is not
+    /// lost: it stays pending and starts a fresh debounce window once the
+    /// machine returns to idle.
+    #[tokio::test(start_paused = true)]
+    async fn a_change_during_preparation_is_not_lost() {
+        let (signal, mut config_changed) = test_signal();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut machine = test_machine();
+
+        machine.begin_preparing(controlled_prepare(rx));
+        assert!(machine.is_preparing());
+
+        // A change arrives while preparing: the change branch is disabled
+        // until the machine returns to idle, so the notification stays
+        // pending.
+        signal.notify_waiters();
+        assert!(machine.is_preparing());
+
+        // Preparation completes; the machine returns to idle, handing the
+        // result out exactly once...
+        tx.send(Ok(())).unwrap();
+        let step = reload_step(&mut machine).await;
+        let ReloadStep::Prepared(result) = step else {
+            panic!("expected a Prepared step");
+        };
+        assert!(result.is_ok());
+        assert!(machine.is_idle());
+
+        // ...and the queued change starts a fresh debounce window.
+        config_changed.notified().await;
+        machine.on_config_changed();
+        assert!(machine.is_debouncing());
+    }
+
+    /// A prepared reload is handed out exactly once: after the single
+    /// hand-out the machine returns to idle, and a fresh cycle works without
+    /// re-committing the old prepare.
+    #[tokio::test(start_paused = true)]
+    async fn a_prepared_reload_is_handed_out_exactly_once() {
+        let mut machine = test_machine();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        machine.begin_preparing(controlled_prepare(rx));
+        tx.send(Ok(())).unwrap();
+        let step = reload_step(&mut machine).await;
+        let ReloadStep::Prepared(result) = step else {
+            panic!("expected a Prepared step");
+        };
+        assert!(result.is_ok());
+        assert!(
+            machine.is_idle(),
+            "after the single hand-out the machine must be idle"
+        );
+
+        // A fresh cycle: the machine never re-commits the old prepare.
+        let (tx2, rx2) = tokio::sync::oneshot::channel();
+        machine.begin_preparing(controlled_prepare(rx2));
+        assert!(machine.is_preparing());
+        tx2.send(Err(ServerServeError::Load("boom".into())))
+            .unwrap();
+        let step = reload_step(&mut machine).await;
+        let ReloadStep::Prepared(result) = step else {
+            panic!("expected a Prepared step");
+        };
+        assert!(result.is_err());
+        assert!(machine.is_idle());
+    }
+
+    /// A failed preparation returns to idle without retrying.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_preparation_returns_to_idle_without_retry() {
+        let mut machine = test_machine();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        machine.begin_preparing(controlled_prepare(rx));
+        tx.send(Err(ServerServeError::Config("synthetic".into())))
+            .unwrap();
+        let step = reload_step(&mut machine).await;
+        let ReloadStep::Prepared(result) = step else {
+            panic!("expected a Prepared step");
+        };
+        assert!(result.is_err());
+        assert!(
+            machine.is_idle(),
+            "a failed preparation must return to idle, not retry"
+        );
+    }
+
+    /// A server-task panic surfaces while the machine is debouncing, exactly
+    /// as it does in the serve loop.
+    #[tokio::test(start_paused = true)]
+    #[should_panic(expected = "connector driver exploded")]
+    async fn a_server_task_panic_propagates_during_debouncing() {
+        let mut machine = test_machine();
+        let mut server_tasks = tokio::task::JoinSet::new();
+        let mut config_changed = test_signal().1;
+
+        machine.on_config_changed();
+        assert!(machine.is_debouncing());
+        server_tasks.spawn(async { panic!("connector driver exploded") });
+        // Let the panicking task land in the join set before driving.
+        tokio::task::yield_now().await;
+        let _ = drive_reload(&mut machine, &mut server_tasks, &mut config_changed).await;
+    }
+
+    /// A server-task panic surfaces while a reload is being prepared.
+    #[tokio::test(start_paused = true)]
+    #[should_panic(expected = "connector driver exploded")]
+    async fn a_server_task_panic_propagates_during_preparation() {
+        let mut machine = test_machine();
+        let mut server_tasks = tokio::task::JoinSet::new();
+        let mut config_changed = test_signal().1;
+        let (_tx, rx) = tokio::sync::oneshot::channel();
+
+        machine.begin_preparing(controlled_prepare(rx));
+        assert!(machine.is_preparing());
+        server_tasks.spawn(async { panic!("connector driver exploded") });
+        tokio::task::yield_now().await;
+        let _ = drive_reload(&mut machine, &mut server_tasks, &mut config_changed).await;
+    }
+
+    /// A server-task error surfaces as a [`ServerServeError::ServerTask`]
+    /// while a reload is being prepared.
+    #[tokio::test(start_paused = true)]
+    async fn a_server_task_error_propagates_during_preparation() {
+        let mut machine = test_machine();
+        let mut server_tasks = tokio::task::JoinSet::new();
+        let mut config_changed = test_signal().1;
+        let (_tx, rx) = tokio::sync::oneshot::channel();
+
+        machine.begin_preparing(controlled_prepare(rx));
+        assert!(machine.is_preparing());
+        server_tasks
+            .spawn(async { Err::<(), AnyError>(std::io::Error::other("connector died").into()) });
+        tokio::task::yield_now().await;
+        let step = drive_reload(&mut machine, &mut server_tasks, &mut config_changed).await;
+        assert!(matches!(step, Err(ServerServeError::ServerTask(_))));
     }
 }

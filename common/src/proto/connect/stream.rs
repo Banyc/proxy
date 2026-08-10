@@ -12,7 +12,7 @@ use std::{
 
 use async_trait::async_trait;
 
-use crate::{connect::ConnectorConfigHandle, stream::ConnParts};
+use crate::{connect::ConnectorConfigReader, stream::ConnParts};
 
 #[async_trait]
 pub trait StreamConnect: std::fmt::Debug + Sync + Send + 'static {
@@ -157,13 +157,13 @@ impl Drop for NamedStreamRegistration {
 
 #[derive(Debug)]
 pub struct StreamConnectorTable {
-    config: ConnectorConfigHandle,
+    config: ConnectorConfigReader,
     connectors: HashMap<Arc<str>, Arc<dyn StreamConnect>>,
     named: Arc<NamedStreamRegistry>,
 }
 impl StreamConnectorTable {
     pub fn new(
-        config: ConnectorConfigHandle,
+        config: ConnectorConfigReader,
         connectors: HashMap<Arc<str>, Arc<dyn StreamConnect>>,
     ) -> Self {
         Self {
@@ -335,7 +335,7 @@ mod tests {
 
     fn empty_table() -> StreamConnectorTable {
         StreamConnectorTable::new(
-            ConnectorConfigHandle::new(ConnectorConfig::default()),
+            crate::connect::connector_config_cell(ConnectorConfig::default()).0,
             HashMap::new(),
         )
     }
@@ -361,7 +361,7 @@ mod tests {
             successful,
         });
         let table = StreamConnectorTable::new(
-            ConnectorConfigHandle::new(ConnectorConfig::default()),
+            crate::connect::connector_config_cell(ConnectorConfig::default()).0,
             HashMap::from([(
                 Arc::from(STREAM_TYPE),
                 connector.clone() as Arc<dyn StreamConnect>,
