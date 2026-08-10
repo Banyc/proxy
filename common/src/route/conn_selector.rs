@@ -131,6 +131,9 @@ pub struct NonEmptyConnSelector {
     score_store: Arc<RwLock<ScoreStore>>,
     active_chains: NonZeroUsize,
     gate: Option<EligibilityGate>,
+    /// The probe kind for selector logs, e.g. `"udp"` or `"stream"`; the
+    /// tracer's [`ProbeRtt::probe_kind`] captured at build time.
+    probe_kind: &'static str,
 }
 impl NonEmptyConnSelector {
     /// Build the selector.
@@ -179,6 +182,10 @@ impl NonEmptyConnSelector {
             score_store,
             active_chains,
             gate,
+            probe_kind: tracer
+                .as_ref()
+                .map(|tracer| tracer.probe_kind())
+                .unwrap_or("unknown"),
         })
     }
 
@@ -191,7 +198,7 @@ impl NonEmptyConnSelector {
             Some(scores) => scores,
             None => {
                 let scores: Arc<[_]> = self.scores().into();
-                info!(?scores, "Calculated scores");
+                info!(kind = self.probe_kind, ?scores, "Calculated scores");
                 let sum = scores.iter().map(|(_, s)| *s).sum::<f64>();
                 let scores = Scores { scores, sum };
                 self.score_store.write().unwrap().set(scores.clone());
@@ -225,6 +232,7 @@ impl NonEmptyConnSelector {
             let dropped = gate.retain_eligible(&mut scored);
             if dropped > 0 {
                 info!(
+                    kind = self.probe_kind,
                     dropped,
                     eligible = scored.len(),
                     max_rtt_ratio = gate.max_ratio,

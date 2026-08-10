@@ -493,6 +493,9 @@ impl UdpTracer {
     }
 }
 impl ProbeRtt for UdpTracer {
+    fn probe_kind(&self) -> &'static str {
+        "udp"
+    }
     fn probe_rtt(
         &self,
         chain: &ConnChain,

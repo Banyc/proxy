@@ -195,6 +195,9 @@ impl StreamTracer {
     }
 }
 impl ProbeRtt for StreamTracer {
+    fn probe_kind(&self) -> &'static str {
+        "stream"
+    }
     fn probe_rtt(
         &self,
         chain: &ConnChain,
