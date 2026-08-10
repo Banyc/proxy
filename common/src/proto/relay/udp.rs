@@ -43,14 +43,27 @@ pub trait UdpRecv {
     ) -> impl Future<Output = Result<usize, AnyError>> + Send;
 }
 
+/// How a write-half shutdown resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownOutcome {
+    /// The shutdown signalled a clean EOF to the peer: the flow closed via
+    /// the explicit epilog rather than its safety timeout.
+    Propagated,
+    /// The transport cannot signal EOF (a raw datagram socket): the flow is
+    /// retained until its safety timeout.
+    Unsupported,
+}
+
 pub trait UdpSend {
     fn trait_send(&mut self, buf: &[u8]) -> impl Future<Output = Result<usize, AnyError>> + Send;
     /// Gracefully close the write half, flushing any in-flight frame and
-    /// signalling EOF to the peer. Datagram sockets have no half-close, so
-    /// the default is a no-op; mux-stream writers override it to propagate a
-    /// clean EOF to the next relay hop.
-    fn trait_shutdown(&mut self) -> impl Future<Output = Result<(), AnyError>> + Send {
-        async { Ok(()) }
+    /// signalling EOF to the peer, reporting whether the close propagated.
+    /// Datagram sockets have no half-close, so the default reports
+    /// [`ShutdownOutcome::Unsupported`] and the flow is retained until its
+    /// safety timeout; mux-stream writers override it to propagate a clean
+    /// EOF to the next relay hop and report [`ShutdownOutcome::Propagated`].
+    fn trait_shutdown(&mut self) -> impl Future<Output = Result<ShutdownOutcome, AnyError>> + Send {
+        async { Ok(ShutdownOutcome::Unsupported) }
     }
 }
 
@@ -257,11 +270,16 @@ where
                         // The peer closed its write half: shut down the next
                         // hop's writer so the clean EOF propagates down the
                         // chain instead of idling the upstream flow out.
-                        upstream
+                        let outcome = upstream
                             .write
                             .trait_shutdown()
                             .await
                             .map_err(CopyBiError::SendUpstream)?;
+                        if outcome == ShutdownOutcome::Unsupported {
+                            // A raw-UDP hop cannot signal EOF: the flow is
+                            // retained until the safety timeout below aborts it.
+                            trace!(?flow, "Downstream closed but the upstream hop cannot signal EOF; flow retained until its safety timeout");
+                        }
                         break;
                     }
                     Err(error) => return Err(CopyBiError::RecvDownstream(error)),
@@ -318,11 +336,16 @@ where
                         // The next hop closed its writer: shut down our
                         // downstream writer so the clean EOF reaches the peer
                         // instead of idling the flow out.
-                        downstream
+                        let outcome = downstream
                             .write
                             .trait_shutdown()
                             .await
                             .map_err(CopyBiError::SendDownstream)?;
+                        if outcome == ShutdownOutcome::Unsupported {
+                            // A raw-UDP hop cannot signal EOF: the flow is
+                            // retained until the safety timeout below aborts it.
+                            trace!(?flow, "Upstream closed but the downstream hop cannot signal EOF; flow retained until its safety timeout");
+                        }
                         break;
                     }
                     Err(error) => return Err(CopyBiError::RecvUpstream(error)),

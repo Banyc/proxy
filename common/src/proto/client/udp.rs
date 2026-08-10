@@ -13,7 +13,7 @@ use crate::{
         context::UdpRuntime,
         relay::{
             decrypt_packet_payload, encrypt_packet_payload,
-            udp::{UdpRecv, UdpSend},
+            udp::{ShutdownOutcome, UdpRecv, UdpSend},
         },
     },
     route::{ConnChain, ProbeRtt, convert_proxies_to_header_crypto_pairs},
@@ -32,6 +32,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 use thiserror::Error;
+use tokio::sync::watch;
 use tracing::{instrument, trace, warn};
 
 #[derive(Debug, Default)]
@@ -232,7 +233,7 @@ impl UdpSend for UdpProxyClientWriteHalf {
     async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
         Self::send(self, buf).await.map_err(|e| e.into())
     }
-    async fn trait_shutdown(&mut self) -> Result<(), AnyError> {
+    async fn trait_shutdown(&mut self) -> Result<ShutdownOutcome, AnyError> {
         self.upstream.trait_shutdown().await
     }
 }
@@ -504,19 +505,74 @@ impl ProbeRtt for UdpTracer {
             let mut pkt_buf = pool.take();
             let res = probe_rtt(&mut pkt_buf, &chain, &context)
                 .await
+                .map(|(rtt, _end)| rtt)
                 .map_err(|e| e.into());
             pool.put(pkt_buf);
             res
         })
     }
 }
+/// The probe flow's end state, reported through the completion signal
+/// returned with [`probe_rtt`]. The flow has actually terminated once the
+/// receiver leaves the pending state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeFlowEnd {
+    /// The flow is still being torn down; the receiver changes once it
+    /// terminates.
+    Pending,
+    /// The peer closed the flow in response to the probe's write-half
+    /// shutdown: a clean EOF was observed at the datagram boundary, so the
+    /// epilog propagated end to end.
+    Eof,
+    /// The epilog could not close the flow — its shutdown outcome was
+    /// [`ShutdownOutcome::Unsupported`] (a raw-UDP hop) or the peer never
+    /// closed — so the flow was retained until its safety timeout.
+    RetainedUntilTimeout,
+}
+
+/// How long the probe's teardown task waits for the flow's EOF before
+/// reporting the retained-until-timeout end: the flow's safety timeout
+/// (which aborts a retained relay after roughly 10s of inactivity) plus
+/// margin.
+const FLOW_END_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Read until the peer's EOF, returning `true` on a clean end at a
+/// datagram boundary. Datagrams arriving before the close are drained.
+async fn await_probe_flow_end(read: &mut UdpConnectionRead) -> bool {
+    let mut buf = [0; PACKET_BUFFER_LENGTH];
+    loop {
+        match read.trait_recv(&mut buf).await {
+            Ok(0) => return true,
+            Ok(_) => continue,
+            Err(error) => {
+                return error
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|error| error.kind() == io::ErrorKind::UnexpectedEof);
+            }
+        }
+    }
+}
+
+/// Send one echo probe over the proxy chain and read its response.
+///
+/// Returns the round-trip time together with a completion signal that
+/// reports how the probe's flow actually terminated: after the response is
+/// in hand the probe shuts down its write half (the explicit epilog), and
+/// the signal resolves once the flow has fully torn down — a clean EOF
+/// when the epilog propagated, or the retained-until-timeout end when a
+/// raw-UDP hop could not propagate it. Tests await the signal to observe
+/// flow termination deterministically; production probe loops ignore it.
 pub async fn probe_rtt(
     pkt_buf: &mut BytesMut,
     proxies: &ConnChain,
     context: &UdpRuntime,
-) -> Result<Duration, TraceError> {
+) -> Result<(Duration, watch::Receiver<ProbeFlowEnd>), TraceError> {
     if proxies.is_empty() {
-        return Ok(Duration::from_secs(0));
+        // No flow was ever opened; report the retained end immediately so
+        // an awaited completion never hangs.
+        let (end_tx, end_rx) = watch::channel(ProbeFlowEnd::Pending);
+        let _ = end_tx.send_replace(ProbeFlowEnd::RetainedUntilTimeout);
+        return Ok((Duration::from_secs(0), end_rx));
     }
     let proxy_addr = &proxies[0].address;
     let upstream = context
@@ -597,12 +653,42 @@ pub async fn probe_rtt(
     // is in hand, so the echo flow on the proxy sees a clean EOF and
     // releases its session slot immediately instead of idling out and
     // tripping the flow's safety timeout.
-    upstream_write
+    let outcome = upstream_write
         .trait_shutdown()
         .await
         .map_err(io::Error::other)?;
     counter!("udp.traces").increment(1);
-    Ok(end.duration_since(start))
+    // The probe flow's termination, reported through the completion signal.
+    // The epilog has already returned, so the flow's end is observed in a
+    // background task that keeps the read half and awaits the peer's close.
+    let (end_tx, end_rx) = watch::channel(ProbeFlowEnd::Pending);
+    match outcome {
+        ShutdownOutcome::Propagated => {
+            // The epilog signalled EOF to the peer; the flow terminates when
+            // the peer's response writer closes, observed as a clean EOF on
+            // the probe's read half. Await it in the background so probe_rtt
+            // still returns promptly, bounded by the flow's safety timeout.
+            tokio::spawn(async move {
+                let end = match tokio::time::timeout(
+                    FLOW_END_TIMEOUT,
+                    await_probe_flow_end(&mut upstream_read),
+                )
+                .await
+                {
+                    Ok(true) => ProbeFlowEnd::Eof,
+                    Ok(false) | Err(_) => ProbeFlowEnd::RetainedUntilTimeout,
+                };
+                let _ = end_tx.send_replace(end);
+            });
+        }
+        ShutdownOutcome::Unsupported => {
+            // A raw-UDP hop cannot signal EOF: no EOF can arrive on the
+            // probe's read half, and the flow is retained until its safety
+            // timeout. Report the retained end immediately.
+            let _ = end_tx.send_replace(ProbeFlowEnd::RetainedUntilTimeout);
+        }
+    }
+    Ok((end.duration_since(start), end_rx))
 }
 #[derive(Debug, Error)]
 pub enum TraceError {

@@ -4,7 +4,7 @@ use crate::{
     error::AnyError,
     proto::{
         addr::RouteAddr,
-        relay::udp::{UdpRecv, UdpSend},
+        relay::udp::{ShutdownOutcome, UdpRecv, UdpSend},
     },
 };
 use async_trait::async_trait;
@@ -113,13 +113,18 @@ impl UdpSend for UdpConnectionWrite {
             Self::Io(writer) => writer.send(buf).await.map_err(Into::into),
         }
     }
-    async fn trait_shutdown(&mut self) -> Result<(), AnyError> {
+    async fn trait_shutdown(&mut self) -> Result<ShutdownOutcome, AnyError> {
         match self {
-            // A connected datagram socket cannot half-close; nothing to do.
-            Self::Socket(_) => Ok(()),
+            // A connected datagram socket cannot half-close; the flow is
+            // retained until its safety timeout.
+            Self::Socket(_) => Ok(ShutdownOutcome::Unsupported),
             // Gracefully close the mux stream so the peer sees a clean EOF
             // at the datagram boundary instead of idling the flow out.
-            Self::Io(writer) => writer.shutdown().await.map_err(Into::into),
+            Self::Io(writer) => writer
+                .shutdown()
+                .await
+                .map(|()| ShutdownOutcome::Propagated)
+                .map_err(Into::into),
         }
     }
 }

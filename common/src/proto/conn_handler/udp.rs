@@ -450,11 +450,22 @@ where
         }
         .await;
         // Explicit epilog: close the response writer so the peer's read half
-        // sees a clean EOF. The peer may already have closed its read half;
-        // that is the same clean end, not a failure of the echo flow.
-        match write.trait_shutdown().await {
-            Ok(()) => {}
-            Err(error) => trace!(?error, "Echo flow response writer shutdown failed"),
+        // sees a clean EOF. Bound by the flow timeout so a stalled peer
+        // cannot hang the shutdown; ignore only the peer-closed errors that
+        // mean the flow already ended the same clean way; propagate genuine
+        // epilog failures instead of discarding them.
+        match tokio::time::timeout(timeout, write.trait_shutdown()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) if is_peer_closed(&error) => {
+                trace!(
+                    ?error,
+                    "Echo flow peer already closed; epilog shutdown skipped"
+                )
+            }
+            Ok(Err(error)) => return Err(UdpProxyError::Tunnel(error)),
+            Err(_) => {
+                return Err(flow_timed_out("UDP echo flow stalled on response shutdown"));
+            }
         }
         result
     }
@@ -606,6 +617,22 @@ fn is_udp_eof(error: &AnyError) -> bool {
         .is_some_and(|error| error.kind() == io::ErrorKind::UnexpectedEof)
 }
 
+/// `true` if the error means the peer already closed its side of the flow,
+/// so the epilog shutdown has nothing left to signal: the flow ended the
+/// same clean way, not because the epilog failed.
+fn is_peer_closed(error: &AnyError) -> bool {
+    error.downcast_ref::<io::Error>().is_some_and(|error| {
+        matches!(
+            error.kind(),
+            io::ErrorKind::UnexpectedEof
+                | io::ErrorKind::BrokenPipe
+                | io::ErrorKind::ConnectionReset
+                | io::ErrorKind::ConnectionAborted
+                | io::ErrorKind::NotConnected
+        )
+    })
+}
+
 /// The idle-expiry message for an echo flow that never received its epilog:
 /// the peer stalled instead of closing the flow, so the safety timeout fired.
 const ECHO_FLOW_IDLE: &str = "UDP echo flow idle";
@@ -654,7 +681,10 @@ mod tests {
         anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         connect::{ConnectorConfig, connector_config_cell},
         header::route::RouteRequest,
-        proto::{conn::udp::UDP_FLOW_ID_LEN, connect::udp::UdpConnector, context::UdpRuntime},
+        proto::{
+            conn::udp::UDP_FLOW_ID_LEN, connect::udp::UdpConnector, context::UdpRuntime,
+            relay::udp::ShutdownOutcome,
+        },
     };
     use ae::anti_replay::TimeValidator;
     use std::sync::Arc;
@@ -713,6 +743,43 @@ mod tests {
     impl UdpSend for StallingSend {
         async fn trait_send(&mut self, _buf: &[u8]) -> Result<usize, AnyError> {
             std::future::pending().await
+        }
+    }
+
+    /// A `UdpSend` whose shutdown never resolves — modelling a peer that
+    /// stops reading, so the epilog shutdown would hang forever.
+    struct StallingShutdownSend;
+    impl UdpSend for StallingShutdownSend {
+        async fn trait_send(&mut self, _buf: &[u8]) -> Result<usize, AnyError> {
+            Ok(0)
+        }
+        async fn trait_shutdown(&mut self) -> Result<ShutdownOutcome, AnyError> {
+            std::future::pending().await
+        }
+    }
+
+    /// A `UdpSend` whose shutdown fails with a peer-closed error — modelling
+    /// a peer that already closed its side of the flow, so the epilog has
+    /// nothing left to signal and the flow ended the same clean way.
+    struct PeerClosedShutdownSend;
+    impl UdpSend for PeerClosedShutdownSend {
+        async fn trait_send(&mut self, _buf: &[u8]) -> Result<usize, AnyError> {
+            Ok(0)
+        }
+        async fn trait_shutdown(&mut self) -> Result<ShutdownOutcome, AnyError> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "peer closed").into())
+        }
+    }
+
+    /// A `UdpSend` whose shutdown fails with a genuine error — modelling a
+    /// real epilog failure that must surface rather than be discarded.
+    struct FailingShutdownSend;
+    impl UdpSend for FailingShutdownSend {
+        async fn trait_send(&mut self, _buf: &[u8]) -> Result<usize, AnyError> {
+            Ok(0)
+        }
+        async fn trait_shutdown(&mut self) -> Result<ShutdownOutcome, AnyError> {
+            Err(io::Error::new(io::ErrorKind::Other, "transport broke").into())
         }
     }
 
@@ -872,5 +939,71 @@ mod tests {
             )
             .await;
         assert_timed_out(result, "UDP echo flow stalled on response write");
+    }
+
+    /// The epilog shutdown is bounded by the flow timeout: a peer that
+    /// stops reading its echo responses must not hang the flow's session
+    /// slot on a shutdown that never resolves.
+    #[tokio::test]
+    async fn a_stalled_echo_shutdown_times_out_the_flow() {
+        let result = handler()
+            .handle_tunnel_flow_with_timeouts(
+                StallingRecv {
+                    packet: Some(routed_echo_packet()),
+                },
+                StallingShutdownSend,
+                "127.0.0.1:1".parse().unwrap(),
+                Duration::from_millis(50),
+                Duration::from_millis(50),
+            )
+            .await;
+        assert_timed_out(result, "UDP echo flow stalled on response shutdown");
+    }
+
+    /// A peer that already closed its side of the flow makes the epilog
+    /// shutdown fail with a peer-closed error; that is the same clean end,
+    /// not a failure of the echo flow.
+    #[tokio::test]
+    async fn a_peer_closed_echo_shutdown_is_a_clean_end() {
+        let result = handler()
+            .handle_tunnel_flow_with_timeouts(
+                StallingRecv {
+                    packet: Some(routed_echo_packet()),
+                },
+                PeerClosedShutdownSend,
+                "127.0.0.1:1".parse().unwrap(),
+                Duration::from_millis(50),
+                Duration::from_millis(50),
+            )
+            .await;
+        assert!(
+            result.is_ok(),
+            "a peer-closed epilog is a clean end: {result:?}"
+        );
+    }
+
+    /// A genuine epilog failure must propagate instead of being discarded
+    /// into a trace while the earlier result is returned.
+    #[tokio::test]
+    async fn a_genuine_echo_shutdown_failure_propagates() {
+        let result = handler()
+            .handle_tunnel_flow_with_timeouts(
+                StallingRecv {
+                    packet: Some(routed_echo_packet()),
+                },
+                FailingShutdownSend,
+                "127.0.0.1:1".parse().unwrap(),
+                Duration::from_millis(50),
+                Duration::from_millis(50),
+            )
+            .await;
+        match result {
+            Err(UdpProxyError::Tunnel(error)) => {
+                let error = error.downcast_ref::<io::Error>().expect("io error");
+                assert_eq!(error.kind(), io::ErrorKind::Other);
+                assert_eq!(error.to_string(), "transport broke");
+            }
+            other => panic!("expected the epilog failure to propagate, got {other:?}"),
+        }
     }
 }

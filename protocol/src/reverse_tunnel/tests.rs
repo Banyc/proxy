@@ -2,6 +2,7 @@
 use super::initiator::initiator_transport;
 use super::*;
 use ae::anti_replay::{ReplayValidator, TimeValidator};
+use bytes::BytesMut;
 use common::{
     anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
     connect::{
@@ -11,13 +12,17 @@ use common::{
     notify::Notify,
     proto::{
         addr::{ReverseTunnelTransport, RouteAddr, RouteAddrStr},
-        client::{stream, udp::UdpProxyClient},
+        client::{
+            stream,
+            udp::{ProbeFlowEnd, UdpProxyClient, probe_rtt},
+        },
         conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
         connect::udp::UdpConnector,
         context::{Runtime, StreamRuntime, UdpRuntime},
     },
     route::{ConnChain, ConnConfig},
     stream::pool::StreamConnPool,
+    udp::PACKET_BUFFER_LENGTH,
 };
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use swap::Swap;
@@ -524,6 +529,86 @@ async fn tcp_reverse_tunnel_carries_udp_with_payload_encryption() {
 #[tokio::test(flavor = "multi_thread")]
 async fn rtp_reverse_tunnel_is_a_later_udp_hop_with_per_hop_payload_encryption() {
     verify_reverse_udp_proxy_hop(ReverseTunnelTransport::Rtp, true).await;
+}
+
+/// A probe over a reverse tunnel on the rtp mux transport, driven through
+/// the production [`probe_rtt`], must close the echo flow promptly once
+/// its write half is shut down: the tunnel's mux stream propagates the
+/// clean EOF to the initiator's echo flow, whose response writer closes,
+/// observed as a clean EOF on the probe's read half and reported through
+/// the flow-completion signal rather than a fixed sleep.
+#[tokio::test(flavor = "multi_thread")]
+async fn rtp_reverse_tunnel_probe_closes_the_flow_promptly() {
+    let mut scope = TestScope::new();
+    let (runtime, session_spawner) = test_runtime(&mut scope).await;
+    let crypto = tokio_chacha20::config::Config::new([7; 32].into());
+    let responder_handler = ReverseTunnelResponderHandler {
+        registration_crypto: crypto.clone(),
+        stream_runtime: runtime.stream.clone(),
+        udp_runtime: runtime.udp.clone(),
+    };
+    let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0", false)
+        .await
+        .unwrap();
+    let addr = server.listener().local_addr();
+    let server = RtpReverseTunnelResponder {
+        server,
+        handler: responder_handler,
+        session_spawner,
+    };
+    scope.spawn_required("rtp responder server", async move {
+        let (_tx, rx) = loading::replace_conn_handler_channel();
+        server.serve(rx).await.unwrap();
+    });
+    let responder_addr: RouteAddr = format!("rtpmux://{addr}").parse().unwrap();
+    let initiator = ReverseTunnelInitiator {
+        handler: initiator_handler(
+            "private-udp",
+            responder_addr,
+            ReverseTunnelTransport::Rtp,
+            crypto.clone(),
+            runtime.clone(),
+        ),
+    };
+    scope.spawn_required("initiator", async move {
+        let (_tx, rx) = loading::replace_conn_handler_channel();
+        initiator.serve(rx).await.unwrap();
+    });
+    let chain: Arc<ConnChain> = Arc::from([ConnConfig {
+        address: "revtunrtp://private-udp".parse().unwrap(),
+        header_crypto: crypto,
+        payload_crypto: None,
+    }]);
+    scope
+        .run(async {
+            let mut pkt_buf = BytesMut::with_capacity(PACKET_BUFFER_LENGTH);
+            let (rtt, mut flow_end) = tokio::time::timeout(
+                Duration::from_secs(30),
+                probe_rtt(&mut pkt_buf, &chain, &runtime.udp),
+            )
+            .await
+            .expect("timed out probing the reverse tunnel")
+            .unwrap();
+            assert!(rtt > Duration::ZERO);
+            assert!(rtt < Duration::from_secs(1));
+
+            // Await the actual flow termination: the completion signal must
+            // report a clean EOF well under the safety timeout.
+            let end = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    if let value @ (ProbeFlowEnd::Eof | ProbeFlowEnd::RetainedUntilTimeout) =
+                        *flow_end.borrow_and_update()
+                    {
+                        return value;
+                    }
+                    flow_end.changed().await.unwrap();
+                }
+            })
+            .await
+            .expect("the reverse-tunnel echo flow must terminate promptly");
+            assert_eq!(end, ProbeFlowEnd::Eof);
+        })
+        .await;
 }
 
 async fn verify_reverse_proxy_hop(transport: ReverseTunnelTransport) {
