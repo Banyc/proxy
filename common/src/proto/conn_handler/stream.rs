@@ -19,7 +19,7 @@ use crate::{
 use async_speed_limit::Limiter;
 use serde::Deserialize;
 use thiserror::Error;
-use tracing::{info, instrument, warn};
+use tracing::{instrument, trace, warn};
 
 pub struct StreamProxyFinished {
     pub io: IoCopyFinished,
@@ -185,7 +185,7 @@ impl StreamServerHandleConn for StreamProxyConnHandler {
         let peer_addr = stream.peer_addr().ok();
         match self.proxy(stream).await {
             Ok(ProxyResult::IoCopy) => (),
-            Ok(ProxyResult::Echo) => info!(?local_addr, ?peer_addr, "Echo finished"),
+            Ok(ProxyResult::Echo) => trace!(?local_addr, ?peer_addr, "Echo finished"),
             Err(e) => {
                 let upstream_addr = e.upstream_addr();
                 warn!(

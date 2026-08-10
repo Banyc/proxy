@@ -45,6 +45,13 @@ pub trait UdpRecv {
 
 pub trait UdpSend {
     fn trait_send(&mut self, buf: &[u8]) -> impl Future<Output = Result<usize, AnyError>> + Send;
+    /// Gracefully close the write half, flushing any in-flight frame and
+    /// signalling EOF to the peer. Datagram sockets have no half-close, so
+    /// the default is a no-op; mux-stream writers override it to propagate a
+    /// clean EOF to the next relay hop.
+    fn trait_shutdown(&mut self) -> impl Future<Output = Result<(), AnyError>> + Send {
+        async { Ok(()) }
+    }
 }
 
 pub struct UpstreamParts<R, W> {
@@ -247,6 +254,14 @@ where
                             .downcast_ref::<io::Error>()
                             .is_some_and(|error| error.kind() == io::ErrorKind::UnexpectedEof) =>
                     {
+                        // The peer closed its write half: shut down the next
+                        // hop's writer so the clean EOF propagates down the
+                        // chain instead of idling the upstream flow out.
+                        upstream
+                            .write
+                            .trait_shutdown()
+                            .await
+                            .map_err(CopyBiError::SendUpstream)?;
                         break;
                     }
                     Err(error) => return Err(CopyBiError::RecvDownstream(error)),
@@ -293,7 +308,25 @@ where
             loop {
                 let res = upstream.read.trait_recv(&mut downlink_buf).await;
                 trace!("Received packet from upstream");
-                let n = res.map_err(CopyBiError::RecvUpstream)?;
+                let n = match res {
+                    Ok(n) => n,
+                    Err(error)
+                        if error
+                            .downcast_ref::<io::Error>()
+                            .is_some_and(|error| error.kind() == io::ErrorKind::UnexpectedEof) =>
+                    {
+                        // The next hop closed its writer: shut down our
+                        // downstream writer so the clean EOF reaches the peer
+                        // instead of idling the flow out.
+                        downstream
+                            .write
+                            .trait_shutdown()
+                            .await
+                            .map_err(CopyBiError::SendDownstream)?;
+                        break;
+                    }
+                    Err(error) => return Err(CopyBiError::RecvUpstream(error)),
+                };
                 let pkt = &mut downlink_buf[..n];
                 speed_limiter.consume(pkt.len()).await;
                 if n == PACKET_BUFFER_LENGTH {
@@ -331,6 +364,7 @@ where
                 packets_downlink.fetch_add(1, Ordering::Relaxed);
                 *last_downlink_packet.write().unwrap() = std::time::Instant::now();
             }
+            Ok(())
         }
     });
     loop {

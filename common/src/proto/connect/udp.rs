@@ -113,6 +113,15 @@ impl UdpSend for UdpConnectionWrite {
             Self::Io(writer) => writer.send(buf).await.map_err(Into::into),
         }
     }
+    async fn trait_shutdown(&mut self) -> Result<(), AnyError> {
+        match self {
+            // A connected datagram socket cannot half-close; nothing to do.
+            Self::Socket(_) => Ok(()),
+            // Gracefully close the mux stream so the peer sees a clean EOF
+            // at the datagram boundary instead of idling the flow out.
+            Self::Io(writer) => writer.shutdown().await.map_err(Into::into),
+        }
+    }
 }
 
 /// A dialer that opens a UDP datagram flow over a multiplexed byte stream.

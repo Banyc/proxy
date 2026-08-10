@@ -232,6 +232,9 @@ impl UdpSend for UdpProxyClientWriteHalf {
     async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
         Self::send(self, buf).await.map_err(|e| e.into())
     }
+    async fn trait_shutdown(&mut self) -> Result<(), AnyError> {
+        self.upstream.trait_shutdown().await
+    }
 }
 impl UdpProxyClientWriteHalf {
     fn new(
@@ -590,6 +593,14 @@ pub async fn probe_rtt(
             packet = remaining.to_vec();
         }
     }
+    // Explicit epilog: close the probe's write half now that its response
+    // is in hand, so the echo flow on the proxy sees a clean EOF and
+    // releases its session slot immediately instead of idling out and
+    // tripping the flow's safety timeout.
+    upstream_write
+        .trait_shutdown()
+        .await
+        .map_err(io::Error::other)?;
     counter!("udp.traces").increment(1);
     Ok(end.duration_since(start))
 }

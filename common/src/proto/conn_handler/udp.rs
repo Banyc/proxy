@@ -20,9 +20,10 @@ use crate::{
     },
 };
 use async_speed_limit::Limiter;
+use metrics::counter;
 use thiserror::Error;
 use tokio::net::{ToSocketAddrs, UdpSocket};
-use tracing::{instrument, trace, warn};
+use tracing::{debug, instrument, trace, warn};
 use udp_listener::{Conn, ConnRead, ConnWrite};
 
 use super::ListenerBindError;
@@ -206,7 +207,17 @@ impl UdpProxyConnHandler {
             Err(error) => return Err(error),
         };
         match tunnel {
-            EstablishedTunnel::Echo(flow) => flow.run(write, echo_timeout).await,
+            EstablishedTunnel::Echo(flow) => match flow.run(write, echo_timeout).await {
+                // An echo flow that went idle has no peer left to answer; the
+                // safety timeout is its designed end. Count the expiry and log
+                // it at debug instead of surfacing a warning.
+                Err(UdpProxyError::Tunnel(error)) if is_echo_flow_idle(&error) => {
+                    counter!("udp.echo_flow_idle_timeouts").increment(1);
+                    debug!(?error, %downstream, "UDP echo flow idled out");
+                    Ok(())
+                }
+                result => result,
+            },
             EstablishedTunnel::Relay(flow) => {
                 let (read, upstream) = flow.into_parts();
                 let flow = Flow {
@@ -411,27 +422,41 @@ where
     R: UdpRecv + Send + 'static,
 {
     /// Echo every datagram on the flow, bounding each read and each response
-    /// write by `timeout`.
+    /// write by `timeout`. Always shuts down the response writer before
+    /// returning, so the client's read half sees a clean EOF and the flow's
+    /// session slot is released promptly instead of idling out.
     async fn run<W>(self, mut write: W, timeout: Duration) -> Result<(), UdpProxyError>
     where
         W: UdpSend + Send + 'static,
     {
         let EchoFlow { mut decoder, first } = self;
-        Self::respond(&decoder.header_crypto, &mut write, &first, timeout).await?;
-        let mut payload = [0; PACKET_BUFFER_LENGTH];
-        loop {
-            let n = match tokio::time::timeout(timeout, decoder.trait_recv(&mut payload)).await {
-                Ok(Ok(n)) => n,
-                // The probing client closed its flow after the echo; end this
-                // flow cleanly instead of logging a warning.
-                Ok(Err(error)) if is_udp_eof(&error) => return Ok(()),
-                Ok(Err(error)) => return Err(UdpProxyError::Tunnel(error)),
-                // An idle echo flow holds its session slot; time it out so
-                // the slot is released.
-                Err(_) => return Err(flow_timed_out("UDP echo flow idle")),
-            };
-            Self::respond(&decoder.header_crypto, &mut write, &payload[..n], timeout).await?;
+        let result = async {
+            Self::respond(&decoder.header_crypto, &mut write, &first, timeout).await?;
+            let mut payload = [0; PACKET_BUFFER_LENGTH];
+            loop {
+                let n = match tokio::time::timeout(timeout, decoder.trait_recv(&mut payload)).await
+                {
+                    Ok(Ok(n)) => n,
+                    // The probing client closed its flow after the echo; end this
+                    // flow cleanly instead of logging a warning.
+                    Ok(Err(error)) if is_udp_eof(&error) => return Ok(()),
+                    Ok(Err(error)) => return Err(UdpProxyError::Tunnel(error)),
+                    // An idle echo flow holds its session slot; time it out so
+                    // the slot is released.
+                    Err(_) => return Err(flow_timed_out(ECHO_FLOW_IDLE)),
+                };
+                Self::respond(&decoder.header_crypto, &mut write, &payload[..n], timeout).await?;
+            }
         }
+        .await;
+        // Explicit epilog: close the response writer so the peer's read half
+        // sees a clean EOF. The peer may already have closed its read half;
+        // that is the same clean end, not a failure of the echo flow.
+        match write.trait_shutdown().await {
+            Ok(()) => {}
+            Err(error) => trace!(?error, "Echo flow response writer shutdown failed"),
+        }
+        result
     }
 
     /// Write one echoed datagram: a `RouteResponse` header followed by the
@@ -579,6 +604,19 @@ fn is_udp_eof(error: &AnyError) -> bool {
     error
         .downcast_ref::<io::Error>()
         .is_some_and(|error| error.kind() == io::ErrorKind::UnexpectedEof)
+}
+
+/// The idle-expiry message for an echo flow that never received its epilog:
+/// the peer stalled instead of closing the flow, so the safety timeout fired.
+const ECHO_FLOW_IDLE: &str = "UDP echo flow idle";
+
+/// `true` if the error is the echo-flow idle expiry: the peer stalled
+/// instead of completing the flow, so it ended by its safety timeout rather
+/// than by a clean close.
+fn is_echo_flow_idle(error: &AnyError) -> bool {
+    error.downcast_ref::<io::Error>().is_some_and(|error| {
+        error.kind() == io::ErrorKind::TimedOut && error.to_string() == ECHO_FLOW_IDLE
+    })
 }
 
 /// A `TimedOut` tunnel-flow error: the peer stalled instead of completing
@@ -773,10 +811,11 @@ mod tests {
         assert_timed_out(result, "timed out waiting for the first routed datagram");
     }
 
-    /// An echo flow that goes idle holds its session slot forever: each
-    /// echo read is bounded by [`crate::udp::UDP_FLOW_TIMEOUT`].
+    /// An echo flow that goes idle still releases its session slot: each
+    /// echo read is bounded by [`crate::udp::UDP_FLOW_TIMEOUT`], and the
+    /// expiry is a quiet clean end (metric + debug) rather than a warning.
     #[tokio::test]
-    async fn an_idle_echo_flow_times_out() {
+    async fn an_idle_echo_flow_ends_quietly_and_releases_its_slot() {
         let result = handler()
             .handle_tunnel_flow_with_timeouts(
                 StallingRecv {
@@ -788,7 +827,32 @@ mod tests {
                 Duration::from_millis(50),
             )
             .await;
-        assert_timed_out(result, "UDP echo flow idle");
+        assert!(
+            result.is_ok(),
+            "an idle echo flow must end as a clean close: {result:?}"
+        );
+    }
+
+    /// The echo loop itself still reports the idle expiry as a timed-out
+    /// tunnel error; [`UdpProxyConnHandler::handle_tunnel_flow_with_timeouts`]
+    /// is what turns it into a quiet clean end.
+    #[tokio::test]
+    async fn echo_flow_run_reports_idle_expiry_as_a_timeout() {
+        let handler = handler();
+        let flow = EchoFlow {
+            decoder: FlowRecv::new(
+                StallingRecv {
+                    packet: Some(routed_echo_packet()),
+                },
+                handler.header_crypto.clone(),
+                handler.udp_context.time_validator.clone(),
+                UdpFlowId::from_bytes([9; UDP_FLOW_ID_LEN]),
+                None,
+            ),
+            first: Vec::new(),
+        };
+        let result = flow.run(NoopSend, Duration::from_millis(50)).await;
+        assert_timed_out(result, ECHO_FLOW_IDLE);
     }
 
     /// A peer that keeps sending echo requests but never reads the

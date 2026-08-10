@@ -1,6 +1,51 @@
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{
+        io,
+        sync::{Arc, Mutex, OnceLock},
+        time::Duration,
+    };
+
+    /// Captures every WARN-level event formatted as a line, so a regression
+    /// test can assert that the "Mux UDP flow failed" spam did NOT fire.
+    /// Installed once per process via the global default subscriber; tests
+    /// using it clear the buffer first and run `#[serial]`.
+    static WARN_CAPTURE: OnceLock<Arc<Mutex<Vec<String>>>> = OnceLock::new();
+
+    fn warn_capture() -> Arc<Mutex<Vec<String>>> {
+        WARN_CAPTURE
+            .get_or_init(|| {
+                let captured = Arc::new(Mutex::new(Vec::new()));
+                let _ = tracing_subscriber::fmt()
+                    .with_max_level(tracing::Level::WARN)
+                    .with_ansi(false)
+                    .with_writer({
+                        let captured = captured.clone();
+                        move || CapturedWriter(captured.clone())
+                    })
+                    .try_init();
+                captured
+            })
+            .clone()
+    }
+
+    /// A `Write` sink that records each formatted log line into the shared
+    /// capture buffer (one event per line from `tracing_subscriber::fmt`).
+    #[derive(Clone)]
+    struct CapturedWriter(Arc<Mutex<Vec<String>>>);
+    impl io::Write for CapturedWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let line = String::from_utf8_lossy(buf);
+            let line = line.trim_end();
+            if !line.is_empty() {
+                self.0.lock().unwrap().push(line.to_string());
+            }
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     use ae::anti_replay::{ReplayValidator, TimeValidator};
     use bytes::BytesMut;
@@ -8,7 +53,7 @@ mod tests {
         addr::InternetAddr,
         anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         connect::{ConnectorConfig, ConnectorConfigHandle, ConnectorResetSignal},
-        header::route::RouteErrorKind,
+        header::{codec::write_header, route::RouteErrorKind},
         loading::{self, Serve},
         notify::Notify,
         proto::{
@@ -17,11 +62,13 @@ mod tests {
                 self,
                 udp::{UdpProxyClient, UdpProxyClientReadHalf, probe_rtt},
             },
+            conn::udp::UdpFlowId,
             conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
             connect::udp::UdpConnector,
             context::{Runtime, StreamRuntime, UdpRuntime},
+            relay::udp::{UdpRecv, UdpSend},
         },
-        route::ConnConfig,
+        route::{ConnConfig, convert_proxies_to_header_crypto_pairs},
         stream::pool::StreamConnPool,
         udp::PACKET_BUFFER_LENGTH,
     };
@@ -554,24 +601,36 @@ mod tests {
     }
 
     /// Spawn a tcpmux/rtpmux proxy server whose UDP handler accepts
-    /// datagram flows, and return the chain config pointing at it.
+    /// datagram flows, and return the chain config pointing at it. The
+    /// payload crypto is freshly generated per hop.
     async fn spawn_mux_udp_proxy(
         scope: &mut TestRuntimeScope,
         runtime: &Runtime,
         protocol: &str,
     ) -> ConnConfig {
+        spawn_mux_udp_proxy_with_payload(scope, runtime, protocol, Some(create_random_crypto()))
+            .await
+    }
+
+    /// Like [`spawn_mux_udp_proxy`], with an explicit payload crypto (pass
+    /// `None` for hops that skip payload encryption).
+    async fn spawn_mux_udp_proxy_with_payload(
+        scope: &mut TestRuntimeScope,
+        runtime: &Runtime,
+        protocol: &str,
+        payload_crypto: Option<tokio_chacha20::config::Config>,
+    ) -> ConnConfig {
         let crypto = create_random_crypto();
-        let payload_crypto = create_random_crypto();
         let stream_proxy = StreamProxyConnHandler::new(
             crypto.clone(),
-            Some(payload_crypto.clone()),
+            payload_crypto.clone(),
             runtime.stream.clone(),
             Arc::from(format!("udp-over-{protocol}")),
             true,
         );
         let udp_proxy = UdpProxyConnHandler::new(
             crypto.clone(),
-            Some(payload_crypto.clone()),
+            payload_crypto.clone(),
             runtime.udp.clone(),
             true,
         );
@@ -613,7 +672,7 @@ mod tests {
                 protocol: protocol.into(),
             },
             header_crypto: crypto,
-            payload_crypto: Some(payload_crypto),
+            payload_crypto,
         }
     }
 
@@ -653,5 +712,162 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn udp_datagrams_flow_over_rtpmux_proxy() {
         verify_udp_flows_over_mux_proxy("rtpmux").await;
+    }
+
+    /// A probe over a relay chain of mux proxies must close the flow
+    /// promptly once the client shuts down its write half, instead of
+    /// idling the echo server out for the full [`common::udp::UDP_FLOW_TIMEOUT`]
+    /// and tripping the "UDP echo flow idle" warning. Exercises the explicit
+    /// epilog end to end: the relay hop shuts down the next mux writer on
+    /// downstream EOF, the echo server shuts down its response writer, and
+    /// the client's read half sees a clean EOF well under the safety timeout.
+    async fn probe_over_mux_proxy_chain_closes_the_flow_promptly(protocol: &str) {
+        let mut scope = TestRuntimeScope::new();
+        let runtime = mux_udp_runtime(&mut scope).await;
+        // Two hops so the probe's echo flow sits behind a relay hop: the
+        // relay is where the EOF previously stalled for 10s.
+        let proxy_1 = spawn_mux_udp_proxy_with_payload(&mut scope, &runtime, protocol, None).await;
+        let proxy_2 = spawn_mux_udp_proxy_with_payload(&mut scope, &runtime, protocol, None).await;
+        let proxies: Arc<[_]> = vec![proxy_1, proxy_2].into();
+        scope
+            .run(async {
+                // Build the layered routed echo request (no upstream) exactly
+                // like `probe_rtt` does.
+                let pairs = convert_proxies_to_header_crypto_pairs(&proxies, None);
+                let mut packet = Vec::new();
+                for ((header, header_crypto), _proxy) in pairs.iter().zip(proxies.iter()).rev() {
+                    let mut header_buf = Vec::new();
+                    UdpFlowId::random().write_routed(&mut header_buf);
+                    write_header(&mut header_buf, header, *header_crypto.key()).unwrap();
+                    header_buf.extend_from_slice(&packet);
+                    packet = header_buf;
+                }
+
+                let upstream = runtime
+                    .udp
+                    .connector
+                    .connect_route(&proxies[0].address, Duration::from_secs(30))
+                    .await
+                    .unwrap();
+                let (mut upstream_read, mut upstream_write) = upstream.into_split();
+                upstream_write.trait_send(&packet).await.unwrap();
+                let mut buf = [0; PACKET_BUFFER_LENGTH];
+                let n = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    upstream_read.trait_recv(&mut buf),
+                )
+                .await
+                .expect("timed out waiting for the echo response")
+                .unwrap();
+                assert!(n > 0, "the echo response must carry response headers");
+
+                // Explicit epilog: close the probe's write half. The relay
+                // hop must propagate the clean EOF to the echo server, which
+                // must close its response writer, so our read half sees EOF
+                // promptly instead of idling the flow out for 10s.
+                upstream_write.trait_shutdown().await.unwrap();
+                let eof = tokio::time::timeout(Duration::from_secs(3), async {
+                    loop {
+                        match upstream_read.trait_recv(&mut buf).await {
+                            Ok(0) => return true,
+                            Ok(_) => continue,
+                            Err(error) => {
+                                return error.downcast_ref::<std::io::Error>().is_some_and(
+                                    |error| error.kind() == std::io::ErrorKind::UnexpectedEof,
+                                );
+                            }
+                        }
+                    }
+                })
+                .await
+                .expect("the echo flow must EOF promptly after the probe's write-half shutdown");
+                assert!(eof, "expected a clean EOF at the datagram boundary");
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn probe_over_tcpmux_proxy_chain_closes_the_flow_promptly() {
+        probe_over_mux_proxy_chain_closes_the_flow_promptly("tcpmux").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn probe_over_rtpmux_proxy_chain_closes_the_flow_promptly() {
+        probe_over_mux_proxy_chain_closes_the_flow_promptly("rtpmux").await;
+    }
+
+    /// A probe over a relay chain of mux proxies must tear the flows down
+    /// without tripping the "Mux UDP flow failed" warning: the relay hop
+    /// treats the downlink EOF as a clean end (instead of a `RecvUpstream`
+    /// error), the echo server shuts down its response writer, and an idle
+    /// echo expiry is logged at debug and counted as a metric rather than
+    /// warned. Asserts no WARN appears while the epilog chain settles.
+    async fn probe_over_mux_proxy_chain_finishes_without_warnings(protocol: &str) {
+        let captured = warn_capture();
+        captured.lock().unwrap().clear();
+        let mut scope = TestRuntimeScope::new();
+        let runtime = mux_udp_runtime(&mut scope).await;
+        let proxy_1 = spawn_mux_udp_proxy_with_payload(&mut scope, &runtime, protocol, None).await;
+        let proxy_2 = spawn_mux_udp_proxy_with_payload(&mut scope, &runtime, protocol, None).await;
+        let proxies: Arc<[_]> = vec![proxy_1, proxy_2].into();
+        scope
+            .run(async {
+                let pairs = convert_proxies_to_header_crypto_pairs(&proxies, None);
+                let mut packet = Vec::new();
+                for ((header, header_crypto), _proxy) in pairs.iter().zip(proxies.iter()).rev() {
+                    let mut header_buf = Vec::new();
+                    UdpFlowId::random().write_routed(&mut header_buf);
+                    write_header(&mut header_buf, header, *header_crypto.key()).unwrap();
+                    header_buf.extend_from_slice(&packet);
+                    packet = header_buf;
+                }
+                let upstream = runtime
+                    .udp
+                    .connector
+                    .connect_route(&proxies[0].address, Duration::from_secs(30))
+                    .await
+                    .unwrap();
+                let (mut upstream_read, mut upstream_write) = upstream.into_split();
+                upstream_write.trait_send(&packet).await.unwrap();
+                let mut buf = [0; PACKET_BUFFER_LENGTH];
+                let n = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    upstream_read.trait_recv(&mut buf),
+                )
+                .await
+                .expect("timed out waiting for the echo response")
+                .unwrap();
+                assert!(n > 0, "the echo response must carry response headers");
+                upstream_write.trait_shutdown().await.unwrap();
+                // Let the epilog chain (relay shutdown -> echo EOF -> echo
+                // response-writer shutdown -> relay downlink EOF) settle.
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            })
+            .await;
+        let warned = captured
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| {
+                line.contains("Mux UDP flow failed") || line.contains("UDP echo flow idle")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            warned.is_empty(),
+            "a probe flow over a mux relay chain must not warn, got: {warned:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn probe_over_tcpmux_proxy_chain_finishes_without_warnings() {
+        probe_over_mux_proxy_chain_finishes_without_warnings("tcpmux").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn probe_over_rtpmux_proxy_chain_finishes_without_warnings() {
+        probe_over_mux_proxy_chain_finishes_without_warnings("rtpmux").await;
     }
 }
