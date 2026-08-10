@@ -109,6 +109,15 @@ impl ReverseTunnelLoader {
         Ok(())
     }
 }
+impl Clone for ReverseTunnelLoader {
+    fn clone(&self) -> Self {
+        Self {
+            initiator: self.initiator.clone(),
+            tcp_responder: self.tcp_responder.clone(),
+            rtp_responder: self.rtp_responder.clone(),
+        }
+    }
+}
 impl Default for ReverseTunnelLoader {
     fn default() -> Self {
         Self::new()

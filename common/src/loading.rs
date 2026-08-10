@@ -125,6 +125,13 @@ where
         Ok(())
     }
 }
+impl<ConnHandler> Clone for Loader<ConnHandler> {
+    fn clone(&self) -> Self {
+        Self {
+            handles: self.handles.clone(),
+        }
+    }
+}
 impl<ConnHandler> Default for Loader<ConnHandler>
 where
     ConnHandler: HandleConn + std::fmt::Debug + Send + Sync + 'static,

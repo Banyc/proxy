@@ -1,6 +1,6 @@
 #![warn(clippy::disallowed_methods, clippy::disallowed_types)]
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use access_server::{AccessServerConfig, AccessServerLoader};
 use ae::anti_replay::{ReplayValidator, TimeValidator};
@@ -54,8 +54,9 @@ pub async fn serve<CR>(
     serve_context: ServeContext,
 ) -> Result<(), ServerServeError>
 where
-    CR: ReadConfig<Config = ServerConfig>,
+    CR: ReadConfig<Config = ServerConfig> + Send + Sync + 'static,
 {
+    let config_reader = Arc::new(config_reader);
     let (session_spawner, mut session_rx) = SessionSpawner::channel();
     let mut sessions = tokio::task::JoinSet::new();
     let mut server_loader = ServerLoader {
@@ -107,8 +108,8 @@ where
 
     let cancellation = CancellationToken::new();
     let prepared = prepare_reload(
-        &config_reader,
-        &server_loader,
+        Arc::clone(&config_reader),
+        server_loader.clone(),
         cancellation.clone(),
         runtime.clone(),
     )
@@ -125,6 +126,7 @@ where
     }
     let mut _cancellation_guard = guard;
     let mut config_changed = serve_context.config_changed.0.subscription();
+    let mut reload = ReloadMachine::new();
 
     loop {
         tokio::select! {
@@ -139,41 +141,128 @@ where
                     error!(?error, "Session task returned an error");
                 }
             }
-            _ = config_changed.notified() => {
+            // Idle or Debouncing: a change notification (re)starts the
+            // debounce window, collapsing bursts of watcher events into a
+            // single reload.
+            _ = config_changed.notified(),
+                if matches!(reload.phase, ReloadPhase::Idle | ReloadPhase::Debouncing) =>
+            {
                 info!("Config file changed");
-
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-                let cancellation = CancellationToken::new();
-                match prepare_reload(
-                    &config_reader,
-                    &server_loader,
-                    cancellation.clone(),
+                reload.phase = ReloadPhase::Debouncing;
+                reload.debounce = Some(Box::pin(tokio::time::sleep(RELOAD_DEBOUNCE)));
+            }
+            // Debouncing: the window expired; start building the next
+            // generation while the current one keeps serving. The prepare
+            // future owns its inputs (an `Arc` config reader and a snapshot
+            // of the loaders), so it is `'static` and never borrows live
+            // state.
+            _ = async {
+                if let Some(debounce) = reload.debounce.as_mut() {
+                    Pin::new(debounce).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            }, if reload.phase == ReloadPhase::Debouncing => {
+                reload.debounce = None;
+                reload.phase = ReloadPhase::Preparing;
+                reload.prepare = Some(Box::pin(prepare_reload(
+                    Arc::clone(&config_reader),
+                    server_loader.clone(),
+                    CancellationToken::new(),
                     runtime.clone(),
-                ).await {
-                    Ok(new_prepared) => {
-                        let (guard, commit_error) = commit_reload(
-                            &mut server_tasks,
-                            &mut server_loader,
-                            new_prepared,
-                            &runtime,
-                            &connector_config,
-                        );
-                        _cancellation_guard = guard;
-                        if let Some(e) = commit_error {
-                            error!(
-                                ?e,
-                                "Reload commit partially failed: a listener died; \
-                                 its handler update was lost; new generation installed"
-                            );
-                        }
+                )));
+            }
+            // Preparing: the next generation is ready. A failed prepare is
+            // reported and dropped — no retry — and the live generation is
+            // left untouched.
+            result = async {
+                match reload.prepare.as_mut() {
+                    Some(prepare) => Pin::new(prepare).await,
+                    None => std::future::pending().await,
+                }
+            }, if reload.phase == ReloadPhase::Preparing => {
+                reload.prepare = None;
+                match result {
+                    Ok(prepared) => {
+                        reload.phase = ReloadPhase::CommitOnce;
+                        reload.commit_once = Some(prepared);
                     }
                     Err(e) => {
                         error!(?e, "Failed to prepare reload; live config unchanged");
-                        continue;
+                        reload.phase = ReloadPhase::Idle;
                     }
                 }
             }
+            // CommitOnce: install the prepared generation exactly once, then
+            // return to Idle.
+            _ = std::future::ready(()), if reload.phase == ReloadPhase::CommitOnce => {
+                let prepared = reload
+                    .commit_once
+                    .take()
+                    .expect("CommitOnce holds the prepared reload");
+                let (guard, commit_error) = commit_reload(
+                    &mut server_tasks,
+                    &mut server_loader,
+                    prepared,
+                    &runtime,
+                    &connector_config,
+                );
+                _cancellation_guard = guard;
+                if let Some(e) = commit_error {
+                    error!(
+                        ?e,
+                        "Reload commit partially failed: a listener died; \
+                         its handler update was lost; new generation installed"
+                    );
+                }
+                reload.phase = ReloadPhase::Idle;
+            }
+        }
+    }
+}
+
+/// A config-file change is debounced, the next generation is prepared while
+/// the current one keeps serving, and the prepared reload is committed
+/// exactly once before returning to idle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReloadPhase {
+    /// No reload in flight; a change notification starts a debounce window.
+    Idle,
+    /// Collapsing rapid change notifications; expires into [`ReloadPhase::Preparing`].
+    Debouncing,
+    /// Building the next generation; the current generation keeps serving.
+    Preparing,
+    /// A prepared reload awaits its single commit; commit returns to [`ReloadPhase::Idle`].
+    CommitOnce,
+}
+
+/// The window that collapses bursts of watcher events into one reload.
+const RELOAD_DEBOUNCE: Duration = Duration::from_secs(1);
+
+/// A boxed, `'static` preparation future: it owns its inputs (an `Arc` config
+/// reader and a snapshot of the loaders), so it never borrows live state and
+/// can be stored in the machine without pinning down a lifetime.
+type PrepareReloadFuture =
+    Pin<Box<dyn Future<Output = Result<PreparedReload, ServerServeError>> + Send + 'static>>;
+
+/// The in-flight reload state machine, polled from the main `select!` rather
+/// than a spawned actor so server-task panics keep cascading while a reload
+/// is in progress. The debounce sleep and the prepare future live in their
+/// own fields so the `select!` branches can poll them without borrowing the
+/// whole machine.
+struct ReloadMachine {
+    phase: ReloadPhase,
+    debounce: Option<Pin<Box<tokio::time::Sleep>>>,
+    prepare: Option<PrepareReloadFuture>,
+    commit_once: Option<PreparedReload>,
+}
+impl ReloadMachine {
+    fn new() -> Self {
+        Self {
+            phase: ReloadPhase::Idle,
+            debounce: None,
+            prepare: None,
+            commit_once: None,
         }
     }
 }
@@ -182,6 +271,15 @@ pub struct ServerLoader {
     pub access_server: AccessServerLoader,
     pub proxy_server: ProxyServerLoader,
     pub reverse_tunnel: ReverseTunnelLoader,
+}
+impl Clone for ServerLoader {
+    fn clone(&self) -> Self {
+        Self {
+            access_server: self.access_server.clone(),
+            proxy_server: self.proxy_server.clone(),
+            reverse_tunnel: self.reverse_tunnel.clone(),
+        }
+    }
 }
 
 pub struct PreparedReload {
@@ -219,14 +317,18 @@ struct PreparedReloadParts {
     reverse_tunnel: PreparedReverseTunnel,
 }
 
+/// Read the config and build the next generation without touching live
+/// state. Takes its inputs by value — an `Arc` config reader and a snapshot
+/// clone of the loaders — so the returned future is `'static` and can be
+/// stored in the reload machine without borrowing live state.
 async fn prepare_reload<CR>(
-    config_reader: &CR,
-    server_loader: &ServerLoader,
+    config_reader: Arc<CR>,
+    server_loader: ServerLoader,
     cancellation: CancellationToken,
     runtime: Runtime,
 ) -> Result<PreparedReload, ServerServeError>
 where
-    CR: ReadConfig<Config = ServerConfig>,
+    CR: ReadConfig<Config = ServerConfig> + Send + Sync + 'static,
 {
     let mut guard = CancelOnDrop(Some(cancellation.clone()));
     let config = config_reader

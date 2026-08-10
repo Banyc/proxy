@@ -173,7 +173,21 @@ impl AccessServerLoader {
             socks5_udp_server: loading::Loader::new(),
         }
     }
+}
 
+impl Clone for AccessServerLoader {
+    fn clone(&self) -> Self {
+        Self {
+            tcp_server: self.tcp_server.clone(),
+            udp_server: self.udp_server.clone(),
+            http_server: self.http_server.clone(),
+            socks5_tcp_server: self.socks5_tcp_server.clone(),
+            socks5_udp_server: self.socks5_udp_server.clone(),
+        }
+    }
+}
+
+impl AccessServerLoader {
     /// Commit a previously-prepared access-server reload: hot-swap handlers
     /// on existing listeners, spawn new listener tasks, and drop handles for
     /// removed listeners. Returns an error if a listener died between

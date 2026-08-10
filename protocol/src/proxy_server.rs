@@ -120,6 +120,19 @@ impl ProxyServerLoader {
         Ok(())
     }
 }
+impl Clone for ProxyServerLoader {
+    fn clone(&self) -> Self {
+        Self {
+            tcp_server: self.tcp_server.clone(),
+            tcp_mux_server: self.tcp_mux_server.clone(),
+            udp_server: self.udp_server.clone(),
+            kcp_server: self.kcp_server.clone(),
+            mptcp_server: self.mptcp_server.clone(),
+            rtp_server: self.rtp_server.clone(),
+            rtp_mux_server: self.rtp_mux_server.clone(),
+        }
+    }
+}
 impl Default for ProxyServerLoader {
     fn default() -> Self {
         Self::new()
