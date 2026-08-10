@@ -185,31 +185,28 @@ pub struct ServerLoader {
 }
 
 pub struct PreparedReload {
-    cancellation: CancellationToken,
-    stream_pool: StreamConnPool,
-    connector_config: ConnectorConfig,
-    access_server: PreparedAccessServer,
-    proxy_server: PreparedProxyServer,
-    reverse_tunnel: PreparedReverseTunnel,
+    parts: Option<PreparedReloadParts>,
 }
 
 impl PreparedReload {
-    fn into_parts(self) -> PreparedReloadParts {
-        let me = std::mem::ManuallyDrop::new(self);
-        PreparedReloadParts {
-            cancellation: unsafe { std::ptr::read(&me.cancellation) },
-            stream_pool: unsafe { std::ptr::read(&me.stream_pool) },
-            connector_config: unsafe { std::ptr::read(&me.connector_config) },
-            access_server: unsafe { std::ptr::read(&me.access_server) },
-            proxy_server: unsafe { std::ptr::read(&me.proxy_server) },
-            reverse_tunnel: unsafe { std::ptr::read(&me.reverse_tunnel) },
-        }
+    /// Consume the prepared reload, handing its parts to the commit path.
+    /// The `Option` is taken so the [`Drop`] impl below sees an empty cell
+    /// and does not cancel a token that has been committed.
+    fn into_parts(mut self) -> PreparedReloadParts {
+        self.parts
+            .take()
+            .expect("PreparedReload parts already taken")
     }
 }
 
 impl Drop for PreparedReload {
     fn drop(&mut self) {
-        self.cancellation.cancel();
+        // A prepared reload that was never committed (an abandoned prepare or
+        // a failed commit) cancels its listener-generation token; a taken one
+        // is the commit path's responsibility.
+        if let Some(parts) = &self.parts {
+            parts.cancellation.cancel();
+        }
     }
 }
 
@@ -286,12 +283,14 @@ where
 
     guard.disarm();
     Ok(PreparedReload {
-        cancellation,
-        stream_pool,
-        connector_config,
-        access_server,
-        proxy_server,
-        reverse_tunnel,
+        parts: Some(PreparedReloadParts {
+            cancellation,
+            stream_pool,
+            connector_config,
+            access_server,
+            proxy_server,
+            reverse_tunnel,
+        }),
     })
 }
 
