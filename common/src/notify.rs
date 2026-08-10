@@ -1,89 +1,47 @@
-use std::sync::{Arc, Mutex};
+//! Coalesced broadcast notification built on a [`tokio::sync::watch`]
+//! generation counter.
+//!
+//! [`Notify::notify_waiters`] bumps a monotonically increasing `u64`
+//! generation. Each [`Subscription`] holds a `watch` receiver, and a
+//! subscriber is considered notified when the generation it last observed is
+//! stale. Broadcasts are *coalesced*: any number of `notify_waiters` calls
+//! between a subscriber's polls collapse into a single wakeup, because the
+//! receiver only ever observes the latest generation, never intermediate
+//! ones.
+//!
+//! The previous implementation was a hand-rolled registry (a mutex-guarded,
+//! swap-remove-indexed entry set with a per-subscriber mpsc channel plus
+//! parent/child fan-out). The parent/child machinery was unused outside its
+//! own tests and has been removed along with the index-management code;
+//! `watch` provides the same broadcast-with-coalescing guarantees natively.
 
-use crate::notify::iter_set::{GuardedIterSet, IterSetEntryGuard};
+use tokio::sync::watch;
 
-fn binary_event_channel() -> (EdgeSignalTx, EdgeSignalRx) {
-    let (tx, rx) = tokio::sync::mpsc::channel(1);
-    (EdgeSignalTx(tx), EdgeSignalRx(rx))
-}
-#[derive(Debug)]
-struct EdgeSignalTx(pub tokio::sync::mpsc::Sender<()>);
-#[derive(Debug)]
-struct EdgeSignalRx(pub tokio::sync::mpsc::Receiver<()>);
-
-mod iter_set;
-
-#[derive(Debug)]
-pub struct Subscription {
-    event: EdgeSignalRx,
-    _parent_guard: IterSetEntryGuard<EdgeSignalTx>,
-}
-impl Subscription {
-    pub fn has_notified(&self) -> bool {
-        !self.event.0.is_empty()
-    }
-    pub fn remove_notified(&mut self) -> bool {
-        self.event.0.try_recv().is_ok()
-    }
-    pub async fn notified(&mut self) {
-        // unwrap: `self` still holds the event tx through `self._parent_guard`
-        self.event.0.recv().await.unwrap();
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-struct Subscribers {
-    waiters: GuardedIterSet<EdgeSignalTx>,
-    child_notifies: GuardedIterSet<Self>,
-}
-impl Subscribers {
-    pub fn notify_waiters(&self) {
-        self.waiters.values_mut(|waiter| {
-            let _ = waiter.0.try_send(());
-        });
-        self.child_notifies.values_mut(|notify| {
-            notify.notify_waiters();
-        });
-    }
-    pub fn subscription(&self) -> Subscription {
-        let (tx, rx) = binary_event_channel();
-        let guard = self.waiters.add(tx);
-        Subscription {
-            event: rx,
-            _parent_guard: guard,
-        }
-    }
-    #[must_use]
-    pub fn add_child_targets(&self, child: Self) -> IterSetEntryGuard<Self> {
-        self.child_notifies.add(child)
-    }
-}
-
+/// A broadcast notification source. Cloneable; all clones share the same
+/// generation counter.
 #[derive(Debug, Clone)]
 pub struct Notify {
-    parent_guard: Arc<Mutex<Vec<IterSetEntryGuard<Subscribers>>>>,
-    targets: Subscribers,
+    tx: watch::Sender<u64>,
 }
 impl Notify {
     pub fn new() -> Self {
-        Self {
-            targets: Subscribers::default(),
-            parent_guard: Arc::new(Mutex::new(vec![])),
-        }
+        let (tx, _) = watch::channel(0);
+        Self { tx }
     }
-    pub fn strong_add_child_notify(&self, child: &Self) {
-        let child_guard = self.targets.add_child_targets(child.targets.clone());
-        child_guard.leak();
-    }
-    pub fn weak_add_child_notify(&self, child: &Self) {
-        let child_guard = self.targets.add_child_targets(child.targets.clone());
-        child.parent_guard.lock().unwrap().push(child_guard);
+    /// Broadcast a wakeup to every current subscriber. Coalesced: a
+    /// subscriber that polls later observes at most one pending
+    /// notification no matter how many broadcasts happened in between.
+    pub fn notify_waiters(&self) {
+        self.tx.send_modify(|generation| *generation += 1);
     }
     pub fn subscription(&self) -> Subscription {
-        self.targets.subscription()
-    }
-    pub fn notify_waiters(&self) {
-        self.targets.notify_waiters();
+        Subscription {
+            rx: self.tx.subscribe(),
+            // Keep the channel alive for the subscription's lifetime, so
+            // `changed()` can never observe the channel closing even if the
+            // originating `Notify` is dropped.
+            _tx: self.tx.clone(),
+        }
     }
 }
 impl Default for Notify {
@@ -92,72 +50,116 @@ impl Default for Notify {
     }
 }
 
+/// A single subscriber to a [`Notify`].
+#[derive(Debug)]
+pub struct Subscription {
+    rx: watch::Receiver<u64>,
+    _tx: watch::Sender<u64>,
+}
+impl Subscription {
+    /// Whether a notification has been broadcast since the last poll.
+    ///
+    /// A subscription created *after* a broadcast does not see it; each
+    /// subscription observes only broadcasts that follow its creation (or its
+    /// last consume).
+    pub fn has_notified(&self) -> bool {
+        // Errors only if the channel closed; `_tx` keeps it open for as long
+        // as this subscription exists.
+        self.rx.has_changed().unwrap_or(false)
+    }
+    /// Consume one pending notification, returning whether one was pending.
+    pub fn remove_notified(&mut self) -> bool {
+        let pending = self.has_notified();
+        // Mark the current generation as seen so that only broadcasts made
+        // after this point are reported by later polls.
+        self.rx.mark_unchanged();
+        pending
+    }
+    pub async fn notified(&mut self) {
+        // unwrap: `self` holds a sender clone through `_tx`, so the channel
+        // never closes while this subscription lives.
+        self.rx.changed().await.unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_notified() {
+    async fn fresh_subscription_sees_no_pending_notification() {
         let n = Notify::new();
         let mut w1 = n.subscription();
         assert!(!w1.has_notified());
 
         n.notify_waiters();
-        let mut w2 = n.subscription();
+        // A subscription created after a broadcast does not observe it.
+        let w2 = n.subscription();
         assert!(!w2.has_notified());
 
         w1.notified().await;
         assert!(!w1.has_notified());
-
-        let n2 = Notify::new();
-        let n3 = Notify::new();
-        n.weak_add_child_notify(&n2);
-        n.strong_add_child_notify(&n3);
-        assert_eq!(n.targets.child_notifies.len(), 2);
-
-        let mut w3 = n2.subscription();
-        assert!(!w3.has_notified());
-
-        n.notify_waiters();
-        w2.notified().await;
-        w1.notified().await;
-        w3.notified().await;
-        assert!(!w1.has_notified());
-        assert!(!w2.has_notified());
-        assert!(!w3.has_notified());
-
-        drop(w1);
-        assert_eq!(n.targets.waiters.len(), 1);
-
-        n.notify_waiters();
-        w2.notified().await;
-        w3.notified().await;
-        assert!(!w2.has_notified());
-        assert!(!w3.has_notified());
-
-        drop(w2);
-        assert_eq!(n.targets.waiters.len(), 0);
-
-        drop(n3);
-        assert_eq!(n.targets.child_notifies.len(), 2);
-
-        drop(n2);
-        assert_eq!(n.targets.child_notifies.len(), 1);
     }
 
     #[tokio::test]
-    async fn a_half_dropped_waiter_does_not_panic_the_notifier() {
+    async fn broadcast_reaches_every_subscriber() {
         let n = Notify::new();
-        let live = n.subscription();
-        let Subscription {
-            event,
-            _parent_guard,
-        } = n.subscription();
-        drop(event);
-        assert_eq!(n.targets.waiters.len(), 2);
+        let mut w1 = n.subscription();
+        let mut w2 = n.subscription();
+        let mut w3 = n.subscription();
+
+        n.notify_waiters();
+        w1.notified().await;
+        w2.notified().await;
+        w3.notified().await;
+        assert!(!w1.has_notified());
+        assert!(!w2.has_notified());
+        assert!(!w3.has_notified());
+
+        // A later broadcast wakes them again.
+        n.notify_waiters();
+        w1.notified().await;
+        w2.notified().await;
+        w3.notified().await;
+        assert!(!w1.has_notified());
+        assert!(!w2.has_notified());
+        assert!(!w3.has_notified());
+    }
+
+    #[tokio::test]
+    async fn concurrent_broadcasts_coalesce_into_a_single_wakeup() {
+        let n = Notify::new();
+        let mut w = n.subscription();
+
+        n.notify_waiters();
+        n.notify_waiters();
+        n.notify_waiters();
+        // Three broadcasts between polls collapse into one wakeup.
+        w.notified().await;
+        assert!(!w.has_notified());
+    }
+
+    #[tokio::test]
+    async fn remove_notified_consumes_a_pending_notification() {
+        let n = Notify::new();
+        let mut w = n.subscription();
+
+        assert!(!w.remove_notified());
+        n.notify_waiters();
+        assert!(w.has_notified());
+        assert!(w.remove_notified());
+        assert!(!w.has_notified());
+    }
+
+    #[tokio::test]
+    async fn dropping_a_subscriber_does_not_break_the_notifier() {
+        let n = Notify::new();
+        let mut live = n.subscription();
+        drop(n.subscription());
+
         n.notify_waiters();
         assert!(live.has_notified());
-        drop(_parent_guard);
-        assert_eq!(n.targets.waiters.len(), 1);
+        live.notified().await;
+        assert!(!live.has_notified());
     }
 }
