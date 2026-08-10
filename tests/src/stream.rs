@@ -505,8 +505,6 @@ mod tests {
     }
 
     async fn stress_test(ty: ConcreteStreamType) {
-        tokio::time::sleep(Duration::from_secs_f64(0.6)).await;
-
         let mut scope = TestRuntimeScope::new();
         let stream_context = stream_context(&mut scope);
 
@@ -566,8 +564,6 @@ mod tests {
     #[ignore = "performance benchmark; not part of the default test run"]
     async fn perf_bulk_rtp_mux_fec() {
         use std::time::Instant;
-
-        tokio::time::sleep(Duration::from_secs_f64(0.6)).await;
 
         let mut scope = TestRuntimeScope::new();
         let stream_context = stream_context(&mut scope);
@@ -771,7 +767,6 @@ mod tests {
     #[serial]
     async fn test_rtp_mux_migration_integrity() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        tokio::time::sleep(Duration::from_secs_f64(0.6)).await;
 
         let mut scope = TestRuntimeScope::new();
         let stream_context = stream_context(&mut scope);

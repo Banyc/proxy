@@ -283,8 +283,6 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn stress_test() {
-        tokio::time::sleep(Duration::from_secs_f64(0.6)).await;
-
         let mut scope = TestRuntimeScope::new();
         let context = udp_context(&mut scope);
 
