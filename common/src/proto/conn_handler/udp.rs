@@ -1,4 +1,4 @@
-use std::{io, net::SocketAddr};
+use std::{io, net::SocketAddr, time::Duration};
 
 use crate::{
     error::AnyError,
@@ -14,7 +14,7 @@ use crate::{
         route_header::udp::{UdpRequestRoute, decode_request_route, echo},
     },
     udp::{
-        PACKET_BUFFER_LENGTH, Packet,
+        PACKET_BUFFER_LENGTH, Packet, UDP_FLOW_TIMEOUT,
         respond::respond_with_error,
         server::{UdpPacketRoute, UdpServer, UdpServerHandleConn},
     },
@@ -162,8 +162,36 @@ impl UdpProxyConnHandler {
     pub async fn handle_tunnel_flow<Read, Write>(
         &self,
         read: Read,
+        write: Write,
+        downstream: SocketAddr,
+    ) -> Result<(), UdpProxyError>
+    where
+        Read: UdpRecv + Send + 'static,
+        Write: UdpSend + Send + 'static,
+    {
+        self.handle_tunnel_flow_with_timeouts(
+            read,
+            write,
+            downstream,
+            crate::STREAM_IO_TIMEOUT,
+            UDP_FLOW_TIMEOUT,
+        )
+        .await
+    }
+
+    /// [`Self::handle_tunnel_flow`] with injectable timeouts: `prime_timeout`
+    /// bounds the wait for the first routed datagram and `echo_timeout`
+    /// bounds each read of an echo flow, so a stalled peer releases its
+    /// bounded session slot. The public entry point uses
+    /// [`crate::STREAM_IO_TIMEOUT`] / [`UDP_FLOW_TIMEOUT`]; tests pass short
+    /// durations.
+    async fn handle_tunnel_flow_with_timeouts<Read, Write>(
+        &self,
+        read: Read,
         mut write: Write,
         downstream: SocketAddr,
+        prime_timeout: Duration,
+        echo_timeout: Duration,
     ) -> Result<(), UdpProxyError>
     where
         Read: UdpRecv + Send + 'static,
@@ -174,24 +202,36 @@ impl UdpProxyConnHandler {
             self.header_crypto.clone(),
             self.udp_context.time_validator.clone(),
         );
-        let upstream = match read.prime().await {
-            Ok(upstream) => upstream,
+        let upstream = match tokio::time::timeout(prime_timeout, read.prime()).await {
+            Ok(Ok(upstream)) => upstream,
             // The client closed the flow before sending any datagram
             // (e.g. an abandoned probe or a torn-down flow). This is a
             // clean close, not an error.
-            Err(error) if is_udp_eof(&error) => return Ok(()),
-            Err(error) => return Err(UdpProxyError::Tunnel(error)),
+            Ok(Err(error)) if is_udp_eof(&error) => return Ok(()),
+            Ok(Err(error)) => return Err(UdpProxyError::Tunnel(error)),
+            // A client that opened the flow but never sent the first
+            // routed datagram must not hold a bounded session slot
+            // forever.
+            Err(_) => {
+                return Err(flow_timed_out(
+                    "timed out waiting for the first routed datagram",
+                ));
+            }
         };
         if upstream.is_none() {
             let mut payload = [0; PACKET_BUFFER_LENGTH];
             loop {
-                let n = match read.trait_recv(&mut payload).await {
-                    Ok(n) => n,
-                    // The probing client closed its flow after the echo;
-                    // end this flow cleanly instead of logging a warning.
-                    Err(error) if is_udp_eof(&error) => return Ok(()),
-                    Err(error) => return Err(UdpProxyError::Tunnel(error)),
-                };
+                let n =
+                    match tokio::time::timeout(echo_timeout, read.trait_recv(&mut payload)).await {
+                        Ok(Ok(n)) => n,
+                        // The probing client closed its flow after the echo;
+                        // end this flow cleanly instead of logging a warning.
+                        Ok(Err(error)) if is_udp_eof(&error) => return Ok(()),
+                        Ok(Err(error)) => return Err(UdpProxyError::Tunnel(error)),
+                        // An idle echo flow holds its session slot; time it
+                        // out so the slot is released.
+                        Err(_) => return Err(flow_timed_out("UDP echo flow idle")),
+                    };
                 let mut response = Vec::new();
                 write_header(
                     &mut response,
@@ -411,6 +451,12 @@ fn is_udp_eof(error: &AnyError) -> bool {
         .is_some_and(|error| error.kind() == io::ErrorKind::UnexpectedEof)
 }
 
+/// A `TimedOut` tunnel-flow error: the peer stalled instead of completing
+/// (or continuing) the flow, so the bounded session slot must be released.
+fn flow_timed_out(what: &'static str) -> UdpProxyError {
+    UdpProxyError::Tunnel(io::Error::new(io::ErrorKind::TimedOut, what).into())
+}
+
 impl loading::HandleConn for UdpProxyConnHandler {}
 impl UdpServerHandleConn for UdpProxyConnHandler {
     fn parse_packet_route(&self, buf: &mut io::Cursor<&[u8]>) -> Option<UdpPacketRoute> {
@@ -430,5 +476,125 @@ impl UdpServerHandleConn for UdpProxyConnHandler {
         let dn_write = accepted.write().clone();
         let res = self.proxy(accepted).await;
         self.handle_proxy_result(&dn_write, res).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
+        connect::ConnectorConfig,
+        header::route::RouteRequest,
+        proto::{conn::udp::UDP_FLOW_ID_LEN, connect::udp::UdpConnector, context::UdpRuntime},
+    };
+    use ae::anti_replay::TimeValidator;
+    use std::sync::{Arc, RwLock};
+
+    fn crypto() -> tokio_chacha20::config::Config {
+        tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into())
+    }
+
+    fn handler() -> UdpProxyConnHandler {
+        let (session_spawner, _session_rx) = crate::session::SessionSpawner::channel();
+        let (_retention_actor, retention) = crate::retention::RetentionActor::new();
+        let udp_context = UdpRuntime {
+            session_table: None,
+            connector: Arc::new(UdpConnector::new(Arc::new(RwLock::new(
+                ConnectorConfig::default(),
+            )))),
+            time_validator: Arc::new(TimeValidator::new(
+                VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
+            )),
+            session_spawner,
+            retention,
+        };
+        UdpProxyConnHandler::new(crypto(), None, udp_context, true)
+    }
+
+    /// A `UdpRecv` that returns its queued packet once and then stalls
+    /// forever — modelling a client that sends the flow-kind byte (and
+    /// maybe one datagram) and never continues.
+    struct StallingRecv {
+        packet: Option<Vec<u8>>,
+    }
+    impl UdpRecv for StallingRecv {
+        async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
+            match self.packet.take() {
+                Some(packet) => {
+                    let n = packet.len().min(buf.len());
+                    buf[..n].copy_from_slice(&packet[..n]);
+                    Ok(n)
+                }
+                None => std::future::pending().await,
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct NoopSend;
+    impl UdpSend for NoopSend {
+        async fn trait_send(&mut self, _buf: &[u8]) -> Result<usize, AnyError> {
+            Ok(0)
+        }
+    }
+
+    /// A valid routed request with no upstream, i.e. an echo flow.
+    fn routed_echo_packet() -> Vec<u8> {
+        let mut packet = Vec::new();
+        UdpFlowId::from_bytes([9; UDP_FLOW_ID_LEN]).write_routed(&mut packet);
+        write_header(
+            &mut packet,
+            &RouteRequest::<crate::proto::addr::RouteAddr> { upstream: None },
+            *crypto().key(),
+        )
+        .unwrap();
+        packet
+    }
+
+    fn assert_timed_out(result: Result<(), UdpProxyError>, expected: &str) {
+        match result {
+            Err(UdpProxyError::Tunnel(error)) => {
+                let error = error.downcast_ref::<io::Error>().expect("io error");
+                assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+                assert_eq!(error.to_string(), expected);
+            }
+            other => panic!("expected a timed-out tunnel error, got {other:?}"),
+        }
+    }
+
+    /// A client that sends the UDP flow-kind byte and then stalls must not
+    /// hold its bounded session slot forever: the first routed datagram is
+    /// bounded by [`crate::STREAM_IO_TIMEOUT`].
+    #[tokio::test]
+    async fn a_stalled_initial_datagram_times_out_the_flow() {
+        let result = handler()
+            .handle_tunnel_flow_with_timeouts(
+                StallingRecv { packet: None },
+                NoopSend,
+                "127.0.0.1:1".parse().unwrap(),
+                Duration::from_millis(50),
+                Duration::from_millis(50),
+            )
+            .await;
+        assert_timed_out(result, "timed out waiting for the first routed datagram");
+    }
+
+    /// An echo flow that goes idle holds its session slot forever: each
+    /// echo read is bounded by [`crate::udp::UDP_FLOW_TIMEOUT`].
+    #[tokio::test]
+    async fn an_idle_echo_flow_times_out() {
+        let result = handler()
+            .handle_tunnel_flow_with_timeouts(
+                StallingRecv {
+                    packet: Some(routed_echo_packet()),
+                },
+                NoopSend,
+                "127.0.0.1:1".parse().unwrap(),
+                Duration::from_millis(50),
+                Duration::from_millis(50),
+            )
+            .await;
+        assert_timed_out(result, "UDP echo flow idle");
     }
 }
