@@ -103,15 +103,27 @@ where
         };
         let listener = &self.listener;
         let session_spawner = self.session_spawner.clone();
+        // The current handler, shared with every established TCP mux
+        // session. A reload replaces it here (via `on_handler_replaced`),
+        // and each accepted mux substream clones whatever is current, so
+        // reloads reach substreams opened on sessions that predate the
+        // reload instead of being pinned to the TCP-accept-time handler.
+        let conn_handler = Arc::new(self.conn_handler);
+        let current_handler = Arc::new(RwLock::new(Arc::clone(&conn_handler)));
         common::serve_loop::serve_loop(
             addr,
-            Arc::new(self.conn_handler),
+            conn_handler,
             set_conn_handler_rx,
-            |_| {},
+            {
+                let current_handler = Arc::clone(&current_handler);
+                move |new_handler: Arc<ConnHandler>| {
+                    *current_handler.write().unwrap() = new_handler;
+                }
+            },
             || listener.accept(),
             |state: &mut MuxState,
              (stream, _): (TcpStream, SocketAddr),
-             conn_handler: Arc<ConnHandler>| {
+             _conn_handler: Arc<ConnHandler>| {
                 let addr = match socket_addr_pair(&stream) {
                     Ok(addr) => addr,
                     Err(_) => return Box::pin(async {}),
@@ -120,10 +132,11 @@ where
                 let (_, accepter) =
                     spawn_mux_no_reconnection(r, w, server_mux_config(), &mut state.mux);
                 let session_spawner = session_spawner.clone();
+                let current_handler = Arc::clone(&current_handler);
                 state.accepting.spawn(async move {
                     run_mux_accepter(accepter, addr, |(reader, writer)| {
                         counter!("stream.tcp_mux.mux.accepts").increment(1);
-                        let conn_handler = Arc::clone(&conn_handler);
+                        let conn_handler = current_handler.read().unwrap().clone();
                         let session_spawner = session_spawner.clone();
                         Box::pin(async move {
                             if let Err(error) = session_spawner

@@ -2,7 +2,10 @@
 mod tests {
     use std::{
         io,
-        sync::{Arc, RwLock},
+        sync::{
+            Arc, RwLock,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::Duration,
     };
 
@@ -16,20 +19,27 @@ mod tests {
             addr::RouteAddr,
             client::stream::{establish, probe_rtt},
             conn::stream::ConnAndAddr,
-            conn_handler::stream::StreamProxyConnHandler,
+            conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
             connect::udp::UdpConnector,
             context::StreamRuntime,
         },
         route::ConnConfig,
-        stream::pool::StreamConnPool,
+        stream::{
+            ConnParts, StreamServerHandleConn,
+            pool::{StreamConnPool, connect_with_pool},
+        },
     };
     use protocol::stream::{
         addr::ConcreteStreamType,
         connect::build_concrete_stream_connector_table,
         streams::{
-            kcp::build_kcp_proxy_server, mptcp::build_mptcp_proxy_server, mux::MuxProxyHandler,
-            rtp::build_rtp_proxy_server, rtp_mux::build_rtp_mux_proxy_server,
-            tcp::proxy_server::build_tcp_proxy_server, tcp_mux::build_tcp_mux_proxy_server,
+            kcp::build_kcp_proxy_server,
+            mptcp::build_mptcp_proxy_server,
+            mux::{MuxProxyConnHandler, MuxProxyHandler},
+            rtp::build_rtp_proxy_server,
+            rtp_mux::build_rtp_mux_proxy_server,
+            tcp::proxy_server::build_tcp_proxy_server,
+            tcp_mux::{TcpMuxServer, build_tcp_mux_proxy_server},
         },
     };
     use serial_test::serial;
@@ -825,5 +835,115 @@ mod tests {
         while let Some(x) = handles.join_next().await {
             x.unwrap();
         }
+    }
+
+    /// A stream handler that counts how many streams it served and echoes a
+    /// single byte back, so a test can tell which handler generation served
+    /// a given substream.
+    #[derive(Debug)]
+    struct EchoCountingHandler {
+        served: Arc<AtomicUsize>,
+    }
+    impl loading::HandleConn for EchoCountingHandler {}
+    impl StreamServerHandleConn for EchoCountingHandler {
+        async fn handle_stream<Stream>(&self, mut stream: Stream)
+        where
+            Stream: ConnParts + std::fmt::Debug,
+        {
+            self.served.fetch_add(1, Ordering::SeqCst);
+            let mut byte = [0u8; 1];
+            if stream.read_exact(&mut byte).await.is_ok() {
+                let _ = stream.write_all(&byte).await;
+            }
+        }
+    }
+    impl MuxProxyConnHandler for EchoCountingHandler {
+        fn udp_proxy(&self) -> Option<&UdpProxyConnHandler> {
+            None
+        }
+    }
+
+    /// A handler reload must reach substreams opened on TCP-mux sessions
+    /// that predate the reload: each TCP connection's mux accepter serves
+    /// every substream with the *current* handler, not the one captured at
+    /// TCP-accept time.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tcp_mux_reload_reaches_existing_session_substreams() {
+        let mut join_set = tokio::task::JoinSet::new();
+        let stream_context = stream_context(&mut join_set);
+
+        // Two handler generations distinguishable only by the counter they
+        // bump.
+        let served_old = Arc::new(AtomicUsize::new(0));
+        let served_new = Arc::new(AtomicUsize::new(0));
+        let handler_old = EchoCountingHandler {
+            served: Arc::clone(&served_old),
+        };
+        let handler_new = EchoCountingHandler {
+            served: Arc::clone(&served_new),
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+        let server = TcpMuxServer::new(
+            listener,
+            handler_old,
+            stream_context.session_spawner.clone(),
+        );
+        let (set_conn_handler_tx, set_conn_handler_rx) = loading::replace_conn_handler_channel();
+        let set_conn_handler_tx_for_server = set_conn_handler_tx.clone();
+        join_set.spawn(async move {
+            // Keep the sender alive so the server's receiver stays open;
+            // the test holds its own clone for the reload.
+            let _set_conn_handler_tx = set_conn_handler_tx_for_server;
+            server.serve(set_conn_handler_rx).await.unwrap();
+        });
+
+        // Client route straight to the tcp_mux proxy (no relay headers: the
+        // echo handler just echoes one byte). The tcp_mux connector keeps
+        // the per-address mux session open between dials.
+        let proxy_route = RouteAddr {
+            address: proxy_addr.into(),
+            protocol: "tcpmux".into(),
+        };
+        let dial = || async {
+            connect_with_pool(&proxy_route, &stream_context, true, Duration::from_secs(10))
+                .await
+                .unwrap()
+                .0
+        };
+        let round_trip = |byte: u8| async move {
+            let mut stream = dial().await;
+            stream.write_all(&[byte]).await.unwrap();
+            let mut echoed = [0u8; 1];
+            tokio::time::timeout(Duration::from_secs(10), stream.read_exact(&mut echoed))
+                .await
+                .expect("timed out waiting for the handler echo")
+                .unwrap();
+            assert_eq!(echoed[0], byte, "echo mismatch");
+        };
+
+        // First substream: served by the original handler generation.
+        round_trip(b'A').await;
+        assert_eq!(served_old.load(Ordering::SeqCst), 1);
+        assert_eq!(served_new.load(Ordering::SeqCst), 0);
+
+        // Reload the handler while the TCP mux session stays open.
+        set_conn_handler_tx.send(handler_new).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Second substream on the same session: must be served by the
+        // reloaded handler, not the one pinned at TCP-accept time.
+        round_trip(b'B').await;
+        assert_eq!(
+            served_old.load(Ordering::SeqCst),
+            1,
+            "pre-reload handler must not serve post-reload substreams"
+        );
+        assert_eq!(
+            served_new.load(Ordering::SeqCst),
+            1,
+            "reloaded handler must serve substreams on existing sessions"
+        );
     }
 }
