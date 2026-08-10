@@ -1,9 +1,4 @@
-use std::{
-    io,
-    net::SocketAddr,
-    num::NonZeroUsize,
-    sync::{Arc, RwLock},
-};
+use std::{io, net::SocketAddr, num::NonZeroUsize, sync::Arc};
 
 use thiserror::Error;
 use tokio::net::UdpSocket;
@@ -113,13 +108,13 @@ where
         self,
         set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
     ) -> Result<(), UdpServerServeError> {
-        let conn_handler = Arc::new(RwLock::new(Arc::new(self.conn_handler)));
+        let reloadable = loading::ReloadableHandler::new(self.conn_handler);
         let dispatch = {
-            let conn_handler = Arc::clone(&conn_handler);
+            let reloadable = reloadable.clone();
             move |&addr: &SocketAddr,
                   packet: udp_listener::Packet|
                   -> Option<Classified<FlowKey, Packet>> {
-                let conn_handler = Arc::clone(&conn_handler.read().unwrap());
+                let conn_handler = reloadable.current();
                 let mut buf_reader = io::Cursor::new(&packet[..]);
                 let route = conn_handler.parse_packet_route(&mut buf_reader)?;
                 // A compact datagram can only continue a live flow: when its
@@ -156,9 +151,12 @@ where
             Arc::new(dispatch),
         ));
         let session_spawner = self.session_spawner;
-        let initial = Arc::clone(&conn_handler.read().unwrap());
-        let swap = |new: Arc<ConnHandler>| {
-            *conn_handler.write().unwrap() = new;
+        let initial = reloadable.current();
+        let swap = {
+            let reloadable = reloadable.clone();
+            move |new: Arc<ConnHandler>| {
+                reloadable.replace(new);
+            }
         };
 
         // Packet dispatch is process-scoped while flow handlers are

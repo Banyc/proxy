@@ -9,7 +9,6 @@ use std::{
     io,
     net::SocketAddr,
     pin::Pin,
-    sync::{Arc, RwLock},
     task::{Context, Poll},
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -65,8 +64,8 @@ where
             conn_handler,
             session_spawner,
         } = self;
-        let conn_handler = Arc::new(RwLock::new(Arc::new(conn_handler)));
-        let handler_for_stream = Arc::clone(&conn_handler);
+        let reloadable = loading::ReloadableHandler::new(conn_handler);
+        let handler_for_stream = reloadable.clone();
         let mux_session_spawner = rtp_mux::SessionSpawner::new({
             let session_spawner = session_spawner.clone();
             move |session| match session_spawner.try_spawn(async move {
@@ -78,7 +77,7 @@ where
             }
         });
         let serving = inner.serve(mux_session_spawner, move |stream| {
-            let handler = handler_for_stream.read().unwrap().clone();
+            let handler = handler_for_stream.current();
             let session_spawner = session_spawner.clone();
             match session_spawner.try_spawn(async move {
                 let addr: SocketAddrPair = stream.addr().into();
@@ -103,7 +102,7 @@ where
                 replacement = set_conn_handler_rx.recv() => {
                     match replacement {
                         Ok(Some(new_handler)) => {
-                            *conn_handler.write().unwrap() = new_handler;
+                            reloadable.replace(new_handler);
                         }
                         Ok(None) => {}
                         Err(()) => return Ok(()),

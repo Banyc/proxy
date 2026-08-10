@@ -9,7 +9,7 @@ use common::{
     addr::any_addr,
     connect::{ConnectorConfig, ConnectorResetSignal},
     error::AnyResult,
-    loading,
+    loading::{self, ReloadableHandler},
     proto::{
         conn_handler::{
             ListenerBindError,
@@ -51,7 +51,7 @@ struct MuxState {
 pub struct TcpMuxServer<ConnHandler> {
     listener: TcpListener,
     mux: JoinSet<MuxError>,
-    conn_handler: ConnHandler,
+    reloadable: ReloadableHandler<ConnHandler>,
     session_spawner: SessionSpawner,
 }
 impl<ConnHandler> TcpMuxServer<ConnHandler> {
@@ -60,12 +60,29 @@ impl<ConnHandler> TcpMuxServer<ConnHandler> {
         conn_handler: ConnHandler,
         session_spawner: SessionSpawner,
     ) -> Self {
+        Self::with_reloadable(
+            listener,
+            ReloadableHandler::new(conn_handler),
+            session_spawner,
+        )
+    }
+    /// Construct with a caller-owned [`ReloadableHandler`], so a test can
+    /// subscribe to its generation watch for deterministic reload
+    /// acknowledgement.
+    pub fn with_reloadable(
+        listener: TcpListener,
+        reloadable: ReloadableHandler<ConnHandler>,
+        session_spawner: SessionSpawner,
+    ) -> Self {
         Self {
             listener,
             mux: JoinSet::new(),
-            conn_handler,
+            reloadable,
             session_spawner,
         }
+    }
+    pub fn reloadable(&self) -> &ReloadableHandler<ConnHandler> {
+        &self.reloadable
     }
     pub fn listener(&self) -> &TcpListener {
         &self.listener
@@ -103,21 +120,21 @@ where
         };
         let listener = &self.listener;
         let session_spawner = self.session_spawner.clone();
-        // The current handler, shared with every established TCP mux
-        // session. A reload replaces it here (via `on_handler_replaced`),
-        // and each accepted mux substream clones whatever is current, so
-        // reloads reach substreams opened on sessions that predate the
-        // reload instead of being pinned to the TCP-accept-time handler.
-        let conn_handler = Arc::new(self.conn_handler);
-        let current_handler = Arc::new(RwLock::new(Arc::clone(&conn_handler)));
+        // The current handler, shared with every established TCP mux session.
+        // A reload replaces it here (via `on_handler_replaced`) and bumps the
+        // generation watch; each accepted mux substream clones whatever is
+        // current, so reloads reach substreams opened on sessions that
+        // predate the reload instead of being pinned to the TCP-accept-time
+        // handler.
+        let reloadable = self.reloadable.clone();
         common::serve_loop::serve_loop(
             addr,
-            conn_handler,
+            reloadable.current(),
             set_conn_handler_rx,
             {
-                let current_handler = Arc::clone(&current_handler);
+                let reloadable = reloadable.clone();
                 move |new_handler: Arc<ConnHandler>| {
-                    *current_handler.write().unwrap() = new_handler;
+                    reloadable.replace(new_handler);
                 }
             },
             || listener.accept(),
@@ -132,11 +149,11 @@ where
                 let (_, accepter) =
                     spawn_mux_no_reconnection(r, w, server_mux_config(), &mut state.mux);
                 let session_spawner = session_spawner.clone();
-                let current_handler = Arc::clone(&current_handler);
+                let reloadable = reloadable.clone();
                 state.accepting.spawn(async move {
                     run_mux_accepter(accepter, addr, |(reader, writer)| {
                         counter!("stream.tcp_mux.mux.accepts").increment(1);
-                        let conn_handler = current_handler.read().unwrap().clone();
+                        let conn_handler = reloadable.current();
                         let session_spawner = session_spawner.clone();
                         Box::pin(async move {
                             if let Err(error) = session_spawner

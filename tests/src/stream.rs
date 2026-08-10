@@ -13,7 +13,7 @@ mod tests {
     use common::{
         anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         connect::{ConnectorConfig, ConnectorResetSignal},
-        loading::{self, Serve},
+        loading::{self, ReloadableHandler, Serve},
         notify::Notify,
         proto::{
             addr::RouteAddr,
@@ -854,19 +854,10 @@ mod tests {
 
     /// A stream handler that counts how many streams it served and echoes a
     /// single byte back, so a test can tell which handler generation served
-    /// a given substream. `released` (if set) fires when this handler
-    /// generation is dropped — i.e. the reload has replaced it.
+    /// a given substream.
     #[derive(Debug)]
     struct EchoCountingHandler {
         served: Arc<AtomicUsize>,
-        released: Option<Notify>,
-    }
-    impl Drop for EchoCountingHandler {
-        fn drop(&mut self) {
-            if let Some(released) = &self.released {
-                released.notify_waiters();
-            }
-        }
     }
     impl loading::HandleConn for EchoCountingHandler {}
     impl StreamServerHandleConn for EchoCountingHandler {
@@ -900,23 +891,23 @@ mod tests {
         // bump.
         let served_old = Arc::new(AtomicUsize::new(0));
         let served_new = Arc::new(AtomicUsize::new(0));
-        // Fires when the old handler is dropped, i.e. the serve_loop has
-        // installed the replacement.
-        let released_old = Notify::new();
         let handler_old = EchoCountingHandler {
             served: Arc::clone(&served_old),
-            released: Some(released_old.clone()),
         };
         let handler_new = EchoCountingHandler {
             served: Arc::clone(&served_new),
-            released: None,
         };
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let proxy_addr = listener.local_addr().unwrap();
-        let server = TcpMuxServer::new(
+        // The reloadable handler cell doubles as the reload acknowledgement:
+        // its generation watch bumps only once the serve_loop has installed
+        // the replacement, so the test can wait deterministically.
+        let reloadable = ReloadableHandler::new(handler_old);
+        let mut generation = reloadable.generation();
+        let server = TcpMuxServer::with_reloadable(
             listener,
-            handler_old,
+            reloadable,
             stream_context.session_spawner.clone(),
         );
         let (set_conn_handler_tx, set_conn_handler_rx) = loading::replace_conn_handler_channel();
@@ -960,14 +951,12 @@ mod tests {
                 assert_eq!(served_new.load(Ordering::SeqCst), 0);
 
                 // Reload the handler while the TCP mux session stays open,
-                // and wait until the old handler is released — the serve_loop
-                // replaces it in the shared current-handler cell before
-                // dropping the last reference — so the next substream is
-                // guaranteed to be dispatched with the reloaded generation,
-                // regardless of scheduler timing.
-                let mut released_old_sub = released_old.subscription();
+                // and wait for the generation bump — the serve_loop replaces
+                // the handler in the shared cell before bumping, so the next
+                // substream is guaranteed to be dispatched with the reloaded
+                // generation, regardless of scheduler timing.
                 set_conn_handler_tx.send(handler_new).unwrap();
-                tokio::time::timeout(Duration::from_secs(10), released_old_sub.notified())
+                tokio::time::timeout(Duration::from_secs(10), generation.changed())
                     .await
                     .expect("timed out waiting for the handler reload to be installed");
 

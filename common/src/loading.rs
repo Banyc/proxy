@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 use derive_more::Debug;
@@ -178,6 +178,67 @@ pub trait Serve {
         self,
         set_conn_handler_rx: ReplaceConnHandlerRx<Self::ConnHandler>,
     ) -> impl Future<Output = AnyResult> + Send;
+}
+
+/// The shared, reloadable handler cell behind a listener, replacing the
+/// hand-rolled `Arc<RwLock<Arc<H>>>` in every server.
+///
+/// Reloads replace the handler through [`Self::replace`], and every reader —
+/// a UDP packet dispatcher, a mux accepter, a flow handler — observes the
+/// same current handler through [`Self::current`]. A [`watch`] generation
+/// counter bumps on every replacement, so a reloader can wait until a
+/// specific reload has actually been applied instead of guessing with a
+/// sleep.
+#[derive(Debug)]
+#[debug(bound(H:))]
+pub struct ReloadableHandler<H> {
+    handler: Arc<RwLock<Arc<H>>>,
+    /// Bumped on every [`Self::replace`]; [`Self::generation`] subscribers
+    /// resolve once a replacement has been applied.
+    generation: watch::Sender<u64>,
+}
+
+impl<H> Clone for ReloadableHandler<H> {
+    fn clone(&self) -> Self {
+        Self {
+            handler: Arc::clone(&self.handler),
+            generation: self.generation.clone(),
+        }
+    }
+}
+
+impl<H> ReloadableHandler<H> {
+    /// A cell holding `handler`.
+    pub fn new(handler: H) -> Self {
+        let (generation, _) = watch::channel(0);
+        Self {
+            handler: Arc::new(RwLock::new(Arc::new(handler))),
+            generation,
+        }
+    }
+
+    /// The current handler.
+    pub fn current(&self) -> Arc<H> {
+        Arc::clone(&self.handler.read().unwrap())
+    }
+
+    /// Replace the current handler and bump the generation. `handler` is the
+    /// shared `Arc` the reload channels deliver.
+    pub fn replace(&self, handler: Arc<H>) {
+        *self.handler.write().unwrap() = handler;
+        // Copy the generation out of the watch's read lock before
+        // `send_replace` takes its write lock; holding the read borrow across
+        // the write would deadlock (std RwLock is not reentrant).
+        let next = self.generation.borrow().wrapping_add(1);
+        self.generation.send_replace(next);
+    }
+
+    /// Subscribe to reload generations: `changed()` / `wait_for()` resolve
+    /// after the next replacement, giving deterministic acknowledgement that
+    /// a reload was applied.
+    pub fn generation(&self) -> watch::Receiver<u64> {
+        self.generation.subscribe()
+    }
 }
 
 #[derive(Debug)]
@@ -423,5 +484,23 @@ mod tests {
             err.to_string().contains("listener died"),
             "unexpected error: {err}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_replacement_bumps_the_generation_observably() {
+        let reloadable = ReloadableHandler::new(NoopConnHandler);
+        let mut generation = reloadable.generation();
+        assert_eq!(*generation.borrow(), 0);
+
+        reloadable.replace(Arc::new(NoopConnHandler));
+        // Subscribed before the replacement, the receiver resolves the moment
+        // it is applied — deterministic acknowledgement, no sleep.
+        generation.changed().await.unwrap();
+        assert_eq!(*generation.borrow(), 1);
+
+        // A second replacement bumps again.
+        reloadable.replace(Arc::new(NoopConnHandler));
+        generation.changed().await.unwrap();
+        assert_eq!(*generation.borrow(), 2);
     }
 }
