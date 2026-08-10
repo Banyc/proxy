@@ -1133,6 +1133,7 @@ mod tests {
     async fn test_stream_runtime(
         tasks: &mut TestScope,
         udp_connector: &UdpConnector,
+        connector_config: Arc<RwLock<ConnectorConfig>>,
     ) -> (StreamRuntime, common::session::SessionSpawner) {
         let (session_spawner, mut session_rx) = common::session::SessionSpawner::channel();
         tasks.spawn_required("session spawner", async move {
@@ -1152,7 +1153,7 @@ mod tests {
         let reset = ConnectorResetSignal(Notify::new());
         let mut connector_drivers = JoinSet::new();
         let connector_table = Arc::new(build_concrete_stream_connector_table(
-            ConnectorConfig::default(),
+            connector_config,
             reset,
             &mut connector_drivers,
             udp_connector,
@@ -1183,10 +1184,10 @@ mod tests {
     }
 
     async fn test_runtime(tasks: &mut TestScope) -> (Runtime, common::session::SessionSpawner) {
-        let udp_connector = Arc::new(UdpConnector::new(Arc::new(RwLock::new(
-            ConnectorConfig::default(),
-        ))));
-        let (stream, session_spawner) = test_stream_runtime(tasks, &udp_connector).await;
+        let connector_config = Arc::new(RwLock::new(ConnectorConfig::default()));
+        let udp_connector = Arc::new(UdpConnector::new(Arc::clone(&connector_config)));
+        let (stream, session_spawner) =
+            test_stream_runtime(tasks, &udp_connector, connector_config).await;
         let runtime = Runtime {
             stream: stream.clone(),
             udp: UdpRuntime {

@@ -224,12 +224,11 @@ mod tests {
         });
         let proxy_addr = {
             let listen_addr = Arc::from("localhost:0");
-            let connector_config = ConnectorConfig {
+            let connector_config = Arc::new(RwLock::new(ConnectorConfig {
                 bind: BothVerIp { v4: None, v6: None },
-            };
+            }));
             let mut connector_drivers = tokio::task::JoinSet::new();
-            let udp_connector =
-                UdpConnector::new(Arc::new(RwLock::new(ConnectorConfig::default())));
+            let udp_connector = UdpConnector::new(Arc::clone(&connector_config));
             let connector_table = Arc::new(build_concrete_stream_connector_table(
                 connector_config,
                 connector_reset,

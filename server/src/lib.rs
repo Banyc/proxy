@@ -1,16 +1,13 @@
 #![warn(clippy::disallowed_methods, clippy::disallowed_types)]
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use access_server::{AccessServerConfig, AccessServerLoader};
 use ae::anti_replay::{ReplayValidator, TimeValidator};
 use common::{
     anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     config::{Merge, merge_map},
-    connect::{ConnectorConfig, ConnectorResetSignal},
+    connect::{ConnectorConfig, ConnectorConfigHandle, ConnectorResetSignal},
     error::{AnyError, AnyResult},
     matcher::Matcher,
     proto::{
@@ -77,11 +74,14 @@ where
         VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
     ));
     let connector_reset = ConnectorResetSignal(serve_context.system_suspended.0);
-    let udp_connector = Arc::new(UdpConnector::new(Arc::new(RwLock::new(
-        ConnectorConfig::default(),
-    ))));
+    // One connector-configuration cell shared by the stream connector table,
+    // the UDP connector, and every mux UDP dialer: a reload replaces it in a
+    // single write, so stream and UDP connectors can never observe different
+    // configurations.
+    let connector_config = ConnectorConfigHandle::new(ConnectorConfig::default());
+    let udp_connector = Arc::new(UdpConnector::new(connector_config.cell()));
     let stream_connector_table = Arc::new(build_concrete_stream_connector_table(
-        ConnectorConfig::default(),
+        connector_config.cell(),
         connector_reset,
         &mut server_tasks,
         &udp_connector,
@@ -113,8 +113,13 @@ where
         runtime.clone(),
     )
     .await?;
-    let (guard, commit_error) =
-        commit_reload(&mut server_tasks, &mut server_loader, prepared, &runtime);
+    let (guard, commit_error) = commit_reload(
+        &mut server_tasks,
+        &mut server_loader,
+        prepared,
+        &runtime,
+        &connector_config,
+    );
     if let Some(e) = commit_error {
         return Err(ServerServeError::Commit(e));
     }
@@ -152,6 +157,7 @@ where
                             &mut server_loader,
                             new_prepared,
                             &runtime,
+                            &connector_config,
                         );
                         _cancellation_guard = guard;
                         if let Some(e) = commit_error {
@@ -308,6 +314,7 @@ fn commit_reload(
     server_loader: &mut ServerLoader,
     prepared: PreparedReload,
     runtime: &Runtime,
+    connector_config_handle: &ConnectorConfigHandle,
 ) -> (tokio_util::sync::DropGuard, Option<AnyError>) {
     let PreparedReloadParts {
         cancellation,
@@ -318,11 +325,9 @@ fn commit_reload(
         reverse_tunnel,
     } = prepared.into_parts();
     runtime.stream.pool.replaced_by(stream_pool);
-    runtime
-        .stream
-        .connector_table
-        .replaced_by(connector_config.clone());
-    *runtime.udp.connector.config().write().unwrap() = connector_config;
+    // One replacement: the handle is shared by the stream connector table,
+    // the UDP connector, and every mux UDP dialer.
+    connector_config_handle.replace(connector_config);
     let commit_error: Option<AnyError> = (|| {
         server_loader
             .access_server

@@ -62,9 +62,10 @@ mod tests {
         // per-protocol connector loops (e.g. rtp_mux, tcp_mux) and are reaped
         // here for the lifetime of the test runtime.
         let mut connector_drivers = tokio::task::JoinSet::new();
-        let udp_connector = UdpConnector::new(Arc::new(RwLock::new(ConnectorConfig::default())));
+        let connector_config = Arc::new(RwLock::new(ConnectorConfig::default()));
+        let udp_connector = UdpConnector::new(Arc::clone(&connector_config));
         let connector_table = Arc::new(build_concrete_stream_connector_table(
-            ConnectorConfig::default(),
+            connector_config,
             connector_reset,
             &mut connector_drivers,
             &udp_connector,

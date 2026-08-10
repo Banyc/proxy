@@ -28,17 +28,20 @@ use super::{
 /// connector command loops and reset listeners; their completion is
 /// surfaced by reaping `drivers`, and dropping it aborts them.
 ///
+/// The `config` cell is shared with the [`UdpConnector`] and every mux UDP
+/// dialer, so a reload replaces the configuration in one write and the
+/// stream and UDP connectors can never drift apart.
+///
 /// The mux connectors (`tcpmux`/`rtpmux`/`rtpmuxfec`) double as
 /// [`UdpMuxDialer`]s: they are registered into `udp_connector` so UDP proxy
 /// chains can open datagram flows over the same mux sessions, using the
 /// same wire format as reverse tunneling.
 pub fn build_concrete_stream_connector_table(
-    config: ConnectorConfig,
+    config: Arc<RwLock<ConnectorConfig>>,
     reset: ConnectorResetSignal,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
     udp_connector: &UdpConnector,
 ) -> StreamConnectorTable {
-    let config = Arc::new(RwLock::new(config));
     let init: Vec<(&'static str, Arc<dyn StreamConnect>)> = STREAM_PROTOS
         .iter()
         .map(|(_, ty, build)| {
