@@ -180,15 +180,15 @@ impl UdpProxyConnHandler {
     }
 
     /// [`Self::handle_tunnel_flow`] with injectable timeouts: `prime_timeout`
-    /// bounds the wait for the first routed datagram and `echo_timeout`
-    /// bounds each read and each response write of an echo flow, so a
-    /// stalled peer releases its bounded session slot. The public entry
-    /// point uses [`crate::STREAM_IO_TIMEOUT`] / [`UDP_FLOW_TIMEOUT`];
-    /// tests pass short durations.
+    /// bounds the establishing read, `echo_timeout` bounds each read and
+    /// each response write of an echo flow, so a stalled peer releases its
+    /// bounded session slot. The public entry point uses
+    /// [`crate::STREAM_IO_TIMEOUT`] / [`UDP_FLOW_TIMEOUT`]; tests pass short
+    /// durations.
     async fn handle_tunnel_flow_with_timeouts<Read, Write>(
         &self,
         read: Read,
-        mut write: Write,
+        write: Write,
         downstream: SocketAddr,
         prime_timeout: Duration,
         echo_timeout: Duration,
@@ -197,66 +197,88 @@ impl UdpProxyConnHandler {
         Read: UdpRecv + Send + 'static,
         Write: UdpSend + Send + 'static,
     {
-        let mut read = RouteDecodingRecv::new(
-            read,
-            self.header_crypto.clone(),
-            self.udp_context.time_validator.clone(),
-        );
-        let upstream = match tokio::time::timeout(prime_timeout, read.prime()).await {
-            Ok(Ok(upstream)) => upstream,
+        let tunnel = match self.establish_tunnel(read, prime_timeout).await {
+            Ok(tunnel) => tunnel,
             // The client closed the flow before sending any datagram
             // (e.g. an abandoned probe or a torn-down flow). This is a
             // clean close, not an error.
-            Ok(Err(error)) if is_udp_eof(&error) => return Ok(()),
+            Err(UdpProxyError::Tunnel(error)) if is_udp_eof(&error) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        match tunnel {
+            EstablishedTunnel::Echo(flow) => flow.run(write, echo_timeout).await,
+            EstablishedTunnel::Relay(flow) => {
+                let (read, upstream) = flow.into_parts();
+                let flow = Flow {
+                    upstream: Some(upstream),
+                    downstream: DownstreamAddr(downstream),
+                };
+                self.proxy_parts(flow, read, write).await
+            }
+        }
+    }
+
+    /// Establish a tunnel flow from its first routed datagram.
+    ///
+    /// Reads one datagram under `prime_timeout` and decodes its route, then
+    /// returns the typed flow: an [`EchoFlow`] when the client requested no
+    /// upstream, a [`RelayFlow`] bound to the requested upstream otherwise.
+    /// After this returns, every flow state is established and non-optional.
+    async fn establish_tunnel<Read>(
+        &self,
+        mut read: Read,
+        prime_timeout: Duration,
+    ) -> Result<EstablishedTunnel<Read>, UdpProxyError>
+    where
+        Read: UdpRecv + Send,
+    {
+        let mut packet = vec![0; PACKET_BUFFER_LENGTH];
+        let n = match tokio::time::timeout(prime_timeout, read.trait_recv(&mut packet)).await {
+            Ok(Ok(n)) => n,
             Ok(Err(error)) => return Err(UdpProxyError::Tunnel(error)),
-            // A client that opened the flow but never sent the first
-            // routed datagram must not hold a bounded session slot
-            // forever.
+            // A client that opened the flow but never sent the first routed
+            // datagram must not hold a bounded session slot forever.
             Err(_) => {
                 return Err(flow_timed_out(
                     "timed out waiting for the first routed datagram",
                 ));
             }
         };
-        if upstream.is_none() {
-            let mut payload = [0; PACKET_BUFFER_LENGTH];
-            loop {
-                let n =
-                    match tokio::time::timeout(echo_timeout, read.trait_recv(&mut payload)).await {
-                        Ok(Ok(n)) => n,
-                        // The probing client closed its flow after the echo;
-                        // end this flow cleanly instead of logging a warning.
-                        Ok(Err(error)) if is_udp_eof(&error) => return Ok(()),
-                        Ok(Err(error)) => return Err(UdpProxyError::Tunnel(error)),
-                        // An idle echo flow holds its session slot; time it
-                        // out so the slot is released.
-                        Err(_) => return Err(flow_timed_out("UDP echo flow idle")),
-                    };
-                let mut response = Vec::new();
-                write_header(
-                    &mut response,
-                    &RouteResponse { result: Ok(()) },
-                    *self.header_crypto.key(),
+        let mut cursor = io::Cursor::new(&packet[..n]);
+        let route = decode_request_route(
+            &mut cursor,
+            &self.header_crypto,
+            &self.udp_context.time_validator,
+        )
+        .map_err(|error| UdpProxyError::Tunnel(Box::new(error)))?;
+        let UdpRequestRoute::Routed { flow_id, upstream } = route else {
+            return Err(UdpProxyError::Tunnel(
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "UDP mux flow used compact form before establishing its route",
                 )
-                .map_err(|error| UdpProxyError::Tunnel(Box::new(error)))?;
-                response.extend_from_slice(&payload[..n]);
-                match tokio::time::timeout(echo_timeout, write.trait_send(&response)).await {
-                    Ok(Ok(_)) => {}
-                    Ok(Err(error)) => return Err(UdpProxyError::Tunnel(error)),
-                    // A peer that stops reading its echo responses lets the
-                    // send block forever; time the write out so the slot is
-                    // released.
-                    Err(_) => {
-                        return Err(flow_timed_out("UDP echo flow stalled on response write"));
-                    }
-                }
-            }
-        }
-        let flow = Flow {
-            upstream,
-            downstream: DownstreamAddr(downstream),
+                .into(),
+            ));
         };
-        self.proxy_parts(flow, read, write).await
+        let payload = packet[usize::try_from(cursor.position()).unwrap()..n].to_vec();
+        let decoder = FlowRecv::new(
+            read,
+            self.header_crypto.clone(),
+            self.udp_context.time_validator.clone(),
+            flow_id,
+            upstream.clone(),
+        );
+        Ok(match upstream {
+            None => EstablishedTunnel::Echo(EchoFlow {
+                decoder,
+                first: payload,
+            }),
+            Some(upstream) => EstablishedTunnel::Relay(RelayFlow {
+                decoder,
+                first: payload,
+                upstream,
+            }),
+        })
     }
 
     async fn handle_proxy_result(
@@ -365,15 +387,138 @@ impl UdpRecv for RouteBoundRecv {
     }
 }
 
-struct RouteDecodingRecv<Read> {
+/// A UDP tunnel flow established from the first routed datagram: either an
+/// echo flow (no upstream) or a relay flow bound to a fixed upstream. Each
+/// variant holds only established, non-optional state.
+enum EstablishedTunnel<R> {
+    /// The client requested no upstream: every datagram is answered with a
+    /// `RouteResponse` header plus the echoed payload.
+    Echo(EchoFlow<R>),
+    /// A routed flow: the establishing datagram and every subsequent one is
+    /// relayed to the bound upstream.
+    Relay(RelayFlow<R>),
+}
+
+/// An echo tunnel flow, running until the peer closes it or goes idle.
+struct EchoFlow<R> {
+    decoder: FlowRecv<R>,
+    /// The establishing datagram's payload, echoed first.
+    first: Vec<u8>,
+}
+
+impl<R> EchoFlow<R>
+where
+    R: UdpRecv + Send + 'static,
+{
+    /// Echo every datagram on the flow, bounding each read and each response
+    /// write by `timeout`.
+    async fn run<W>(self, mut write: W, timeout: Duration) -> Result<(), UdpProxyError>
+    where
+        W: UdpSend + Send + 'static,
+    {
+        let EchoFlow { mut decoder, first } = self;
+        Self::respond(&decoder.header_crypto, &mut write, &first, timeout).await?;
+        let mut payload = [0; PACKET_BUFFER_LENGTH];
+        loop {
+            let n = match tokio::time::timeout(timeout, decoder.trait_recv(&mut payload)).await {
+                Ok(Ok(n)) => n,
+                // The probing client closed its flow after the echo; end this
+                // flow cleanly instead of logging a warning.
+                Ok(Err(error)) if is_udp_eof(&error) => return Ok(()),
+                Ok(Err(error)) => return Err(UdpProxyError::Tunnel(error)),
+                // An idle echo flow holds its session slot; time it out so
+                // the slot is released.
+                Err(_) => return Err(flow_timed_out("UDP echo flow idle")),
+            };
+            Self::respond(&decoder.header_crypto, &mut write, &payload[..n], timeout).await?;
+        }
+    }
+
+    /// Write one echoed datagram: a `RouteResponse` header followed by the
+    /// payload, bounded by `timeout`.
+    async fn respond<W>(
+        header_crypto: &tokio_chacha20::config::Config,
+        write: &mut W,
+        payload: &[u8],
+        timeout: Duration,
+    ) -> Result<(), UdpProxyError>
+    where
+        W: UdpSend,
+    {
+        let mut response = Vec::new();
+        write_header(
+            &mut response,
+            &RouteResponse { result: Ok(()) },
+            *header_crypto.key(),
+        )
+        .map_err(|error| UdpProxyError::Tunnel(Box::new(error)))?;
+        response.extend_from_slice(payload);
+        match tokio::time::timeout(timeout, write.trait_send(&response)).await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(error)) => Err(UdpProxyError::Tunnel(error)),
+            // A peer that stops reading its echo responses lets the send
+            // block forever; time the write out so the slot is released.
+            Err(_) => Err(flow_timed_out("UDP echo flow stalled on response write")),
+        }
+    }
+}
+
+/// A relay tunnel flow bound to a fixed upstream route.
+struct RelayFlow<R> {
+    decoder: FlowRecv<R>,
+    /// The establishing datagram's payload, relayed first.
+    first: Vec<u8>,
+    upstream: UpstreamAddr,
+}
+
+impl<R> RelayFlow<R> {
+    /// Split into the relay's downstream read (the establishing datagram
+    /// first, then decoded datagrams) and the upstream route.
+    fn into_parts(self) -> (RelayRead<R>, UpstreamAddr) {
+        (
+            RelayRead {
+                decoder: self.decoder,
+                pending: Some(self.first),
+            },
+            self.upstream,
+        )
+    }
+}
+
+/// A relay flow's downstream read: yields the establishing datagram once,
+/// then falls through to decoding datagrams bound to the flow.
+struct RelayRead<R> {
+    decoder: FlowRecv<R>,
+    /// The establishing datagram's payload, delivered once.
+    pending: Option<Vec<u8>>,
+}
+impl<R> UdpRecv for RelayRead<R>
+where
+    R: UdpRecv + Send,
+{
+    async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
+        if let Some(payload) = self.pending.take() {
+            let copied = payload.len().min(buf.len());
+            buf[..copied].copy_from_slice(&payload[..copied]);
+            return Ok(copied);
+        }
+        self.decoder.trait_recv(buf).await
+    }
+}
+
+/// A read half that decodes UDP route headers and validates every datagram
+/// against the flow it was established with. `flow_id` is fixed and
+/// `upstream` is the route the flow was bound to (`None` for echo flows) —
+/// there is no not-yet-established state.
+struct FlowRecv<Read> {
     inner: Read,
     header_crypto: tokio_chacha20::config::Config,
     time_validator: std::sync::Arc<ae::anti_replay::TimeValidator>,
-    expected: Option<(UdpFlowId, Option<UpstreamAddr>)>,
-    first_payload: Option<Vec<u8>>,
+    flow_id: UdpFlowId,
+    upstream: Option<UpstreamAddr>,
     packet: Vec<u8>,
 }
-impl<Read> RouteDecodingRecv<Read>
+impl<Read> FlowRecv<Read>
 where
     Read: UdpRecv,
 {
@@ -381,65 +526,44 @@ where
         inner: Read,
         header_crypto: tokio_chacha20::config::Config,
         time_validator: std::sync::Arc<ae::anti_replay::TimeValidator>,
+        flow_id: UdpFlowId,
+        upstream: Option<UpstreamAddr>,
     ) -> Self {
         Self {
             inner,
             header_crypto,
             time_validator,
-            expected: None,
-            first_payload: None,
+            flow_id,
+            upstream,
             packet: vec![0; PACKET_BUFFER_LENGTH],
         }
     }
-    async fn prime(&mut self) -> Result<Option<UpstreamAddr>, AnyError> {
-        let (route, payload) = self.recv_decoded().await?;
-        let UdpRequestRoute::Routed { flow_id, upstream } = route else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "UDP mux flow used compact form before establishing its route",
-            )
-            .into());
-        };
-        self.expected = Some((flow_id, upstream.clone()));
-        self.first_payload = Some(payload);
-        Ok(upstream)
-    }
-    async fn recv_decoded(&mut self) -> Result<(UdpRequestRoute, Vec<u8>), AnyError> {
+    async fn recv_decoded(&mut self) -> Result<Vec<u8>, AnyError> {
         let n = self.inner.trait_recv(&mut self.packet).await?;
         let mut cursor = io::Cursor::new(&self.packet[..n]);
         let route = decode_request_route(&mut cursor, &self.header_crypto, &self.time_validator)?;
-        let payload = self.packet[usize::try_from(cursor.position()).unwrap()..n].to_vec();
-        Ok((route, payload))
+        let mismatched = match route {
+            UdpRequestRoute::Compact { flow_id } => flow_id != self.flow_id,
+            UdpRequestRoute::Routed { flow_id, upstream } => {
+                flow_id != self.flow_id || upstream != self.upstream
+            }
+        };
+        if mismatched {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "UDP mux flow changed its flow ID or upstream route",
+            )
+            .into());
+        }
+        Ok(self.packet[usize::try_from(cursor.position()).unwrap()..n].to_vec())
     }
 }
-impl<Read> UdpRecv for RouteDecodingRecv<Read>
+impl<Read> UdpRecv for FlowRecv<Read>
 where
     Read: UdpRecv + Send,
 {
     async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
-        let payload = if let Some(payload) = self.first_payload.take() {
-            payload
-        } else {
-            let (route, payload) = self.recv_decoded().await?;
-            let mismatched = match (&self.expected, route) {
-                (Some((expected_flow_id, _)), UdpRequestRoute::Compact { flow_id }) => {
-                    flow_id != *expected_flow_id
-                }
-                (
-                    Some((expected_flow_id, expected_upstream)),
-                    UdpRequestRoute::Routed { flow_id, upstream },
-                ) => flow_id != *expected_flow_id || upstream != *expected_upstream,
-                (None, _) => true,
-            };
-            if mismatched {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "UDP mux flow changed its flow ID or upstream route",
-                )
-                .into());
-            }
-            payload
-        };
+        let payload = self.recv_decoded().await?;
         let copied = payload.len().min(buf.len());
         buf[..copied].copy_from_slice(&payload[..copied]);
         Ok(copied)
@@ -565,6 +689,60 @@ mod tests {
         )
         .unwrap();
         packet
+    }
+
+    /// A valid routed request with an upstream, i.e. a relay flow.
+    fn routed_relay_packet() -> Vec<u8> {
+        let mut packet = Vec::new();
+        UdpFlowId::from_bytes([8; UDP_FLOW_ID_LEN]).write_routed(&mut packet);
+        write_header(
+            &mut packet,
+            &RouteRequest::<crate::proto::addr::RouteAddr> {
+                upstream: Some(crate::proto::addr::RouteAddr::udp(
+                    "127.0.0.1:9".parse().unwrap(),
+                )),
+            },
+            *crypto().key(),
+        )
+        .unwrap();
+        packet
+    }
+
+    /// The establishing datagram's route decides the flow kind: no upstream
+    /// becomes an echo flow, a routed upstream becomes a relay flow bound to
+    /// that upstream.
+    #[tokio::test]
+    async fn establishment_classifies_echo_and_relay_flows() {
+        let handler = handler();
+        let echo = handler
+            .establish_tunnel(
+                StallingRecv {
+                    packet: Some(routed_echo_packet()),
+                },
+                Duration::from_millis(50),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(echo, EstablishedTunnel::Echo(_)));
+
+        let relay = handler
+            .establish_tunnel(
+                StallingRecv {
+                    packet: Some(routed_relay_packet()),
+                },
+                Duration::from_millis(50),
+            )
+            .await
+            .unwrap();
+        match relay {
+            EstablishedTunnel::Relay(flow) => {
+                assert_eq!(
+                    flow.upstream.0,
+                    crate::proto::addr::RouteAddr::udp("127.0.0.1:9".parse().unwrap())
+                );
+            }
+            _ => panic!("expected a relay flow"),
+        }
     }
 
     fn assert_timed_out(result: Result<(), UdpProxyError>, expected: &str) {
