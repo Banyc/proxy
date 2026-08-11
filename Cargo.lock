@@ -636,6 +636,7 @@ dependencies = [
 [[package]]
 name = "dfsql"
 version = "0.18.0"
+source = "git+https://github.com/Banyc/dfsql?tag=v0.18.0#b5dd0e3b3ab07b296c8fe2cd6b38ccdff0c546cd"
 dependencies = [
  "regex",
  "thiserror 2.0.20",

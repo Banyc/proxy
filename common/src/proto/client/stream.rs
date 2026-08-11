@@ -1,5 +1,4 @@
 use crate::{
-    error::AnyError,
     header::{
         codec::{CodecError, timed_read_header_async, timed_write_header_async},
         preamble::{self, PreambleError},
@@ -201,11 +200,17 @@ impl ProbeRtt for StreamTracer {
     fn probe_rtt(
         &self,
         chain: &ConnChain,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Duration, AnyError>> + Send>>
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::route::ProbeOutcome> + Send>>
     {
         let stream_context = self.stream_context.clone();
         let chain: Vec<ConnConfig> = chain.to_vec();
-        Box::pin(async move { probe_rtt(&chain, &stream_context).await.map_err(Into::into) })
+        Box::pin(async move {
+            crate::route::ProbeOutcome {
+                rtt: probe_rtt(&chain, &stream_context).await.map_err(Into::into),
+                // The stream probe has no teardown epilog to observe.
+                epilog: None,
+            }
+        })
     }
     fn recycle(
         &self,

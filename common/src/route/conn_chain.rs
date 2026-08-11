@@ -232,22 +232,24 @@ impl GaugedConnChain {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::route::ProbeOutcome;
     use std::{
         pin::Pin,
         sync::atomic::{AtomicUsize, Ordering},
     };
-
-    use crate::error::AnyError;
 
     struct CountingTracer(Arc<AtomicUsize>);
     impl ProbeRtt for CountingTracer {
         fn probe_rtt(
             &self,
             _chain: &ConnChain,
-        ) -> Pin<Box<dyn Future<Output = Result<Duration, AnyError>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>> {
             Box::pin(async move {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                Ok(Duration::from_millis(1))
+                ProbeOutcome {
+                    rtt: Ok(Duration::from_millis(1)),
+                    epilog: None,
+                }
             })
         }
     }
@@ -291,7 +293,7 @@ mod tests {
         fn probe_rtt(
             &self,
             _chain: &ConnChain,
-        ) -> Pin<Box<dyn Future<Output = Result<Duration, AnyError>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>> {
             Box::pin(async move {
                 panic!("synthetic probe panic");
             })

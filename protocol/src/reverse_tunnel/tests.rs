@@ -582,7 +582,7 @@ async fn rtp_reverse_tunnel_probe_closes_the_flow_promptly() {
     scope
         .run(async {
             let mut pkt_buf = BytesMut::with_capacity(PACKET_BUFFER_LENGTH);
-            let (rtt, mut flow_end) = tokio::time::timeout(
+            let (rtt, probe_epilog) = tokio::time::timeout(
                 Duration::from_secs(30),
                 probe_rtt(&mut pkt_buf, &chain, &runtime.udp),
             )
@@ -591,14 +591,21 @@ async fn rtp_reverse_tunnel_probe_closes_the_flow_promptly() {
             .unwrap();
             assert!(rtt > Duration::ZERO);
             assert!(rtt < Duration::from_secs(1));
+            // The teardown epilog is owned by the caller: spawn it into a
+            // scoped JoinSet, as `probe_task` does in production, so the
+            // flow's end is observed and reported.
+            let mut epilogs = tokio::task::JoinSet::new();
+            if let Some(fut) = probe_epilog.fut {
+                epilogs.spawn(fut);
+            }
+            let mut flow_end = probe_epilog.end;
 
             // Await the actual flow termination: the completion signal must
             // report a clean EOF well under the safety timeout.
             let end = tokio::time::timeout(Duration::from_secs(3), async {
                 loop {
-                    if let value @ (ProbeFlowEnd::Eof | ProbeFlowEnd::RetainedUntilTimeout) =
-                        *flow_end.borrow_and_update()
-                    {
+                    let value = *flow_end.borrow_and_update();
+                    if value != ProbeFlowEnd::Pending {
                         return value;
                     }
                     flow_end.changed().await.unwrap();

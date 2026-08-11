@@ -46,11 +46,26 @@ impl fmt::Display for DisplayChain<'_> {
     }
 }
 
+/// The outcome of one probe round: the RTT sample, plus any teardown
+/// epilog produced by the probe that must be owned and reaped by the
+/// caller — `probe_task`, through its function-scoped `JoinSet`.
+pub struct ProbeOutcome {
+    /// The round's RTT sample: `Ok` when a response was in hand, `Err`
+    /// when the probe failed.
+    pub rtt: Result<Duration, AnyError>,
+    /// The teardown epilog future to spawn into the caller's `JoinSet`, if
+    /// the probe flow needs observing after the round (e.g. awaiting the
+    /// flow's end after the write-half shutdown). `None` when there is
+    /// nothing to observe. The caller reaps it with `.unwrap()` so a
+    /// panicked epilog re-raises instead of being swallowed.
+    pub epilog: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+}
+
 pub trait ProbeRtt {
     fn probe_rtt(
         &self,
         chain: &ConnChain,
-    ) -> Pin<Box<dyn Future<Output = Result<Duration, AnyError>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>>;
     /// The probe kind for prober logs, e.g. `"udp"` or `"stream"`.
     fn probe_kind(&self) -> &'static str {
         "unknown"
@@ -82,18 +97,39 @@ pub(crate) async fn probe_task(
     let mut pacer = RecyclePacer::new(std::time::Instant::now());
     let mut reoptimize_pacer = RecyclePacer::new(std::time::Instant::now());
     let kind = tracer.probe_kind();
+    // Each probe round's teardown epilog is owned here, in this task's
+    // scope: the future is spawned into this JoinSet instead of escaping
+    // as a detached `tokio::spawn`. The JoinSet aborts any outstanding
+    // epilog when this task ends, and completed epilogs are reaped below
+    // with `.unwrap()`, so a panicked epilog re-raises out of `probe_task`
+    // (surfacing at the commit-time JoinSet reap) rather than being
+    // silently swallowed by the runtime.
+    let mut epilogs = tokio::task::JoinSet::new();
     while !cancellation.is_cancelled() {
         let sample = match tokio::time::timeout(RTT_TIMEOUT, tracer.probe_rtt(&chain)).await {
-            Ok(Ok(rtt)) => Some(rtt),
-            Ok(Err(e)) => {
-                trace!(kind, "probe error: {e:?}");
-                None
+            Ok(outcome) => {
+                if let Some(epilog) = outcome.epilog {
+                    epilogs.spawn(epilog);
+                }
+                match outcome.rtt {
+                    Ok(rtt) => Some(rtt),
+                    Err(e) => {
+                        trace!(kind, "probe error: {e:?}");
+                        None
+                    }
+                }
             }
             Err(_) => {
                 trace!(kind, "probe timeout");
                 None
             }
         };
+        // Reap epilogs that finished while this round ran; a panicked
+        // epilog re-raises here, cascading out of probe_task. `try_join_next`
+        // never blocks, so the probe cadence is undisturbed.
+        while let Some(joined) = epilogs.try_join_next() {
+            joined.unwrap();
+        }
         if cancellation.is_cancelled() {
             break;
         }
@@ -173,10 +209,13 @@ mod tests {
         fn probe_rtt(
             &self,
             _chain: &ConnChain,
-        ) -> Pin<Box<dyn Future<Output = Result<Duration, AnyError>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>> {
             Box::pin(async move {
                 self.calls.fetch_add(1, Ordering::SeqCst);
-                Ok(Duration::from_millis(10))
+                ProbeOutcome {
+                    rtt: Ok(Duration::from_millis(10)),
+                    epilog: None,
+                }
             })
         }
     }

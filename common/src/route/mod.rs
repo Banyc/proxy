@@ -11,7 +11,7 @@ mod rtt_stats;
 pub use conn::*;
 pub use conn_chain::*;
 pub use conn_selector::*;
-pub use prober::{DisplayChain, ProbeRtt};
+pub use prober::{DisplayChain, ProbeOutcome, ProbeRtt};
 pub use route_table::*;
 
 /// Probe futures collected during route/selector preparation.

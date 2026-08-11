@@ -676,9 +676,8 @@ mod tests {
     /// first assert the flow is still retained and then await its end.
     async fn await_flow_end(end: &mut watch::Receiver<ProbeFlowEnd>) -> ProbeFlowEnd {
         loop {
-            if let value @ (ProbeFlowEnd::Eof | ProbeFlowEnd::RetainedUntilTimeout) =
-                *end.borrow_and_update()
-            {
+            let value = *end.borrow_and_update();
+            if value != ProbeFlowEnd::Pending {
                 return value;
             }
             end.changed().await.expect("flow-end channel closed");
@@ -705,7 +704,7 @@ mod tests {
         scope
             .run(async {
                 let mut packet_buf = BytesMut::with_capacity(PACKET_BUFFER_LENGTH);
-                let (rtt, mut flow_end) = tokio::time::timeout(
+                let (rtt, probe_epilog) = tokio::time::timeout(
                     Duration::from_secs(30),
                     probe_rtt(&mut packet_buf, &proxies, &runtime.udp),
                 )
@@ -714,10 +713,19 @@ mod tests {
                 .unwrap();
                 assert!(rtt > Duration::ZERO);
                 assert!(rtt < Duration::from_secs(1));
+                // The teardown epilog is returned unspawned so the caller
+                // owns it: spawn it into a scoped JoinSet, exactly as
+                // `probe_task` does in production, so the flow's end is
+                // observed and reported.
+                let mut epilogs = tokio::task::JoinSet::new();
+                if let Some(fut) = probe_epilog.fut {
+                    epilogs.spawn(fut);
+                }
+                let mut flow_end = probe_epilog.end;
 
                 // The probe's epilog must have torn the flow down: the
                 // completion signal reports a clean EOF well under the
-                // safety timeout, not the retained-until-timeout end.
+                // safety timeout, not the timed-out end.
                 let end =
                     tokio::time::timeout(Duration::from_secs(3), await_flow_end(&mut flow_end))
                         .await
@@ -752,13 +760,20 @@ mod tests {
         scope
             .run(async {
                 let mut packet_buf = BytesMut::with_capacity(PACKET_BUFFER_LENGTH);
-                let (_rtt, mut flow_end) = tokio::time::timeout(
+                let (_rtt, probe_epilog) = tokio::time::timeout(
                     Duration::from_secs(30),
                     probe_rtt(&mut packet_buf, &proxies, &runtime.udp),
                 )
                 .await
                 .expect("timed out probing the mux proxy chain")
                 .unwrap();
+                // Spawn the teardown epilog into a scoped JoinSet, exactly
+                // as `probe_task` does in production.
+                let mut epilogs = tokio::task::JoinSet::new();
+                if let Some(fut) = probe_epilog.fut {
+                    epilogs.spawn(fut);
+                }
+                let mut flow_end = probe_epilog.end;
                 let end = tokio::time::timeout(Duration::from_secs(30), async {
                     await_flow_end(&mut flow_end).await
                 })
@@ -804,13 +819,21 @@ mod tests {
             .run(async {
                 let started = std::time::Instant::now();
                 let mut packet_buf = BytesMut::with_capacity(PACKET_BUFFER_LENGTH);
-                let (rtt, mut flow_end) = tokio::time::timeout(
+                let (rtt, probe_epilog) = tokio::time::timeout(
                     Duration::from_secs(30),
                     probe_rtt(&mut packet_buf, &proxies, &runtime.udp),
                 )
                 .await
                 .expect("timed out probing the mixed mux/raw-UDP chain")
                 .unwrap();
+                // The teardown epilog is owned by the caller: spawn it into
+                // a scoped JoinSet, as `probe_task` does in production, so
+                // the retained flow's end is observed and reported.
+                let mut epilogs = tokio::task::JoinSet::new();
+                if let Some(fut) = probe_epilog.fut {
+                    epilogs.spawn(fut);
+                }
+                let mut flow_end = probe_epilog.end;
                 // The response is in hand promptly...
                 assert!(rtt < Duration::from_secs(2));
                 // ...but the flow must be retained: no completion within a
@@ -827,16 +850,17 @@ mod tests {
                 // observed at the probe's read half is transport-dependent:
                 // the tcpmux drop cascade delivers a late EOF, while the
                 // rtp_mux drop path does not close the client lane within
-                // the teardown bound, so the completion reports the retained
-                // end. Both prove the flow was retained and then released by
-                // the safety timeout rather than closed promptly.
+                // the teardown bound, so the scoped epilog reports the
+                // timed-out end. Both prove the flow was retained and then
+                // released by the safety timeout rather than closed
+                // promptly.
                 let end = tokio::time::timeout(Duration::from_secs(20), async {
                     await_flow_end(&mut flow_end).await
                 })
                 .await
                 .expect("the retained flow must terminate by the safety timeout");
                 assert!(
-                    matches!(end, ProbeFlowEnd::Eof | ProbeFlowEnd::RetainedUntilTimeout),
+                    matches!(end, ProbeFlowEnd::Eof | ProbeFlowEnd::TimedOut),
                     "the retained flow must end via the safety timeout, got {end:?}"
                 );
                 assert!(

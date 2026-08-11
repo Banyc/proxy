@@ -403,10 +403,7 @@ mod tests {
                 &self,
                 _chain: &crate::route::ConnChain,
             ) -> std::pin::Pin<
-                Box<
-                    dyn std::future::Future<Output = Result<Duration, crate::error::AnyError>>
-                        + Send,
-                >,
+                Box<dyn std::future::Future<Output = crate::route::ProbeOutcome> + Send>,
             > {
                 unreachable!()
             }

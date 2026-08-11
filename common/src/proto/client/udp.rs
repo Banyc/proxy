@@ -499,44 +499,63 @@ impl ProbeRtt for UdpTracer {
     fn probe_rtt(
         &self,
         chain: &ConnChain,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Duration, AnyError>> + Send>>
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::route::ProbeOutcome> + Send>>
     {
         let pool = self.pool.clone();
         let context = self.context.clone();
         let chain: Vec<crate::route::ConnConfig> = chain.to_vec();
         Box::pin(async move {
             let mut pkt_buf = pool.take();
-            let res = probe_rtt(&mut pkt_buf, &chain, &context)
-                .await
-                .map(|(rtt, _end)| rtt)
-                .map_err(|e| e.into());
+            let outcome = match probe_rtt(&mut pkt_buf, &chain, &context).await {
+                Ok((rtt, epilog)) => crate::route::ProbeOutcome {
+                    rtt: Ok(rtt),
+                    // The teardown epilog is handed to the caller so it is
+                    // owned and reaped by `probe_task`'s scoped JoinSet
+                    // instead of escaping as a detached task.
+                    epilog: epilog.fut,
+                },
+                Err(error) => crate::route::ProbeOutcome {
+                    rtt: Err(error.into()),
+                    epilog: None,
+                },
+            };
             pool.put(pkt_buf);
-            res
+            outcome
         })
     }
 }
 /// The probe flow's end state, reported through the completion signal
 /// returned with [`probe_rtt`]. The flow has actually terminated once the
-/// receiver leaves the pending state.
+/// receiver leaves the pending state. [`ProbeFlowEnd::Eof`] and
+/// [`ProbeFlowEnd::TimedOut`] are only reported by the scoped epilog task
+/// after it observed the teardown; the other terminal states are facts
+/// about the probe itself, reported without any observation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProbeFlowEnd {
     /// The flow is still being torn down; the receiver changes once it
     /// terminates.
     Pending,
-    /// The peer closed the flow in response to the probe's write-half
-    /// shutdown: a clean EOF was observed at the datagram boundary, so the
-    /// epilog propagated end to end.
+    /// No flow was ever opened (an empty chain): there is nothing to tear
+    /// down, so no teardown was observed.
+    NoFlow,
+    /// The write-half shutdown reported [`ShutdownOutcome::Unsupported`]
+    /// (a raw-UDP hop): no EOF can arrive on the probe's read half and the
+    /// flow is retained until its safety timeout, so there is nothing for
+    /// an epilog to observe.
+    ShutdownUnsupported,
+    /// The scoped epilog task observed a clean EOF at the datagram
+    /// boundary: the peer closed the flow in response to the probe's
+    /// write-half shutdown, so the epilog propagated end to end.
     Eof,
-    /// The epilog could not close the flow — its shutdown outcome was
-    /// [`ShutdownOutcome::Unsupported`] (a raw-UDP hop) or the peer never
-    /// closed — so the flow was retained until its safety timeout.
-    RetainedUntilTimeout,
+    /// The scoped epilog task waited out [`FLOW_END_TIMEOUT`] without
+    /// observing the flow's end: no EOF arrived, so the flow was retained
+    /// until its safety timeout.
+    TimedOut,
 }
 
-/// How long the probe's teardown task waits for the flow's EOF before
-/// reporting the retained-until-timeout end: the flow's safety timeout
-/// (which aborts a retained relay after roughly 10s of inactivity) plus
-/// margin.
+/// How long the probe's teardown epilog waits for the flow's EOF before
+/// reporting [`ProbeFlowEnd::TimedOut`]: the flow's safety timeout (which
+/// aborts a retained relay after roughly 10s of inactivity) plus margin.
 const FLOW_END_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Read until the peer's EOF, returning `true` on a clean end at a
@@ -556,26 +575,53 @@ async fn await_probe_flow_end(read: &mut UdpConnectionRead) -> bool {
     }
 }
 
+/// The probe flow's teardown epilog: once the response is in hand the
+/// probe shuts down its write half, and the epilog future observes the
+/// flow's actual end — a clean EOF or a wait-out — and reports it through
+/// the completion signal. It is returned unspawned so the caller owns it:
+/// `probe_task` spawns it into its function-scoped `JoinSet`, which
+/// reaps it (aborting outstanding epilogs when the task ends) and re-raises
+/// panics on join, instead of escaping as a detached `tokio::spawn` that
+/// nobody joins.
+pub struct ProbeEpilog {
+    /// Completion signal. Tests await it to observe flow termination
+    /// deterministically; production probe loops ignore it.
+    pub end: watch::Receiver<ProbeFlowEnd>,
+    /// The teardown observation future, present only when the write-half
+    /// shutdown propagated and there is an end to observe. `None` means
+    /// the terminal state was already reported ([`ProbeFlowEnd::NoFlow`]
+    /// or [`ProbeFlowEnd::ShutdownUnsupported`]) and there is nothing to
+    /// run.
+    pub fut: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>>,
+}
+
 /// Send one echo probe over the proxy chain and read its response.
 ///
-/// Returns the round-trip time together with a completion signal that
-/// reports how the probe's flow actually terminated: after the response is
-/// in hand the probe shuts down its write half (the explicit epilog), and
-/// the signal resolves once the flow has fully torn down — a clean EOF
-/// when the epilog propagated, or the retained-until-timeout end when a
-/// raw-UDP hop could not propagate it. Tests await the signal to observe
-/// flow termination deterministically; production probe loops ignore it.
+/// Returns the round-trip time together with the probe's teardown epilog:
+/// after the response is in hand the probe shuts down its write half (the
+/// explicit epilog), and the epilog future observes how the flow actually
+/// terminated — a clean EOF when the shutdown propagated, or a wait-out
+/// when the peer never closed. The caller must spawn the epilog future
+/// (into `probe_task`'s scoped `JoinSet`) so it does not escape scoped
+/// ownership.
 pub async fn probe_rtt(
     pkt_buf: &mut BytesMut,
     proxies: &ConnChain,
     context: &UdpRuntime,
-) -> Result<(Duration, watch::Receiver<ProbeFlowEnd>), TraceError> {
+) -> Result<(Duration, ProbeEpilog), TraceError> {
     if proxies.is_empty() {
-        // No flow was ever opened; report the retained end immediately so
-        // an awaited completion never hangs.
+        // No flow was ever opened; report the no-flow end immediately so
+        // an awaited completion never hangs. There is no teardown to
+        // observe, so no epilog future.
         let (end_tx, end_rx) = watch::channel(ProbeFlowEnd::Pending);
-        let _ = end_tx.send_replace(ProbeFlowEnd::RetainedUntilTimeout);
-        return Ok((Duration::from_secs(0), end_rx));
+        let _ = end_tx.send_replace(ProbeFlowEnd::NoFlow);
+        return Ok((
+            Duration::from_secs(0),
+            ProbeEpilog {
+                end: end_rx,
+                fut: None,
+            },
+        ));
     }
     let proxy_addr = &proxies[0].address;
     let upstream = context
@@ -662,16 +708,20 @@ pub async fn probe_rtt(
         .map_err(io::Error::other)?;
     counter!("udp.traces").increment(1);
     // The probe flow's termination, reported through the completion signal.
-    // The epilog has already returned, so the flow's end is observed in a
-    // background task that keeps the read half and awaits the peer's close.
+    // The epilog has already returned, so the flow's end is observed by
+    // the epilog future, which keeps the read half and awaits the peer's
+    // close. The future is returned unspawned so the caller owns it.
     let (end_tx, end_rx) = watch::channel(ProbeFlowEnd::Pending);
-    match outcome {
+    let fut: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> = match outcome
+    {
         ShutdownOutcome::Propagated => {
-            // The epilog signalled EOF to the peer; the flow terminates when
-            // the peer's response writer closes, observed as a clean EOF on
-            // the probe's read half. Await it in the background so probe_rtt
-            // still returns promptly, bounded by the flow's safety timeout.
-            tokio::spawn(async move {
+            // The epilog signalled EOF to the peer; the flow terminates
+            // when the peer's response writer closes, observed as a
+            // clean EOF on the probe's read half. The caller spawns
+            // this future into its scoped JoinSet so the teardown is
+            // owned and reaped; Eof and TimedOut are only reported
+            // from here, after the epilog observes them.
+            Some(Box::pin(async move {
                 let end = match tokio::time::timeout(
                     FLOW_END_TIMEOUT,
                     await_probe_flow_end(&mut upstream_read),
@@ -679,19 +729,22 @@ pub async fn probe_rtt(
                 .await
                 {
                     Ok(true) => ProbeFlowEnd::Eof,
-                    Ok(false) | Err(_) => ProbeFlowEnd::RetainedUntilTimeout,
+                    Ok(false) | Err(_) => ProbeFlowEnd::TimedOut,
                 };
                 let _ = end_tx.send_replace(end);
-            });
+            }))
         }
         ShutdownOutcome::Unsupported => {
             // A raw-UDP hop cannot signal EOF: no EOF can arrive on the
-            // probe's read half, and the flow is retained until its safety
-            // timeout. Report the retained end immediately.
-            let _ = end_tx.send_replace(ProbeFlowEnd::RetainedUntilTimeout);
+            // probe's read half, and the flow is retained until its
+            // safety timeout. Report the unsupported-shutdown end
+            // immediately; there is no end to observe, so no epilog
+            // future.
+            let _ = end_tx.send_replace(ProbeFlowEnd::ShutdownUnsupported);
+            None
         }
-    }
-    Ok((end.duration_since(start), end_rx))
+    };
+    Ok((end.duration_since(start), ProbeEpilog { end: end_rx, fut }))
 }
 #[derive(Debug, Error)]
 pub enum TraceError {
