@@ -779,7 +779,7 @@ mod tests {
             Ok(0)
         }
         async fn trait_shutdown(&mut self) -> Result<ShutdownOutcome, AnyError> {
-            Err(io::Error::new(io::ErrorKind::Other, "transport broke").into())
+            Err(io::Error::other("transport broke").into())
         }
     }
 
