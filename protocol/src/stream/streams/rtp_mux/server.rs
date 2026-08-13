@@ -76,25 +76,30 @@ where
                 Err(error) => log_rejection("rtp_mux_session", error),
             }
         });
-        let serving = inner.serve(mux_session_spawner, move |stream| {
-            let handler = handler_for_stream.current();
-            let session_spawner = session_spawner.clone();
-            match session_spawner.try_spawn(async move {
-                let addr: SocketAddrPair = stream.addr().into();
-                dispatch_mux_flow(
-                    stream,
-                    addr,
-                    handler,
-                    |stream, _addr| ProxyRtpMuxStream(stream),
-                    "stream.rtp_mux.udp.flows",
-                )
-                .await;
-                Ok(())
-            }) {
-                Ok(()) => {}
-                Err(error) => log_rejection("rtp_mux_stream", error),
-            }
-        });
+        let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+        let serving = inner.serve_with_shutdown(
+            mux_session_spawner,
+            move |stream| {
+                let handler = handler_for_stream.current();
+                let session_spawner = session_spawner.clone();
+                match session_spawner.try_spawn(async move {
+                    let addr: SocketAddrPair = stream.addr().into();
+                    dispatch_mux_flow(
+                        stream,
+                        addr,
+                        handler,
+                        |stream, _addr| ProxyRtpMuxStream(stream),
+                        "stream.rtp_mux.udp.flows",
+                    )
+                    .await;
+                    Ok(())
+                }) {
+                    Ok(()) => {}
+                    Err(error) => log_rejection("rtp_mux_stream", error),
+                }
+            },
+            shutdown_rx,
+        );
         tokio::pin!(serving);
         loop {
             tokio::select! {
@@ -105,7 +110,13 @@ where
                             reloadable.replace(new_handler);
                         }
                         Ok(None) => {}
-                        Err(()) => return Ok(()),
+                        Err(()) => {
+                            // The server was removed: signal shutdown and keep
+                            // polling the serving future until every nested
+                            // rtp_mux scope has been reaped.
+                            shutdown.send_replace(true);
+                            return serving.await.map_err(Into::into);
+                        }
                     }
                 }
             }

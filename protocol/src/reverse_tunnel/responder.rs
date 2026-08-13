@@ -336,9 +336,10 @@ impl loading::Serve for RtpReverseTunnelResponder {
                 }
             }
         });
-        let serving = self
-            .server
-            .serve_sessions(rtp_session_spawner, move |session| {
+        let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+        let serving = self.server.serve_sessions_with_shutdown(
+            rtp_session_spawner,
+            move |session| {
                 let handler = handler_for_session.read().unwrap().clone();
                 let session_spawner = session_spawner.clone();
                 if let Err(error) = session_spawner.try_spawn(async move {
@@ -349,7 +350,9 @@ impl loading::Serve for RtpReverseTunnelResponder {
                 }) {
                     log_rejection("revtun_rtp_session", error);
                 }
-            });
+            },
+            shutdown_rx,
+        );
         tokio::pin!(serving);
         loop {
             tokio::select! {
@@ -360,7 +363,13 @@ impl loading::Serve for RtpReverseTunnelResponder {
                             *handler.write().unwrap() = new_handler;
                         }
                         Ok(None) => {}
-                        Err(()) => return Ok(()),
+                        Err(()) => {
+                            // The responder was removed: signal shutdown and
+                            // keep polling the serving future until every
+                            // nested rtp_mux scope has been reaped.
+                            shutdown.send_replace(true);
+                            return serving.await.map_err(Into::into);
+                        }
                     }
                 }
             }
