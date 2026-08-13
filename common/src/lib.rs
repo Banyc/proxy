@@ -38,5 +38,6 @@ pub mod serve_loop;
 pub mod session;
 pub mod stream;
 pub mod suspend;
+pub mod task_scope;
 pub mod ttl_cell;
 pub mod udp;

@@ -184,6 +184,10 @@ pub(crate) async fn probe_task(
             () = cancellation.cancelled() => {}
         }
     }
+    // Outstanding epilogs are aborted and reaped before cancellation
+    // returns: a completed epilog that beat the cancellation still surfaces
+    // (its panic cascades) instead of being swallowed by the JoinSet drop.
+    crate::task_scope::abort_and_reap(&mut epilogs).await;
 }
 
 #[cfg(test)]
@@ -250,5 +254,60 @@ mod tests {
         while let Some(res) = tasks.join_next().await {
             res.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn cancellation_reaps_the_probe_epilog_before_returning() {
+        use crate::route::ConnConfig;
+
+        struct EpilogTracer {
+            started: Arc<tokio::sync::Notify>,
+        }
+        impl ProbeRtt for EpilogTracer {
+            fn probe_rtt(
+                &self,
+                _chain: &ConnChain,
+            ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>> {
+                let started = Arc::clone(&self.started);
+                Box::pin(async move {
+                    ProbeOutcome {
+                        rtt: Ok(Duration::from_millis(10)),
+                        // A parked epilog: it starts, then never finishes on
+                        // its own, so only the task-scope epilog can reap it.
+                        epilog: Some(Box::pin(async move {
+                            started.notify_waiters();
+                            std::future::pending::<()>().await;
+                        })),
+                    }
+                })
+            }
+        }
+
+        let epilog_started = Arc::new(tokio::sync::Notify::new());
+        let chain: Arc<ConnChain> = Arc::from(Vec::<ConnConfig>::new());
+        let rtt_stats = Arc::new(RwLock::new(RttStats::default()));
+        let loss = Arc::new(RwLock::new(None));
+        let cancellation = CancellationToken::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(probe_task(
+            Arc::new(EpilogTracer {
+                started: Arc::clone(&epilog_started),
+            }),
+            chain,
+            rtt_stats,
+            loss,
+            cancellation.clone(),
+        ));
+        tokio::time::timeout(Duration::from_secs(5), epilog_started.notified())
+            .await
+            .expect("the probe epilog was never spawned");
+        cancellation.cancel();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(res) = tasks.join_next().await {
+                res.unwrap();
+            }
+        })
+        .await
+        .expect("probe_task must abort and reap its outstanding epilog before returning");
     }
 }

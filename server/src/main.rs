@@ -105,9 +105,9 @@ async fn main() -> AnyResult {
     let config_reader = MultiFileConfigReader::new(args.config_file_paths.into());
     let serving = serve(config_reader, serve_context);
     tokio::pin!(serving);
-    loop {
+    let root_outcome: AnyResult = loop {
         tokio::select! {
-            res = &mut serving => return res.map_err(Into::into),
+            res = &mut serving => break res.map_err(Into::into),
             Some(res) = process_tasks.join_next() => {
                 // Root-process actors are expected to run for the process's
                 // entire lifetime; any exit — clean completion, failure,
@@ -119,9 +119,27 @@ async fn main() -> AnyResult {
                 // without the dead actor.
                 if let Err(error) = handle_root_task_exit(res) {
                     error!(%error, "Root process task exited; shutting down");
-                    return Err(error.into());
+                    break Err(error.into());
                 }
             }
         }
-    }
+    };
+    // Process-root epilog: abort and reap every remaining process task,
+    // converting each completed exit through the root-task handler, logging
+    // it, and replacing the outcome only while it is still `Ok` — the
+    // already-selected root outcome (serve failure or a fatal process-task
+    // exit) wins over later ordinary children.
+    let mut outcome = root_outcome;
+    common::task_scope::abort_and_reap_with(&mut process_tasks, |exit| {
+        if let Err(error) = handle_root_task_exit(Ok(exit)) {
+            error!(%error, "Root process task exited during shutdown");
+            // Replace the outcome only while it is still `Ok`: the
+            // already-selected root outcome wins over later children.
+            if outcome.is_ok() {
+                outcome = Err(error.into());
+            }
+        }
+    })
+    .await;
+    outcome
 }

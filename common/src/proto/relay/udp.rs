@@ -390,10 +390,37 @@ where
             Ok(())
         }
     });
+    let mut outcome: Result<(), CopyBiError> = Ok(());
     loop {
         trace!("Waiting for packet");
-        tokio::select! { res = io_copy_tasks.join_next() => { let Some(res) = res else { break; }; let res = res.unwrap(); res?; } _ = activity_check.tick() => { trace!("Checking if flow is still alive"); let now = std::time::Instant::now(); let last_uplink_packet = *last_uplink_packet.read().unwrap(); let last_downlink_packet = *last_downlink_packet.read().unwrap(); if now.duration_since(last_uplink_packet) > UDP_FLOW_TIMEOUT && now.duration_since(last_downlink_packet) > UDP_FLOW_TIMEOUT { trace!(?flow, "Flow timed out"); io_copy_tasks.abort_all(); break; } } }
+        tokio::select! {
+            res = io_copy_tasks.join_next() => {
+                let Some(res) = res else { break };
+                match res.unwrap() {
+                    Ok(()) => {}
+                    Err(error) => {
+                        outcome = Err(error);
+                        break;
+                    }
+                }
+            }
+            _ = activity_check.tick() => {
+                trace!("Checking if flow is still alive");
+                let now = std::time::Instant::now();
+                let last_uplink_packet = *last_uplink_packet.read().unwrap();
+                let last_downlink_packet = *last_downlink_packet.read().unwrap();
+                if now.duration_since(last_uplink_packet) > UDP_FLOW_TIMEOUT && now.duration_since(last_downlink_packet) > UDP_FLOW_TIMEOUT {
+                    trace!(?flow, "Flow timed out");
+                    break;
+                }
+            }
+        }
     }
+    // Reap whatever is still in flight (the other direction after the first
+    // ended, or both after the timeout): the selected outcome wins, a
+    // completed sibling error is folded in only while the outcome is Ok, and
+    // a completed sibling panic still cascades.
+    crate::task_scope::abort_and_reap_results(&mut io_copy_tasks, outcome).await?;
     let last_packet = std::time::Instant::max(
         *last_downlink_packet.read().unwrap(),
         *last_uplink_packet.read().unwrap(),

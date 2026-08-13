@@ -315,7 +315,7 @@ pub async fn run_mux_connector<R, W, Fut>(
         tokio::select! {
             () = reset_notified.notified() => {
                 openers.clear();
-                mux_spawner = JoinSet::new();
+                reap_mux_sessions(&mut mux_spawner, "reset").await;
             }
             Some(result) = mux_spawner.join_next() => {
                 let (addr, error) = result.unwrap();
@@ -350,6 +350,17 @@ pub async fn run_mux_connector<R, W, Fut>(
             }
         }
     }
+    // Connector shutdown: abort and reap every live mux session so a
+    // completed session error or panic stays observable.
+    reap_mux_sessions(&mut mux_spawner, "connector_shutdown").await;
+}
+
+/// Abort and reap every live mux session, logging each completed session.
+async fn reap_mux_sessions(sessions: &mut JoinSet<(SocketAddr, MuxError)>, epilog: &'static str) {
+    common::task_scope::abort_and_reap_with(sessions, |(addr, error)| {
+        warn!(?error, ?addr, epilog, "MUX session completed during epilog");
+    })
+    .await;
 }
 
 fn convert_open_err(error: mux::StreamOpenError, addr: &SocketAddrPair) -> io::Error {

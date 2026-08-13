@@ -636,7 +636,6 @@ dependencies = [
 [[package]]
 name = "dfsql"
 version = "0.18.0"
-source = "git+https://github.com/Banyc/dfsql?tag=v0.18.0#b5dd0e3b3ab07b296c8fe2cd6b38ccdff0c546cd"
 dependencies = [
  "regex",
  "thiserror 2.0.20",
@@ -1478,6 +1477,7 @@ dependencies = [
 name = "mux"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "getrandom 0.4.3",
  "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
  "tokio",

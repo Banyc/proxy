@@ -154,7 +154,7 @@ where
     let mut config_changed = serve_context.config_changed.0.subscription();
     let mut reload = ServerReloadMachine::new();
 
-    loop {
+    let outcome = loop {
         tokio::select! {
             Some(fut) = session_rx.recv() => {
                 sessions.spawn(fut);
@@ -208,11 +208,31 @@ where
                             error!(?e, "Failed to prepare reload; live config unchanged");
                         }
                     },
-                    Err(e) => return Err(e),
+                    Err(e) => break Err(e),
                 }
             }
         }
+    };
+    // Fatal-outcome epilog: stop admitting sessions, adopt every future that
+    // is still queued, then abort and reap the session and server task sets
+    // with logging so a completed panic is not hidden by a JoinSet drop.
+    session_rx.close();
+    while let Some(fut) = session_rx.recv().await {
+        sessions.spawn(fut);
     }
+    common::task_scope::abort_and_reap_with(&mut sessions, |res| {
+        if let Err(error) = res {
+            error!(?error, "Session task returned an error during shutdown");
+        }
+    })
+    .await;
+    common::task_scope::abort_and_reap_with(&mut server_tasks, |res| {
+        if let Err(error) = res {
+            error!(?error, "Server task returned an error during shutdown");
+        }
+    })
+    .await;
+    outcome
 }
 
 /// The window that collapses bursts of watcher events into one reload.
