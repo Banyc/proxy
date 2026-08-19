@@ -41,7 +41,9 @@ The `tcpmux` and `rtpmux` proxy servers accept both stream and UDP flows over a 
 1: [kind=1 | u16 datagram length | payload]...        # UDP flow (udp_mux framing)
 ```
 
-A `tcpmux://host:port` / `rtpmux://host:port` / `rtpmuxfec://host:port` address therefore works as a hop in a UDP proxy chain: the client dials the mux proxy, opens a UDP-flow substream, and each datagram carries the same routed/compact request framing as any other UDP hop. The proxy server dispatches the flow to its UDP proxy handler, which shares the listener's `header_key`/`payload_key`.
+A `tcpmux://host:port` / `rtpmux://host:port` address therefore works as a hop in a UDP proxy chain: the client dials the mux proxy, opens a UDP-flow substream, and each datagram carries the same routed/compact request framing as any other UDP hop. The proxy server dispatches the flow to its UDP proxy handler, which shares the listener's `header_key`/`payload_key`.
+
+RTP-mux owns a fixed, lane-aware FEC policy: the interactive lane enables FEC by default (with optional interactive tuning), while the bulk lane always remains FEC-free — no proxy-facing switch or protocol alias can override either lane's mode.
 
 ## Protocol
 

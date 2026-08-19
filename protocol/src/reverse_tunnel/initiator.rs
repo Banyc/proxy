@@ -51,7 +51,6 @@ pub struct ReverseTunnelInitiatorHandler {
     pub(crate) stream_proxy: Arc<StreamProxyConnHandler>,
     pub(crate) udp_proxy: Arc<UdpProxyConnHandler>,
     pub(crate) stream_runtime: StreamRuntime,
-    pub(crate) fec: bool,
 }
 impl loading::HandleConn for ReverseTunnelInitiatorHandler {}
 
@@ -145,7 +144,7 @@ async fn run_rtp_initiator(
         let bind: rtp_mux::BindSelector = Arc::new(move |peer| connector_table.bind_addr_for(peer));
         match rtp_mux::connect_bidirectional_session(
             addr,
-            rtp_mux::RtpMuxConnectorConfig::standard(bind, handler.fec),
+            rtp_mux::RtpMuxConnectorConfig::standard(bind),
         )
         .await
         {
@@ -362,7 +361,6 @@ impl ReverseTunnelInitiatorBuilder {
             stream_proxy,
             udp_proxy,
             stream_runtime: self.runtime.stream,
-            fec: self.config.fec,
         })
     }
 }

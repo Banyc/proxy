@@ -119,7 +119,9 @@ header_key = "cHJveHktZXhhbXBsZS1rZXk"
 # Reverse tunnels: the private machine dials out and registers under a name;
 # this public server accepts the registration, and the chain entries above hop
 # through it. Responder and initiator share header_key; the optional payload_key
-# is shared with the chain entry; fec (RTP transport only) matches on both sides.
+# is shared with the chain entry. RTP-mux owns a fixed lane-aware FEC policy:
+# interactive lanes enable FEC by default while bulk lanes remain FEC-free —
+# there is no proxy-facing fec switch.
 
 # Public side (this server) — one responder per transport, no name or destination:
 [[reverse_tunnel.responder]]
@@ -129,7 +131,6 @@ header_key = "cHJveHktZXhhbXBsZS1rZXk"
 [[reverse_tunnel.responder]]
 listen_addr = "rtpmux://0.0.0.0:7100"
 header_key = "cHJveHktZXhhbXBsZS1rZXk"
-fec = false
 
 # Private side (the machine behind NAT) — dials out to the responder above:
 [[reverse_tunnel.initiator]]
@@ -144,4 +145,3 @@ name = "private-b"
 responder_addr = "rtpmux://proxy.example.org:7100"
 header_key = "cHJveHktZXhhbXBsZS1rZXk"
 payload_key = "cHJveHktZXhhbXBsZS1rZXk"
-fec = false

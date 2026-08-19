@@ -12,7 +12,6 @@ pub enum ConcreteStreamType {
     Mptcp,
     Rtp,
     RtpMux,
-    RtpMuxFec,
 }
 impl fmt::Display for ConcreteStreamType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
@@ -27,5 +26,19 @@ impl FromStr for ConcreteStreamType {
             return Err(ParseInternetAddrError);
         };
         Ok(*ty)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rtpmux_is_the_only_rtp_mux_protocol() {
+        assert_eq!(
+            "rtpmux".parse::<ConcreteStreamType>().unwrap(),
+            ConcreteStreamType::RtpMux
+        );
+        assert!("rtpmuxfec".parse::<ConcreteStreamType>().is_err());
     }
 }

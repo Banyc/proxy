@@ -210,36 +210,12 @@ mod tests {
                 proxy_addr
             }
             ConcreteStreamType::RtpMux => {
-                let fec = false;
                 let server = build_rtp_mux_proxy_server(
                     addr.as_ref(),
                     MuxProxyHandler {
                         stream: proxy,
                         udp: None,
                     },
-                    fec,
-                    session_spawner.clone(),
-                )
-                .await
-                .unwrap();
-                let proxy_addr = server.listener().local_addr();
-                let (set_conn_handler_tx, set_conn_handler_rx) =
-                    loading::replace_conn_handler_channel();
-                scope.spawn_required(async move {
-                    let _set_conn_handler_tx = set_conn_handler_tx;
-                    server.serve(set_conn_handler_rx).await
-                });
-                proxy_addr
-            }
-            ConcreteStreamType::RtpMuxFec => {
-                let fec = true;
-                let server = build_rtp_mux_proxy_server(
-                    addr.as_ref(),
-                    MuxProxyHandler {
-                        stream: proxy,
-                        udp: None,
-                    },
-                    fec,
                     session_spawner.clone(),
                 )
                 .await
@@ -498,12 +474,6 @@ mod tests {
         stress_test(ConcreteStreamType::RtpMux).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    #[serial]
-    async fn stress_test_rtp_mux_fec() {
-        stress_test(ConcreteStreamType::RtpMuxFec).await
-    }
-
     async fn stress_test(ty: ConcreteStreamType) {
         let mut scope = TestRuntimeScope::new();
         let stream_context = stream_context(&mut scope);
@@ -562,7 +532,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     #[ignore = "performance benchmark; not part of the default test run"]
-    async fn perf_bulk_rtp_mux_fec() {
+    async fn perf_bulk_rtp_mux() {
         use std::time::Instant;
 
         let mut scope = TestRuntimeScope::new();
@@ -572,7 +542,7 @@ mod tests {
         let mut proxies = Vec::new();
         let addr = Arc::from("0.0.0.0:0");
         for _ in 0..STRESS_CHAINS {
-            let proxy_config = spawn_proxy(&mut scope, &addr, ConcreteStreamType::RtpMuxFec).await;
+            let proxy_config = spawn_proxy(&mut scope, &addr, ConcreteStreamType::RtpMux).await;
             proxies.push(proxy_config);
         }
 
@@ -629,7 +599,7 @@ mod tests {
                 let mib = (TOTAL_BYTES as f64) / (1024.0 * 1024.0);
                 let secs = elapsed.as_secs_f64();
                 let mib_s = mib / secs;
-                println!("perf_bulk_rtp_mux_fec_mib_s={mib_s:.3}");
+                println!("perf_bulk_rtp_mux_mib_s={mib_s:.3}");
             })
             .await;
     }

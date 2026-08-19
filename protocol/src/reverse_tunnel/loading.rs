@@ -51,8 +51,6 @@ pub struct ReverseTunnelInitiatorConfig {
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
     #[serde(default)]
     pub allow_loopback: bool,
-    #[serde(default)]
-    pub fec: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -60,8 +58,6 @@ pub struct ReverseTunnelInitiatorConfig {
 pub struct ReverseTunnelResponderConfig {
     pub listen_addr: RouteAddrStr,
     pub header_key: tokio_chacha20::config::ConfigBuilder,
-    #[serde(default)]
-    pub fec: bool,
 }
 
 #[derive(Debug, Error)]
@@ -177,7 +173,6 @@ pub async fn prepare(
                 listen_addr,
                 header_key: config.header_key,
                 runtime: runtime.clone(),
-                fec: config.fec,
             }),
         }
     }

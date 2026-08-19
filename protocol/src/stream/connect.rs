@@ -29,7 +29,7 @@ use super::{
 /// dialer, so a reload replaces the configuration in one write and the
 /// stream and UDP connectors can never drift apart.
 ///
-/// The mux connectors (`tcpmux`/`rtpmux`/`rtpmuxfec`) double as
+/// The mux connectors (`tcpmux`/`rtpmux`) double as
 /// [`UdpMuxDialer`]s: they are registered into `udp_connector` so UDP proxy
 /// chains can open datagram flows over the same mux sessions, using the
 /// same wire format as reverse tunneling.
@@ -94,22 +94,7 @@ pub fn build_rtp_mux_connector(
     reset: ConnectorResetSignal,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
-    build_rtp_mux_connector_with_fec(config, reset, drivers, false)
-}
-pub fn build_rtp_mux_fec_connector(
-    config: ConnectorConfigReader,
-    reset: ConnectorResetSignal,
-    drivers: &mut tokio::task::JoinSet<AnyResult>,
-) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
-    build_rtp_mux_connector_with_fec(config, reset, drivers, true)
-}
-fn build_rtp_mux_connector_with_fec(
-    config: ConnectorConfigReader,
-    reset: ConnectorResetSignal,
-    drivers: &mut tokio::task::JoinSet<AnyResult>,
-    fec: bool,
-) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
-    let (connector, driver) = RtpMuxConnector::new(config.clone(), reset, fec);
+    let (connector, driver) = RtpMuxConnector::new(config.clone(), reset);
     spawn_mux_connector(connector, driver, drivers)
 }
 

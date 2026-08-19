@@ -28,8 +28,6 @@ pub use server::{RtpMuxServer, ServeError};
 #[serde(deny_unknown_fields)]
 pub struct RtpMuxProxyServerConfig {
     pub listen_addr: Arc<str>,
-    #[serde(default)]
-    pub fec: bool,
     #[serde(flatten)]
     pub inner: StreamProxyConnHandlerConfig,
 }
@@ -39,7 +37,6 @@ impl RtpMuxProxyServerConfig {
         let inner = self.inner.into_builder(runtime.stream, listen_addr);
         RtpMuxProxyServerBuilder {
             listen_addr: self.listen_addr,
-            fec: self.fec,
             inner,
             udp_context: runtime.udp,
         }
@@ -48,7 +45,6 @@ impl RtpMuxProxyServerConfig {
 #[derive(Debug, Clone)]
 pub struct RtpMuxProxyServerBuilder {
     pub listen_addr: Arc<str>,
-    pub fec: bool,
     pub inner: StreamProxyConnHandlerBuilder,
     pub udp_context: UdpRuntime,
 }
@@ -58,10 +54,9 @@ impl loading::Build for RtpMuxProxyServerBuilder {
     type Err = RtpMuxProxyServerBuildError;
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
-        let fec = self.fec;
         let session_spawner = self.inner.stream_context.session_spawner.clone();
         let handler = self.build_conn_handler()?;
-        build_rtp_mux_proxy_server(listen_addr.as_ref(), handler, fec, session_spawner)
+        build_rtp_mux_proxy_server(listen_addr.as_ref(), handler, session_spawner)
             .await
             .map_err(Into::into)
     }
@@ -96,11 +91,22 @@ pub enum RtpMuxProxyServerBuildError {
 pub async fn build_rtp_mux_proxy_server(
     listen_addr: impl ToSocketAddrs + Clone + std::fmt::Debug,
     handler: MuxProxyHandler,
-    fec: bool,
     session_spawner: SessionSpawner,
 ) -> Result<RtpMuxServer<MuxProxyHandler>, ListenerBindError> {
-    let server = ::rtp_mux::RtpMuxServer::bind(listen_addr, fec)
+    let server = ::rtp_mux::RtpMuxServer::bind(listen_addr)
         .await
         .map_err(ListenerBindError)?;
     Ok(RtpMuxServer::from_core(server, handler, session_spawner))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_config_rejects_removed_fec_option() {
+        let error = serde_json::from_str::<RtpMuxProxyServerConfig>(r#"{ "listen_addr": "127.0.0.1:7000", "header_key": "aGVsbG8", "payload_key": null, "fec": true }"#)
+            .unwrap_err();
+        assert!(error.to_string().contains("fec"), "{error}");
+    }
 }

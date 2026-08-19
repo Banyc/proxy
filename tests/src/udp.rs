@@ -504,9 +504,9 @@ mod tests {
             .await;
     }
 
-    /// A full runtime whose `UdpConnector` has the tcpmux/rtpmux/rtpmuxfec
-    /// mux dialers registered, so UDP proxy chains can carry datagrams over
-    /// a mux stream with the reverse-tunnel wire format.
+    /// A full runtime whose `UdpConnector` has the tcpmux/rtpmux mux dialers
+    /// registered, so UDP proxy chains can carry datagrams over a mux stream
+    /// with the reverse-tunnel wire format.
     async fn mux_udp_runtime(scope: &mut TestRuntimeScope) -> Runtime {
         // Connector drivers run the per-protocol connector loops (e.g.
         // rtp_mux, tcp_mux) and are reaped here for the lifetime of the
@@ -609,10 +609,9 @@ mod tests {
                 addr
             }
             "rtpmux" => {
-                let server =
-                    build_rtp_mux_proxy_server("127.0.0.1:0", handler, false, session_spawner)
-                        .await
-                        .unwrap();
+                let server = build_rtp_mux_proxy_server("127.0.0.1:0", handler, session_spawner)
+                    .await
+                    .unwrap();
                 let addr = server.listener().local_addr();
                 scope.spawn_required(async move {
                     let _set_conn_handler_tx = set_conn_handler_tx;

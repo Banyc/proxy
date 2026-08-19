@@ -249,8 +249,8 @@ pub struct UdpConnector {
     config: ConnectorConfigReader,
     named: Arc<NamedUdpRegistry>,
     /// Per-protocol dialers that carry datagram flows over a multiplexed
-    /// byte stream (`tcpmux`, `rtpmux`, `rtpmuxfec`). Registered once at
-    /// runtime build time, alongside the stream connector table.
+    /// byte stream (`tcpmux`, `rtpmux`). Registered once at runtime build
+    /// time, alongside the stream connector table.
     dialers: Arc<RwLock<UdpMuxDialerMap>>,
 }
 impl UdpConnector {

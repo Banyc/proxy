@@ -30,7 +30,6 @@ impl RtpMuxConnector {
     pub fn new(
         config: ConnectorConfigReader,
         reset: ConnectorResetSignal,
-        fec: bool,
     ) -> (Self, MuxConnectorDriver) {
         let bind = Arc::new(move |addr: SocketAddr| {
             config
@@ -40,7 +39,7 @@ impl RtpMuxConnector {
                 .map(|ip| SocketAddr::new(ip, 0))
                 .unwrap_or_else(|| any_addr(&addr.ip()))
         });
-        let (inner, inner_driver) = ::rtp_mux::RtpMuxConnector::new(bind, fec);
+        let (inner, inner_driver) = ::rtp_mux::RtpMuxConnector::new(bind);
         let inner = Arc::new(inner);
         let reset_driver = {
             let inner = Arc::clone(&inner);

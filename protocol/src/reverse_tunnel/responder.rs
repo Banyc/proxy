@@ -409,15 +409,13 @@ pub struct RtpReverseTunnelResponderBuilder {
     pub(crate) listen_addr: RouteAddr,
     pub(crate) header_key: tokio_chacha20::config::ConfigBuilder,
     pub(crate) runtime: Runtime,
-    pub(crate) fec: bool,
 }
 impl loading::Build for RtpReverseTunnelResponderBuilder {
     type ConnHandler = ReverseTunnelResponderHandler;
     type Server = RtpReverseTunnelResponder;
     type Err = BuildError;
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
-        let server =
-            rtp_mux::RtpMuxServer::bind(self.listen_addr.address.to_string(), self.fec).await?;
+        let server = rtp_mux::RtpMuxServer::bind(self.listen_addr.address.to_string()).await?;
         let session_spawner = self.runtime.session_spawner.clone();
         Ok(RtpReverseTunnelResponder {
             server,

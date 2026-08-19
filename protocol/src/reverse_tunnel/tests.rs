@@ -135,6 +135,15 @@ fn responder_rejects_payload_key() {
     assert!(error.to_string().contains("payload_key"), "{error}");
 }
 
+#[test]
+fn reverse_tunnel_rejects_removed_fec_option() {
+    let error = serde_json::from_str::<ReverseTunnelConfig>(
+            r#"{ "initiator": [{ "name": "private-a", "responder_addr": "rtpmux://127.0.0.1:7000", "header_key": "aGVsbG8", "fec": true }], "responder": [{ "listen_addr": "rtpmux://127.0.0.1:7000", "header_key": "aGVsbG8" }] }"#,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("fec"), "{error}");
+}
+
 fn initiator_config(
     name: &str,
     responder_addr: RouteAddr,
@@ -147,7 +156,6 @@ fn initiator_config(
         header_key,
         payload_key,
         allow_loopback: true,
-        fec: false,
     }
 }
 
@@ -262,7 +270,6 @@ fn initiator_handler(
         )),
         udp_proxy: Arc::new(UdpProxyConnHandler::new(crypto, None, runtime.udp, true)),
         stream_runtime: runtime.stream,
-        fec: false,
     }
 }
 
@@ -315,9 +322,7 @@ async fn verify_reverse_proxy_hop_with_payload(transport: ReverseTunnelTransport
             format!("tcp://{addr}").parse().unwrap()
         }
         ReverseTunnelTransport::Rtp => {
-            let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0", false)
-                .await
-                .unwrap();
+            let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0").await.unwrap();
             let addr = server.listener().local_addr();
             let server = RtpReverseTunnelResponder {
                 server,
@@ -419,9 +424,7 @@ async fn verify_reverse_udp_proxy_hop(
             format!("tcp://{addr}").parse().unwrap()
         }
         ReverseTunnelTransport::Rtp => {
-            let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0", false)
-                .await
-                .unwrap();
+            let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0").await.unwrap();
             let addr = server.listener().local_addr();
             let server = RtpReverseTunnelResponder {
                 server,
@@ -547,9 +550,7 @@ async fn rtp_reverse_tunnel_probe_closes_the_flow_promptly() {
         stream_runtime: runtime.stream.clone(),
         udp_runtime: runtime.udp.clone(),
     };
-    let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0", false)
-        .await
-        .unwrap();
+    let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0").await.unwrap();
     let addr = server.listener().local_addr();
     let server = RtpReverseTunnelResponder {
         server,
@@ -642,9 +643,7 @@ async fn verify_reverse_proxy_hop(transport: ReverseTunnelTransport) {
             format!("tcp://{addr}").parse().unwrap()
         }
         ReverseTunnelTransport::Rtp => {
-            let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0", false)
-                .await
-                .unwrap();
+            let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0").await.unwrap();
             let addr = server.listener().local_addr();
             let server = RtpReverseTunnelResponder {
                 server,

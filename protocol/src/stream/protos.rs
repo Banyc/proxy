@@ -10,7 +10,7 @@ use super::{
     addr::ConcreteStreamType,
     connect::{
         build_kcp_connector, build_mptcp_connector, build_rtp_connector, build_rtp_mux_connector,
-        build_rtp_mux_fec_connector, build_tcp_connector, build_tcp_mux_connector,
+        build_tcp_connector, build_tcp_mux_connector,
     },
     streams::tcp::listener::TCP_STREAM_TYPE,
 };
@@ -39,10 +39,5 @@ pub const STREAM_PROTOS: &StreamProtoTable = &[
         ConcreteStreamType::RtpMux,
         "rtpmux",
         build_rtp_mux_connector,
-    ),
-    (
-        ConcreteStreamType::RtpMuxFec,
-        "rtpmuxfec",
-        build_rtp_mux_fec_connector,
     ),
 ];

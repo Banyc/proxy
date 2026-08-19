@@ -26,11 +26,10 @@ impl<ConnHandler> RtpMuxServer<ConnHandler> {
         interactive_listener: rtp::udp::Listener,
         bulk_listener: rtp::udp::Listener,
         conn_handler: ConnHandler,
-        fec: bool,
         session_spawner: SessionSpawner,
     ) -> Self {
         Self::from_core(
-            ::rtp_mux::RtpMuxServer::new(interactive_listener, bulk_listener, fec),
+            ::rtp_mux::RtpMuxServer::new(interactive_listener, bulk_listener),
             conn_handler,
             session_spawner,
         )
