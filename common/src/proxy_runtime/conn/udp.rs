@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use hdv_derive::HdvSerde;
 
-use crate::{addr::InternetAddrHostPort, proto::addr::RouteAddr};
+use crate::{addr::InternetAddrHostPort, proxy_runtime::addr::RouteAddr};
 
 pub const UDP_FLOW_ID_LEN: usize = 16;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

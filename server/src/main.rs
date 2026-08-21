@@ -43,8 +43,8 @@ async fn main() -> AnyResult {
         std::process::exit(1);
     }
     if let Some(path) = args.record_dir {
-        common::proto::log::stream::init_logger(path.clone());
-        common::proto::log::udp::init_logger(path.clone());
+        common::proxy_runtime::log::stream::init_logger(path.clone());
+        common::proxy_runtime::log::udp::init_logger(path.clone());
     };
 
     let mut process_tasks: tokio::task::JoinSet<RootTaskExit> = tokio::task::JoinSet::new();

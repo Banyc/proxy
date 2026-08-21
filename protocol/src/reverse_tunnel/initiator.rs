@@ -14,7 +14,7 @@ use common::{
     error::AnyResult,
     header::codec::{timed_read_header_async, timed_write_header_async},
     loading,
-    proto::{
+    proxy_runtime::{
         addr::{ReverseTunnelTransport, RouteAddr, validate_reverse_tunnel_name},
         conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
         context::{Runtime, StreamRuntime},

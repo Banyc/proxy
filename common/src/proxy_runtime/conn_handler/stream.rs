@@ -3,7 +3,7 @@ use std::{fmt, io, net::SocketAddr, sync::Arc};
 use crate::{
     addr::ParseInternetAddrError,
     loading,
-    proto::{
+    proxy_runtime::{
         addr::RouteAddr,
         conn::stream::ConnAndAddr,
         context::StreamRuntime,

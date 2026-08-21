@@ -2,7 +2,7 @@ use crate::{
     addr::any_addr,
     connect::ConnectorConfigReader,
     error::AnyError,
-    proto::{
+    proxy_runtime::{
         addr::RouteAddr,
         relay::udp::{ShutdownOutcome, UdpRecv, UdpSend},
     },

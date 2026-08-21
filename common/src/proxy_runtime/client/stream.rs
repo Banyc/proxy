@@ -4,7 +4,7 @@ use crate::{
         preamble::{self, PreambleError},
         route::{RouteError, RouteResponse},
     },
-    proto::{
+    proxy_runtime::{
         addr::RouteAddr, conn::stream::ConnAndAddr, context::StreamRuntime,
         relay::same_key_nonce_ciphertext,
     },

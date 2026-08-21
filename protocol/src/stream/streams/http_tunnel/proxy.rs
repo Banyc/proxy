@@ -21,7 +21,7 @@ use common::{
     addr::{InternetAddr, InternetAddrKind},
     lifecycle::retention::RetentionActorSender,
     log::Timing,
-    proto::{
+    proxy_runtime::{
         addr::RouteAddr,
         client::stream::establish,
         log::stream::{LOGGER, StreamLogWithoutByteCounts, StreamProxyLogWithoutByteCounts},

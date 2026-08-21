@@ -14,7 +14,7 @@ use tracing::instrument;
 use common::{
     error::AnyResult,
     loading,
-    proto::{
+    proxy_runtime::{
         conn_handler::{
             ListenerBindError,
             stream::{

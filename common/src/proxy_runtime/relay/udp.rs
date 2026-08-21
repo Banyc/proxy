@@ -3,7 +3,7 @@ use crate::{
     anti_replay::VALIDATOR_UDP_HDR_TTL,
     error::AnyError,
     log::Timing,
-    proto::{
+    proxy_runtime::{
         conn::udp::Flow,
         log::udp::{FlowLog, LOGGER, TrafficLog},
         metrics::udp::{UdpSession, UdpSessionTable},

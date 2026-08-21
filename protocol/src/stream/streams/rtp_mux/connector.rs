@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use common::{
     addr::any_addr,
     connect::{ConnectorConfigReader, ConnectorResetSignal},
-    proto::connect::{
+    proxy_runtime::connect::{
         stream::StreamConnect,
         udp::{UdpConnection, UdpMuxDialer},
     },

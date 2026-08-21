@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use common::{
     loading,
-    proto::{
+    proxy_runtime::{
         conn_handler::{ListenerBindError, udp::UdpProxyConnHandler},
         context::UdpRuntime,
     },
@@ -84,7 +84,7 @@ mod tests {
     use ae::anti_replay::TimeValidator;
     use common::{
         connect::{ConnectorConfig, connector_config_cell},
-        proto::connect::udp::UdpConnector,
+        proxy_runtime::connect::udp::UdpConnector,
     };
     use std::time::Duration;
 

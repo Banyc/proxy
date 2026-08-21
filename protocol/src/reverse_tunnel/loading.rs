@@ -7,7 +7,7 @@ use common::{
     config::Merge,
     error::{AnyError, AnyResult},
     loading,
-    proto::{
+    proxy_runtime::{
         addr::{ReverseTunnelTransport, RouteAddr, RouteAddrStr},
         context::Runtime,
     },

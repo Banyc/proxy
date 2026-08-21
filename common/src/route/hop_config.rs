@@ -2,11 +2,11 @@ use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::proto::addr::RouteAddrStr;
+use crate::proxy_runtime::addr::RouteAddrStr;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HopConfig {
-    pub address: crate::proto::addr::RouteAddr,
+    pub address: crate::proxy_runtime::addr::RouteAddr,
     pub header_crypto: tokio_chacha20::config::Config,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
 }

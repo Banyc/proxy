@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use crate::{proto::addr::RouteAddr, stream::IoConnection};
+use crate::{proxy_runtime::addr::RouteAddr, stream::IoConnection};
 
 #[derive(Debug)]
 pub struct ConnAndAddr {

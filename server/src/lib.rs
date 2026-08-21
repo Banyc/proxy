@@ -15,7 +15,7 @@ use common::{
     lifecycle::suspend::SystemResumeSignal,
     matcher::Matcher,
     notify::Subscription,
-    proto::{
+    proxy_runtime::{
         client::stream::StreamTracer,
         connect::udp::UdpConnector,
         context::{Runtime, StreamRuntime, UdpRuntime},

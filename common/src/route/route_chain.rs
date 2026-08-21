@@ -8,7 +8,7 @@ use thiserror::Error;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use crate::{config::SharableConfig, header::route::RouteRequest, proto::addr::RouteAddr};
+use crate::{config::SharableConfig, header::route::RouteRequest, proxy_runtime::addr::RouteAddr};
 
 use super::{
     HopConfig, HopConfigBuildError, ProbeFutures, ProbeRtt, Registries, prober::probe_task,

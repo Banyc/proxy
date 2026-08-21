@@ -5,7 +5,7 @@ use common::{
     addr::{InternetAddr, InternetAddrStr},
     config::SharableConfig,
     loading,
-    proto::{
+    proxy_runtime::{
         client::{self, udp::UdpProxyClient},
         conn::udp::{FlowKey, UpstreamAddr},
         context::UdpRuntime,
@@ -184,7 +184,7 @@ impl UdpServerHandleConn for UdpAccessConnHandler {
     fn parse_packet_route(&self, _buf: &mut io::Cursor<&[u8]>) -> Option<UdpPacketRoute> {
         Some(UdpPacketRoute::Routed {
             flow_id: None,
-            upstream: Some(UpstreamAddr(common::proto::addr::RouteAddr::udp(
+            upstream: Some(UpstreamAddr(common::proxy_runtime::addr::RouteAddr::udp(
                 self.destination.clone(),
             ))),
         })

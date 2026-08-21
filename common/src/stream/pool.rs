@@ -8,7 +8,9 @@ use tokio_conn_pool::{ConnPool, ConnPoolEntry};
 use crate::{
     config::{Merge, SharableConfig},
     header::preamble::send_keep_alive,
-    proto::{addr::RouteAddr, connect::stream::StreamConnectorTable, context::StreamRuntime},
+    proxy_runtime::{
+        addr::RouteAddr, connect::stream::StreamConnectorTable, context::StreamRuntime,
+    },
     route::{HopConfig, HopConfigBuildError, Registries},
 };
 

@@ -15,7 +15,7 @@ mod tests {
         connect::{ConnectorConfig, ConnectorResetSignal, connector_config_cell},
         loading::{self, ReloadableHandler, Serve},
         notify::Notify,
-        proto::{
+        proxy_runtime::{
             addr::RouteAddr,
             client::stream::{establish, probe_rtt},
             conn::stream::ConnAndAddr,

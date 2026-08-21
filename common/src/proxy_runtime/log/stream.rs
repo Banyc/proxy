@@ -12,7 +12,7 @@ use primitive::ops::unit::HumanBytes;
 use crate::{
     addr::{InternetAddr, InternetAddrHostPort, InternetAddrKind},
     log::{HdvLogger, Timing, TimingHdv},
-    proto::addr::{RouteAddr, RouteAddrHdv},
+    proxy_runtime::addr::{RouteAddr, RouteAddrHdv},
 };
 
 pub static LOGGER: LazyLock<Arc<Mutex<Option<HdvLogger<StreamLogHdv>>>>> =

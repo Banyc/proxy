@@ -31,7 +31,7 @@ pub mod log;
 pub mod matcher;
 pub mod metrics;
 pub mod notify;
-pub mod proto;
+pub mod proxy_runtime;
 pub mod route;
 pub mod session;
 pub mod stream;

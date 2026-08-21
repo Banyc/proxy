@@ -1,6 +1,6 @@
 use common::{
     loading,
-    proto::{
+    proxy_runtime::{
         conn_handler::{
             ListenerBindError,
             stream::{

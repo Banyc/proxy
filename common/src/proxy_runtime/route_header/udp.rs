@@ -11,7 +11,7 @@ use crate::{
         codec::{CodecError, read_header, write_header},
         route::RouteResponse,
     },
-    proto::{
+    proxy_runtime::{
         conn::udp::{UDP_FLOW_ID_LEN, UdpFlowId, UpstreamAddr},
         header::UdpRequestHeader,
     },
@@ -91,7 +91,7 @@ mod tests {
     use crate::{
         anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         header::route::RouteRequest,
-        proto::addr::RouteAddr,
+        proxy_runtime::addr::RouteAddr,
     };
 
     #[test]

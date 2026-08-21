@@ -3,7 +3,7 @@ use std::sync::Arc;
 use common::{
     connect::{ConnectorConfigReader, ConnectorResetSignal},
     error::AnyResult,
-    proto::connect::{stream::StreamConnect, udp::UdpMuxDialer},
+    proxy_runtime::connect::{stream::StreamConnect, udp::UdpMuxDialer},
 };
 
 use super::{

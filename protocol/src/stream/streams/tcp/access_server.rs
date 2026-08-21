@@ -4,7 +4,7 @@ use async_speed_limit::Limiter;
 use common::{
     config::SharableConfig,
     loading,
-    proto::{
+    proxy_runtime::{
         addr::{RouteAddr, RouteAddrStr},
         client::stream::{StreamEstablishError, establish},
         context::StreamRuntime,

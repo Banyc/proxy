@@ -9,7 +9,7 @@ use udp_listener::{Classified, Conn, Dispatch, DispatchPolicy, UtpListener};
 use crate::{
     error::AnyResult,
     loading,
-    proto::conn::udp::{DownstreamAddr, Flow, FlowKey, UdpFlowId, UpstreamAddr},
+    proxy_runtime::conn::udp::{DownstreamAddr, Flow, FlowKey, UdpFlowId, UpstreamAddr},
     session::{SessionSpawner, log_rejection},
     udp::Packet,
 };
@@ -313,8 +313,8 @@ pub trait UdpServerHandleConn: loading::HandleConn {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::conn::udp::UDP_FLOW_ID_LEN;
-    use crate::{loading::Serve, proto::addr::RouteAddr};
+    use crate::proxy_runtime::conn::udp::UDP_FLOW_ID_LEN;
+    use crate::{loading::Serve, proxy_runtime::addr::RouteAddr};
     use std::time::Duration;
     #[derive(Debug)]
     struct TagEcho(u8);

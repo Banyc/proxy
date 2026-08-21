@@ -15,7 +15,7 @@ use common::{
     addr::ParseInternetAddrError,
     config::SharableConfig,
     loading,
-    proto::{client::stream::StreamEstablishError, context::StreamRuntime},
+    proxy_runtime::{client::stream::StreamEstablishError, context::StreamRuntime},
     route::{ProbeFutures, Registries, RouteTable, RouteTableBuildError, RouteTableBuilder},
     stream::{HasIoAddr, OwnedIoStream, StreamServerHandleConn},
 };
@@ -305,7 +305,7 @@ impl From<StreamEstablishError> for TunnelError {
     }
 }
 impl TunnelError {
-    fn upstream_addr(&self) -> Option<&common::proto::addr::RouteAddr> {
+    fn upstream_addr(&self) -> Option<&common::proxy_runtime::addr::RouteAddr> {
         match self {
             Self::EstablishProxyChain(e) => match e.as_ref() {
                 StreamEstablishError::ConnectDestination { upstream_addr, .. }
@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn connect_error_exposes_attempted_upstream_address() {
-        let addr = common::proto::addr::RouteAddr {
+        let addr = common::proxy_runtime::addr::RouteAddr {
             address: "127.0.0.1:8080".parse().unwrap(),
             protocol: "tcp".into(),
         };
@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn establish_error_exposes_structured_upstream_address() {
-        let addr = common::proto::addr::RouteAddr {
+        let addr = common::proxy_runtime::addr::RouteAddr {
             address: "10.0.0.1:9090".parse().unwrap(),
             protocol: "rtp-mux".into(),
         };

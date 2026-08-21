@@ -11,7 +11,7 @@ use std::{
 
 use common::{
     connect::ConnectorResetSignal,
-    proto::{
+    proxy_runtime::{
         conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
         connect::udp::UdpConnection,
         context::UdpRuntime,

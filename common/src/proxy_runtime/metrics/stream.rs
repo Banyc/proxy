@@ -14,7 +14,7 @@ use tokio_throughput::GaugeHandle;
 use crate::{
     addr::InternetAddrHostPort,
     metrics::{GaugeView, display_value},
-    proto::addr::{RouteAddr, RouteAddrHdv},
+    proxy_runtime::addr::{RouteAddr, RouteAddrHdv},
 };
 
 pub type StreamSessionTable = Table<StreamSession>;

@@ -11,7 +11,7 @@ use crate::{
         preamble::{self, PreambleError},
         route::RouteResponse,
     },
-    proto::{addr::RouteAddr, header::StreamRequestHeader},
+    proxy_runtime::{addr::RouteAddr, header::StreamRequestHeader},
     stream::IoConnection,
 };
 

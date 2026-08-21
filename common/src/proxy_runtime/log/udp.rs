@@ -9,7 +9,7 @@ use primitive::ops::unit::HumanBytes;
 
 use crate::{
     log::{HdvLogger, Timing, TimingHdv},
-    proto::conn::udp::{Flow, FlowHdv},
+    proxy_runtime::conn::udp::{Flow, FlowHdv},
 };
 
 pub static LOGGER: LazyLock<Arc<Mutex<Option<HdvLogger<FlowLogHdv>>>>> =

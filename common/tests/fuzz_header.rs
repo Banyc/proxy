@@ -1,6 +1,6 @@
 use ae::anti_replay::{TimeValidator, ValidatorRef};
 use common::header::codec::{MAX_HEADER_LEN, read_header_async};
-use common::proto::header::StreamRequestHeader;
+use common::proxy_runtime::header::StreamRequestHeader;
 use std::io::Cursor;
 use std::time::Duration;
 

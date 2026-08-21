@@ -6,7 +6,7 @@ use common::{
     connect::{ConnectorConfigReader, ConnectorResetSignal},
     error::AnyResult,
     loading::{self, ReloadableHandler},
-    proto::{
+    proxy_runtime::{
         conn_handler::{
             ListenerBindError,
             stream::StreamProxyServerBuildError,
@@ -314,7 +314,7 @@ impl TcpMuxProxyServerConfig {
 pub struct TcpMuxProxyServerBuilder {
     pub listen_addr: Arc<str>,
     pub inner: StreamProxyConnHandlerBuilder,
-    pub udp_context: common::proto::context::UdpRuntime,
+    pub udp_context: common::proxy_runtime::context::UdpRuntime,
 }
 impl loading::Build for TcpMuxProxyServerBuilder {
     type ConnHandler = MuxProxyHandler;

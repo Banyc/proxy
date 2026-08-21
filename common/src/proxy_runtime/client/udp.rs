@@ -6,7 +6,7 @@ use crate::{
         codec::{CodecError, read_header, write_header},
         route::{RouteError, RouteRequest, RouteResponse},
     },
-    proto::{
+    proxy_runtime::{
         addr::RouteAddr,
         conn::udp::UdpFlowId,
         connect::udp::{UdpConnectionRead, UdpConnectionWrite},
@@ -97,7 +97,7 @@ impl UdpProxyClient {
                     sock_addr: addr,
                 }
             })?;
-            let upstream = crate::proto::connect::udp::UdpConnection::socket(upstream);
+            let upstream = crate::proxy_runtime::connect::udp::UdpConnection::socket(upstream);
             let local_addr = upstream.local_addr();
             let peer_addr = upstream.peer_addr();
             let (upstream_read, upstream_write) = upstream.into_split();
@@ -767,7 +767,7 @@ mod tests {
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         client.connect(peer.local_addr().unwrap()).await.unwrap();
         peer.connect(client.local_addr().unwrap()).await.unwrap();
-        let connection = crate::proto::connect::udp::UdpConnection::socket(client);
+        let connection = crate::proxy_runtime::connect::udp::UdpConnection::socket(client);
         let local_addr = connection.local_addr();
         let peer_addr = connection.peer_addr();
         let (upstream, _write) = connection.into_split();
@@ -787,8 +787,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_valid_response_switches_later_requests_to_compact_form() {
-        use crate::proto::conn::udp::UDP_FLOW_ID_LEN;
-        use crate::proto::route_header::udp::{UdpRequestRoute, decode_request_route};
+        use crate::proxy_runtime::conn::udp::UDP_FLOW_ID_LEN;
+        use crate::proxy_runtime::route_header::udp::{UdpRequestRoute, decode_request_route};
 
         let mut pkt = [0u8; 2048];
 
@@ -796,7 +796,7 @@ mod tests {
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         client.connect(peer.local_addr().unwrap()).await.unwrap();
         peer.connect(client.local_addr().unwrap()).await.unwrap();
-        let connection = crate::proto::connect::udp::UdpConnection::socket(client);
+        let connection = crate::proxy_runtime::connect::udp::UdpConnection::socket(client);
         let local_addr = connection.local_addr();
         let peer_addr = connection.peer_addr();
         let (upstream_read, upstream_write) = connection.into_split();

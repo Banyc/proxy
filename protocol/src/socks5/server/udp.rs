@@ -4,7 +4,7 @@ use async_speed_limit::Limiter;
 use common::{
     config::SharableConfig,
     loading,
-    proto::{
+    proxy_runtime::{
         client::{self, udp::UdpProxyClient},
         conn::udp::{FlowKey, UpstreamAddr},
         context::UdpRuntime,
@@ -202,7 +202,7 @@ impl UdpServerHandleConn for Socks5ServerUdpAccessConnHandler {
 
         Some(UdpPacketRoute::Routed {
             flow_id: None,
-            upstream: Some(UpstreamAddr(common::proto::addr::RouteAddr::udp(
+            upstream: Some(UpstreamAddr(common::proxy_runtime::addr::RouteAddr::udp(
                 request_header.destination,
             ))),
         })

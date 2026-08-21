@@ -13,7 +13,7 @@ use common::{
     addr::any_addr,
     connect::ConnectorConfigReader,
     loading,
-    proto::{
+    proxy_runtime::{
         conn_handler::{
             ListenerBindError,
             stream::{
@@ -185,7 +185,7 @@ mod tests {
         header::{codec::write_header_async, preamble},
         loading::Serve,
         notify::Notify,
-        proto::{
+        proxy_runtime::{
             addr::RouteAddr, connect::udp::UdpConnector, context::StreamRuntime,
             header::StreamRequestHeader,
         },

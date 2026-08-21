@@ -10,7 +10,7 @@ use common::{
     addr::{InternetAddr, InternetAddrStr},
     config::SharableConfig,
     loading::{self, HandleConn},
-    proto::{
+    proxy_runtime::{
         addr::RouteAddr,
         client::{self, stream::StreamEstablishError},
         conn::stream::ConnAndAddr,

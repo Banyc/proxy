@@ -11,7 +11,7 @@ mod tests {
         header::route::RouteErrorKind,
         loading::{self, Serve},
         notify::Notify,
-        proto::{
+        proxy_runtime::{
             addr::RouteAddr,
             client::{
                 self,
@@ -92,7 +92,7 @@ mod tests {
             server.serve(set_conn_handler_rx).await
         });
         HopConfig {
-            address: common::proto::addr::RouteAddr::udp(proxy_addr.into()),
+            address: common::proxy_runtime::addr::RouteAddr::udp(proxy_addr.into()),
             header_crypto: crypto,
             payload_crypto,
         }

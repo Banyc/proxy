@@ -12,7 +12,7 @@ use common::{
     config::Merge,
     error::{AnyError, AnyResult},
     loading,
-    proto::{
+    proxy_runtime::{
         conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
         context::Runtime,
     },

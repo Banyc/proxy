@@ -10,7 +10,7 @@ use common::{
     },
     loading::{self, Serve},
     notify::Notify,
-    proto::{
+    proxy_runtime::{
         addr::{ReverseTunnelTransport, RouteAddr, RouteAddrStr},
         client::{
             stream,

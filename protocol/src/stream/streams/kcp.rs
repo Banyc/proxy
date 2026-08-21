@@ -16,7 +16,7 @@ use common::{
     connect::ConnectorConfigReader,
     error::AnyResult,
     loading,
-    proto::{
+    proxy_runtime::{
         conn_handler::{
             ListenerBindError,
             stream::{

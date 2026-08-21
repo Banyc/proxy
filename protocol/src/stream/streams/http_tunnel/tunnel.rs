@@ -14,7 +14,7 @@ use async_speed_limit::Limiter;
 use bytes::Bytes;
 use common::{
     addr::InternetAddr,
-    proto::{
+    proxy_runtime::{
         addr::RouteAddr,
         client::stream::{StreamEstablishError, establish},
         connect::stream::StreamConnectorTable,

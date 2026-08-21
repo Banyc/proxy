@@ -11,7 +11,7 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::{proto::connect::stream::StreamConnectorTable, ttl_cell::TtlCell};
+use crate::{proxy_runtime::connect::stream::StreamConnectorTable, ttl_cell::TtlCell};
 
 use super::{
     GaugedRouteChain, HopConfig, PROBE_ROUND_INTERVAL, ProbeFutures, ProbeRtt, WeightedRouteChain,

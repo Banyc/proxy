@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-use crate::proto::conn::udp::UpstreamAddr;
+use crate::proxy_runtime::conn::udp::UpstreamAddr;
 
 pub mod respond;
 pub mod server;

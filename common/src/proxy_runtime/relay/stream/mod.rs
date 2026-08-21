@@ -12,11 +12,11 @@ use scopeguard::defer;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_throughput::{ReadGauge, WriteGauge};
 
-pub use crate::proto::log::stream::IoCopyFinished;
+pub use crate::proxy_runtime::log::stream::IoCopyFinished;
 
 use crate::{
     log::Timing,
-    proto::{
+    proxy_runtime::{
         addr::RouteAddr,
         log::stream::{LOGGER, StreamLog, StreamProxyLog},
         metrics::stream::{StreamSession, StreamSessionTable},

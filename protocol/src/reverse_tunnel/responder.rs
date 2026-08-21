@@ -10,7 +10,7 @@ use common::{
     error::AnyResult,
     header::codec::{timed_read_header_async, timed_write_header_async},
     loading,
-    proto::{
+    proxy_runtime::{
         addr::{
             REVERSE_TUNNEL_RTP_PROTOCOL, REVERSE_TUNNEL_TCP_PROTOCOL, ReverseTunnelTransport,
             RouteAddr, validate_reverse_tunnel_name,

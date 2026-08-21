@@ -7,7 +7,7 @@ use crate::{
         route::{RouteErrorKind, RouteResponse},
     },
     loading,
-    proto::{
+    proxy_runtime::{
         conn::udp::{DownstreamAddr, Flow, FlowKey, UdpFlowId, UpstreamAddr},
         context::UdpRuntime,
         relay::udp::{CopyBidirectional, DownstreamParts, UdpRecv, UdpSend, UpstreamParts},
@@ -320,23 +320,23 @@ pub enum UdpProxyError {
     Resolve {
         #[source]
         source: io::Error,
-        addr: crate::proto::addr::RouteAddr,
+        addr: crate::proxy_runtime::addr::RouteAddr,
     },
     #[error("Refused to connect to a loopback address: {addr}, {sock_addr}")]
     Loopback {
-        addr: crate::proto::addr::RouteAddr,
+        addr: crate::proxy_runtime::addr::RouteAddr,
         sock_addr: SocketAddr,
     },
     #[error("Failed to connect to upstream: {source}, {addr}")]
     ConnectUpstream {
         #[source]
         source: io::Error,
-        addr: crate::proto::addr::RouteAddr,
+        addr: crate::proxy_runtime::addr::RouteAddr,
     },
     #[error("reverse-tunnel UDP flow: {0}")]
     Tunnel(#[source] AnyError),
     #[error("UDP relay: {0}")]
-    Copy(#[source] crate::proto::relay::udp::CopyBiError),
+    Copy(#[source] crate::proxy_runtime::relay::udp::CopyBiError),
     #[error("UDP flow key is not a routed flow")]
     InvalidFlowKey,
     #[error("Failed to receive the initial packet: {0}")]
@@ -681,7 +681,7 @@ mod tests {
         anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         connect::{ConnectorConfig, connector_config_cell},
         header::route::RouteRequest,
-        proto::{
+        proxy_runtime::{
             conn::udp::UDP_FLOW_ID_LEN, connect::udp::UdpConnector, context::UdpRuntime,
             relay::udp::ShutdownOutcome,
         },
@@ -789,7 +789,7 @@ mod tests {
         UdpFlowId::from_bytes([9; UDP_FLOW_ID_LEN]).write_routed(&mut packet);
         write_header(
             &mut packet,
-            &RouteRequest::<crate::proto::addr::RouteAddr> { upstream: None },
+            &RouteRequest::<crate::proxy_runtime::addr::RouteAddr> { upstream: None },
             *crypto().key(),
         )
         .unwrap();
@@ -802,8 +802,8 @@ mod tests {
         UdpFlowId::from_bytes([8; UDP_FLOW_ID_LEN]).write_routed(&mut packet);
         write_header(
             &mut packet,
-            &RouteRequest::<crate::proto::addr::RouteAddr> {
-                upstream: Some(crate::proto::addr::RouteAddr::udp(
+            &RouteRequest::<crate::proxy_runtime::addr::RouteAddr> {
+                upstream: Some(crate::proxy_runtime::addr::RouteAddr::udp(
                     "127.0.0.1:9".parse().unwrap(),
                 )),
             },
@@ -843,7 +843,7 @@ mod tests {
             EstablishedTunnel::Relay(flow) => {
                 assert_eq!(
                     flow.upstream.0,
-                    crate::proto::addr::RouteAddr::udp("127.0.0.1:9".parse().unwrap())
+                    crate::proxy_runtime::addr::RouteAddr::udp("127.0.0.1:9".parse().unwrap())
                 );
             }
             _ => panic!("expected a relay flow"),

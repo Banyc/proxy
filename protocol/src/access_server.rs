@@ -29,7 +29,7 @@ use common::{
     error::{AnyError, AnyResult},
     loading,
     matcher::Matcher,
-    proto::{
+    proxy_runtime::{
         client::{stream::StreamTracer, udp::UdpTracer},
         context::Runtime,
     },

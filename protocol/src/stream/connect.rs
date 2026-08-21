@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use common::{
     connect::{ConnectorConfigReader, ConnectorResetSignal},
     error::{AnyError, AnyResult},
-    proto::connect::{
+    proxy_runtime::connect::{
         stream::{StreamConnect, StreamConnectorTable},
         udp::{UdpConnector, UdpMuxDialer},
     },
