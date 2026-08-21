@@ -40,8 +40,8 @@ mod tests {
     use tracing::trace;
 
     use crate::{
-        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         header::codec::{MAX_HEADER_LEN, read_header_async, write_header_async},
+        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
     };
 
     use super::*;

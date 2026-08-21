@@ -1,6 +1,5 @@
 use crate::{
     addr::InternetAddr,
-    anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     error::AnyError,
     header::{
         codec::{CodecError, read_header, write_header},
@@ -16,6 +15,7 @@ use crate::{
             udp::{ShutdownOutcome, UdpRecv, UdpSend},
         },
     },
+    anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     route::{ConnChain, ProbeRtt, convert_proxies_to_header_crypto_pairs},
     ttl_cell::RegeneratingHeader,
     udp::{PACKET_BUFFER_LENGTH, UDP_FLOW_TIMEOUT},

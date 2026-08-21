@@ -12,12 +12,12 @@ use crate::{
     route::{ConnConfig, ConnConfigBuildError, Registries},
 };
 
-use super::ConnParts;
+use super::IoConnection;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 pub type StreamPoolBuilder = PoolBuilder;
-pub type StreamConnPool = ConnPool<RouteAddr, Box<dyn ConnParts>>;
+pub type StreamConnPool = ConnPool<RouteAddr, Box<dyn IoConnection>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,7 +29,7 @@ impl PoolBuilder {
     pub fn resolve(
         self,
         registries: &Registries<'_>,
-    ) -> Result<ConnPool<RouteAddr, Box<dyn ConnParts>>, PoolBuildError> {
+    ) -> Result<ConnPool<RouteAddr, Box<dyn IoConnection>>, PoolBuildError> {
         let c = self
             .0
             .into_iter()
@@ -75,7 +75,7 @@ impl Merge for PoolBuilder {
 fn pool_entries_from_proxy_configs(
     proxy_configs: impl Iterator<Item = ConnConfig>,
     connector_table: Arc<StreamConnectorTable>,
-) -> impl Iterator<Item = ConnPoolEntry<RouteAddr, Box<dyn ConnParts>>> {
+) -> impl Iterator<Item = ConnPoolEntry<RouteAddr, Box<dyn IoConnection>>> {
     proxy_configs.map(move |c| ConnPoolEntry {
         key: c.address.clone(),
         connect: Arc::new(PoolConnector {
@@ -93,7 +93,7 @@ struct PoolConnector {
 }
 #[async_trait]
 impl tokio_conn_pool::Connect for PoolConnector {
-    type Connection = Box<dyn ConnParts>;
+    type Connection = Box<dyn IoConnection>;
     async fn connect(&self) -> Option<Self::Connection> {
         let addr = self.conn.address.clone();
         if let Some((_, name)) = addr.reverse_tunnel() {
@@ -119,7 +119,7 @@ struct PoolHeartbeat {
 }
 #[async_trait]
 impl tokio_conn_pool::Heartbeat for PoolHeartbeat {
-    type Connection = Box<dyn ConnParts>;
+    type Connection = Box<dyn IoConnection>;
     async fn heartbeat(&self, mut conn: Self::Connection) -> Option<Self::Connection> {
         send_keep_alive(
             &mut conn,
@@ -137,7 +137,7 @@ pub async fn connect_with_pool(
     stream_context: &StreamRuntime,
     allow_loopback: bool,
     timeout: Duration,
-) -> Result<(Box<dyn ConnParts>, SocketAddr), ConnectError> {
+) -> Result<(Box<dyn IoConnection>, SocketAddr), ConnectError> {
     let stream = stream_context.pool.inner().pull(addr);
     let sock_addr = stream.as_ref().and_then(|s| s.peer_addr().ok());
     if let (Some(stream), Some(sock_addr)) = (stream, sock_addr) {
@@ -229,7 +229,7 @@ mod tests {
     use crate::{
         addr::InternetAddrKind,
         connect::{ConnectorConfig, connector_config_cell},
-        stream::{HasIoAddr, OwnIoStream},
+        stream::{HasIoAddr, OwnedIoStream},
     };
     use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
 
@@ -276,8 +276,8 @@ mod tests {
         }
     }
 
-    impl OwnIoStream for TestConn {}
-    impl ConnParts for TestConn {}
+    impl OwnedIoStream for TestConn {}
+    impl IoConnection for TestConn {}
 
     #[derive(Debug)]
     struct TestConnect {
@@ -285,7 +285,7 @@ mod tests {
     }
     #[async_trait]
     impl tokio_conn_pool::Connect for TestConnect {
-        type Connection = Box<dyn ConnParts>;
+        type Connection = Box<dyn IoConnection>;
         async fn connect(&self) -> Option<Self::Connection> {
             let (io, _peer) = tokio::io::duplex(1);
             Some(Box::new(TestConn {
@@ -299,7 +299,7 @@ mod tests {
     struct TestHeartbeat;
     #[async_trait]
     impl tokio_conn_pool::Heartbeat for TestHeartbeat {
-        type Connection = Box<dyn ConnParts>;
+        type Connection = Box<dyn IoConnection>;
         async fn heartbeat(&self, conn: Self::Connection) -> Option<Self::Connection> {
             Some(conn)
         }
@@ -322,7 +322,7 @@ mod tests {
         }
     }
 
-    fn entry(key: &RouteAddr) -> ConnPoolEntry<RouteAddr, Box<dyn ConnParts>> {
+    fn entry(key: &RouteAddr) -> ConnPoolEntry<RouteAddr, Box<dyn IoConnection>> {
         ConnPoolEntry {
             key: key.clone(),
             connect: Arc::new(TestConnect {
@@ -340,9 +340,9 @@ mod tests {
     }
 
     async fn pull_until_ready(
-        pool: &ConnPool<RouteAddr, Box<dyn ConnParts>>,
+        pool: &ConnPool<RouteAddr, Box<dyn IoConnection>>,
         key: &RouteAddr,
-    ) -> Box<dyn ConnParts> {
+    ) -> Box<dyn IoConnection> {
         for _ in 0..10_000 {
             if let Some(conn) = pool.pull(key) {
                 return conn;

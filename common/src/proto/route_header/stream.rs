@@ -12,7 +12,7 @@ use crate::{
         route::RouteResponse,
     },
     proto::{addr::RouteAddr, header::StreamRequestHeader},
-    stream::ConnParts,
+    stream::IoConnection,
 };
 
 pub async fn read_route_header<Downstream>(
@@ -21,7 +21,7 @@ pub async fn read_route_header<Downstream>(
     replay_validator: &ReplayValidator,
 ) -> Result<Option<RouteAddr>, SteerError>
 where
-    Downstream: ConnParts + std::fmt::Debug,
+    Downstream: IoConnection + std::fmt::Debug,
 {
     let validator = ValidatorRef::Replay(replay_validator);
     // Wait for heartbeat upgrade

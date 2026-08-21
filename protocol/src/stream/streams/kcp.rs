@@ -28,7 +28,7 @@ use common::{
         context::StreamRuntime,
     },
     session::{SessionSpawner, log_rejection},
-    stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    stream::{HasIoAddr, IoConnection, OwnedIoStream, StreamServerHandleConn},
 };
 
 #[derive(Debug)]
@@ -147,7 +147,7 @@ impl KcpConnector {
 }
 #[async_trait]
 impl StreamConnect for KcpConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
         let bind = self
             .config
             .current()
@@ -183,8 +183,8 @@ pub struct AddressedKcpStream {
     local_addr: SocketAddr,
     peer_addr: SocketAddr,
 }
-impl ConnParts for AddressedKcpStream {}
-impl OwnIoStream for AddressedKcpStream {}
+impl IoConnection for AddressedKcpStream {}
+impl OwnedIoStream for AddressedKcpStream {}
 impl HasIoAddr for AddressedKcpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.peer_addr)
@@ -293,7 +293,7 @@ pub async fn build_kcp_proxy_server(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::addr::BothVerIp;
+    use common::addr::DualStackBind;
     use common::connect::ConnectorConfig;
 
     #[tokio::test]
@@ -309,7 +309,7 @@ mod tests {
         });
         let connector = KcpConnector::new(
             common::connect::connector_config_cell(ConnectorConfig {
-                bind: BothVerIp { v4: None, v6: None },
+                bind: DualStackBind { v4: None, v6: None },
             })
             .0,
         );

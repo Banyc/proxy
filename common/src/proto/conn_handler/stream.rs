@@ -12,7 +12,7 @@ use crate::{
         route_header::stream::{SteerError, read_route_header},
     },
     stream::{
-        ConnParts, StreamServerHandleConn,
+        IoConnection, StreamServerHandleConn,
         pool::{ConnectError, connect_with_pool},
     },
 };
@@ -132,7 +132,7 @@ impl StreamProxyConnHandler {
         mut downstream: Downstream,
     ) -> Result<ProxyResult, StreamProxyServerError>
     where
-        Downstream: ConnParts + std::fmt::Debug,
+        Downstream: IoConnection + std::fmt::Debug,
     {
         // Establish proxy chain
         let upstream = match self.acceptor.establish(&mut downstream).await {
@@ -179,7 +179,7 @@ impl StreamServerHandleConn for StreamProxyConnHandler {
     #[instrument(skip_all)]
     async fn handle_stream<Stream>(&self, stream: Stream)
     where
-        Stream: ConnParts + std::fmt::Debug,
+        Stream: IoConnection + std::fmt::Debug,
     {
         let local_addr = stream.local_addr().ok();
         let peer_addr = stream.peer_addr().ok();
@@ -232,7 +232,7 @@ impl StreamProxyAcceptor {
         downstream: &mut Downstream,
     ) -> Result<Option<ConnAndAddr>, StreamProxyAcceptorError>
     where
-        Downstream: ConnParts + std::fmt::Debug,
+        Downstream: IoConnection + std::fmt::Debug,
     {
         let addr = match read_route_header(
             downstream,

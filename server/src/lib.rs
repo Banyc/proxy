@@ -5,14 +5,13 @@ use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Durat
 use access_server::{AccessServerConfig, AccessServerLoader, AccessServerLoaderSnapshot};
 use ae::anti_replay::{ReplayValidator, TimeValidator};
 use common::{
-    anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     config::{Merge, merge_map},
     connect::{
         ConnectorConfig, ConnectorConfigUpdater, ConnectorResetSignal, connector_config_cell,
     },
     error::{AnyError, AnyResult},
     lifecycle::retention::RetentionActorSender,
-    lifecycle::suspend::SystemSuspendSignal,
+    lifecycle::suspend::SystemResumeSignal,
     matcher::Matcher,
     notify::Subscription,
     proto::{
@@ -21,6 +20,7 @@ use common::{
         context::{Runtime, StreamRuntime, UdpRuntime},
         metrics::{stream::StreamSessionTable, udp::UdpSessionTable},
     },
+    anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     route::{ConnConfig, ConnSelector, ProbeRtt, Registries},
     session::SessionSpawner,
     stream::pool::{StreamConnPool, StreamPoolBuilder},
@@ -53,7 +53,7 @@ pub struct ServeContext {
     pub stream_session_table: Option<StreamSessionTable>,
     pub udp_session_table: Option<UdpSessionTable>,
     pub config_changed: ConfigChangeSignal,
-    pub system_suspended: SystemSuspendSignal,
+    pub system_resume: SystemResumeSignal,
     pub retention: RetentionActorSender,
 }
 
@@ -82,7 +82,7 @@ where
     let udp_validator = Arc::new(TimeValidator::new(
         VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
     ));
-    let connector_reset = ConnectorResetSignal(serve_context.system_suspended.0);
+    let connector_reset = ConnectorResetSignal(serve_context.system_resume.0);
     // One connector-configuration cell shared by the stream connector table,
     // the UDP connector, and every mux UDP dialer: a reload replaces it in a
     // single write, so stream and UDP connectors can never observe different

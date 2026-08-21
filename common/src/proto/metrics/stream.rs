@@ -12,7 +12,7 @@ use monitor_table::{
 use tokio_throughput::GaugeHandle;
 
 use crate::{
-    addr::InternetAddrHdv,
+    addr::InternetAddrHostPort,
     metrics::{GaugeView, display_value},
     proto::addr::{RouteAddr, RouteAddrHdv},
 };
@@ -53,10 +53,10 @@ struct StreamSessionView {
     pub duration: u64,
     pub start_ms: u64,
     pub end_ms: Option<u64>,
-    pub upstream_local: Option<InternetAddrHdv>,
+    pub upstream_local: Option<InternetAddrHostPort>,
     pub upstream_remote: RouteAddrHdv,
     pub downstream_local: Arc<str>,
-    pub downstream_remote: Option<InternetAddrHdv>,
+    pub downstream_remote: Option<InternetAddrHostPort>,
     pub up: Option<GaugeView>,
     pub dn: Option<GaugeView>,
 }

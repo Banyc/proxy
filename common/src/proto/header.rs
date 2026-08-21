@@ -13,8 +13,8 @@ mod tests {
     use tracing::trace;
 
     use crate::{
-        anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         header::codec::{MAX_HEADER_LEN, read_header_async, write_header_async},
+        anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     };
 
     use super::*;

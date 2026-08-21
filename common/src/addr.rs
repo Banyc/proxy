@@ -21,11 +21,11 @@ static RESOLVED_SOCKET_ADDR: LazyLock<
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct BothVerIp {
+pub struct DualStackBind {
     pub v4: Option<Ipv4Addr>,
     pub v6: Option<Ipv6Addr>,
 }
-impl BothVerIp {
+impl DualStackBind {
     pub fn get_matched(&self, ip_version: &IpAddr) -> Option<IpAddr> {
         Some(match ip_version {
             IpAddr::V4(_) => self.v4?.into(),
@@ -174,11 +174,11 @@ impl InternetAddr {
 }
 
 #[derive(Debug, Clone, HdvSerde)]
-pub struct InternetAddrHdv {
+pub struct InternetAddrHostPort {
     pub host: Arc<str>,
     pub port: u16,
 }
-impl From<&InternetAddr> for InternetAddrHdv {
+impl From<&InternetAddr> for InternetAddrHostPort {
     fn from(value: &InternetAddr) -> Self {
         let (host, port) = match &value.0 {
             InternetAddrKind::SocketAddr(x) => return (*x).into(),
@@ -187,7 +187,7 @@ impl From<&InternetAddr> for InternetAddrHdv {
         Self { host, port }
     }
 }
-impl From<SocketAddr> for InternetAddrHdv {
+impl From<SocketAddr> for InternetAddrHostPort {
     fn from(value: SocketAddr) -> Self {
         let (host, port) = (value.ip().to_string().into(), value.port());
         Self { host, port }

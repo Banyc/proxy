@@ -12,11 +12,11 @@ use std::{
 
 use async_trait::async_trait;
 
-use crate::{connect::ConnectorConfigReader, stream::ConnParts};
+use crate::{connect::ConnectorConfigReader, stream::IoConnection};
 
 #[async_trait]
 pub trait StreamConnect: std::fmt::Debug + Sync + Send + 'static {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>>;
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>>;
     fn reset_addr(&self, _addr: SocketAddr) {}
     fn reoptimize(&self, _addr: SocketAddr) {}
     fn session_stats(&self, _addr: SocketAddr) -> Option<String> {
@@ -31,7 +31,7 @@ pub trait StreamConnectExt: StreamConnect {
         &self,
         addr: SocketAddr,
         timeout: Duration,
-    ) -> impl Future<Output = io::Result<Box<dyn ConnParts>>> + Send
+    ) -> impl Future<Output = io::Result<Box<dyn IoConnection>>> + Send
     where
         Self: Sync,
     {
@@ -48,7 +48,7 @@ impl<T: StreamConnect + ?Sized> StreamConnectExt for T {}
 
 #[async_trait]
 pub trait NamedStreamConnect: std::fmt::Debug + Sync + Send + 'static {
-    async fn connect(&self) -> io::Result<Box<dyn ConnParts>>;
+    async fn connect(&self) -> io::Result<Box<dyn IoConnection>>;
     fn session_stats(&self) -> Option<String> {
         None
     }
@@ -101,7 +101,7 @@ impl NamedStreamRegistry {
             generation,
         }
     }
-    async fn connect(&self, protocol: &str, name: &str) -> io::Result<Box<dyn ConnParts>> {
+    async fn connect(&self, protocol: &str, name: &str) -> io::Result<Box<dyn IoConnection>> {
         let mut changed = self.changed.subscribe();
         loop {
             let connector = self
@@ -187,7 +187,7 @@ impl StreamConnectorTable {
         stream_type: &str,
         addrs: impl IntoIterator<Item = SocketAddr>,
         timeout: Duration,
-    ) -> io::Result<(Box<dyn ConnParts>, SocketAddr)> {
+    ) -> io::Result<(Box<dyn IoConnection>, SocketAddr)> {
         let mut last_res = None;
         for addr in addrs {
             let res = self.timed_connect(stream_type, addr, timeout).await;
@@ -207,7 +207,7 @@ impl StreamConnectorTable {
         stream_type: &str,
         addr: SocketAddr,
         timeout: Duration,
-    ) -> io::Result<Box<dyn ConnParts>> {
+    ) -> io::Result<Box<dyn IoConnection>> {
         let Some(connector) = self.connectors.get(stream_type) else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -247,7 +247,7 @@ impl StreamConnectorTable {
         stream_type: &str,
         name: &str,
         timeout: Duration,
-    ) -> io::Result<Box<dyn ConnParts>> {
+    ) -> io::Result<Box<dyn IoConnection>> {
         tokio::time::timeout(timeout, self.named.connect(stream_type, name))
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "timed out"))?
@@ -261,7 +261,7 @@ impl StreamConnectorTable {
 mod tests {
     use super::*;
     use crate::connect::ConnectorConfig;
-    use crate::stream::{HasIoAddr, OwnIoStream};
+    use crate::stream::{HasIoAddr, OwnedIoStream};
     use std::pin::Pin;
     use std::task::{Context, Poll};
     use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
@@ -309,8 +309,8 @@ mod tests {
         }
     }
 
-    impl OwnIoStream for TestConn {}
-    impl ConnParts for TestConn {}
+    impl OwnedIoStream for TestConn {}
+    impl IoConnection for TestConn {}
 
     #[derive(Debug)]
     struct FallbackConnector {
@@ -324,7 +324,7 @@ mod tests {
     }
     #[async_trait]
     impl NamedStreamConnect for NamedConnector {
-        async fn connect(&self) -> io::Result<Box<dyn ConnParts>> {
+        async fn connect(&self) -> io::Result<Box<dyn IoConnection>> {
             let (io, _peer) = tokio::io::duplex(1);
             Ok(Box::new(TestConn {
                 io,
@@ -342,7 +342,7 @@ mod tests {
 
     #[async_trait]
     impl StreamConnect for FallbackConnector {
-        async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
+        async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
             self.attempted.lock().unwrap().push(addr);
             if addr != self.successful {
                 return Err(io::Error::from(io::ErrorKind::NetworkUnreachable));

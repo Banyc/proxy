@@ -27,7 +27,7 @@ use common::{
         context::StreamRuntime,
     },
     session::{SessionSpawner, log_rejection},
-    stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    stream::{HasIoAddr, IoConnection, OwnedIoStream, StreamServerHandleConn},
 };
 
 #[derive(Debug)]
@@ -144,7 +144,7 @@ impl RtpConnector {
 }
 #[async_trait]
 impl StreamConnect for RtpConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
         let bind = self
             .config
             .current()
@@ -184,8 +184,8 @@ pub struct AddressedRtpStream {
     // the session driver tasks, so the reliable transport stalls without it.
     _supervisor: rtp::socket::SessionHandle,
 }
-impl ConnParts for AddressedRtpStream {}
-impl OwnIoStream for AddressedRtpStream {}
+impl IoConnection for AddressedRtpStream {}
+impl OwnedIoStream for AddressedRtpStream {}
 impl HasIoAddr for AddressedRtpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.peer_addr)

@@ -6,7 +6,6 @@ mod tests {
     use bytes::BytesMut;
     use common::{
         addr::InternetAddr,
-        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         connect::{ConnectorConfig, ConnectorResetSignal, connector_config_cell},
         header::route::RouteErrorKind,
         loading::{self, Serve},
@@ -21,6 +20,7 @@ mod tests {
             connect::udp::UdpConnector,
             context::{Runtime, StreamRuntime, UdpRuntime},
         },
+        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         route::ConnConfig,
         stream::pool::StreamConnPool,
         udp::PACKET_BUFFER_LENGTH,

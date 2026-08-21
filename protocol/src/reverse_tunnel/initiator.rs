@@ -20,7 +20,7 @@ use common::{
         context::{Runtime, StreamRuntime},
     },
     session::log_rejection,
-    stream::{ConnParts, StreamServerHandleConn},
+    stream::{IoConnection, StreamServerHandleConn},
 };
 use metrics::counter;
 use mux::{LaneClass, MuxError, spawn_mux_no_reconnection};
@@ -285,7 +285,7 @@ impl loading::HandleConn for TunnelMuxFlowHandler {}
 impl StreamServerHandleConn for TunnelMuxFlowHandler {
     async fn handle_stream<Stream>(&self, stream: Stream)
     where
-        Stream: ConnParts + std::fmt::Debug,
+        Stream: IoConnection + std::fmt::Debug,
     {
         self.stream.handle_stream(stream).await;
     }
@@ -299,7 +299,7 @@ impl MuxProxyConnHandler for TunnelMuxFlowHandler {
 async fn connect_concrete(
     addr: &RouteAddr,
     runtime: &StreamRuntime,
-) -> Result<(Box<dyn ConnParts>, SocketAddr), ReverseTunnelSessionError> {
+) -> Result<(Box<dyn IoConnection>, SocketAddr), ReverseTunnelSessionError> {
     let sock_addrs = addr.address.to_socket_addrs().await?;
     runtime
         .connector_table

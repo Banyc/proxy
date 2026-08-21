@@ -678,13 +678,13 @@ impl UdpServerHandleConn for UdpProxyConnHandler {
 mod tests {
     use super::*;
     use crate::{
-        anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         connect::{ConnectorConfig, connector_config_cell},
         header::route::RouteRequest,
         proto::{
             conn::udp::UDP_FLOW_ID_LEN, connect::udp::UdpConnector, context::UdpRuntime,
             relay::udp::ShutdownOutcome,
         },
+        anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     };
     use ae::anti_replay::TimeValidator;
     use std::sync::Arc;

@@ -12,7 +12,7 @@ use common::{
         relay::stream::{ConnContext, CopyBidirectional},
     },
     route::{ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, ProbeFutures, Registries},
-    stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    stream::{HasIoAddr, OwnedIoStream, StreamServerHandleConn},
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -138,7 +138,7 @@ impl TcpAccessConnHandler {
 
     async fn proxy<Downstream>(&self, downstream: Downstream) -> Result<(), TcpAccessProxyError>
     where
-        Downstream: OwnIoStream + HasIoAddr,
+        Downstream: OwnedIoStream + HasIoAddr,
     {
         let chain = match &self.conn_selector {
             common::route::ConnSelector::Empty => [].into(),
@@ -189,7 +189,7 @@ impl StreamServerHandleConn for TcpAccessConnHandler {
     #[instrument(skip(self, stream))]
     async fn handle_stream<Stream>(&self, stream: Stream)
     where
-        Stream: OwnIoStream + HasIoAddr,
+        Stream: OwnedIoStream + HasIoAddr,
     {
         match self.proxy(stream).await {
             Ok(()) => (),

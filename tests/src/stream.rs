@@ -11,7 +11,6 @@ mod tests {
 
     use ae::anti_replay::ReplayValidator;
     use common::{
-        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         connect::{ConnectorConfig, ConnectorResetSignal, connector_config_cell},
         loading::{self, ReloadableHandler, Serve},
         notify::Notify,
@@ -23,9 +22,10 @@ mod tests {
             connect::udp::UdpConnector,
             context::StreamRuntime,
         },
+        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         route::ConnConfig,
         stream::{
-            ConnParts, StreamServerHandleConn,
+            IoConnection, StreamServerHandleConn,
             pool::{StreamConnPool, connect_with_pool},
         },
     };
@@ -868,7 +868,7 @@ mod tests {
     impl StreamServerHandleConn for EchoCountingHandler {
         async fn handle_stream<Stream>(&self, mut stream: Stream)
         where
-            Stream: ConnParts + std::fmt::Debug,
+            Stream: IoConnection + std::fmt::Debug,
         {
             self.served.fetch_add(1, Ordering::SeqCst);
             let mut byte = [0u8; 1];

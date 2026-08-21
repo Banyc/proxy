@@ -10,7 +10,7 @@ use hdv_derive::HdvSerde;
 use primitive::ops::unit::HumanBytes;
 
 use crate::{
-    addr::{InternetAddr, InternetAddrHdv, InternetAddrKind},
+    addr::{InternetAddr, InternetAddrHostPort, InternetAddrKind},
     log::{HdvLogger, Timing, TimingHdv},
     proto::addr::{RouteAddr, RouteAddrHdv},
 };
@@ -59,9 +59,9 @@ pub struct StreamLogHdv {
     pub up_bytes: Option<u64>,
     pub dn_bytes: Option<u64>,
     pub upstream_addr: RouteAddrHdv,
-    pub upstream_sock_addr: InternetAddrHdv,
-    pub downstream_addr: Option<InternetAddrHdv>,
-    pub destination: Option<InternetAddrHdv>,
+    pub upstream_sock_addr: InternetAddrHostPort,
+    pub downstream_addr: Option<InternetAddrHostPort>,
+    pub destination: Option<InternetAddrHostPort>,
 }
 impl From<&StreamLog> for StreamLogHdv {
     fn from(value: &StreamLog) -> Self {

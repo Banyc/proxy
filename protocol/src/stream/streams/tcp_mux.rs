@@ -19,7 +19,7 @@ use common::{
         context::Runtime,
     },
     session::{SessionSpawner, log_rejection},
-    stream::ConnParts,
+    stream::IoConnection,
 };
 use metrics::counter;
 use mux::{MuxError, spawn_mux_no_reconnection};
@@ -283,7 +283,7 @@ impl UdpMuxDialer for TcpMuxConnector {
 }
 #[async_trait]
 impl StreamConnect for TcpMuxConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
         let ((reader, mut writer), addr) = self.connect_request_tx.send(addr).await?;
         counter!("stream.tcp_mux.mux.connects").increment(1);
         write_flow_kind(&mut writer, MuxFlowKind::Stream).await?;

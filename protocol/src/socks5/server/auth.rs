@@ -1,6 +1,6 @@
 use std::{collections::HashMap, io, num::NonZeroU8, sync::Arc};
 
-use common::stream::{HasIoAddr, OwnIoStream};
+use common::stream::{HasIoAddr, OwnedIoStream};
 
 use crate::socks5::messages::{
     MethodIdentifier, NegotiationRequest, NegotiationResponse,
@@ -20,7 +20,7 @@ impl Users {
 
     pub(crate) async fn negotiate<Stream>(&self, mut stream: Stream) -> io::Result<Stream>
     where
-        Stream: OwnIoStream + HasIoAddr + std::fmt::Debug,
+        Stream: OwnedIoStream + HasIoAddr + std::fmt::Debug,
     {
         let negotiation_request = NegotiationRequest::decode(&mut stream).await?;
 

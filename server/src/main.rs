@@ -6,7 +6,7 @@ use common::{
     error::AnyResult,
     lifecycle::process::{ProcessTaskExit, handle_root_task_exit},
     lifecycle::retention::RetentionActor,
-    lifecycle::suspend::spawn_check_system_suspend,
+    lifecycle::suspend::spawn_suspend_watcher,
 };
 use server::{
     ServeContext,
@@ -53,7 +53,7 @@ async fn main() -> AnyResult {
     process_tasks.spawn(retention_actor.run());
 
     let config_changed = spawn_watch_tasks(&mut process_tasks, &args.config_file_paths);
-    let system_suspended = spawn_check_system_suspend(&mut process_tasks);
+    let system_resume = spawn_suspend_watcher(&mut process_tasks);
 
     #[cfg(feature = "dhat-heap")]
     let profiler = dhat::Profiler::new_heap();
@@ -89,7 +89,7 @@ async fn main() -> AnyResult {
             stream_session_table: Some(session_tables.stream),
             udp_session_table: Some(session_tables.udp),
             config_changed,
-            system_suspended,
+            system_resume,
             retention,
         };
     } else {
@@ -97,7 +97,7 @@ async fn main() -> AnyResult {
             stream_session_table: None,
             udp_session_table: None,
             config_changed,
-            system_suspended,
+            system_resume,
             retention,
         };
     }

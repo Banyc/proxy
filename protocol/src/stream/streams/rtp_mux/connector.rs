@@ -6,7 +6,7 @@ use common::{
         stream::StreamConnect,
         udp::{UdpConnection, UdpMuxDialer},
     },
-    stream::{ConnParts, HasIoAddr, OwnIoStream},
+    stream::{HasIoAddr, IoConnection, OwnedIoStream},
 };
 use mux::LaneClass;
 use std::{
@@ -64,7 +64,7 @@ impl RtpMuxConnector {
 }
 #[async_trait]
 impl StreamConnect for RtpMuxConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
         let mut stream = self.inner.connect_stream(addr).await?;
         write_flow_kind(&mut stream, MuxFlowKind::Stream).await?;
         Ok(Box::new(ProxyRtpMuxClientStream(stream)))
@@ -139,8 +139,8 @@ impl AsyncWrite for ProxyRtpMuxClientStream {
         Pin::new(&mut self.0).poll_shutdown(cx)
     }
 }
-impl OwnIoStream for ProxyRtpMuxClientStream {}
-impl ConnParts for ProxyRtpMuxClientStream {
+impl OwnedIoStream for ProxyRtpMuxClientStream {}
+impl IoConnection for ProxyRtpMuxClientStream {
     fn set_stream_name(&self, name: &str) {
         self.0.set_name(name);
     }

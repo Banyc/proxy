@@ -16,7 +16,7 @@ use common::{
         connect::udp::UdpConnection,
         context::UdpRuntime,
     },
-    stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    stream::{HasIoAddr, IoConnection, OwnedIoStream, StreamServerHandleConn},
 };
 use metrics::counter;
 use mux::{
@@ -150,7 +150,7 @@ impl common::loading::HandleConn for MuxProxyHandler {}
 impl StreamServerHandleConn for MuxProxyHandler {
     async fn handle_stream<Stream>(&self, stream: Stream)
     where
-        Stream: ConnParts + std::fmt::Debug,
+        Stream: IoConnection + std::fmt::Debug,
     {
         self.stream.handle_stream(stream).await;
     }
@@ -195,7 +195,7 @@ pub async fn dispatch_mux_flow<ConnHandler, S, Wrapped, WrapStream>(
 ) where
     ConnHandler: MuxProxyConnHandler,
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    Wrapped: ConnParts + std::fmt::Debug + Send + 'static,
+    Wrapped: IoConnection + std::fmt::Debug + Send + 'static,
     WrapStream: FnOnce(S, SocketAddrPair) -> Wrapped + Send + 'static,
 {
     let kind = match read_flow_kind(&mut stream).await {
@@ -512,9 +512,9 @@ impl<R: Unpin, W: AsyncWrite + Unpin> AsyncWrite for AddressedMuxStream<R, W> {
     }
 }
 
-impl<R, W> ConnParts for AddressedMuxStream<R, W> where Self: OwnIoStream {}
+impl<R, W> IoConnection for AddressedMuxStream<R, W> where Self: OwnedIoStream {}
 
-impl<R, W> OwnIoStream for AddressedMuxStream<R, W>
+impl<R, W> OwnedIoStream for AddressedMuxStream<R, W>
 where
     R: std::fmt::Debug + Send + Sync + Unpin + 'static,
     W: std::fmt::Debug + Send + Sync + Unpin + 'static,

@@ -3,7 +3,7 @@ use common::{
     error::AnyResult,
     loading,
     session::{SessionSpawner, log_rejection},
-    stream::{ConnParts, HasIoAddr, OwnIoStream},
+    stream::{HasIoAddr, IoConnection, OwnedIoStream},
 };
 use std::{
     io,
@@ -158,8 +158,8 @@ impl AsyncWrite for ProxyRtpMuxStream {
         Pin::new(&mut self.0).poll_shutdown(cx)
     }
 }
-impl OwnIoStream for ProxyRtpMuxStream {}
-impl ConnParts for ProxyRtpMuxStream {}
+impl OwnedIoStream for ProxyRtpMuxStream {}
+impl IoConnection for ProxyRtpMuxStream {}
 impl HasIoAddr for ProxyRtpMuxStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.0.addr().peer_addr)

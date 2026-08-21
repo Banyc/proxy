@@ -26,7 +26,7 @@ use common::{
         context::StreamRuntime,
     },
     session::{SessionSpawner, log_rejection},
-    stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    stream::{HasIoAddr, IoConnection, OwnedIoStream, StreamServerHandleConn},
 };
 
 const STREAMS: usize = 4;
@@ -132,7 +132,7 @@ pub use common::lifecycle::serve_loop::ServeLoopError;
 pub struct MptcpConnector;
 #[async_trait]
 impl StreamConnect for MptcpConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
         let addrs = std::iter::repeat_n((), STREAMS).map(|()| addr);
         let stream = MptcpStream::connect(addrs).await?;
         counter!("stream.mptcp.connects").increment(1);
@@ -174,8 +174,8 @@ impl AsyncRead for AddressedMptcpStream {
         std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
     }
 }
-impl ConnParts for AddressedMptcpStream {}
-impl OwnIoStream for AddressedMptcpStream {}
+impl IoConnection for AddressedMptcpStream {}
+impl OwnedIoStream for AddressedMptcpStream {}
 impl HasIoAddr for AddressedMptcpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         self.0.peer_addr().ok_or_else(|| {

@@ -22,7 +22,7 @@ use common::{
         ConnSelector, ProbeFutures, Registries, RouteAction, RouteTable, RouteTableBuildError,
         RouteTableBuilder,
     },
-    stream::{ConnParts, HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    stream::{HasIoAddr, IoConnection, OwnedIoStream, StreamServerHandleConn},
     udp::UDP_FLOW_TIMEOUT,
 };
 use serde::{Deserialize, Serialize};
@@ -156,7 +156,7 @@ impl HandleConn for Socks5ServerTcpAccessConnHandler {}
 impl StreamServerHandleConn for Socks5ServerTcpAccessConnHandler {
     async fn handle_stream<Stream>(&self, stream: Stream)
     where
-        Stream: OwnIoStream + HasIoAddr + std::fmt::Debug,
+        Stream: OwnedIoStream + HasIoAddr + std::fmt::Debug,
     {
         let res = self.proxy(stream).await;
         match res {
@@ -191,7 +191,7 @@ impl Socks5ServerTcpAccessConnHandler {
         downstream: Downstream,
     ) -> Result<ProxyResult, Socks5ProxyError>
     where
-        Downstream: OwnIoStream + HasIoAddr + std::fmt::Debug,
+        Downstream: OwnedIoStream + HasIoAddr + std::fmt::Debug,
     {
         let res = self.establish(downstream).await?;
         let (destination, downstream, upstream, payload_crypto) = match res {
@@ -292,7 +292,7 @@ impl Socks5ServerTcpAccessConnHandler {
         stream: Stream,
     ) -> Result<EstablishResult<Stream>, EstablishError>
     where
-        Stream: OwnIoStream + HasIoAddr + std::fmt::Debug,
+        Stream: OwnedIoStream + HasIoAddr + std::fmt::Debug,
     {
         let (mut stream, relay_request) = self
             .negotiate_request(stream)
@@ -455,7 +455,7 @@ impl Socks5ServerTcpAccessConnHandler {
 
     async fn negotiate_request<Stream>(&self, stream: Stream) -> io::Result<(Stream, RelayRequest)>
     where
-        Stream: OwnIoStream + HasIoAddr + std::fmt::Debug,
+        Stream: OwnedIoStream + HasIoAddr + std::fmt::Debug,
     {
         let mut stream = self.users.negotiate(stream).await?;
 
@@ -499,7 +499,7 @@ pub enum EstablishResult<S> {
     },
     Direct {
         downstream: S,
-        upstream: Box<dyn ConnParts>,
+        upstream: Box<dyn IoConnection>,
         upstream_addr: InternetAddr,
         upstream_sock_addr: SocketAddr,
     },
@@ -518,7 +518,7 @@ enum RequestResult {
         destination: InternetAddr,
     },
     Direct {
-        upstream: Box<dyn ConnParts>,
+        upstream: Box<dyn IoConnection>,
         upstream_addr: InternetAddr,
         upstream_sock_addr: SocketAddr,
     },

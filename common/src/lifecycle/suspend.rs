@@ -11,12 +11,12 @@ fn suspend_toleration() -> Duration {
 }
 
 #[derive(Debug, Clone)]
-pub struct SystemSuspendSignal(pub Notify);
+pub struct SystemResumeSignal(pub Notify);
 
-pub fn spawn_check_system_suspend(
+pub fn spawn_suspend_watcher(
     process_tasks: &mut tokio::task::JoinSet<ProcessTaskExit>,
-) -> SystemSuspendSignal {
-    let system_suspend = SystemSuspendSignal(Notify::new());
+) -> SystemResumeSignal {
+    let system_suspend = SystemResumeSignal(Notify::new());
     process_tasks.spawn({
         let system_suspend = system_suspend.clone();
         async move {
@@ -43,7 +43,7 @@ mod tests {
     #[ignore = "requires an actual system suspend to trigger the notification"]
     async fn basics() {
         let mut process_tasks = tokio::task::JoinSet::new();
-        let system_suspend = spawn_check_system_suspend(&mut process_tasks);
+        let system_suspend = spawn_suspend_watcher(&mut process_tasks);
         let mut system_suspend = system_suspend.0.subscription();
         system_suspend.notified().await;
     }

@@ -10,7 +10,7 @@ use crate::{
     },
     route::{ConnChain, ConnConfig, ProbeRtt, convert_proxies_to_header_crypto_pairs},
     stream::{
-        ConnParts, HasIoAddr, OwnIoStream,
+        HasIoAddr, IoConnection, OwnedIoStream,
         pool::{ConnectError, connect_with_pool},
     },
 };
@@ -28,9 +28,9 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tracing::{instrument, trace};
 
 type PayloadCryptoReader =
-    tokio_chacha20::stream::NonceCiphertextReader<tokio::io::ReadHalf<Box<dyn ConnParts>>>;
+    tokio_chacha20::stream::NonceCiphertextReader<tokio::io::ReadHalf<Box<dyn IoConnection>>>;
 type PayloadCryptoWriter =
-    tokio_chacha20::stream::NonceCiphertextWriter<tokio::io::WriteHalf<Box<dyn ConnParts>>>;
+    tokio_chacha20::stream::NonceCiphertextWriter<tokio::io::WriteHalf<Box<dyn IoConnection>>>;
 #[derive(Debug)]
 struct PayloadCryptoConn {
     stream: tokio_chacha20::stream::DuplexStream<PayloadCryptoReader, PayloadCryptoWriter>,
@@ -40,9 +40,9 @@ struct PayloadCryptoConn {
 
 impl PayloadCryptoConn {
     fn wrap(
-        stream: Box<dyn ConnParts>,
+        stream: Box<dyn IoConnection>,
         crypto: &tokio_chacha20::config::Config,
-    ) -> Box<dyn ConnParts> {
+    ) -> Box<dyn IoConnection> {
         let local_addr = stream.local_addr().ok();
         let peer_addr = stream.peer_addr().ok();
         let (reader, writer) = tokio::io::split(stream);
@@ -81,8 +81,8 @@ impl AsyncWrite for PayloadCryptoConn {
     }
 }
 
-impl OwnIoStream for PayloadCryptoConn {}
-impl ConnParts for PayloadCryptoConn {}
+impl OwnedIoStream for PayloadCryptoConn {}
+impl IoConnection for PayloadCryptoConn {}
 
 impl HasIoAddr for PayloadCryptoConn {
     fn peer_addr(&self) -> io::Result<SocketAddr> {

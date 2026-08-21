@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use hdv_derive::HdvSerde;
 
-use crate::{addr::InternetAddrHdv, proto::addr::RouteAddr};
+use crate::{addr::InternetAddrHostPort, proto::addr::RouteAddr};
 
 pub const UDP_FLOW_ID_LEN: usize = 16;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -54,8 +54,8 @@ impl FlowKey {
 }
 #[derive(Debug, Clone, HdvSerde)]
 pub struct FlowHdv {
-    pub upstream: Option<InternetAddrHdv>,
-    pub downstream: InternetAddrHdv,
+    pub upstream: Option<InternetAddrHostPort>,
+    pub downstream: InternetAddrHostPort,
 }
 impl From<&Flow> for FlowHdv {
     fn from(value: &Flow) -> Self {

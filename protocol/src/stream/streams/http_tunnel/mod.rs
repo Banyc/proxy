@@ -17,7 +17,7 @@ use common::{
     loading,
     proto::{client::stream::StreamEstablishError, context::StreamRuntime},
     route::{ProbeFutures, Registries, RouteTable, RouteTableBuildError, RouteTableBuilder},
-    stream::{HasIoAddr, OwnIoStream, StreamServerHandleConn},
+    stream::{HasIoAddr, OwnedIoStream, StreamServerHandleConn},
 };
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::{Method, Request, Response, service::service_fn};
@@ -187,7 +187,7 @@ impl StreamServerHandleConn for HttpAccessConnHandler {
     #[instrument(skip_all)]
     async fn handle_stream<Stream>(&self, stream: Stream)
     where
-        Stream: OwnIoStream + HasIoAddr,
+        Stream: OwnedIoStream + HasIoAddr,
     {
         let dn_remote = stream.peer_addr().ok();
         let dn_local = stream.local_addr().ok();
@@ -207,7 +207,7 @@ async fn proxy<Downstream>(
     listener: Arc<str>,
 ) -> Result<(), TunnelError>
 where
-    Downstream: OwnIoStream,
+    Downstream: OwnedIoStream,
 {
     let downstream_ctx = Arc::new(downstream_ctx);
     let listener = Arc::clone(&listener);

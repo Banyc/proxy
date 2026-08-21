@@ -12,7 +12,7 @@ use monitor_table::{
 use tokio_throughput::GaugeHandle;
 
 use crate::{
-    addr::{InternetAddr, InternetAddrHdv},
+    addr::{InternetAddr, InternetAddrHostPort},
     metrics::{GaugeView, display_value},
 };
 
@@ -47,13 +47,13 @@ impl ValueDisplay for UdpSession {
 
 #[derive(Debug, HdvSerde)]
 struct UdpSessionHdv {
-    pub destination: Option<InternetAddrHdv>,
+    pub destination: Option<InternetAddrHostPort>,
     pub duration: u64,
     pub start_ms: u64,
     pub end_ms: Option<u64>,
-    pub upstream_local: Option<InternetAddrHdv>,
-    pub upstream_remote: InternetAddrHdv,
-    pub downstream_remote: InternetAddrHdv,
+    pub upstream_local: Option<InternetAddrHostPort>,
+    pub upstream_remote: InternetAddrHostPort,
+    pub downstream_remote: InternetAddrHostPort,
     pub up: GaugeView,
     pub dn: GaugeView,
 }

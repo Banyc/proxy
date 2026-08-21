@@ -4,7 +4,6 @@ use super::*;
 use ae::anti_replay::{ReplayValidator, TimeValidator};
 use bytes::BytesMut;
 use common::{
-    anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
     connect::{
         ConnectorConfig, ConnectorConfigReader, ConnectorResetSignal, connector_config_cell,
     },
@@ -20,6 +19,7 @@ use common::{
         connect::udp::UdpConnector,
         context::{Runtime, StreamRuntime, UdpRuntime},
     },
+    anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
     route::{ConnChain, ConnConfig},
     stream::pool::StreamConnPool,
     udp::PACKET_BUFFER_LENGTH,

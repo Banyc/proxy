@@ -3,7 +3,7 @@ use std::{fmt::Display, str::FromStr, sync::Arc};
 use hdv_derive::HdvSerde;
 use serde::{Deserialize, Serialize};
 
-use crate::addr::{InternetAddr, InternetAddrHdv, ParseInternetAddrError};
+use crate::addr::{InternetAddr, InternetAddrHostPort, ParseInternetAddrError};
 
 pub const REVERSE_TUNNEL_TCP_PROTOCOL: &str = "revtuntcp";
 pub const REVERSE_TUNNEL_RTP_PROTOCOL: &str = "revtunrtp";
@@ -93,7 +93,7 @@ pub fn validate_reverse_tunnel_name(name: &str) -> Result<(), ParseInternetAddrE
 
 #[derive(Debug, Clone, HdvSerde)]
 pub struct RouteAddrHdv {
-    pub addr: InternetAddrHdv,
+    pub addr: InternetAddrHostPort,
     pub ty: Arc<str>,
 }
 impl From<&RouteAddr> for RouteAddrHdv {

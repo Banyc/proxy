@@ -1,17 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 
-use crate::{addr::BothVerIp, config::Merge, notify::Notify};
+use crate::{addr::DualStackBind, config::Merge, notify::Notify};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectorConfig {
-    pub bind: BothVerIp,
+    pub bind: DualStackBind,
 }
 impl Default for ConnectorConfig {
     fn default() -> Self {
         Self {
-            bind: BothVerIp { v4: None, v6: None },
+            bind: DualStackBind { v4: None, v6: None },
         }
     }
 }
@@ -95,7 +95,7 @@ mod tests {
         let stream_reader = reader.clone();
         let udp_reader = reader.clone();
         let replaced = ConnectorConfig {
-            bind: BothVerIp {
+            bind: DualStackBind {
                 v4: Some("192.0.2.1".parse().unwrap()),
                 v6: None,
             },

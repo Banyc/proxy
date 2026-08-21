@@ -89,9 +89,9 @@ pub fn decode_request_route(
 mod tests {
     use super::*;
     use crate::{
-        anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         header::route::RouteRequest,
         proto::addr::RouteAddr,
+        anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     };
 
     #[test]

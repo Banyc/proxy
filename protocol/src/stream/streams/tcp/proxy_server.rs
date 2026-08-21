@@ -25,7 +25,7 @@ use common::{
         context::StreamRuntime,
     },
     session::SessionSpawner,
-    stream::{ConnParts, HasIoAddr, OwnIoStream},
+    stream::{HasIoAddr, IoConnection, OwnedIoStream},
 };
 
 use super::listener::TcpServer;
@@ -41,7 +41,7 @@ impl TcpConnector {
 }
 #[async_trait]
 impl StreamConnect for TcpConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn ConnParts>> {
+    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
         let bind = self
             .config
             .current()
@@ -94,8 +94,8 @@ impl AsyncRead for AddressedTcpStream {
         std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
     }
 }
-impl ConnParts for AddressedTcpStream {}
-impl OwnIoStream for AddressedTcpStream {}
+impl IoConnection for AddressedTcpStream {}
+impl OwnedIoStream for AddressedTcpStream {}
 impl HasIoAddr for AddressedTcpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         self.0.peer_addr()
@@ -179,8 +179,7 @@ mod tests {
     use crate::stream::streams::tcp::listener::TCP_STREAM_TYPE;
     use ae::anti_replay::ReplayValidator;
     use common::{
-        addr::BothVerIp,
-        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
+        addr::DualStackBind,
         connect::{ConnectorConfig, ConnectorResetSignal, connector_config_cell},
         header::{codec::write_header_async, preamble},
         loading::Serve,
@@ -189,6 +188,7 @@ mod tests {
             addr::RouteAddr, connect::udp::UdpConnector, context::StreamRuntime,
             header::StreamRequestHeader,
         },
+        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         stream::pool::StreamConnPool,
     };
     use swap::Swap;
@@ -219,7 +219,7 @@ mod tests {
         let proxy_addr = {
             let listen_addr = Arc::from("localhost:0");
             let (connector_config, _updater) = connector_config_cell(ConnectorConfig {
-                bind: BothVerIp { v4: None, v6: None },
+                bind: DualStackBind { v4: None, v6: None },
             });
             let mut connector_drivers = tokio::task::JoinSet::new();
             let udp_connector = UdpConnector::new(connector_config.clone());

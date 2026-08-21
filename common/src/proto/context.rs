@@ -5,7 +5,7 @@ use swap::Swap;
 use tokio_conn_pool::ConnPool;
 
 use crate::{
-    lifecycle::retention::RetentionActorSender, session::SessionSpawner, stream::ConnParts,
+    lifecycle::retention::RetentionActorSender, session::SessionSpawner, stream::IoConnection,
 };
 
 use super::{
@@ -24,7 +24,7 @@ pub struct Runtime {
 #[derive(Debug, Clone)]
 pub struct StreamRuntime {
     pub session_table: Option<StreamSessionTable>,
-    pub pool: Swap<ConnPool<RouteAddr, Box<dyn ConnParts>>>,
+    pub pool: Swap<ConnPool<RouteAddr, Box<dyn IoConnection>>>,
     pub connector_table: Arc<StreamConnectorTable>,
     pub replay_validator: Arc<ReplayValidator>,
     pub session_spawner: SessionSpawner,

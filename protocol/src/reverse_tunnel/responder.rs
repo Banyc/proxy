@@ -22,7 +22,7 @@ use common::{
         context::{Runtime, StreamRuntime, UdpRuntime},
     },
     session::log_rejection,
-    stream::{ConnParts, HasIoAddr},
+    stream::{HasIoAddr, IoConnection},
 };
 use metrics::{counter, gauge};
 use mux::{LaneClass, spawn_mux_no_reconnection};
@@ -78,7 +78,7 @@ struct RegisteredUdpTunnel {
 }
 #[async_trait]
 impl NamedStreamConnect for RegisteredTunnel {
-    async fn connect(&self) -> io::Result<Box<dyn ConnParts>> {
+    async fn connect(&self) -> io::Result<Box<dyn IoConnection>> {
         let (reader, mut writer) = self.opener.open().await?;
         write_flow_kind(&mut writer, MuxFlowKind::Stream).await?;
         counter!("revtun.stream.opened").increment(1);
