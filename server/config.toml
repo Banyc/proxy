@@ -95,26 +95,31 @@ conn_selector = "default"    # Or, `conn_selector = { chains = ..., probe_rtt = 
 listen_addr = "0.0.0.0:80"
 header_key = "cHJveHktZXhhbXBsZS1rZXk"
 # payload_key = "cHJveHktZXhhbXBsZS1rZXk"
+# speed_limit = 1024.0 # 1.0 KiB/s
 
 [[proxy_server.kcp_server]]
 listen_addr = "0.0.0.0:80"
 header_key = "cHJveHktZXhhbXBsZS1rZXk"
 # payload_key = "cHJveHktZXhhbXBsZS1rZXk"
+# speed_limit = 1024.0 # 1.0 KiB/s
 
 [[proxy_server.mptcp_server]]
 listen_addr = "0.0.0.0:80"
 header_key = "cHJveHktZXhhbXBsZS1rZXk"
 # payload_key = "cHJveHktZXhhbXBsZS1rZXk"
+# speed_limit = 1024.0 # 1.0 KiB/s
 
 [[proxy_server.rtp_server]]
 listen_addr = "0.0.0.0:80"
 header_key = "cHJveHktZXhhbXBsZS1rZXk"
 # payload_key = "cHJveHktZXhhbXBsZS1rZXk"
+# speed_limit = 1024.0 # 1.0 KiB/s
 
 [[proxy_server.udp_server]]
 listen_addr = "0.0.0.0:80"
 header_key = "cHJveHktZXhhbXBsZS1rZXk"
 # payload_key = "cHJveHktZXhhbXBsZS1rZXk"
+# speed_limit = 1024.0 # 1.0 KiB/s
 
 # Reverse tunnels: the private machine dials out and registers under a name;
 # this public server accepts the registration, and the chain entries above hop

@@ -41,6 +41,11 @@ pub struct StreamProxyConnHandlerConfig {
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
     #[serde(default)]
     pub allow_loopback: bool,
+    /// Per-listener egress speed limit in bytes/s. `None` (the default) means
+    /// unlimited. The limit is shared across all connections of a single
+    /// listener (the `Limiter` is `Arc`-backed and cloned per connection).
+    #[serde(default)]
+    pub speed_limit: Option<f64>,
 }
 
 impl StreamProxyConnHandlerConfig {
@@ -53,6 +58,7 @@ impl StreamProxyConnHandlerConfig {
             header_key: self.header_key,
             payload_key: self.payload_key,
             allow_loopback: self.allow_loopback,
+            speed_limit: self.speed_limit,
             stream_context,
             listen_addr,
         }
@@ -64,6 +70,7 @@ pub struct StreamProxyConnHandlerBuilder {
     pub header_key: tokio_chacha20::config::ConfigBuilder,
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
     pub allow_loopback: bool,
+    pub speed_limit: Option<f64>,
     pub stream_context: StreamRuntime,
     pub listen_addr: Arc<str>,
 }
@@ -86,6 +93,7 @@ impl StreamProxyConnHandlerBuilder {
             self.stream_context,
             Arc::clone(&self.listen_addr),
             self.allow_loopback,
+            self.speed_limit.unwrap_or(f64::INFINITY),
         ))
     }
 }
@@ -105,6 +113,7 @@ pub struct StreamProxyConnHandler {
     payload_crypto: Option<tokio_chacha20::config::Config>,
     stream_context: StreamRuntime,
     listen_addr: Arc<str>,
+    speed_limiter: Limiter,
 }
 impl StreamProxyConnHandler {
     pub fn new(
@@ -113,6 +122,7 @@ impl StreamProxyConnHandler {
         stream_context: StreamRuntime,
         listen_addr: Arc<str>,
         allow_loopback: bool,
+        speed_limit: f64,
     ) -> Self {
         Self {
             acceptor: StreamProxyAcceptor::new(
@@ -123,6 +133,7 @@ impl StreamProxyConnHandler {
             payload_crypto,
             stream_context,
             listen_addr,
+            speed_limiter: Limiter::new(speed_limit),
         }
     }
 
@@ -160,7 +171,7 @@ impl StreamProxyConnHandler {
             downstream,
             upstream: upstream.stream,
             payload_crypto: self.payload_crypto.clone(),
-            speed_limiter: Limiter::new(f64::INFINITY),
+            speed_limiter: self.speed_limiter.clone(),
             conn_context,
             retention: self.stream_context.retention.clone(),
         }

@@ -34,6 +34,7 @@ pub struct UdpProxyConnHandler {
     payload_crypto: Option<tokio_chacha20::config::Config>,
     udp_context: UdpRuntime,
     allow_loopback: bool,
+    speed_limiter: Limiter,
 }
 impl UdpProxyConnHandler {
     pub fn new(
@@ -41,12 +42,14 @@ impl UdpProxyConnHandler {
         payload_crypto: Option<tokio_chacha20::config::Config>,
         udp_context: UdpRuntime,
         allow_loopback: bool,
+        speed_limit: f64,
     ) -> Self {
         Self {
             header_crypto,
             payload_crypto,
             udp_context,
             allow_loopback,
+            speed_limiter: Limiter::new(speed_limit),
         }
     }
 
@@ -148,7 +151,7 @@ impl UdpProxyConnHandler {
                 read: dn_read,
                 write: dn_write,
             },
-            speed_limiter: Limiter::new(f64::INFINITY),
+            speed_limiter: self.speed_limiter.clone(),
             payload_crypto,
             response_header: Some(Box::new(response_header)),
             retention,
@@ -707,7 +710,7 @@ mod tests {
             session_spawner,
             retention,
         };
-        UdpProxyConnHandler::new(crypto(), None, udp_context, true)
+        UdpProxyConnHandler::new(crypto(), None, udp_context, true, f64::INFINITY)
     }
 
     /// A `UdpRecv` that returns its queued packet once and then stalls

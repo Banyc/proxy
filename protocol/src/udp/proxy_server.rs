@@ -11,7 +11,7 @@ use common::{
 use serde::Deserialize;
 use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UdpProxyServerConfig {
     pub listen_addr: Arc<str>,
@@ -19,6 +19,11 @@ pub struct UdpProxyServerConfig {
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
     #[serde(default)]
     pub allow_loopback: bool,
+    /// Per-listener egress speed limit in bytes/s. `None` (the default) means
+    /// unlimited. The limit is shared across all connections of a single
+    /// listener (the `Limiter` is `Arc`-backed and cloned per connection).
+    #[serde(default)]
+    pub speed_limit: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +62,7 @@ impl loading::Build for UdpProxyServerBuilder {
             payload_crypto,
             self.udp_context,
             self.config.allow_loopback,
+            self.config.speed_limit.unwrap_or(f64::INFINITY),
         ))
     }
 
@@ -98,6 +104,7 @@ mod tests {
                     "c2VjcmV0LXByb3h5LWtleQ!!".to_owned(),
                 )),
                 allow_loopback: false,
+                speed_limit: None,
             },
             udp_context: UdpRuntime {
                 session_table: None,

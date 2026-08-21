@@ -134,6 +134,7 @@ mod tests {
             stream_context,
             Arc::clone(addr),
             allow_loopback,
+            f64::INFINITY,
         );
         let proxy_addr = match ty {
             ConcreteStreamType::Tcp => {

@@ -256,6 +256,7 @@ pub fn build_udp_proxy_handler(
         payload_crypto,
         udp_context,
         allow_loopback,
+        f64::INFINITY,
     )))
 }
 

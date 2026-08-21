@@ -346,12 +346,14 @@ impl ReverseTunnelInitiatorBuilder {
             self.runtime.stream.clone(),
             self.key.clone(),
             self.config.allow_loopback,
+            f64::INFINITY,
         ));
         let udp_proxy = Arc::new(UdpProxyConnHandler::new(
             registration_crypto.clone(),
             payload_crypto,
             self.runtime.udp,
             self.config.allow_loopback,
+            f64::INFINITY,
         ));
         Ok(ReverseTunnelInitiatorHandler {
             name: self.config.name,
