@@ -7,7 +7,7 @@ use std::{
 
 use tokio::sync::mpsc;
 
-use crate::lifecycle::process::ProcessTaskExit;
+use crate::lifecycle::process::RootTaskExit;
 
 /// Burst buffer for retained guards. Retention submissions happen once per
 /// session/tunnel teardown, so steady-state occupancy is tiny; the actor
@@ -61,7 +61,7 @@ impl RetentionActor {
     }
 
     /// Run the retention loop until every sender is dropped.
-    pub async fn run(mut self) -> ProcessTaskExit {
+    pub async fn run(mut self) -> RootTaskExit {
         loop {
             let sleep: Pin<Box<dyn Future<Output = ()> + Send>> = self
                 .guards
@@ -86,7 +86,7 @@ impl RetentionActor {
                 msg = self.rx.recv() => {
                     match msg {
                         Some(retain) => self.guards.push((retain.until, retain.guard)),
-                        None => return ProcessTaskExit::Completed { task: "retention_actor" },
+                        None => return RootTaskExit::Completed { task: "retention_actor" },
                     }
                 }
                 () = sleep => {

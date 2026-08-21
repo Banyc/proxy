@@ -4,7 +4,7 @@ use axum::Router;
 use clap::Parser;
 use common::{
     error::AnyResult,
-    lifecycle::process::{ProcessTaskExit, handle_root_task_exit},
+    lifecycle::process::{RootTaskExit, handle_root_task_exit},
     lifecycle::retention::RetentionActor,
     lifecycle::suspend::spawn_suspend_watcher,
 };
@@ -47,7 +47,7 @@ async fn main() -> AnyResult {
         common::proto::log::udp::init_logger(path.clone());
     };
 
-    let mut process_tasks: tokio::task::JoinSet<ProcessTaskExit> = tokio::task::JoinSet::new();
+    let mut process_tasks: tokio::task::JoinSet<RootTaskExit> = tokio::task::JoinSet::new();
 
     let (retention_actor, retention) = RetentionActor::new();
     process_tasks.spawn(retention_actor.run());
@@ -75,10 +75,10 @@ async fn main() -> AnyResult {
         info!("Monitoring HTTP server listening addr: {listen_addr}");
         process_tasks.spawn(async move {
             match server.await {
-                Ok(()) => ProcessTaskExit::Completed {
+                Ok(()) => RootTaskExit::Completed {
                     task: "monitor_server",
                 },
-                Err(error) => ProcessTaskExit::Failed {
+                Err(error) => RootTaskExit::Failed {
                     task: "monitor_server",
                     detail: error.to_string(),
                 },

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use common::{error::AnyError, lifecycle::process::ProcessTaskExit, notify::Notify};
+use common::{error::AnyError, lifecycle::process::RootTaskExit, notify::Notify};
 
 pub mod multi_file_config;
 pub mod toml;
@@ -41,7 +41,7 @@ impl file_watcher_tokio::HandleEvent for ConfigWatcher {
 }
 
 pub fn spawn_watch_tasks(
-    process_tasks: &mut tokio::task::JoinSet<ProcessTaskExit>,
+    process_tasks: &mut tokio::task::JoinSet<RootTaskExit>,
     config_file_paths: &[Arc<str>],
 ) -> ConfigChangeSignal {
     let watcher = ConfigWatcher::new();
@@ -52,7 +52,7 @@ pub fn spawn_watch_tasks(
         process_tasks.spawn(async move {
             let watched = Arc::clone(&path);
             match file_watcher_tokio::watch_file(path.as_ref(), watcher).await {
-                Ok(()) => ProcessTaskExit::Completed {
+                Ok(()) => RootTaskExit::Completed {
                     task: "config_watcher",
                 },
                 Err(error) => watcher_failure(&watched, error),
@@ -62,8 +62,8 @@ pub fn spawn_watch_tasks(
     signal
 }
 
-fn watcher_failure(path: &str, error: impl std::fmt::Display) -> ProcessTaskExit {
-    ProcessTaskExit::Failed {
+fn watcher_failure(path: &str, error: impl std::fmt::Display) -> RootTaskExit {
+    RootTaskExit::Failed {
         task: "config_watcher",
         detail: format!("{path}:{error}"),
     }
@@ -80,12 +80,12 @@ mod tests {
             std::io::Error::other("synthetic watcher failure"),
         );
         match exit {
-            ProcessTaskExit::Failed { task, detail } => {
+            RootTaskExit::Failed { task, detail } => {
                 assert_eq!(task, "config_watcher");
                 assert!(detail.contains("/tmp/missing-config"), "{detail}");
                 assert!(detail.contains("synthetic watcher failure"), "{detail}");
             }
-            ProcessTaskExit::Completed { .. } => panic!("expected a failure"),
+            RootTaskExit::Completed { .. } => panic!("expected a failure"),
         }
     }
 }

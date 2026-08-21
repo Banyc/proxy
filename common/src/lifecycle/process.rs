@@ -9,7 +9,7 @@ use crate::error::AnyError;
 /// that ran to completion on its own, which for a root-owned task is
 /// unexpected.
 #[derive(Debug)]
-pub enum ProcessTaskExit {
+pub enum RootTaskExit {
     Completed { task: &'static str },
     Failed { task: &'static str, detail: String },
 }
@@ -23,12 +23,12 @@ pub enum ProcessTaskExit {
 /// re-raises them inside [`handle_root_task_exit`]); this type covers the
 /// remaining, previously log-only cases.
 #[derive(Debug, Error)]
-pub enum ProcessSupervisionError {
-    /// A root task returned `ProcessTaskExit::Completed` on its own, which
+pub enum RootTaskSupervisionError {
+    /// A root task returned `RootTaskExit::Completed` on its own, which
     /// for a process-lifetime actor is unexpected.
     #[error("Root process task `{task}` completed unexpectedly")]
     CompletedUnexpectedly { task: &'static str },
-    /// A root task returned `ProcessTaskExit::Failed`.
+    /// A root task returned `RootTaskExit::Failed`.
     #[error("Root process task `{task}` failed: {detail}")]
     Failed { task: &'static str, detail: String },
     /// A root task was cancelled without the `JoinSet` being dropped, which
@@ -42,7 +42,7 @@ pub enum ProcessSupervisionError {
 
 /// Supervise the join result of a single root-process task.
 ///
-/// Returns `Err(ProcessSupervisionError)` for *every* non-normal completion
+/// Returns `Err(RootTaskSupervisionError)` for *every* non-normal completion
 /// of a root task: clean completion and failure are both fatal for
 /// process-lifetime actors. The caller is expected to surface this as a
 /// process-fatal error (e.g. propagate it out of `main`) so the service is
@@ -57,15 +57,15 @@ pub enum ProcessSupervisionError {
 ///
 /// `Ok(())` is never returned: there is no normal exit for a root actor.
 pub fn handle_root_task_exit(
-    res: Result<ProcessTaskExit, tokio::task::JoinError>,
-) -> Result<(), ProcessSupervisionError> {
+    res: Result<RootTaskExit, tokio::task::JoinError>,
+) -> Result<(), RootTaskSupervisionError> {
     let exit = res.unwrap();
     match exit {
-        ProcessTaskExit::Completed { task } => {
-            Err(ProcessSupervisionError::CompletedUnexpectedly { task })
+        RootTaskExit::Completed { task } => {
+            Err(RootTaskSupervisionError::CompletedUnexpectedly { task })
         }
-        ProcessTaskExit::Failed { task, detail } => {
-            Err(ProcessSupervisionError::Failed { task, detail })
+        RootTaskExit::Failed { task, detail } => {
+            Err(RootTaskSupervisionError::Failed { task, detail })
         }
     }
 }
@@ -82,12 +82,12 @@ mod tests {
     /// fatal `CompletedUnexpectedly` error — it must not be silently logged.
     #[test]
     fn root_task_completing_unexpectedly_is_fatal() {
-        let res: Result<ProcessTaskExit, tokio::task::JoinError> = Ok(ProcessTaskExit::Completed {
+        let res: Result<RootTaskExit, tokio::task::JoinError> = Ok(RootTaskExit::Completed {
             task: "retention_actor",
         });
         let err = handle_root_task_exit(res).expect_err("must be fatal");
         match err {
-            ProcessSupervisionError::CompletedUnexpectedly { task } => {
+            RootTaskSupervisionError::CompletedUnexpectedly { task } => {
                 assert_eq!(task, "retention_actor",)
             }
             other => panic!("expected CompletedUnexpectedly, got {other:?}"),
@@ -98,13 +98,13 @@ mod tests {
     /// `Failed` error carrying the task tag and detail.
     #[test]
     fn root_task_failing_is_fatal() {
-        let res: Result<ProcessTaskExit, tokio::task::JoinError> = Ok(ProcessTaskExit::Failed {
+        let res: Result<RootTaskExit, tokio::task::JoinError> = Ok(RootTaskExit::Failed {
             task: "config_watcher",
             detail: "/etc/proxy.toml:watcher gone".to_string(),
         });
         let err = handle_root_task_exit(res).expect_err("must be fatal");
         match err {
-            ProcessSupervisionError::Failed { task, detail } => {
+            RootTaskSupervisionError::Failed { task, detail } => {
                 assert_eq!(task, "config_watcher");
                 assert!(detail.contains("/etc/proxy.toml"), "{detail}");
                 assert!(detail.contains("watcher gone"), "{detail}");
@@ -135,7 +135,7 @@ mod tests {
                 .join_next()
                 .await
                 .expect("task exists")
-                .map(|_: ()| ProcessTaskExit::Completed { task: "test" })
+                .map(|_: ()| RootTaskExit::Completed { task: "test" })
         });
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = handle_root_task_exit(join_res);
@@ -158,7 +158,7 @@ mod tests {
 
     /// A cancelled root task is fatal: the handler unwraps the join result
     /// first, so a cancelled join aborts (panics) rather than returning
-    /// `ProcessSupervisionError::Cancelled`.
+    /// `RootTaskSupervisionError::Cancelled`.
     #[tokio::test]
     #[should_panic(expected = "JoinError::Cancelled")]
     async fn root_task_cancelled_is_fatal() {
@@ -172,7 +172,7 @@ mod tests {
             .join_next()
             .await
             .expect("task exists")
-            .map(|_: ()| ProcessTaskExit::Completed { task: "test" });
+            .map(|_: ()| RootTaskExit::Completed { task: "test" });
         handle_root_task_exit(join_res).unwrap_err();
     }
 
@@ -181,31 +181,31 @@ mod tests {
     /// be swallowed as a normal exit.
     #[test]
     fn handle_root_task_exit_never_returns_ok() {
-        let res: Result<ProcessTaskExit, tokio::task::JoinError> = Ok(ProcessTaskExit::Completed {
+        let res: Result<RootTaskExit, tokio::task::JoinError> = Ok(RootTaskExit::Completed {
             task: "monitor_server",
         });
         assert!(handle_root_task_exit(res).is_err());
     }
 
     /// The handler must be usable in a `select!` loop the way `main.rs` uses
-    /// it: it takes the exact `Result<ProcessTaskExit, JoinError>` that
+    /// it: it takes the exact `Result<RootTaskExit, JoinError>` that
     /// `JoinSet::join_next` yields (modulo `Option`), and returns a value
     /// the caller can propagate. This is a compile-time check plus a single
     /// runtime invocation.
     #[tokio::test]
     async fn handler_is_select_loop_compatible() {
-        let mut tasks: tokio::task::JoinSet<ProcessTaskExit> = tokio::task::JoinSet::new();
+        let mut tasks: tokio::task::JoinSet<RootTaskExit> = tokio::task::JoinSet::new();
         let sentinel = Arc::new(AtomicUsize::new(0));
         let s = sentinel.clone();
         tasks.spawn(async move {
             s.store(1, Ordering::SeqCst);
-            ProcessTaskExit::Completed { task: "sentinel" }
+            RootTaskExit::Completed { task: "sentinel" }
         });
         let join_res = tasks.join_next().await.expect("task exists");
         let err = handle_root_task_exit(join_res).expect_err("must be fatal");
         assert!(matches!(
             err,
-            ProcessSupervisionError::CompletedUnexpectedly { task: "sentinel" }
+            RootTaskSupervisionError::CompletedUnexpectedly { task: "sentinel" }
         ));
         assert_eq!(sentinel.load(Ordering::SeqCst), 1, "task ran");
     }

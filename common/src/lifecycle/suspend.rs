@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::{lifecycle::process::ProcessTaskExit, notify::Notify};
+use crate::{lifecycle::process::RootTaskExit, notify::Notify};
 
 const SUSPEND_CHECK_INTERVAL: Duration = Duration::from_millis(200);
 /// The tolerance factor applied to the suspend check interval before a gap is
@@ -14,7 +14,7 @@ fn suspend_toleration() -> Duration {
 pub struct SystemResumeSignal(pub Notify);
 
 pub fn spawn_suspend_watcher(
-    process_tasks: &mut tokio::task::JoinSet<ProcessTaskExit>,
+    process_tasks: &mut tokio::task::JoinSet<RootTaskExit>,
 ) -> SystemResumeSignal {
     let system_suspend = SystemResumeSignal(Notify::new());
     process_tasks.spawn({
