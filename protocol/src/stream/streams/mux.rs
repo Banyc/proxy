@@ -357,7 +357,7 @@ pub async fn run_mux_connector<R, W, Fut>(
 
 /// Abort and reap every live mux session, logging each completed session.
 async fn reap_mux_sessions(sessions: &mut JoinSet<(SocketAddr, MuxError)>, epilog: &'static str) {
-    common::task_scope::abort_and_reap_with(sessions, |(addr, error)| {
+    common::lifecycle::task_scope::abort_and_reap_with(sessions, |(addr, error)| {
         warn!(?error, ?addr, epilog, "MUX session completed during epilog");
     })
     .await;

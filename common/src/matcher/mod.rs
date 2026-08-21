@@ -1,3 +1,11 @@
+//! Address/port matchers used by access-server route tables and listener
+//! `conn_selector` bindings.
+//!
+//! A [`Matcher`] is built from a `MatcherBuilderKind` that may be a single
+//! `addr`/`port` predicate, a named reference to another matcher, or a list
+//! of matchers (all-of). The resulting matcher tests a destination address and
+//! port, supporting IPv4/IPv6 literals, ranges, and domain-name regexes.
+
 use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},

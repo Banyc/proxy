@@ -88,7 +88,7 @@ where
         let accept_listener = Arc::clone(&listener);
         let session_spawner = self.session_spawner.clone();
         let mut state = ();
-        common::serve_loop::serve_loop(
+        common::lifecycle::serve_loop::serve_loop(
             addr,
             Arc::new(self.conn_handler),
             set_conn_handler_rx,
@@ -125,7 +125,7 @@ where
             },
             &mut state,
             |_| Box::pin(std::future::pending::<()>()),
-            common::serve_loop::ServeLoopConfig {
+            common::lifecycle::serve_loop::ServeLoopConfig {
                 label: "kcp",
                 counter_name: Some("stream.kcp.accepts"),
                 counts_dispatch_errors: false,
@@ -134,7 +134,7 @@ where
         .await
     }
 }
-pub use common::serve_loop::ServeLoopError;
+pub use common::lifecycle::serve_loop::ServeLoopError;
 
 #[derive(Debug, Clone)]
 pub struct KcpConnector {

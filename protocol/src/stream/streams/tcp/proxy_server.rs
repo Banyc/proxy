@@ -202,7 +202,7 @@ mod tests {
         let crypto = tokio_chacha20::config::Config::new(vec![].into());
         let connector_reset = ConnectorResetSignal(Notify::new());
         let (session_spawner, mut session_rx) = common::session::SessionSpawner::channel();
-        let (retention_actor, retention) = common::retention::RetentionActor::new();
+        let (retention_actor, retention) = common::lifecycle::retention::RetentionActor::new();
         // Test-owned tasks; aborted via JoinSet drop at the end of the test.
         let mut test_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
         test_tasks.spawn(async move {

@@ -4,9 +4,9 @@ use axum::Router;
 use clap::Parser;
 use common::{
     error::AnyResult,
-    process::{ProcessTaskExit, handle_root_task_exit},
-    retention::RetentionActor,
-    suspend::spawn_check_system_suspend,
+    lifecycle::process::{ProcessTaskExit, handle_root_task_exit},
+    lifecycle::retention::RetentionActor,
+    lifecycle::suspend::spawn_check_system_suspend,
 };
 use server::{
     ServeContext,
@@ -130,7 +130,7 @@ async fn main() -> AnyResult {
     // already-selected root outcome (serve failure or a fatal process-task
     // exit) wins over later ordinary children.
     let mut outcome = root_outcome;
-    common::task_scope::abort_and_reap_with(&mut process_tasks, |exit| {
+    common::lifecycle::task_scope::abort_and_reap_with(&mut process_tasks, |exit| {
         if let Err(error) = handle_root_task_exit(Ok(exit)) {
             error!(%error, "Root process task exited during shutdown");
             // Replace the outcome only while it is still `Ok`: the

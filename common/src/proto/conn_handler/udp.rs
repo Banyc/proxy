@@ -695,7 +695,7 @@ mod tests {
 
     fn handler() -> UdpProxyConnHandler {
         let (session_spawner, _session_rx) = crate::session::SessionSpawner::channel();
-        let (_retention_actor, retention) = crate::retention::RetentionActor::new();
+        let (_retention_actor, retention) = crate::lifecycle::retention::RetentionActor::new();
         let udp_context = UdpRuntime {
             session_table: None,
             connector: Arc::new(UdpConnector::new(

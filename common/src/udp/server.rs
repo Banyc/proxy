@@ -199,7 +199,7 @@ where
         }
 
         let mut state = ();
-        let serve_result = crate::serve_loop::serve_loop(
+        let serve_result = crate::lifecycle::serve_loop::serve_loop(
             addr,
             initial,
             set_conn_handler_rx,
@@ -238,7 +238,7 @@ where
             },
             &mut state,
             |_| Box::pin(std::future::pending::<()>()),
-            crate::serve_loop::ServeLoopConfig {
+            crate::lifecycle::serve_loop::ServeLoopConfig {
                 label: "udp",
                 counter_name: None,
                 counts_dispatch_errors: false,
@@ -248,8 +248,10 @@ where
         // The listener is removed: tell the dispatcher to drain and stop.
         accept_done.notify_one();
         serve_result.map_err(|e| match e {
-            crate::serve_loop::ServeLoopError::LocalAddr(e) => UdpServerServeError::LocalAddr(e),
-            crate::serve_loop::ServeLoopError::Accept { source, addr } => {
+            crate::lifecycle::serve_loop::ServeLoopError::LocalAddr(e) => {
+                UdpServerServeError::LocalAddr(e)
+            }
+            crate::lifecycle::serve_loop::ServeLoopError::Accept { source, addr } => {
                 UdpServerServeError::RecvFrom { source, addr }
             }
         })

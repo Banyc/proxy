@@ -11,6 +11,8 @@ use common::{
         ConnectorConfig, ConnectorConfigUpdater, ConnectorResetSignal, connector_config_cell,
     },
     error::{AnyError, AnyResult},
+    lifecycle::retention::RetentionActorSender,
+    lifecycle::suspend::SystemSuspendSignal,
     matcher::Matcher,
     notify::Subscription,
     proto::{
@@ -19,11 +21,9 @@ use common::{
         context::{Runtime, StreamRuntime, UdpRuntime},
         metrics::{stream::StreamSessionTable, udp::UdpSessionTable},
     },
-    retention::RetentionActorSender,
     route::{ConnConfig, ConnSelector, ProbeRtt, Registries},
     session::SessionSpawner,
     stream::pool::{StreamConnPool, StreamPoolBuilder},
-    suspend::SystemSuspendSignal,
 };
 use config::ReadConfig;
 use protocol::{
@@ -220,13 +220,13 @@ where
     while let Some(fut) = session_rx.recv().await {
         sessions.spawn(fut);
     }
-    common::task_scope::abort_and_reap_with(&mut sessions, |res| {
+    common::lifecycle::task_scope::abort_and_reap_with(&mut sessions, |res| {
         if let Err(error) = res {
             error!(?error, "Session task returned an error during shutdown");
         }
     })
     .await;
-    common::task_scope::abort_and_reap_with(&mut server_tasks, |res| {
+    common::lifecycle::task_scope::abort_and_reap_with(&mut server_tasks, |res| {
         if let Err(error) = res {
             error!(?error, "Server task returned an error during shutdown");
         }

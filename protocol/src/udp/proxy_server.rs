@@ -110,7 +110,7 @@ mod tests {
                     spawner
                 },
                 retention: {
-                    let (_actor, sender) = common::retention::RetentionActor::new();
+                    let (_actor, sender) = common::lifecycle::retention::RetentionActor::new();
                     sender
                 },
             },

@@ -1,3 +1,7 @@
+//! A time-expiring cell: holds an optional value that reads as `None` once a
+//! fixed `lifetime` elapses since the last [`TtlCell::set`], with no background
+//! timer. Used for cached route/selector state that should go stale on its own.
+
 use std::{
     sync::Arc,
     time::{Duration, Instant},

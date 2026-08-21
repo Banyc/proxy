@@ -187,7 +187,7 @@ pub(crate) async fn probe_task(
     // Outstanding epilogs are aborted and reaped before cancellation
     // returns: a completed epilog that beat the cancellation still surfaces
     // (its panic cascades) instead of being swallowed by the JoinSet drop.
-    crate::task_scope::abort_and_reap(&mut epilogs).await;
+    crate::lifecycle::task_scope::abort_and_reap(&mut epilogs).await;
 }
 
 #[cfg(test)]

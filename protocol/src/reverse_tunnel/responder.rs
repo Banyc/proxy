@@ -277,7 +277,7 @@ impl loading::Serve for TcpReverseTunnelResponder {
         let addr = self.listener.local_addr()?;
         let listener = self.listener;
         let mut state = ();
-        common::serve_loop::serve_loop(
+        common::lifecycle::serve_loop::serve_loop(
             addr,
             Arc::new(self.handler),
             replacement_rx,
@@ -299,7 +299,7 @@ impl loading::Serve for TcpReverseTunnelResponder {
             },
             &mut state,
             |_| Box::pin(std::future::pending()),
-            common::serve_loop::ServeLoopConfig {
+            common::lifecycle::serve_loop::ServeLoopConfig {
                 label: "revtun_tcp",
                 counter_name: Some("revtun.tcp.accepted"),
                 counts_dispatch_errors: false,

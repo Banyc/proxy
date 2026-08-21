@@ -2,7 +2,7 @@ use std::future::Future;
 
 use common::{
     error::AnyResult,
-    retention::{RetentionActor, RetentionActorSender},
+    lifecycle::retention::{RetentionActor, RetentionActorSender},
     session::SessionSpawner,
 };
 

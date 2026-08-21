@@ -189,7 +189,7 @@ struct DirectContext {
     pub downstream: super::HttpDownstreamContext,
     pub method: String,
     pub uri: String,
-    pub retention: common::retention::RetentionActorSender,
+    pub retention: common::lifecycle::retention::RetentionActorSender,
 }
 #[instrument(skip_all)]
 async fn direct(ctx: DirectContext, upgraded: Upgraded) -> Result<(), ConnectFailure> {

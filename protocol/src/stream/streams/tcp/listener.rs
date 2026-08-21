@@ -70,7 +70,7 @@ where
         let listener = &self.listener;
         let session_spawner = self.session_spawner.clone();
         let mut loop_state = ();
-        common::serve_loop::serve_loop(
+        common::lifecycle::serve_loop::serve_loop(
             addr,
             Arc::new(self.conn_handler),
             set_conn_handler_rx,
@@ -92,7 +92,7 @@ where
             },
             &mut loop_state,
             |_| Box::pin(std::future::pending::<()>()),
-            common::serve_loop::ServeLoopConfig {
+            common::lifecycle::serve_loop::ServeLoopConfig {
                 label: "tcp",
                 counter_name: Some("stream.tcp.accepts"),
                 counts_dispatch_errors: false,
@@ -101,4 +101,4 @@ where
         .await
     }
 }
-pub use common::serve_loop::ServeLoopError;
+pub use common::lifecycle::serve_loop::ServeLoopError;

@@ -19,6 +19,7 @@ use crate::stream::{
 };
 use common::{
     addr::{InternetAddr, InternetAddrKind},
+    lifecycle::retention::RetentionActorSender,
     log::Timing,
     proto::{
         addr::RouteAddr,
@@ -27,7 +28,6 @@ use common::{
         metrics::stream::StreamSession,
         relay::DEAD_SESSION_RETENTION_DURATION,
     },
-    retention::RetentionActorSender,
     route::{ConnSelector, RouteAction},
     session::{SessionSpawner, log_rejection},
     udp::UDP_FLOW_TIMEOUT,

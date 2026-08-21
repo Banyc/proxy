@@ -32,7 +32,7 @@ pub struct CopyBidirectional<Downstream, Upstream> {
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
     pub speed_limiter: Limiter,
     pub conn_context: ConnContext,
-    pub retention: crate::retention::RetentionActorSender,
+    pub retention: crate::lifecycle::retention::RetentionActorSender,
 }
 
 impl<Downstream, Upstream> CopyBidirectional<Downstream, Upstream>

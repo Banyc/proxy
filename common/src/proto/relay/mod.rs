@@ -22,7 +22,7 @@ pub const DEAD_SESSION_RETENTION_DURATION: Duration = Duration::from_secs(5);
 
 pub async fn retain_dead_session<Session: Send + Sync + 'static>(
     session: RowOwnedGuard<Session>,
-    retention: &crate::retention::RetentionActorSender,
+    retention: &crate::lifecycle::retention::RetentionActorSender,
 ) {
     retention
         .retain(

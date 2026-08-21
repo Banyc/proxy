@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use common::{error::AnyError, notify::Notify, process::ProcessTaskExit};
+use common::{error::AnyError, lifecycle::process::ProcessTaskExit, notify::Notify};
 
 pub mod multi_file_config;
 pub mod toml;

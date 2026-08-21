@@ -192,7 +192,7 @@ async fn test_stream_runtime(
             result.unwrap().unwrap();
         }
     });
-    let (retention_actor, retention) = common::retention::RetentionActor::new();
+    let (retention_actor, retention) = common::lifecycle::retention::RetentionActor::new();
     tasks.spawn_required("retention actor", async move {
         retention_actor.run().await;
     });

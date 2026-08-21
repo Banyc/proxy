@@ -82,7 +82,7 @@ pub struct CopyBidirectional<R, W, DownstreamRead, DownstreamWrite> {
     pub speed_limiter: Limiter,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
     pub response_header: Option<Box<dyn Fn() -> Arc<[u8]> + Send>>,
-    pub retention: crate::retention::RetentionActorSender,
+    pub retention: crate::lifecycle::retention::RetentionActorSender,
 }
 
 impl<R, W, DownstreamRead, DownstreamWrite> CopyBidirectional<R, W, DownstreamRead, DownstreamWrite>
@@ -420,7 +420,7 @@ where
     // ended, or both after the timeout): the selected outcome wins, a
     // completed sibling error is folded in only while the outcome is Ok, and
     // a completed sibling panic still cascades.
-    crate::task_scope::abort_and_reap_results(&mut io_copy_tasks, outcome).await?;
+    crate::lifecycle::task_scope::abort_and_reap_results(&mut io_copy_tasks, outcome).await?;
     let last_packet = std::time::Instant::max(
         *last_downlink_packet.read().unwrap(),
         *last_uplink_packet.read().unwrap(),

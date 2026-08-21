@@ -123,7 +123,7 @@ where
         // predate the reload instead of being pinned to the TCP-accept-time
         // handler.
         let reloadable = self.reloadable.clone();
-        common::serve_loop::serve_loop(
+        common::lifecycle::serve_loop::serve_loop(
             addr,
             reloadable.current(),
             set_conn_handler_rx,
@@ -191,7 +191,7 @@ where
                     }
                 })
             },
-            common::serve_loop::ServeLoopConfig {
+            common::lifecycle::serve_loop::ServeLoopConfig {
                 label: "tcp_mux",
                 counter_name: Some("stream.tcp_mux.tcp.accepts"),
                 counts_dispatch_errors: false,
@@ -200,7 +200,7 @@ where
         .await
     }
 }
-pub use common::serve_loop::ServeLoopError;
+pub use common::lifecycle::serve_loop::ServeLoopError;
 
 /// Injectable query for a stream's local/peer address pair.
 ///

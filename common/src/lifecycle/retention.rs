@@ -7,7 +7,7 @@ use std::{
 
 use tokio::sync::mpsc;
 
-use crate::process::ProcessTaskExit;
+use crate::lifecycle::process::ProcessTaskExit;
 
 /// Burst buffer for retained guards. Retention submissions happen once per
 /// session/tunnel teardown, so steady-state occupancy is tiny; the actor

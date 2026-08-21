@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::{notify::Notify, process::ProcessTaskExit};
+use crate::{lifecycle::process::ProcessTaskExit, notify::Notify};
 
 const SUSPEND_CHECK_INTERVAL: Duration = Duration::from_millis(200);
 /// The tolerance factor applied to the suspend check interval before a gap is
