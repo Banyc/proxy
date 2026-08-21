@@ -11,7 +11,7 @@ use crate::{
     loading,
     proxy_runtime::conn::udp::{DownstreamAddr, Flow, FlowKey, UdpFlowId, UpstreamAddr},
     session::{SessionSpawner, log_rejection},
-    udp::Packet,
+    udp_runtime::Packet,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

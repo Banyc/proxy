@@ -22,10 +22,10 @@ mod tests {
             context::{Runtime, StreamRuntime, UdpRuntime},
         },
         route::HopConfig,
-        stream::pool::StreamConnPool,
-        udp::PACKET_BUFFER_LENGTH,
+        stream_runtime::pool::StreamConnPool,
+        udp_runtime::PACKET_BUFFER_LENGTH,
     };
-    use protocol::stream::{
+    use protocol::stream_proto::{
         connect::build_concrete_stream_connector_table,
         streams::{
             mux::MuxProxyHandler, rtp_mux::build_rtp_mux_proxy_server,
@@ -689,7 +689,7 @@ mod tests {
     /// A probe over a relay chain of mux proxies, driven through the
     /// production [`probe_rtt`], must close the flow promptly once its
     /// write half is shut down, instead of idling the echo server out for
-    /// the full [`common::udp::UDP_FLOW_TIMEOUT`] and tripping the "UDP
+    /// the full [`common::udp_runtime::UDP_FLOW_TIMEOUT`] and tripping the "UDP
     /// echo flow idle" warning. The completion signal returned with the
     /// probe reports the actual flow termination: deleting the production
     /// epilog (the shutdown inside `probe_rtt`) leaves the flow retained
@@ -804,7 +804,7 @@ mod tests {
     /// the raw-UDP hop's write-half shutdown reports
     /// [`ShutdownOutcome::Unsupported`], so the probe's EOF cannot propagate
     /// past it, and the relay aborts the flow only after
-    /// [`common::udp::UDP_FLOW_TIMEOUT`] of inactivity. The completion
+    /// [`common::udp_runtime::UDP_FLOW_TIMEOUT`] of inactivity. The completion
     /// signal therefore must NOT fire promptly, and must report the late
     /// EOF of the safety-timeout teardown once the retained relay dies.
     async fn probe_over_mixed_mux_raw_udp_chain_is_retained_until_the_safety_timeout(

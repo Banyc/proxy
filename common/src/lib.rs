@@ -34,6 +34,6 @@ pub mod notify;
 pub mod proxy_runtime;
 pub mod route;
 pub mod session;
-pub mod stream;
+pub mod stream_runtime;
 pub mod ttl_cell;
-pub mod udp;
+pub mod udp_runtime;

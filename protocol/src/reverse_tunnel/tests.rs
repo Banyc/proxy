@@ -21,8 +21,8 @@ use common::{
         context::{Runtime, StreamRuntime, UdpRuntime},
     },
     route::{HopConfig, RouteChain},
-    stream::pool::StreamConnPool,
-    udp::PACKET_BUFFER_LENGTH,
+    stream_runtime::pool::StreamConnPool,
+    udp_runtime::PACKET_BUFFER_LENGTH,
 };
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use swap::Swap;
@@ -33,7 +33,7 @@ use tokio::{
 };
 use tokio_chacha20::config::ConfigBuilder;
 
-use crate::stream::connect::build_concrete_stream_connector_table;
+use crate::stream_proto::connect::build_concrete_stream_connector_table;
 
 /// Actively-polled scope of test-owned background tasks. The test body
 /// runs through [`TestScope::run`], which races it against `join_next()`

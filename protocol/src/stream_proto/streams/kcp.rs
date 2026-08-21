@@ -6,8 +6,9 @@ use serde::Deserialize;
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    net::ToSocketAddrs,
+    net::{ToSocketAddrs, UdpSocket},
 };
+use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
 use tracing::instrument;
 
 use common::{
@@ -27,40 +28,37 @@ use common::{
         context::StreamRuntime,
     },
     session::{SessionSpawner, log_rejection},
-    stream::{HasIoAddr, IoConnection, OwnedIoStream, StreamServerHandleConn},
+    stream_runtime::{HasIoAddr, IoConnection, OwnedIoStream, StreamServerHandleConn},
 };
 
 #[derive(Debug)]
-pub struct RtpServer<ConnHandler> {
-    listener: rtp::udp::Listener,
+pub struct KcpServer<ConnHandler> {
+    listener: KcpListener,
     conn_handler: ConnHandler,
-    fec: bool,
     session_spawner: SessionSpawner,
 }
-impl<ConnHandler> RtpServer<ConnHandler> {
+impl<ConnHandler> KcpServer<ConnHandler> {
     pub fn new(
-        listener: rtp::udp::Listener,
+        listener: KcpListener,
         conn_handler: ConnHandler,
-        fec: bool,
         session_spawner: SessionSpawner,
     ) -> Self {
         Self {
             listener,
             conn_handler,
-            fec,
             session_spawner,
         }
     }
 
-    pub fn listener(&self) -> &rtp::udp::Listener {
+    pub fn listener(&self) -> &KcpListener {
         &self.listener
     }
 
-    pub fn listener_mut(&mut self) -> &mut rtp::udp::Listener {
+    pub fn listener_mut(&mut self) -> &mut KcpListener {
         &mut self.listener
     }
 }
-impl<ConnHandler> loading::Serve for RtpServer<ConnHandler>
+impl<ConnHandler> loading::Serve for KcpServer<ConnHandler>
 where
     ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
 {
@@ -73,7 +71,7 @@ where
         self.serve_(set_conn_handler_rx).await.map_err(|e| e.into())
     }
 }
-impl<ConnHandler> RtpServer<ConnHandler>
+impl<ConnHandler> KcpServer<ConnHandler>
 where
     ConnHandler: StreamServerHandleConn + Send + Sync + 'static,
 {
@@ -82,9 +80,12 @@ where
         self,
         set_conn_handler_rx: loading::ReplaceConnHandlerRx<ConnHandler>,
     ) -> Result<(), ServeLoopError> {
-        let addr = self.listener.local_addr();
-        let listener = &self.listener;
-        let fec = self.fec;
+        let addr = self
+            .listener
+            .local_addr()
+            .map_err(ServeLoopError::LocalAddr)?;
+        let listener = Arc::new(tokio::sync::Mutex::new(self.listener));
+        let accept_listener = Arc::clone(&listener);
         let session_spawner = self.session_spawner.clone();
         let mut state = ();
         common::lifecycle::serve_loop::serve_loop(
@@ -93,18 +94,21 @@ where
             set_conn_handler_rx,
             |_| {},
             || {
-                listener.accept_without_handshake_with(rtp::udp::AcceptConfig {
-                    fec,
-                    ..rtp::udp::AcceptConfig::default()
-                })
+                let accept_listener = Arc::clone(&accept_listener);
+                async move {
+                    accept_listener
+                        .lock()
+                        .await
+                        .accept()
+                        .await
+                        .map_err(Into::into)
+                }
             },
-            |_, stream: rtp::udp::Accepted, conn_handler: Arc<ConnHandler>| {
-                let stream = AddressedRtpStream {
-                    read: stream.read.into_async_read(),
-                    write: stream.write.into_async_write(),
-                    local_addr: listener.local_addr(),
-                    peer_addr: stream.peer_addr,
-                    _supervisor: stream.supervisor,
+            |_, (stream, peer_addr): (KcpStream, SocketAddr), conn_handler: Arc<ConnHandler>| {
+                let stream = AddressedKcpStream {
+                    stream,
+                    local_addr: addr,
+                    peer_addr,
                 };
                 let session_spawner = session_spawner.clone();
                 Box::pin(async move {
@@ -115,16 +119,16 @@ where
                         })
                         .await
                     {
-                        log_rejection("rtp", error);
+                        log_rejection("kcp", error);
                     }
                 })
             },
             &mut state,
             |_| Box::pin(std::future::pending::<()>()),
             common::lifecycle::serve_loop::ServeLoopConfig {
-                label: "rtp",
-                counter_name: Some("stream.rtp.accepts"),
-                counts_dispatch_errors: true,
+                label: "kcp",
+                counter_name: Some("stream.kcp.accepts"),
+                counts_dispatch_errors: false,
             },
         )
         .await
@@ -133,17 +137,16 @@ where
 pub use common::lifecycle::serve_loop::ServeLoopError;
 
 #[derive(Debug, Clone)]
-pub struct RtpConnector {
+pub struct KcpConnector {
     config: ConnectorConfigReader,
-    fec: bool,
 }
-impl RtpConnector {
-    pub fn new(config: ConnectorConfigReader, fec: bool) -> Self {
-        Self { config, fec }
+impl KcpConnector {
+    pub fn new(config: ConnectorConfigReader) -> Self {
+        Self { config }
     }
 }
 #[async_trait]
-impl StreamConnect for RtpConnector {
+impl StreamConnect for KcpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
         let bind = self
             .config
@@ -152,41 +155,37 @@ impl StreamConnect for RtpConnector {
             .get_matched(&addr.ip())
             .map(|ip| SocketAddr::new(ip, 0))
             .unwrap_or_else(|| any_addr(&addr.ip()));
-        let connected = rtp::udp::connect_with(
-            bind,
-            addr,
-            rtp::udp::ConnectConfig {
-                handshake: false,
-                fec: self.fec,
-                ..rtp::udp::ConnectConfig::default()
-            },
-        )
-        .await?;
-        let stream = AddressedRtpStream {
-            read: connected.read.into_async_read(),
-            write: connected.write.into_async_write(),
-            local_addr: connected.local_addr,
-            peer_addr: connected.peer_addr,
-            _supervisor: connected.supervisor,
+        let socket = UdpSocket::bind(bind).await?;
+        let local_addr = socket.local_addr()?;
+        let config = fast_kcp_config();
+        let stream = KcpStream::connect_with_socket(&config, socket, addr).await?;
+        let stream = AddressedKcpStream {
+            stream,
+            local_addr,
+            peer_addr: addr,
         };
-        counter!("stream.rtp.connects").increment(1);
+        counter!("stream.kcp.connects").increment(1);
         Ok(Box::new(stream))
     }
 }
 
+pub fn fast_kcp_config() -> KcpConfig {
+    KcpConfig {
+        /* cSpell:disable */
+        nodelay: KcpNoDelayConfig::fastest(),
+        ..Default::default()
+    }
+}
+
 #[derive(Debug)]
-pub struct AddressedRtpStream {
-    read: rtp::socket::AsyncReadAdapter,
-    write: rtp::socket::AsyncWriteAdapter,
+pub struct AddressedKcpStream {
+    stream: KcpStream,
     local_addr: SocketAddr,
     peer_addr: SocketAddr,
-    // Held for the stream's lifetime: dropping the RTP session handle aborts
-    // the session driver tasks, so the reliable transport stalls without it.
-    _supervisor: rtp::socket::SessionHandle,
 }
-impl IoConnection for AddressedRtpStream {}
-impl OwnedIoStream for AddressedRtpStream {}
-impl HasIoAddr for AddressedRtpStream {
+impl IoConnection for AddressedKcpStream {}
+impl OwnedIoStream for AddressedKcpStream {}
+impl HasIoAddr for AddressedKcpStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.peer_addr)
     }
@@ -194,51 +193,51 @@ impl HasIoAddr for AddressedRtpStream {
         Ok(self.local_addr)
     }
 }
-impl AsyncRead for AddressedRtpStream {
+impl AsyncRead for AddressedKcpStream {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<io::Result<()>> {
-        Pin::new(&mut self.read).poll_read(cx, buf)
+        Pin::new(&mut self.stream).poll_read(cx, buf)
     }
 }
-impl AsyncWrite for AddressedRtpStream {
+impl AsyncWrite for AddressedKcpStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, io::Error>> {
-        Pin::new(&mut self.write).poll_write(cx, buf)
+        Pin::new(&mut self.stream).poll_write(cx, buf)
     }
 
     fn poll_flush(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), io::Error>> {
-        Pin::new(&mut self.write).poll_flush(cx)
+        Pin::new(&mut self.stream).poll_flush(cx)
     }
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), io::Error>> {
-        Pin::new(&mut self.write).poll_shutdown(cx)
+        Pin::new(&mut self.stream).poll_shutdown(cx)
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RtpProxyServerConfig {
+pub struct KcpProxyServerConfig {
     pub listen_addr: Arc<str>,
     #[serde(flatten)]
     pub inner: StreamProxyConnHandlerConfig,
 }
-impl RtpProxyServerConfig {
-    pub fn into_builder(self, stream_context: StreamRuntime) -> RtpProxyServerBuilder {
+impl KcpProxyServerConfig {
+    pub fn into_builder(self, stream_context: StreamRuntime) -> KcpProxyServerBuilder {
         let listen_addr = Arc::clone(&self.listen_addr);
         let inner = self.inner.into_builder(stream_context, listen_addr);
-        RtpProxyServerBuilder {
+        KcpProxyServerBuilder {
             listen_addr: self.listen_addr,
             inner,
         }
@@ -246,20 +245,20 @@ impl RtpProxyServerConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct RtpProxyServerBuilder {
+pub struct KcpProxyServerBuilder {
     pub listen_addr: Arc<str>,
     pub inner: StreamProxyConnHandlerBuilder,
 }
-impl loading::Build for RtpProxyServerBuilder {
+impl loading::Build for KcpProxyServerBuilder {
     type ConnHandler = StreamProxyConnHandler;
-    type Server = RtpServer<Self::ConnHandler>;
-    type Err = RtpProxyServerBuildError;
+    type Server = KcpServer<Self::ConnHandler>;
+    type Err = KcpProxyServerBuildError;
 
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let session_spawner = self.inner.stream_context.session_spawner.clone();
         let stream_proxy = self.build_conn_handler()?;
-        build_rtp_proxy_server(listen_addr.as_ref(), stream_proxy, session_spawner)
+        build_kcp_proxy_server(listen_addr.as_ref(), stream_proxy, session_spawner)
             .await
             .map_err(|e| e.into())
     }
@@ -273,21 +272,50 @@ impl loading::Build for RtpProxyServerBuilder {
     }
 }
 #[derive(Debug, Error)]
-pub enum RtpProxyServerBuildError {
+pub enum KcpProxyServerBuildError {
     #[error("{0}")]
     Hook(#[from] StreamProxyServerBuildError),
     #[error("{0}")]
     Server(#[from] ListenerBindError),
 }
-pub async fn build_rtp_proxy_server(
+pub async fn build_kcp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyConnHandler,
     session_spawner: SessionSpawner,
-) -> Result<RtpServer<StreamProxyConnHandler>, ListenerBindError> {
-    let fec = false;
-    let listener = rtp::udp::Listener::bind(listen_addr)
+) -> Result<KcpServer<StreamProxyConnHandler>, ListenerBindError> {
+    let config = fast_kcp_config();
+    let listener = KcpListener::bind(config, listen_addr)
         .await
-        .map_err(ListenerBindError)?;
-    let server = RtpServer::new(listener, stream_proxy, fec, session_spawner);
+        .map_err(|e| ListenerBindError(e.into()))?;
+    let server = KcpServer::new(listener, stream_proxy, session_spawner);
     Ok(server)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::addr::DualStackBind;
+    use common::connect::ConnectorConfig;
+
+    #[tokio::test]
+    async fn a_connected_stream_reports_the_address_the_kernel_assigned() {
+        let listener = KcpListener::bind(fast_kcp_config(), "127.0.0.1:0")
+            .await
+            .unwrap();
+        let listen_addr = listener.local_addr().unwrap();
+        let mut accept_tasks = tokio::task::JoinSet::new();
+        accept_tasks.spawn(async move {
+            let mut listener = listener;
+            let _ = listener.accept().await;
+        });
+        let connector = KcpConnector::new(
+            common::connect::connector_config_cell(ConnectorConfig {
+                bind: DualStackBind { v4: None, v6: None },
+            })
+            .0,
+        );
+        let stream = connector.connect(listen_addr).await.unwrap();
+        let local_addr = stream.local_addr().unwrap();
+        assert_ne!(local_addr.port(), 0, "{local_addr}");
+        drop(accept_tasks);
+    }
 }

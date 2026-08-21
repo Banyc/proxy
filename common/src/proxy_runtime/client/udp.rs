@@ -18,7 +18,7 @@ use crate::{
     },
     route::{ProbeRtt, RouteChain, convert_proxies_to_header_crypto_pairs},
     ttl_cell::RegeneratingHeader,
-    udp::{PACKET_BUFFER_LENGTH, UDP_FLOW_TIMEOUT},
+    udp_runtime::{PACKET_BUFFER_LENGTH, UDP_FLOW_TIMEOUT},
 };
 use ae::anti_replay::{TimeValidator, ValidatorRef};
 use bytes::BytesMut;

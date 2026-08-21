@@ -1,6 +1,6 @@
 use std::{fmt, sync::Arc};
 
-use crate::stream::{
+use crate::stream_proto::{
     addr::ConcreteStreamType,
     streams::{
         http_tunnel::{
@@ -25,7 +25,7 @@ use common::{
     },
     route::{RouteAction, RouteSelector},
     session::log_rejection,
-    udp::UDP_FLOW_TIMEOUT,
+    udp_runtime::UDP_FLOW_TIMEOUT,
 };
 use http_body_util::{BodyExt, Empty, combinators::BoxBody};
 use hyper::{Request, Response, body::Incoming, upgrade::Upgraded};

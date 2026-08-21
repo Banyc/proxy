@@ -231,7 +231,7 @@ mod tests {
     use crate::{
         addr::InternetAddrKind,
         connect::{ConnectorConfig, connector_config_cell},
-        stream::{HasIoAddr, OwnedIoStream},
+        stream_runtime::{HasIoAddr, OwnedIoStream},
     };
     use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
 

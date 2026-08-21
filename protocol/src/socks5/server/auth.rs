@@ -1,6 +1,6 @@
 use std::{collections::HashMap, io, num::NonZeroU8, sync::Arc};
 
-use common::stream::{HasIoAddr, OwnedIoStream};
+use common::stream_runtime::{HasIoAddr, OwnedIoStream};
 
 use crate::socks5::messages::{
     MethodIdentifier, NegotiationRequest, NegotiationResponse,

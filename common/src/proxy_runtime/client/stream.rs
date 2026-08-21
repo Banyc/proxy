@@ -9,7 +9,7 @@ use crate::{
         relay::same_key_nonce_ciphertext,
     },
     route::{HopConfig, ProbeRtt, RouteChain, convert_proxies_to_header_crypto_pairs},
-    stream::{
+    stream_runtime::{
         HasIoAddr, IoConnection, OwnedIoStream,
         pool::{ConnectError, connect_with_pool},
     },

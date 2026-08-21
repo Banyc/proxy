@@ -6,7 +6,7 @@ use common::{
         stream::StreamConnect,
         udp::{UdpConnection, UdpMuxDialer},
     },
-    stream::{HasIoAddr, IoConnection, OwnedIoStream},
+    stream_runtime::{HasIoAddr, IoConnection, OwnedIoStream},
 };
 use mux::LaneClass;
 use std::{
@@ -18,7 +18,7 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::stream::streams::mux::{
+use crate::stream_proto::streams::mux::{
     ConnectorDriverError, MuxConnectorDriver, MuxFlowKind, write_flow_kind,
 };
 #[derive(Debug)]

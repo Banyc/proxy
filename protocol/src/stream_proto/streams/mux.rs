@@ -16,7 +16,7 @@ use common::{
         connect::udp::UdpConnection,
         context::UdpRuntime,
     },
-    stream::{HasIoAddr, IoConnection, OwnedIoStream, StreamServerHandleConn},
+    stream_runtime::{HasIoAddr, IoConnection, OwnedIoStream, StreamServerHandleConn},
 };
 use metrics::counter;
 use mux::{

@@ -12,7 +12,7 @@ use crate::{
         route::RouteResponse,
     },
     proxy_runtime::{addr::RouteAddr, header::StreamRequestHeader},
-    stream::IoConnection,
+    stream_runtime::IoConnection,
 };
 
 pub async fn read_route_header<Downstream>(

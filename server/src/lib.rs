@@ -18,14 +18,14 @@ use common::{
     },
     route::HopConfig,
     session::SessionSpawner,
-    stream::pool::{StreamConnPool, StreamPoolBuilder},
+    stream_runtime::pool::{StreamConnPool, StreamPoolBuilder},
 };
 use config::ReadConfig;
 use protocol::{
     access_server::{self},
     proxy_server::{ProxyServerConfig, ProxyServerLoader, ProxyServerLoaderSnapshot},
     reverse_tunnel::{ReverseTunnelConfig, ReverseTunnelLoader, ReverseTunnelLoaderSnapshot},
-    stream::connect::build_concrete_stream_connector_table,
+    stream_proto::connect::build_concrete_stream_connector_table,
 };
 use serde::Deserialize;
 use swap::Swap;

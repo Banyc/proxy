@@ -7,7 +7,7 @@ use std::{
 };
 
 use super::authority::get_authority_from_req;
-use crate::stream::{
+use crate::stream_proto::{
     addr::ConcreteStreamType,
     streams::{
         http_tunnel::{
@@ -30,7 +30,7 @@ use common::{
     },
     route::{RouteAction, RouteSelector},
     session::{SessionSpawner, log_rejection},
-    udp::UDP_FLOW_TIMEOUT,
+    udp_runtime::UDP_FLOW_TIMEOUT,
 };
 use http_body_util::BodyExt;
 use hyper::{Request, body::Incoming};

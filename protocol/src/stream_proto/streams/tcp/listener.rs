@@ -7,7 +7,7 @@ use common::{
     error::AnyResult,
     loading,
     session::{SessionSpawner, log_rejection},
-    stream::StreamServerHandleConn,
+    stream_runtime::StreamServerHandleConn,
 };
 
 use super::proxy_server::AddressedTcpStream;

@@ -5,7 +5,8 @@ use swap::Swap;
 use tokio_conn_pool::ConnPool;
 
 use crate::{
-    lifecycle::retention::RetentionActorSender, session::SessionSpawner, stream::IoConnection,
+    lifecycle::retention::RetentionActorSender, session::SessionSpawner,
+    stream_runtime::IoConnection,
 };
 
 use super::{

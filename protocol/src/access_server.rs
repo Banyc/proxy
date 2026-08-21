@@ -11,7 +11,7 @@ use crate::{
             Socks5ServerUdpAccessServerConfig, Socks5UdpBuildError,
         },
     },
-    stream::streams::{
+    stream_proto::streams::{
         http_tunnel::{
             HttpAccessConnHandler, HttpAccessServerBuilder, HttpAccessServerConfig, HttpBuildError,
         },
@@ -20,7 +20,7 @@ use crate::{
             TcpAccessServerConfig,
         },
     },
-    udp::access_server::{
+    udp_proto::access_server::{
         UdpAccessBuildError, UdpAccessConnHandler, UdpAccessServerBuilder, UdpAccessServerConfig,
     },
 };

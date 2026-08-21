@@ -4,5 +4,5 @@ pub mod access_server;
 pub mod proxy_server;
 pub mod reverse_tunnel;
 pub mod socks5;
-pub mod stream;
-pub mod udp;
+pub mod stream_proto;
+pub mod udp_proto;

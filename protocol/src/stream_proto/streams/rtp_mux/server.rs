@@ -3,7 +3,7 @@ use common::{
     error::AnyResult,
     loading,
     session::{SessionSpawner, log_rejection},
-    stream::{HasIoAddr, IoConnection, OwnedIoStream},
+    stream_runtime::{HasIoAddr, IoConnection, OwnedIoStream},
 };
 use std::{
     io,
@@ -13,7 +13,7 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::stream::streams::mux::{MuxProxyConnHandler, SocketAddrPair, dispatch_mux_flow};
+use crate::stream_proto::streams::mux::{MuxProxyConnHandler, SocketAddrPair, dispatch_mux_flow};
 
 #[derive(Debug)]
 pub struct RtpMuxServer<ConnHandler> {

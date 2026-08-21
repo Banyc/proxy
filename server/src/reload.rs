@@ -16,7 +16,7 @@ use common::{
     notify::Subscription,
     proxy_runtime::{client::stream::StreamTracer, context::Runtime},
     route::{Registries, RouteSelector},
-    stream::pool::StreamConnPool,
+    stream_runtime::pool::StreamConnPool,
 };
 // `ProbeRtt` is referenced only in the `dyn ProbeRtt` annotation of
 // `stream_tracer` below; rustc's `unused_imports` lint mis-flags it there, yet

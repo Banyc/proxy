@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex, atomic::AtomicBool},
 };
 
-use crate::stream::streams::{
+use crate::stream_proto::streams::{
     http_tunnel::{proxy::dispatch_proxy, tunnel::dispatch_tunnel},
     tcp::listener::TcpServer,
 };
@@ -17,7 +17,7 @@ use common::{
     loading,
     proxy_runtime::{client::stream::StreamEstablishError, context::StreamRuntime},
     route::{ProbeFutures, Registries, RouteTable, RouteTableBuildError, RouteTableBuilder},
-    stream::{HasIoAddr, OwnedIoStream, StreamServerHandleConn},
+    stream_runtime::{HasIoAddr, OwnedIoStream, StreamServerHandleConn},
 };
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::{Method, Request, Response, service::service_fn};
@@ -358,7 +358,7 @@ mod tests {
             address: "127.0.0.1:8080".parse().unwrap(),
             protocol: "tcp".into(),
         };
-        let source = common::stream::pool::ConnectError::ConnectAddr {
+        let source = common::stream_runtime::pool::ConnectError::ConnectAddr {
             source: io::Error::other("test"),
             addr: addr.clone(),
             sock_addrs: vec![],
@@ -380,7 +380,7 @@ mod tests {
             address: "10.0.0.1:9090".parse().unwrap(),
             protocol: "rtp-mux".into(),
         };
-        let source = common::stream::pool::ConnectError::ConnectAddr {
+        let source = common::stream_runtime::pool::ConnectError::ConnectAddr {
             source: io::Error::other("test"),
             addr: addr.clone(),
             sock_addrs: vec![],

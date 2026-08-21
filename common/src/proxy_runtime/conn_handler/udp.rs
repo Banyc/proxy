@@ -13,7 +13,7 @@ use crate::{
         relay::udp::{CopyBidirectional, DownstreamParts, UdpRecv, UdpSend, UpstreamParts},
         route_header::udp::{UdpRequestRoute, decode_request_route, echo},
     },
-    udp::{
+    udp_runtime::{
         PACKET_BUFFER_LENGTH, Packet, UDP_FLOW_TIMEOUT,
         respond::respond_with_error,
         server::{UdpPacketRoute, UdpServer, UdpServerHandleConn},
@@ -882,7 +882,7 @@ mod tests {
     }
 
     /// An echo flow that goes idle still releases its session slot: each
-    /// echo read is bounded by [`crate::udp::UDP_FLOW_TIMEOUT`], and the
+    /// echo read is bounded by [`crate::udp_runtime::UDP_FLOW_TIMEOUT`], and the
     /// expiry is a quiet clean end (metric + debug) rather than a warning.
     #[tokio::test]
     async fn an_idle_echo_flow_ends_quietly_and_releases_its_slot() {
@@ -927,7 +927,7 @@ mod tests {
 
     /// A peer that keeps sending echo requests but never reads the
     /// responses must not hold its session slot forever: the response
-    /// write is bounded by [`crate::udp::UDP_FLOW_TIMEOUT`].
+    /// write is bounded by [`crate::udp_runtime::UDP_FLOW_TIMEOUT`].
     #[tokio::test]
     async fn a_stalled_echo_writer_times_out_the_flow() {
         let result = handler()

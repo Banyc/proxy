@@ -26,7 +26,7 @@ use common::{
         context::StreamRuntime,
     },
     session::{SessionSpawner, log_rejection},
-    stream::{HasIoAddr, IoConnection, OwnedIoStream, StreamServerHandleConn},
+    stream_runtime::{HasIoAddr, IoConnection, OwnedIoStream, StreamServerHandleConn},
 };
 
 const STREAMS: usize = 4;

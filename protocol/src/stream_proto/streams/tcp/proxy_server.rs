@@ -25,7 +25,7 @@ use common::{
         context::StreamRuntime,
     },
     session::SessionSpawner,
-    stream::{HasIoAddr, IoConnection, OwnedIoStream},
+    stream_runtime::{HasIoAddr, IoConnection, OwnedIoStream},
 };
 
 use super::listener::TcpServer;
@@ -173,10 +173,10 @@ pub async fn build_tcp_proxy_server(
 mod tests {
     use std::time::Duration;
 
-    use crate::stream::connect::build_concrete_stream_connector_table;
+    use crate::stream_proto::connect::build_concrete_stream_connector_table;
 
     use super::*;
-    use crate::stream::streams::tcp::listener::TCP_STREAM_TYPE;
+    use crate::stream_proto::streams::tcp::listener::TCP_STREAM_TYPE;
     use ae::anti_replay::ReplayValidator;
     use common::{
         addr::DualStackBind,
@@ -189,7 +189,7 @@ mod tests {
             addr::RouteAddr, connect::udp::UdpConnector, context::StreamRuntime,
             header::StreamRequestHeader,
         },
-        stream::pool::StreamConnPool,
+        stream_runtime::pool::StreamConnPool,
     };
     use swap::Swap;
     use tokio::{

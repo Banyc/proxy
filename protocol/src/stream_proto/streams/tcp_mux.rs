@@ -19,7 +19,7 @@ use common::{
         context::Runtime,
     },
     session::{SessionSpawner, log_rejection},
-    stream::IoConnection,
+    stream_runtime::IoConnection,
 };
 use metrics::counter;
 use mux::{MuxError, spawn_mux_no_reconnection};
@@ -31,7 +31,7 @@ use tokio::{
 };
 use tracing::{instrument, warn};
 
-use crate::stream::streams::mux::{
+use crate::stream_proto::streams::mux::{
     AddressedMuxStream, ConnectRequestTx, ConnectorDriverError, MuxConnectorDriver, MuxFlowKind,
     MuxProxyConnHandler, MuxProxyHandler, MuxProxyUdpBuildError, SocketAddrPair,
     build_udp_proxy_handler, connect_request_channel, dispatch_mux_flow, run_mux_accepter,

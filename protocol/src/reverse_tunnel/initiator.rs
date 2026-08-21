@@ -20,14 +20,14 @@ use common::{
         context::{Runtime, StreamRuntime},
     },
     session::log_rejection,
-    stream::{IoConnection, StreamServerHandleConn},
+    stream_runtime::{IoConnection, StreamServerHandleConn},
 };
 use metrics::counter;
 use mux::{LaneClass, MuxError, spawn_mux_no_reconnection};
 use tokio::task::JoinSet;
 use tracing::warn;
 
-use crate::stream::streams::mux::{
+use crate::stream_proto::streams::mux::{
     AddressedMuxStream, MuxProxyConnHandler, SocketAddrPair, client_mux_config, dispatch_mux_flow,
 };
 

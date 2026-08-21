@@ -11,7 +11,7 @@ use crate::{
         relay::stream::{ConnContext, CopyBidirectional},
         route_header::stream::{SteerError, read_route_header},
     },
-    stream::{
+    stream_runtime::{
         IoConnection, StreamServerHandleConn,
         pool::{ConnectError, connect_with_pool},
     },

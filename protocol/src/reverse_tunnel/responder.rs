@@ -22,14 +22,14 @@ use common::{
         context::{Runtime, StreamRuntime, UdpRuntime},
     },
     session::log_rejection,
-    stream::{HasIoAddr, IoConnection},
+    stream_runtime::{HasIoAddr, IoConnection},
 };
 use metrics::{counter, gauge};
 use mux::{LaneClass, spawn_mux_no_reconnection};
 use tokio::{net::TcpListener, task::JoinSet};
 use tracing::{info, warn};
 
-use crate::stream::streams::{
+use crate::stream_proto::streams::{
     mux::{AddressedMuxStream, MuxFlowKind, SocketAddrPair, server_mux_config, write_flow_kind},
     tcp::proxy_server::AddressedTcpStream,
 };

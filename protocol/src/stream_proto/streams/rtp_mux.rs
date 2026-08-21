@@ -19,7 +19,7 @@ use tokio::net::ToSocketAddrs;
 mod connector;
 mod server;
 pub use super::mux::{ConnectorDriverError, MuxConnectorDriver};
-use crate::stream::streams::mux::{
+use crate::stream_proto::streams::mux::{
     MuxProxyHandler, MuxProxyUdpBuildError, build_udp_proxy_handler,
 };
 pub use connector::RtpMuxConnector;

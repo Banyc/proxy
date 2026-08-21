@@ -24,12 +24,12 @@ mod tests {
             context::StreamRuntime,
         },
         route::HopConfig,
-        stream::{
+        stream_runtime::{
             IoConnection, StreamServerHandleConn,
             pool::{StreamConnPool, connect_with_pool},
         },
     };
-    use protocol::stream::{
+    use protocol::stream_proto::{
         addr::ConcreteStreamType,
         connect::build_concrete_stream_connector_table,
         streams::{

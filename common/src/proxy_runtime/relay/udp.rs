@@ -13,7 +13,7 @@ use crate::{
         },
     },
     ttl_cell::RegeneratingHeader,
-    udp::{PACKET_BUFFER_LENGTH, Packet, UDP_FLOW_TIMEOUT},
+    udp_runtime::{PACKET_BUFFER_LENGTH, Packet, UDP_FLOW_TIMEOUT},
 };
 use async_speed_limit::Limiter;
 use metrics::{counter, gauge};

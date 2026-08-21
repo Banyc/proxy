@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt, io, net::SocketAddr, sync::Arc};
 
 use super::auth::Users;
-use crate::stream::{
+use crate::stream_proto::{
     addr::ConcreteStreamType,
     streams::tcp::listener::{TCP_STREAM_TYPE, TcpServer},
 };
@@ -22,8 +22,8 @@ use common::{
         ProbeFutures, Registries, RouteAction, RouteSelector, RouteTable, RouteTableBuildError,
         RouteTableBuilder,
     },
-    stream::{HasIoAddr, IoConnection, OwnedIoStream, StreamServerHandleConn},
-    udp::UDP_FLOW_TIMEOUT,
+    stream_runtime::{HasIoAddr, IoConnection, OwnedIoStream, StreamServerHandleConn},
+    udp_runtime::UDP_FLOW_TIMEOUT,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

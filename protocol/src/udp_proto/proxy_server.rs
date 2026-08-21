@@ -6,7 +6,7 @@ use common::{
         conn_handler::{ListenerBindError, udp::UdpProxyConnHandler},
         context::UdpRuntime,
     },
-    udp::server::UdpServer,
+    udp_runtime::server::UdpServer,
 };
 use serde::Deserialize;
 use thiserror::Error;

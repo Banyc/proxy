@@ -12,7 +12,7 @@ use std::{
 
 use async_trait::async_trait;
 
-use crate::{connect::ConnectorConfigReader, stream::IoConnection};
+use crate::{connect::ConnectorConfigReader, stream_runtime::IoConnection};
 
 #[async_trait]
 pub trait StreamConnect: std::fmt::Debug + Sync + Send + 'static {
@@ -261,7 +261,7 @@ impl StreamConnectorTable {
 mod tests {
     use super::*;
     use crate::connect::ConnectorConfig;
-    use crate::stream::{HasIoAddr, OwnedIoStream};
+    use crate::stream_runtime::{HasIoAddr, OwnedIoStream};
     use std::pin::Pin;
     use std::task::{Context, Poll};
     use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};

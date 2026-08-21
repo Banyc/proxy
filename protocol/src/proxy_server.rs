@@ -1,12 +1,12 @@
 use std::convert::Infallible;
 
 use crate::{
-    stream::streams::{
+    stream_proto::streams::{
         kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, mux::MuxProxyHandler,
         rtp::RtpProxyServerConfig, rtp_mux::RtpMuxProxyServerConfig,
         tcp::proxy_server::TcpProxyServerConfig, tcp_mux::TcpMuxProxyServerConfig,
     },
-    udp::proxy_server::{UdpProxyServerBuilder, UdpProxyServerConfig},
+    udp_proto::proxy_server::{UdpProxyServerBuilder, UdpProxyServerConfig},
 };
 use common::{
     config::Merge,

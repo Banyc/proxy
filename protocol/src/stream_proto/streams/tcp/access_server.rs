@@ -14,7 +14,7 @@ use common::{
     route::{
         ProbeFutures, Registries, RouteSelector, RouteSelectorBuildError, RouteSelectorBuilder,
     },
-    stream::{HasIoAddr, OwnedIoStream, StreamServerHandleConn},
+    stream_runtime::{HasIoAddr, OwnedIoStream, StreamServerHandleConn},
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
