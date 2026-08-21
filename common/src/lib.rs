@@ -20,6 +20,7 @@ macro_rules! info_println {
 }
 
 pub mod addr;
+pub mod anti_replay;
 pub mod config;
 pub mod connect;
 pub mod error;
@@ -31,7 +32,6 @@ pub mod matcher;
 pub mod metrics;
 pub mod notify;
 pub mod proto;
-pub mod anti_replay;
 pub mod route;
 pub mod session;
 pub mod stream;

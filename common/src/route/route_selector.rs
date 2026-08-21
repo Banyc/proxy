@@ -14,8 +14,8 @@ use tracing::info;
 use crate::{proto::connect::stream::StreamConnectorTable, ttl_cell::TtlCell};
 
 use super::{
-    ConnConfig, GaugedConnChain, PROBE_ROUND_INTERVAL, ProbeFutures, ProbeRtt, WeightedConnChain,
-    WeightedConnChainBuildError, WeightedConnChainBuilder,
+    GaugedRouteChain, HopConfig, PROBE_ROUND_INTERVAL, ProbeFutures, ProbeRtt, WeightedRouteChain,
+    WeightedRouteChainBuildError, WeightedRouteChainBuilder,
     chain_selection::{EligibilityGate, ScoredChain, chain_score, pick_weighted},
 };
 
@@ -23,9 +23,9 @@ use super::{
 /// their names against.
 #[derive(Clone)]
 pub struct Registries<'caller> {
-    pub conn: &'caller HashMap<Arc<str>, ConnConfig>,
+    pub conn: &'caller HashMap<Arc<str>, HopConfig>,
     pub matcher: &'caller Arc<HashMap<Arc<str>, crate::matcher::Matcher>>,
-    pub conn_selector: &'caller HashMap<Arc<str>, ConnSelector>,
+    pub conn_selector: &'caller HashMap<Arc<str>, RouteSelector>,
     pub tracer: &'caller Arc<dyn ProbeRtt + Send + Sync>,
     pub connector_table: &'caller Arc<StreamConnectorTable>,
     pub cancellation: CancellationToken,
@@ -45,31 +45,31 @@ impl fmt::Debug for Registries<'_> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConnSelectorBuilder {
-    pub chains: Vec<WeightedConnChainBuilder>,
+pub struct RouteSelectorBuilder {
+    pub chains: Vec<WeightedRouteChainBuilder>,
     #[serde(default, alias = "trace_rtt")]
     pub probe_rtt: bool,
     pub active_chains: Option<NonZeroUsize>,
     #[serde(default)]
     pub max_rtt_ratio: Option<f64>,
 }
-impl ConnSelectorBuilder {
+impl RouteSelectorBuilder {
     pub fn resolve(
         self,
         registries: &Registries<'_>,
         probes: &mut ProbeFutures,
-    ) -> Result<ConnSelector, ConnSelectorBuildError> {
+    ) -> Result<RouteSelector, RouteSelectorBuildError> {
         let chains = self
             .chains
             .into_iter()
             .map(|c| c.resolve(registries))
             .collect::<Result<_, _>>()
-            .map_err(ConnSelectorBuildError::ChainConfig)?;
+            .map_err(RouteSelectorBuildError::ChainConfig)?;
         let tracer = match self.probe_rtt {
             true => Some(registries.tracer.clone()),
             false => None,
         };
-        ConnSelector::new(
+        RouteSelector::new(
             chains,
             tracer,
             self.active_chains,
@@ -81,19 +81,19 @@ impl ConnSelectorBuilder {
     }
 }
 #[derive(Debug, Error)]
-pub enum ConnSelectorBuildError {
+pub enum RouteSelectorBuildError {
     #[error("Chain config is invalid: {0}")]
-    ChainConfig(#[source] WeightedConnChainBuildError),
+    ChainConfig(#[source] WeightedRouteChainBuildError),
     #[error("{0}")]
-    ConnSelector(#[from] ConnSelectorError),
+    RouteSelector(#[from] RouteSelectorError),
 }
 
 #[derive(Debug, Clone)]
-pub enum ConnSelector {
+pub enum RouteSelector {
     Empty,
-    Some(NonEmptyConnSelector),
+    Some(NonEmptyRouteSelector),
 }
-impl ConnSelector {
+impl RouteSelector {
     /// Build the selector.
     ///
     /// Probe futures are collected into the caller-owned [`ProbeFutures`]
@@ -102,17 +102,17 @@ impl ConnSelector {
     /// which is drained with `result.unwrap()` so probe panics propagate. A
     /// failed or abandoned prepare drops only unspawned futures.
     pub fn new(
-        chains: Vec<WeightedConnChain>,
+        chains: Vec<WeightedRouteChain>,
         tracer: Option<Arc<dyn ProbeRtt + Send + Sync>>,
         active_chains: Option<NonZeroUsize>,
         max_rtt_ratio: Option<f64>,
         cancellation: CancellationToken,
         probes: &mut ProbeFutures,
-    ) -> Result<Self, ConnSelectorError> {
+    ) -> Result<Self, RouteSelectorError> {
         if chains.is_empty() {
             return Ok(Self::Empty);
         }
-        let selector = NonEmptyConnSelector::new(
+        let selector = NonEmptyRouteSelector::new(
             chains,
             tracer,
             active_chains,
@@ -125,8 +125,8 @@ impl ConnSelector {
 }
 
 #[derive(Debug, Clone)]
-pub struct NonEmptyConnSelector {
-    chains: Arc<[GaugedConnChain]>,
+pub struct NonEmptyRouteSelector {
+    chains: Arc<[GaugedRouteChain]>,
     cum_weight: NonZeroUsize,
     score_store: Arc<RwLock<ScoreStore>>,
     active_chains: NonZeroUsize,
@@ -135,7 +135,7 @@ pub struct NonEmptyConnSelector {
     /// tracer's [`ProbeRtt::probe_kind`] captured at build time.
     probe_kind: &'static str,
 }
-impl NonEmptyConnSelector {
+impl NonEmptyRouteSelector {
     /// Build the selector.
     ///
     /// Each chain's probe supervision future is collected into the
@@ -143,28 +143,28 @@ impl NonEmptyConnSelector {
     /// spawned; the futures are spawned into the server-owned `JoinSet` only
     /// at the commit boundary.
     pub fn new(
-        chains: Vec<WeightedConnChain>,
+        chains: Vec<WeightedRouteChain>,
         tracer: Option<Arc<dyn ProbeRtt + Send + Sync>>,
         active_chains: Option<NonZeroUsize>,
         max_rtt_ratio: Option<f64>,
         cancellation: CancellationToken,
         probes: &mut ProbeFutures,
-    ) -> Result<Self, ConnSelectorError> {
+    ) -> Result<Self, RouteSelectorError> {
         let cum_weight = chains.iter().map(|c| c.weight).sum();
         if cum_weight == 0 {
-            return Err(ConnSelectorError::ZeroAccumulatedWeight);
+            return Err(RouteSelectorError::ZeroAccumulatedWeight);
         }
         let cum_weight = NonZeroUsize::new(cum_weight).unwrap();
         let gate = match max_rtt_ratio {
             Some(r) if r.is_finite() && r >= 1.0 => Some(EligibilityGate::new(r)),
-            Some(r) => return Err(ConnSelectorError::InvalidMaxRttRatio(r)),
+            Some(r) => return Err(RouteSelectorError::InvalidMaxRttRatio(r)),
             None => None,
         };
 
         let active_chains = match active_chains {
             Some(active_chains) => {
                 if active_chains.get() > chains.len() {
-                    return Err(ConnSelectorError::TooManyActiveChains);
+                    return Err(RouteSelectorError::TooManyActiveChains);
                 }
                 active_chains
             }
@@ -173,7 +173,7 @@ impl NonEmptyConnSelector {
 
         let chains = chains
             .into_iter()
-            .map(|c| GaugedConnChain::new(c, tracer.clone(), cancellation.clone(), probes))
+            .map(|c| GaugedRouteChain::new(c, tracer.clone(), cancellation.clone(), probes))
             .collect::<Arc<[_]>>();
         let score_store = Arc::new(RwLock::new(ScoreStore::new(None, PROBE_ROUND_INTERVAL)));
         Ok(Self {
@@ -189,7 +189,7 @@ impl NonEmptyConnSelector {
         })
     }
 
-    pub fn choose_chain(&self) -> &WeightedConnChain {
+    pub fn choose_chain(&self) -> &WeightedRouteChain {
         if self.chains.len() == 1 {
             return self.chains[0].weighted();
         }
@@ -248,7 +248,7 @@ impl NonEmptyConnSelector {
     }
 }
 #[derive(Debug, Error, Clone)]
-pub enum ConnSelectorError {
+pub enum RouteSelectorError {
     #[error("Zero accumulated weight with chains")]
     ZeroAccumulatedWeight,
     #[error("The number of active chains is more than the number of chains")]
@@ -266,19 +266,19 @@ struct Scores {
 
 #[cfg(test)]
 mod tests {
-    use super::super::conn_chain::ProbeTaskState;
+    use super::super::route_chain::ProbeTaskState;
     use super::*;
     use std::time::Duration;
-    fn chain(weight: usize) -> WeightedConnChain {
-        WeightedConnChain {
+    fn chain(weight: usize) -> WeightedRouteChain {
+        WeightedRouteChain {
             weight,
-            chain: Arc::from(Vec::<ConnConfig>::new()),
+            chain: Arc::from(Vec::<HopConfig>::new()),
         }
     }
     #[test]
     fn a_zero_sum_falls_back_within_the_eligible_set() {
         let mut probes = ProbeFutures::new();
-        let selector = NonEmptyConnSelector::new(
+        let selector = NonEmptyRouteSelector::new(
             vec![chain(0), chain(5)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn a_dead_probe_chain_is_excluded_regardless_of_stale_gauges() {
         let mut probes = ProbeFutures::new();
-        let selector = NonEmptyConnSelector::new(
+        let selector = NonEmptyRouteSelector::new(
             vec![chain(1), chain(2)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn all_dead_probes_fall_back_to_uniform_selection() {
         let mut probes = ProbeFutures::new();
-        let selector = NonEmptyConnSelector::new(
+        let selector = NonEmptyRouteSelector::new(
             vec![chain(1), chain(2)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn cancelled_probe_is_treated_as_healthy() {
         let mut probes = ProbeFutures::new();
-        let selector = NonEmptyConnSelector::new(
+        let selector = NonEmptyRouteSelector::new(
             vec![chain(1), chain(2)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,

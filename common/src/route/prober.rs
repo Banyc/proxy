@@ -12,7 +12,7 @@ use crate::error::AnyError;
 
 use super::degradation::{RecyclePacer, RttDegradation};
 use super::rtt_stats::{RttStats, ewma_loss};
-use super::{ConnChain, PROBE_ROUND_INTERVAL};
+use super::{PROBE_ROUND_INTERVAL, RouteChain};
 
 pub const PROBE_DEAD_INTERVAL: Duration = Duration::from_secs(60 * 2);
 const PROBES_PER_INTERVAL: u32 = 5;
@@ -31,7 +31,7 @@ fn poisson_interval(mean: Duration) -> Duration {
     d.clamp(PROBE_MIN_INTERVAL, PROBE_MAX_INTERVAL)
 }
 
-pub struct DisplayChain<'chain>(&'chain ConnChain);
+pub struct DisplayChain<'chain>(&'chain RouteChain);
 impl fmt::Display for DisplayChain<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[")?;
@@ -64,21 +64,21 @@ pub struct ProbeOutcome {
 pub trait ProbeRtt {
     fn probe_rtt(
         &self,
-        chain: &ConnChain,
+        chain: &RouteChain,
     ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>>;
     /// The probe kind for prober logs, e.g. `"udp"` or `"stream"`.
     fn probe_kind(&self) -> &'static str {
         "unknown"
     }
-    fn recycle(&self, _chain: &ConnChain) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+    fn recycle(&self, _chain: &RouteChain) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async {})
     }
-    fn reoptimize(&self, _chain: &ConnChain) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+    fn reoptimize(&self, _chain: &RouteChain) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async {})
     }
     fn session_stats(
         &self,
-        _chain: &ConnChain,
+        _chain: &RouteChain,
     ) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>> {
         Box::pin(async { None })
     }
@@ -86,7 +86,7 @@ pub trait ProbeRtt {
 
 pub(crate) async fn probe_task(
     tracer: Arc<dyn ProbeRtt + Send + Sync>,
-    chain: Arc<ConnChain>,
+    chain: Arc<RouteChain>,
     rtt_stats_store: Arc<RwLock<RttStats>>,
     loss_store: Arc<RwLock<Option<f64>>>,
     cancellation: CancellationToken,
@@ -212,7 +212,7 @@ mod tests {
     impl ProbeRtt for FakeTracer {
         fn probe_rtt(
             &self,
-            _chain: &ConnChain,
+            _chain: &RouteChain,
         ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>> {
             Box::pin(async move {
                 self.calls.fetch_add(1, Ordering::SeqCst);
@@ -226,10 +226,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_fake_tracer_drives_the_probe_loop_until_cancellation() {
-        use crate::route::ConnConfig;
+        use crate::route::HopConfig;
 
         let calls = Arc::new(AtomicUsize::new(0));
-        let chain: Arc<ConnChain> = Arc::from(Vec::<ConnConfig>::new());
+        let chain: Arc<RouteChain> = Arc::from(Vec::<HopConfig>::new());
         let rtt_stats = Arc::new(RwLock::new(RttStats::default()));
         let loss = Arc::new(RwLock::new(None));
         let cancellation = CancellationToken::new();
@@ -258,7 +258,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_reaps_the_probe_epilog_before_returning() {
-        use crate::route::ConnConfig;
+        use crate::route::HopConfig;
 
         struct EpilogTracer {
             started: Arc<tokio::sync::Notify>,
@@ -266,7 +266,7 @@ mod tests {
         impl ProbeRtt for EpilogTracer {
             fn probe_rtt(
                 &self,
-                _chain: &ConnChain,
+                _chain: &RouteChain,
             ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>> {
                 let started = Arc::clone(&self.started);
                 Box::pin(async move {
@@ -284,7 +284,7 @@ mod tests {
         }
 
         let epilog_started = Arc::new(tokio::sync::Notify::new());
-        let chain: Arc<ConnChain> = Arc::from(Vec::<ConnConfig>::new());
+        let chain: Arc<RouteChain> = Arc::from(Vec::<HopConfig>::new());
         let rtt_stats = Arc::new(RwLock::new(RttStats::default()));
         let loss = Arc::new(RwLock::new(None));
         let cancellation = CancellationToken::new();

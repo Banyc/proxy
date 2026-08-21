@@ -34,7 +34,7 @@ use common::{
         context::Runtime,
     },
     route::{
-        ConnSelector, ConnSelectorBuilder, ProbeFutures, ProbeRtt, Registries, RouteTable,
+        ProbeFutures, ProbeRtt, Registries, RouteSelector, RouteSelectorBuilder, RouteTable,
         RouteTableBuilder,
     },
 };
@@ -49,7 +49,7 @@ pub struct AccessServerStream {
     pub route_table: HashMap<Arc<str>, RouteTableBuilder>,
     #[serde(default)]
     #[serde(alias = "proxy_group")]
-    pub conn_selector: HashMap<Arc<str>, ConnSelectorBuilder>,
+    pub conn_selector: HashMap<Arc<str>, RouteSelectorBuilder>,
 }
 impl Merge for AccessServerStream {
     type Error = AnyError;
@@ -75,7 +75,7 @@ pub struct AccessServerUdp {
     pub route_table: HashMap<Arc<str>, RouteTableBuilder>,
     #[serde(default)]
     #[serde(alias = "proxy_group")]
-    pub conn_selector: HashMap<Arc<str>, ConnSelectorBuilder>,
+    pub conn_selector: HashMap<Arc<str>, RouteSelectorBuilder>,
 }
 impl Merge for AccessServerUdp {
     type Error = AnyError;
@@ -256,8 +256,8 @@ pub async fn prepare(
     loader: &AccessServerLoaderSnapshot,
     cancellation: CancellationToken,
     context: Runtime,
-    stream_conn: &HashMap<Arc<str>, common::route::ConnConfig>,
-    udp_conn: &HashMap<Arc<str>, common::route::ConnConfig>,
+    stream_conn: &HashMap<Arc<str>, common::route::HopConfig>,
+    udp_conn: &HashMap<Arc<str>, common::route::HopConfig>,
 ) -> Result<PreparedAccessServer, AnyError> {
     let matcher = Arc::new(config.matcher);
     let stream_tracer: Arc<dyn ProbeRtt + Send + Sync> =
@@ -373,12 +373,12 @@ fn forbid_reserved_selector_name(name: Arc<str>) -> Result<(), AnyError> {
 }
 fn stream_conn_selector(
     registries: &Registries<'_>,
-    config: HashMap<Arc<str>, ConnSelectorBuilder>,
+    config: HashMap<Arc<str>, RouteSelectorBuilder>,
     probes: &mut ProbeFutures,
-) -> Result<HashMap<Arc<str>, ConnSelector>, AnyError> {
+) -> Result<HashMap<Arc<str>, RouteSelector>, AnyError> {
     let stream_conn_selector = config
         .into_iter()
-        .map(|(k, v)| -> Result<(Arc<str>, ConnSelector), AnyError> {
+        .map(|(k, v)| -> Result<(Arc<str>, RouteSelector), AnyError> {
             forbid_reserved_selector_name(k.clone())?;
             let selector = v.resolve(registries, probes)?;
             Ok((k, selector))
@@ -388,12 +388,12 @@ fn stream_conn_selector(
 }
 fn udp_conn_selector(
     registries: &Registries<'_>,
-    config: HashMap<Arc<str>, ConnSelectorBuilder>,
+    config: HashMap<Arc<str>, RouteSelectorBuilder>,
     probes: &mut ProbeFutures,
-) -> Result<HashMap<Arc<str>, ConnSelector>, AnyError> {
+) -> Result<HashMap<Arc<str>, RouteSelector>, AnyError> {
     let udp_conn_selector = config
         .into_iter()
-        .map(|(k, v)| -> Result<(Arc<str>, ConnSelector), AnyError> {
+        .map(|(k, v)| -> Result<(Arc<str>, RouteSelector), AnyError> {
             forbid_reserved_selector_name(k.clone())?;
             let selector = v.resolve(registries, probes)?;
             Ok((k, selector))
@@ -417,7 +417,7 @@ fn stream_route_tables(
 }
 async fn tcp_prepare(
     config: Vec<TcpAccessServerConfig>,
-    stream_conn_selector: &HashMap<Arc<str>, ConnSelector>,
+    stream_conn_selector: &HashMap<Arc<str>, RouteSelector>,
     registries: &Registries<'_>,
     context: &Runtime,
     loader: &loading::LoaderSnapshot<TcpAccessConnHandler>,
@@ -439,7 +439,7 @@ async fn tcp_prepare(
 }
 async fn udp_prepare(
     config: Vec<UdpAccessServerConfig>,
-    udp_conn_selector: &HashMap<Arc<str>, ConnSelector>,
+    udp_conn_selector: &HashMap<Arc<str>, RouteSelector>,
     registries: &Registries<'_>,
     context: &Runtime,
     loader: &loading::LoaderSnapshot<UdpAccessConnHandler>,
@@ -502,7 +502,7 @@ async fn socks5_tcp_prepare(
 }
 async fn socks5_udp_prepare(
     config: Vec<Socks5ServerUdpAccessServerConfig>,
-    udp_conn_selector: &HashMap<Arc<str>, ConnSelector>,
+    udp_conn_selector: &HashMap<Arc<str>, RouteSelector>,
     registries: &Registries<'_>,
     context: &Runtime,
     loader: &loading::LoaderSnapshot<Socks5ServerUdpAccessConnHandler>,

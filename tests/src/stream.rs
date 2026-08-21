@@ -11,6 +11,7 @@ mod tests {
 
     use ae::anti_replay::ReplayValidator;
     use common::{
+        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         connect::{ConnectorConfig, ConnectorResetSignal, connector_config_cell},
         loading::{self, ReloadableHandler, Serve},
         notify::Notify,
@@ -22,8 +23,7 @@ mod tests {
             connect::udp::UdpConnector,
             context::StreamRuntime,
         },
-        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
-        route::ConnConfig,
+        route::HopConfig,
         stream::{
             IoConnection, StreamServerHandleConn,
             pool::{StreamConnPool, connect_with_pool},
@@ -97,7 +97,7 @@ mod tests {
         scope: &mut TestRuntimeScope,
         addr: &Arc<str>,
         ty: ConcreteStreamType,
-    ) -> ConnConfig {
+    ) -> HopConfig {
         spawn_proxy_(scope, addr, ty, true, false).await
     }
 
@@ -105,7 +105,7 @@ mod tests {
         scope: &mut TestRuntimeScope,
         addr: &Arc<str>,
         ty: ConcreteStreamType,
-    ) -> ConnConfig {
+    ) -> HopConfig {
         spawn_proxy_(scope, addr, ty, true, true).await
     }
 
@@ -113,7 +113,7 @@ mod tests {
         scope: &mut TestRuntimeScope,
         addr: &Arc<str>,
         ty: ConcreteStreamType,
-    ) -> ConnConfig {
+    ) -> HopConfig {
         spawn_proxy_(scope, addr, ty, false, false).await
     }
 
@@ -123,7 +123,7 @@ mod tests {
         ty: ConcreteStreamType,
         allow_loopback: bool,
         encrypt_payload: bool,
-    ) -> ConnConfig {
+    ) -> HopConfig {
         let crypto = create_random_crypto();
         let payload_crypto = encrypt_payload.then(create_random_crypto);
         let stream_context = stream_context(scope);
@@ -230,7 +230,7 @@ mod tests {
                 proxy_addr
             }
         };
-        ConnConfig {
+        HopConfig {
             address: RouteAddr {
                 address: proxy_addr.into(),
                 protocol: ty.to_string().into(),
@@ -632,7 +632,7 @@ mod tests {
 
     async fn assert_refused(
         stream_context: &StreamRuntime,
-        proxies: &[ConnConfig],
+        proxies: &[HopConfig],
         greet_addr: RouteAddr,
     ) {
         let mut stream = match tokio::time::timeout(

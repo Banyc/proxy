@@ -11,19 +11,19 @@ use tokio_util::sync::CancellationToken;
 use crate::{config::SharableConfig, header::route::RouteRequest, proto::addr::RouteAddr};
 
 use super::{
-    ConnConfig, ConnConfigBuildError, ProbeFutures, ProbeRtt, Registries, prober::probe_task,
+    HopConfig, HopConfigBuildError, ProbeFutures, ProbeRtt, Registries, prober::probe_task,
     rtt_stats::RttStats,
 };
 
 pub const PROBE_ROUND_INTERVAL: Duration = Duration::from_secs(30);
 
-pub type ConnChain = [ConnConfig];
+pub type RouteChain = [HopConfig];
 
 /// # Panic
 ///
 /// `nodes` must not be empty.
 pub fn convert_proxies_to_header_crypto_pairs(
-    nodes: &ConnChain,
+    nodes: &RouteChain,
     destination: Option<RouteAddr>,
 ) -> Vec<(RouteRequest<RouteAddr>, &tokio_chacha20::config::Config)> {
     assert!(!nodes.is_empty());
@@ -46,15 +46,15 @@ pub fn convert_proxies_to_header_crypto_pairs(
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WeightedConnChainBuilder {
+pub struct WeightedRouteChainBuilder {
     pub weight: usize,
-    pub chain: Vec<SharableConfig<ConnConfig>>,
+    pub chain: Vec<SharableConfig<HopConfig>>,
 }
-impl WeightedConnChainBuilder {
+impl WeightedRouteChainBuilder {
     pub fn resolve(
         self,
         registries: &Registries<'_>,
-    ) -> Result<WeightedConnChain, WeightedConnChainBuildError> {
+    ) -> Result<WeightedRouteChain, WeightedRouteChainBuildError> {
         let chain = self
             .chain
             .into_iter()
@@ -63,27 +63,27 @@ impl WeightedConnChainBuilder {
                     .conn
                     .get(&k)
                     .cloned()
-                    .ok_or(WeightedConnChainBuildError::ProxyServerKeyNotFound(k)),
+                    .ok_or(WeightedRouteChainBuildError::ProxyServerKeyNotFound(k)),
                 SharableConfig::Private(c) => Ok(c),
             })
             .collect::<Result<Arc<_>, _>>()?;
-        Ok(WeightedConnChain {
+        Ok(WeightedRouteChain {
             weight: self.weight,
             chain,
         })
     }
 }
 #[derive(Debug, Error)]
-pub enum WeightedConnChainBuildError {
+pub enum WeightedRouteChainBuildError {
     #[error("{0}")]
-    ProxyServer(#[from] ConnConfigBuildError),
+    ProxyServer(#[from] HopConfigBuildError),
     #[error("Proxy server key not found: {0}")]
     ProxyServerKeyNotFound(Arc<str>),
 }
 #[derive(Debug)]
-pub struct WeightedConnChain {
+pub struct WeightedRouteChain {
     pub weight: usize,
-    pub chain: Arc<ConnChain>,
+    pub chain: Arc<RouteChain>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,15 +112,15 @@ impl ProbeTaskState {
 }
 
 #[derive(Debug)]
-pub struct GaugedConnChain {
-    weighted: WeightedConnChain,
+pub struct GaugedRouteChain {
+    weighted: WeightedRouteChain,
     rtt_stats: Arc<RwLock<RttStats>>,
     loss: Arc<RwLock<Option<f64>>>,
     probe_state: watch::Receiver<ProbeTaskState>,
     #[cfg(test)]
     probe_state_tx: watch::Sender<ProbeTaskState>,
 }
-impl GaugedConnChain {
+impl GaugedRouteChain {
     /// Return the chain handle.
     ///
     /// The probe future is collected into the caller-owned [`ProbeFutures`]
@@ -131,7 +131,7 @@ impl GaugedConnChain {
     /// failed or abandoned prepare drops only unspawned futures. The chain
     /// retains only the `probe_state` watch receiver for state observation.
     pub fn new(
-        weighted: WeightedConnChain,
+        weighted: WeightedRouteChain,
         tracer: Option<Arc<dyn ProbeRtt + Send + Sync>>,
         cancellation: CancellationToken,
         probes: &mut ProbeFutures,
@@ -166,7 +166,7 @@ impl GaugedConnChain {
         }
     }
 
-    pub fn weighted(&self) -> &WeightedConnChain {
+    pub fn weighted(&self) -> &WeightedRouteChain {
         &self.weighted
     }
 
@@ -242,7 +242,7 @@ mod tests {
     impl ProbeRtt for CountingTracer {
         fn probe_rtt(
             &self,
-            _chain: &ConnChain,
+            _chain: &RouteChain,
         ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>> {
             Box::pin(async move {
                 self.0.fetch_add(1, Ordering::SeqCst);
@@ -258,10 +258,10 @@ mod tests {
     async fn dropping_the_chain_aborts_the_probe_task() {
         let counter = Arc::new(AtomicUsize::new(0));
         let mut probes = ProbeFutures::new();
-        let chain = GaugedConnChain::new(
-            WeightedConnChain {
+        let chain = GaugedRouteChain::new(
+            WeightedRouteChain {
                 weight: 1,
-                chain: Arc::from(Vec::<crate::route::ConnConfig>::new()),
+                chain: Arc::from(Vec::<crate::route::HopConfig>::new()),
             },
             Some(Arc::new(CountingTracer(counter.clone())) as Arc<dyn ProbeRtt + Send + Sync>),
             CancellationToken::new(),
@@ -292,7 +292,7 @@ mod tests {
     impl ProbeRtt for PanickingTracer {
         fn probe_rtt(
             &self,
-            _chain: &ConnChain,
+            _chain: &RouteChain,
         ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>> {
             Box::pin(async move {
                 panic!("synthetic probe panic");
@@ -304,10 +304,10 @@ mod tests {
     #[should_panic(expected = "synthetic probe panic")]
     async fn probe_panic_is_observed_at_the_generation_boundary() {
         let mut probes = ProbeFutures::new();
-        let _chain = GaugedConnChain::new(
-            WeightedConnChain {
+        let _chain = GaugedRouteChain::new(
+            WeightedRouteChain {
                 weight: 1,
-                chain: Arc::from(Vec::<crate::route::ConnConfig>::new()),
+                chain: Arc::from(Vec::<crate::route::HopConfig>::new()),
             },
             Some(Arc::new(PanickingTracer) as Arc<dyn ProbeRtt + Send + Sync>),
             CancellationToken::new(),
@@ -327,10 +327,10 @@ mod tests {
     async fn probe_cancellation_is_classified() {
         let cancellation = CancellationToken::new();
         let mut probes = ProbeFutures::new();
-        let chain = GaugedConnChain::new(
-            WeightedConnChain {
+        let chain = GaugedRouteChain::new(
+            WeightedRouteChain {
                 weight: 1,
-                chain: Arc::from(Vec::<crate::route::ConnConfig>::new()),
+                chain: Arc::from(Vec::<crate::route::HopConfig>::new()),
             },
             Some(Arc::new(CountingTracer(Arc::new(AtomicUsize::new(0))))
                 as Arc<dyn ProbeRtt + Send + Sync>),
@@ -368,10 +368,10 @@ mod tests {
     #[test]
     fn probe_healthy_reflects_injected_state() {
         let mut probes = ProbeFutures::new();
-        let chain = GaugedConnChain::new(
-            WeightedConnChain {
+        let chain = GaugedRouteChain::new(
+            WeightedRouteChain {
                 weight: 1,
-                chain: Arc::from(Vec::<crate::route::ConnConfig>::new()),
+                chain: Arc::from(Vec::<crate::route::HopConfig>::new()),
             },
             None,
             CancellationToken::new(),

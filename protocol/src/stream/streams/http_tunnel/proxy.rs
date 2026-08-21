@@ -28,7 +28,7 @@ use common::{
         metrics::stream::StreamSession,
         relay::DEAD_SESSION_RETENTION_DURATION,
     },
-    route::{ConnSelector, RouteAction},
+    route::{RouteAction, RouteSelector},
     session::{SessionSpawner, log_rejection},
     udp::UDP_FLOW_TIMEOUT,
 };
@@ -106,7 +106,7 @@ async fn dispatch(
 ) -> HttpResult {
     let action = ctx.route_table.action(&dst_addr.address);
     match action {
-        RouteAction::ConnSelector(conn_selector) => {
+        RouteAction::RouteSelector(conn_selector) => {
             proxy(conn_selector, dst_addr, req, method, uri, ctx, reporter).await
         }
         RouteAction::Block => {
@@ -186,7 +186,7 @@ async fn direct(
 
 #[instrument(skip_all)]
 async fn proxy(
-    conn_selector: &ConnSelector,
+    conn_selector: &RouteSelector,
     dst_addr: RouteAddr,
     req: Request<Incoming>,
     method: String,
@@ -196,8 +196,8 @@ async fn proxy(
 ) -> HttpResult {
     let start = (std::time::Instant::now(), std::time::SystemTime::now());
     let chain = match conn_selector {
-        common::route::ConnSelector::Empty => [].into(),
-        common::route::ConnSelector::Some(non_empty_conn_selector) => {
+        common::route::RouteSelector::Empty => [].into(),
+        common::route::RouteSelector::Some(non_empty_conn_selector) => {
             non_empty_conn_selector.choose_chain().chain.clone()
         }
     };

@@ -19,7 +19,7 @@ use common::{
         relay::stream::{ConnContext, CopyBidirectional},
     },
     route::{
-        ConnSelector, ProbeFutures, Registries, RouteAction, RouteTable, RouteTableBuildError,
+        ProbeFutures, Registries, RouteAction, RouteSelector, RouteTable, RouteTableBuildError,
         RouteTableBuilder,
     },
     stream::{HasIoAddr, IoConnection, OwnedIoStream, StreamServerHandleConn},
@@ -420,7 +420,7 @@ impl Socks5ServerTcpAccessConnHandler {
                     }),
                 );
             }
-            RouteAction::ConnSelector(conn_selector) => conn_selector,
+            RouteAction::RouteSelector(conn_selector) => conn_selector,
         };
 
         let (upstream, payload_crypto) = match self
@@ -466,13 +466,13 @@ impl Socks5ServerTcpAccessConnHandler {
 
     async fn establish_proxy_chain(
         &self,
-        conn_selector: &ConnSelector,
+        conn_selector: &RouteSelector,
         destination: InternetAddr,
     ) -> Result<(ConnAndAddr, Option<tokio_chacha20::config::Config>), EstablishProxyChainError>
     {
         let chain = match &conn_selector {
-            common::route::ConnSelector::Empty => [].into(),
-            common::route::ConnSelector::Some(non_empty_conn_selector) => {
+            common::route::RouteSelector::Empty => [].into(),
+            common::route::RouteSelector::Some(non_empty_conn_selector) => {
                 non_empty_conn_selector.choose_chain().chain.clone()
             }
         };

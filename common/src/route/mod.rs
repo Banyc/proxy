@@ -1,17 +1,17 @@
 use std::future::Future;
 
 mod chain_selection;
-mod conn;
-mod conn_chain;
-mod conn_selector;
 mod degradation;
+mod hop_config;
 mod prober;
+mod route_chain;
+mod route_selector;
 mod route_table;
 mod rtt_stats;
-pub use conn::*;
-pub use conn_chain::*;
-pub use conn_selector::*;
+pub use hop_config::*;
 pub use prober::{DisplayChain, ProbeOutcome, ProbeRtt};
+pub use route_chain::*;
+pub use route_selector::*;
 pub use route_table::*;
 
 /// Probe futures collected during route/selector preparation.

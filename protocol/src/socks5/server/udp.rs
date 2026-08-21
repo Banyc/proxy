@@ -10,7 +10,9 @@ use common::{
         context::UdpRuntime,
         relay::udp::{CopyBidirectional, DownstreamParts, UpstreamParts},
     },
-    route::{ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, ProbeFutures, Registries},
+    route::{
+        ProbeFutures, Registries, RouteSelector, RouteSelectorBuildError, RouteSelectorBuilder,
+    },
     udp::{
         Packet,
         server::{UdpPacketRoute, UdpServer, UdpServerHandleConn},
@@ -28,13 +30,13 @@ use crate::socks5::messages::UdpRequestHeader;
 #[serde(deny_unknown_fields)]
 pub struct Socks5ServerUdpAccessServerConfig {
     pub listen_addr: Arc<str>,
-    pub conn_selector: SharableConfig<ConnSelectorBuilder>,
+    pub conn_selector: SharableConfig<RouteSelectorBuilder>,
     pub speed_limit: Option<f64>,
 }
 impl Socks5ServerUdpAccessServerConfig {
     pub fn into_builder(
         self,
-        conn_selector: &HashMap<Arc<str>, ConnSelector>,
+        conn_selector: &HashMap<Arc<str>, RouteSelector>,
         registries: &Registries<'_>,
         udp_runtime: UdpRuntime,
         probes: &mut ProbeFutures,
@@ -60,13 +62,13 @@ pub enum Socks5UdpBuildError {
     #[error("Proxy group key not found: {0}")]
     ProxyGroupKeyNotFound(Arc<str>),
     #[error("{0}")]
-    ProxyGroup(#[from] ConnSelectorBuildError),
+    ProxyGroup(#[from] RouteSelectorBuildError),
 }
 
 #[derive(Debug, Clone)]
 pub struct Socks5ServerUdpAccessServerBuilder {
     listen_addr: Arc<str>,
-    conn_selector: ConnSelector,
+    conn_selector: RouteSelector,
     speed_limit: f64,
     udp_runtime: UdpRuntime,
 }
@@ -97,13 +99,13 @@ impl loading::Build for Socks5ServerUdpAccessServerBuilder {
 
 #[derive(Debug)]
 pub struct Socks5ServerUdpAccessConnHandler {
-    conn_selector: ConnSelector,
+    conn_selector: RouteSelector,
     speed_limiter: Limiter,
     udp_runtime: UdpRuntime,
 }
 impl loading::HandleConn for Socks5ServerUdpAccessConnHandler {}
 impl Socks5ServerUdpAccessConnHandler {
-    pub fn new(conn_selector: ConnSelector, speed_limit: f64, udp_runtime: UdpRuntime) -> Self {
+    pub fn new(conn_selector: RouteSelector, speed_limit: f64, udp_runtime: UdpRuntime) -> Self {
         Self {
             conn_selector,
             speed_limiter: Limiter::new(speed_limit),
@@ -119,8 +121,8 @@ impl Socks5ServerUdpAccessConnHandler {
 
     async fn proxy(&self, conn: Conn<UdpSocket, FlowKey, Packet>) -> Result<(), AccessProxyError> {
         let chain = match &self.conn_selector {
-            common::route::ConnSelector::Empty => [].into(),
-            common::route::ConnSelector::Some(conn_selector) => {
+            common::route::RouteSelector::Empty => [].into(),
+            common::route::RouteSelector::Some(conn_selector) => {
                 conn_selector.choose_chain().chain.clone()
             }
         };

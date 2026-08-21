@@ -180,6 +180,7 @@ mod tests {
     use ae::anti_replay::ReplayValidator;
     use common::{
         addr::DualStackBind,
+        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         connect::{ConnectorConfig, ConnectorResetSignal, connector_config_cell},
         header::{codec::write_header_async, preamble},
         loading::Serve,
@@ -188,7 +189,6 @@ mod tests {
             addr::RouteAddr, connect::udp::UdpConnector, context::StreamRuntime,
             header::StreamRequestHeader,
         },
-        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
         stream::pool::StreamConnPool,
     };
     use swap::Swap;

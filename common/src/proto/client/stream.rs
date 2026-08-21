@@ -8,7 +8,7 @@ use crate::{
         addr::RouteAddr, conn::stream::ConnAndAddr, context::StreamRuntime,
         relay::same_key_nonce_ciphertext,
     },
-    route::{ConnChain, ConnConfig, ProbeRtt, convert_proxies_to_header_crypto_pairs},
+    route::{HopConfig, ProbeRtt, RouteChain, convert_proxies_to_header_crypto_pairs},
     stream::{
         HasIoAddr, IoConnection, OwnedIoStream,
         pool::{ConnectError, connect_with_pool},
@@ -99,7 +99,7 @@ impl HasIoAddr for PayloadCryptoConn {
 
 #[instrument(skip(proxies, stream_context))]
 pub async fn establish(
-    proxies: &ConnChain,
+    proxies: &RouteChain,
     destination: RouteAddr,
     stream_context: &StreamRuntime,
 ) -> Result<ConnAndAddr, StreamEstablishError> {
@@ -199,11 +199,11 @@ impl ProbeRtt for StreamTracer {
     }
     fn probe_rtt(
         &self,
-        chain: &ConnChain,
+        chain: &RouteChain,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::route::ProbeOutcome> + Send>>
     {
         let stream_context = self.stream_context.clone();
-        let chain: Vec<ConnConfig> = chain.to_vec();
+        let chain: Vec<HopConfig> = chain.to_vec();
         Box::pin(async move {
             crate::route::ProbeOutcome {
                 rtt: probe_rtt(&chain, &stream_context).await.map_err(Into::into),
@@ -214,7 +214,7 @@ impl ProbeRtt for StreamTracer {
     }
     fn recycle(
         &self,
-        chain: &ConnChain,
+        chain: &RouteChain,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         let Some(first) = chain.first() else {
             return Box::pin(async {});
@@ -236,7 +236,7 @@ impl ProbeRtt for StreamTracer {
     }
     fn reoptimize(
         &self,
-        chain: &ConnChain,
+        chain: &RouteChain,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         let Some(first) = chain.first() else {
             return Box::pin(async {});
@@ -258,7 +258,7 @@ impl ProbeRtt for StreamTracer {
     }
     fn session_stats(
         &self,
-        chain: &ConnChain,
+        chain: &RouteChain,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>> {
         let Some(first) = chain.first() else {
             return Box::pin(async { None });
@@ -283,7 +283,7 @@ impl ProbeRtt for StreamTracer {
     }
 }
 pub async fn probe_rtt(
-    proxies: &ConnChain,
+    proxies: &RouteChain,
     stream_context: &StreamRuntime,
 ) -> Result<Duration, TraceError> {
     if proxies.is_empty() {

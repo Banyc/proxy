@@ -11,7 +11,9 @@ use common::{
         log::stream::IoCopyFinished,
         relay::stream::{ConnContext, CopyBidirectional},
     },
-    route::{ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, ProbeFutures, Registries},
+    route::{
+        ProbeFutures, Registries, RouteSelector, RouteSelectorBuildError, RouteSelectorBuilder,
+    },
     stream::{HasIoAddr, OwnedIoStream, StreamServerHandleConn},
 };
 use serde::{Deserialize, Serialize};
@@ -38,13 +40,13 @@ use super::listener::TcpServer;
 pub struct TcpAccessServerConfig {
     pub listen_addr: Arc<str>,
     pub destination: RouteAddrStr,
-    pub conn_selector: SharableConfig<ConnSelectorBuilder>,
+    pub conn_selector: SharableConfig<RouteSelectorBuilder>,
     pub speed_limit: Option<f64>,
 }
 impl TcpAccessServerConfig {
     pub fn into_builder(
         self,
-        conn_selector: &HashMap<Arc<str>, ConnSelector>,
+        conn_selector: &HashMap<Arc<str>, RouteSelector>,
         registries: &Registries<'_>,
         stream_runtime: StreamRuntime,
         probes: &mut ProbeFutures,
@@ -71,14 +73,14 @@ pub enum TcpAccessBuildError {
     #[error("Proxy group key not found: {0}")]
     ProxyGroupKeyNotFound(Arc<str>),
     #[error("{0}")]
-    ProxyGroup(#[from] ConnSelectorBuildError),
+    ProxyGroup(#[from] RouteSelectorBuildError),
 }
 
 #[derive(Debug, Clone)]
 pub struct TcpAccessServerBuilder {
     listen_addr: Arc<str>,
     destination: RouteAddrStr,
-    conn_selector: ConnSelector,
+    conn_selector: RouteSelector,
     speed_limit: f64,
     stream_runtime: StreamRuntime,
 }
@@ -113,7 +115,7 @@ impl loading::Build for TcpAccessServerBuilder {
 
 #[derive(Debug)]
 pub struct TcpAccessConnHandler {
-    conn_selector: ConnSelector,
+    conn_selector: RouteSelector,
     destination: RouteAddr,
     speed_limiter: Limiter,
     stream_runtime: StreamRuntime,
@@ -121,7 +123,7 @@ pub struct TcpAccessConnHandler {
 }
 impl TcpAccessConnHandler {
     pub fn new(
-        conn_selector: ConnSelector,
+        conn_selector: RouteSelector,
         destination: RouteAddr,
         speed_limit: f64,
         stream_runtime: StreamRuntime,
@@ -141,8 +143,8 @@ impl TcpAccessConnHandler {
         Downstream: OwnedIoStream + HasIoAddr,
     {
         let chain = match &self.conn_selector {
-            common::route::ConnSelector::Empty => [].into(),
-            common::route::ConnSelector::Some(non_empty_conn_selector) => {
+            common::route::RouteSelector::Empty => [].into(),
+            common::route::RouteSelector::Some(non_empty_conn_selector) => {
                 non_empty_conn_selector.choose_chain().chain.clone()
             }
         };

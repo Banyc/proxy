@@ -1,5 +1,6 @@
 use crate::{
     addr::InternetAddr,
+    anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     error::AnyError,
     header::{
         codec::{CodecError, read_header, write_header},
@@ -15,8 +16,7 @@ use crate::{
             udp::{ShutdownOutcome, UdpRecv, UdpSend},
         },
     },
-    anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
-    route::{ConnChain, ProbeRtt, convert_proxies_to_header_crypto_pairs},
+    route::{ProbeRtt, RouteChain, convert_proxies_to_header_crypto_pairs},
     ttl_cell::RegeneratingHeader,
     udp::{PACKET_BUFFER_LENGTH, UDP_FLOW_TIMEOUT},
 };
@@ -75,7 +75,7 @@ pub struct UdpProxyClient {
 impl UdpProxyClient {
     #[instrument(skip_all)]
     pub async fn establish(
-        proxies: Arc<ConnChain>,
+        proxies: Arc<RouteChain>,
         destination: InternetAddr,
         context: &UdpRuntime,
     ) -> Result<UdpProxyClient, EstablishError> {
@@ -337,7 +337,7 @@ pub struct UdpProxyClientReadHalf {
     upstream: UdpConnectionRead,
     local_addr: Option<SocketAddr>,
     peer_addr: Option<SocketAddr>,
-    proxies: Arc<ConnChain>,
+    proxies: Arc<RouteChain>,
     read_buf: Vec<u8>,
     transform_buf: Vec<u8>,
     time_validator: TimeValidator,
@@ -353,7 +353,7 @@ impl UdpProxyClientReadHalf {
         upstream: UdpConnectionRead,
         local_addr: Option<SocketAddr>,
         peer_addr: Option<SocketAddr>,
-        proxies: Arc<ConnChain>,
+        proxies: Arc<RouteChain>,
         route_confirmation: Arc<RouteConfirmation>,
     ) -> Self {
         Self {
@@ -498,12 +498,12 @@ impl ProbeRtt for UdpTracer {
     }
     fn probe_rtt(
         &self,
-        chain: &ConnChain,
+        chain: &RouteChain,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::route::ProbeOutcome> + Send>>
     {
         let pool = self.pool.clone();
         let context = self.context.clone();
-        let chain: Vec<crate::route::ConnConfig> = chain.to_vec();
+        let chain: Vec<crate::route::HopConfig> = chain.to_vec();
         Box::pin(async move {
             let mut pkt_buf = pool.take();
             let outcome = match probe_rtt(&mut pkt_buf, &chain, &context).await {
@@ -606,7 +606,7 @@ pub struct ProbeEpilog {
 /// ownership.
 pub async fn probe_rtt(
     pkt_buf: &mut BytesMut,
-    proxies: &ConnChain,
+    proxies: &RouteChain,
     context: &UdpRuntime,
 ) -> Result<(Duration, ProbeEpilog), TraceError> {
     if proxies.is_empty() {
@@ -802,12 +802,12 @@ mod tests {
         let (upstream_read, upstream_write) = connection.into_split();
 
         let crypto = tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into());
-        let node = crate::route::ConnConfig {
+        let node = crate::route::HopConfig {
             address: RouteAddr::udp("127.0.0.1:9".parse::<SocketAddr>().unwrap().into()),
             header_crypto: crypto.clone(),
             payload_crypto: None,
         };
-        let proxies: Arc<ConnChain> = Arc::new([node]);
+        let proxies: Arc<RouteChain> = Arc::new([node]);
         let layer_crypto = crypto.clone();
         let layer = UdpRequestLayer {
             header: RegeneratingHeader::new(

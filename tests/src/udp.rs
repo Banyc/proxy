@@ -6,6 +6,7 @@ mod tests {
     use bytes::BytesMut;
     use common::{
         addr::InternetAddr,
+        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         connect::{ConnectorConfig, ConnectorResetSignal, connector_config_cell},
         header::route::RouteErrorKind,
         loading::{self, Serve},
@@ -20,8 +21,7 @@ mod tests {
             connect::udp::UdpConnector,
             context::{Runtime, StreamRuntime, UdpRuntime},
         },
-        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
-        route::ConnConfig,
+        route::HopConfig,
         stream::pool::StreamConnPool,
         udp::PACKET_BUFFER_LENGTH,
     };
@@ -58,15 +58,15 @@ mod tests {
         }
     }
 
-    async fn spawn_proxy(scope: &mut TestRuntimeScope, addr: &str) -> ConnConfig {
+    async fn spawn_proxy(scope: &mut TestRuntimeScope, addr: &str) -> HopConfig {
         spawn_proxy_(scope, addr, true, false).await
     }
 
-    async fn spawn_encrypted_proxy(scope: &mut TestRuntimeScope, addr: &str) -> ConnConfig {
+    async fn spawn_encrypted_proxy(scope: &mut TestRuntimeScope, addr: &str) -> HopConfig {
         spawn_proxy_(scope, addr, true, true).await
     }
 
-    async fn spawn_guarded_proxy(scope: &mut TestRuntimeScope, addr: &str) -> ConnConfig {
+    async fn spawn_guarded_proxy(scope: &mut TestRuntimeScope, addr: &str) -> HopConfig {
         spawn_proxy_(scope, addr, false, false).await
     }
 
@@ -75,7 +75,7 @@ mod tests {
         addr: &str,
         allow_loopback: bool,
         encrypt_payload: bool,
-    ) -> ConnConfig {
+    ) -> HopConfig {
         let crypto = create_random_crypto();
         let payload_crypto = encrypt_payload.then(create_random_crypto);
         let proxy = UdpProxyConnHandler::new(
@@ -91,7 +91,7 @@ mod tests {
                 loading::replace_conn_handler_channel();
             server.serve(set_conn_handler_rx).await
         });
-        ConnConfig {
+        HopConfig {
             address: common::proto::addr::RouteAddr::udp(proxy_addr.into()),
             header_crypto: crypto,
             payload_crypto,
@@ -563,7 +563,7 @@ mod tests {
         scope: &mut TestRuntimeScope,
         runtime: &Runtime,
         protocol: &str,
-    ) -> ConnConfig {
+    ) -> HopConfig {
         spawn_mux_udp_proxy_with_payload(scope, runtime, protocol, Some(create_random_crypto()))
             .await
     }
@@ -575,7 +575,7 @@ mod tests {
         runtime: &Runtime,
         protocol: &str,
         payload_crypto: Option<tokio_chacha20::config::Config>,
-    ) -> ConnConfig {
+    ) -> HopConfig {
         let crypto = create_random_crypto();
         let stream_proxy = StreamProxyConnHandler::new(
             crypto.clone(),
@@ -621,7 +621,7 @@ mod tests {
             }
             other => panic!("unsupported mux protocol {other}"),
         };
-        ConnConfig {
+        HopConfig {
             address: RouteAddr {
                 address: proxy_addr.into(),
                 protocol: protocol.into(),

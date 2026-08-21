@@ -23,7 +23,7 @@ use common::{
         metrics::stream::StreamSessionTable,
         relay::stream::{ConnContext, CopyBidirectional},
     },
-    route::{ConnSelector, RouteAction},
+    route::{RouteAction, RouteSelector},
     session::log_rejection,
     udp::UDP_FLOW_TIMEOUT,
 };
@@ -96,7 +96,7 @@ async fn dispatch(
     let uri = redacted_uri(req.uri());
     let action = ctx.route_table.action(&dst_addr);
     let action = match &action {
-        RouteAction::ConnSelector(conn_selector) => {
+        RouteAction::RouteSelector(conn_selector) => {
             let proxy_ctx = ProxyContext {
                 conn_selector: Arc::clone(conn_selector),
                 speed_limiter: ctx.speed_limiter.clone(),
@@ -246,7 +246,7 @@ async fn direct(ctx: DirectContext, upgraded: Upgraded) -> Result<(), ConnectFai
 
 #[derive(Debug)]
 struct ProxyContext {
-    pub conn_selector: Arc<ConnSelector>,
+    pub conn_selector: Arc<RouteSelector>,
     pub speed_limiter: Limiter,
     pub stream_context: StreamRuntime,
     pub listen_addr: Arc<str>,
@@ -262,8 +262,8 @@ async fn proxy(ctx: &ProxyContext, upgraded: Upgraded) -> Result<(), ProxyError>
         protocol: ConcreteStreamType::Tcp.to_string().into(),
     };
     let chain = match &ctx.conn_selector.as_ref() {
-        common::route::ConnSelector::Empty => [].into(),
-        common::route::ConnSelector::Some(non_empty_conn_selector) => {
+        common::route::RouteSelector::Empty => [].into(),
+        common::route::RouteSelector::Some(non_empty_conn_selector) => {
             non_empty_conn_selector.choose_chain().chain.clone()
         }
     };

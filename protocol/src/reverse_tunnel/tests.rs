@@ -4,6 +4,7 @@ use super::*;
 use ae::anti_replay::{ReplayValidator, TimeValidator};
 use bytes::BytesMut;
 use common::{
+    anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
     connect::{
         ConnectorConfig, ConnectorConfigReader, ConnectorResetSignal, connector_config_cell,
     },
@@ -19,8 +20,7 @@ use common::{
         connect::udp::UdpConnector,
         context::{Runtime, StreamRuntime, UdpRuntime},
     },
-    anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
-    route::{ConnChain, ConnConfig},
+    route::{HopConfig, RouteChain},
     stream::pool::StreamConnPool,
     udp::PACKET_BUFFER_LENGTH,
 };
@@ -356,7 +356,7 @@ async fn verify_reverse_proxy_hop_with_payload(transport: ReverseTunnelTransport
     let reverse_addr: RouteAddr = format!("{}://private-a", transport.protocol())
         .parse()
         .unwrap();
-    let chain = [ConnConfig {
+    let chain = [HopConfig {
         address: reverse_addr,
         header_crypto: header_crypto.clone(),
         payload_crypto: Some(payload_crypto.clone()),
@@ -485,18 +485,18 @@ async fn verify_reverse_udp_proxy_hop(
             let (_tx, rx) = loading::replace_conn_handler_channel();
             server.serve(rx).await.unwrap();
         });
-        chain.push(ConnConfig {
+        chain.push(HopConfig {
             address: RouteAddr::udp(server_addr.into()),
             header_crypto: first_header_crypto,
             payload_crypto: Some(first_payload_crypto),
         });
     }
-    chain.push(ConnConfig {
+    chain.push(HopConfig {
         address: reverse_addr,
         header_crypto,
         payload_crypto: Some(payload_crypto),
     });
-    let chain: Arc<ConnChain> = chain.into();
+    let chain: Arc<RouteChain> = chain.into();
     scope
         .run(async {
             let client = tokio::time::timeout(
@@ -575,7 +575,7 @@ async fn rtp_reverse_tunnel_probe_closes_the_flow_promptly() {
         let (_tx, rx) = loading::replace_conn_handler_channel();
         initiator.serve(rx).await.unwrap();
     });
-    let chain: Arc<ConnChain> = Arc::from([ConnConfig {
+    let chain: Arc<RouteChain> = Arc::from([HopConfig {
         address: "revtunrtp://private-udp".parse().unwrap(),
         header_crypto: crypto,
         payload_crypto: None,
@@ -674,7 +674,7 @@ async fn verify_reverse_proxy_hop(transport: ReverseTunnelTransport) {
     let reverse_addr: RouteAddr = format!("{}://private-a", transport.protocol())
         .parse()
         .unwrap();
-    let chain = [ConnConfig {
+    let chain = [HopConfig {
         address: reverse_addr,
         header_crypto: crypto,
         payload_crypto: None,

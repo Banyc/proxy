@@ -9,7 +9,7 @@ use crate::{
     config::{Merge, SharableConfig},
     header::preamble::send_keep_alive,
     proto::{addr::RouteAddr, connect::stream::StreamConnectorTable, context::StreamRuntime},
-    route::{ConnConfig, ConnConfigBuildError, Registries},
+    route::{HopConfig, HopConfigBuildError, Registries},
 };
 
 use super::IoConnection;
@@ -21,7 +21,7 @@ pub type StreamConnPool = ConnPool<RouteAddr, Box<dyn IoConnection>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PoolBuilder(#[serde(default)] pub Vec<SharableConfig<ConnConfig>>);
+pub struct PoolBuilder(#[serde(default)] pub Vec<SharableConfig<HopConfig>>);
 impl PoolBuilder {
     pub fn new() -> Self {
         Self(vec![])
@@ -51,7 +51,7 @@ impl PoolBuilder {
 #[derive(Debug, Error)]
 pub enum PoolBuildError {
     #[error("{0}")]
-    ProxyConfigBuild(#[from] ConnConfigBuildError),
+    ProxyConfigBuild(#[from] HopConfigBuildError),
     #[error("Proxy server key not found: {0}")]
     ProxyServerKeyNotFound(Arc<str>),
 }
@@ -73,7 +73,7 @@ impl Merge for PoolBuilder {
 }
 
 fn pool_entries_from_proxy_configs(
-    proxy_configs: impl Iterator<Item = ConnConfig>,
+    proxy_configs: impl Iterator<Item = HopConfig>,
     connector_table: Arc<StreamConnectorTable>,
 ) -> impl Iterator<Item = ConnPoolEntry<RouteAddr, Box<dyn IoConnection>>> {
     proxy_configs.map(move |c| ConnPoolEntry {
@@ -88,7 +88,7 @@ fn pool_entries_from_proxy_configs(
 
 #[derive(Debug)]
 struct PoolConnector {
-    conn: ConnConfig,
+    conn: HopConfig,
     connector_table: Arc<StreamConnectorTable>,
 }
 #[async_trait]
@@ -115,7 +115,7 @@ impl tokio_conn_pool::Connect for PoolConnector {
 
 #[derive(Debug)]
 struct PoolHeartbeat {
-    conn: ConnConfig,
+    conn: HopConfig,
 }
 #[async_trait]
 impl tokio_conn_pool::Heartbeat for PoolHeartbeat {
@@ -312,8 +312,8 @@ mod tests {
         }
     }
 
-    fn conn_config(addr: &str, protocol: &str) -> ConnConfig {
-        ConnConfig {
+    fn conn_config(addr: &str, protocol: &str) -> HopConfig {
+        HopConfig {
             address: stream_addr(addr, protocol),
             header_crypto: tokio_chacha20::config::Config::new(
                 [7; tokio_chacha20::KEY_BYTES].into(),
@@ -401,14 +401,14 @@ mod tests {
         impl ProbeRtt for NoTracer {
             fn probe_rtt(
                 &self,
-                _chain: &crate::route::ConnChain,
+                _chain: &crate::route::RouteChain,
             ) -> std::pin::Pin<
                 Box<dyn std::future::Future<Output = crate::route::ProbeOutcome> + Send>,
             > {
                 unreachable!()
             }
         }
-        let conn: HashMap<Arc<str>, ConnConfig> = HashMap::new();
+        let conn: HashMap<Arc<str>, HopConfig> = HashMap::new();
         let matcher = Arc::new(HashMap::new());
         let conn_selector = HashMap::new();
         let tracer: Arc<dyn ProbeRtt + Send + Sync> = Arc::new(NoTracer);

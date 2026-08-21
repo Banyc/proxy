@@ -1,5 +1,6 @@
 use crate::{
     addr::InternetAddr,
+    anti_replay::VALIDATOR_UDP_HDR_TTL,
     error::AnyError,
     log::Timing,
     proto::{
@@ -11,7 +12,6 @@ use crate::{
             retain_dead_session,
         },
     },
-    anti_replay::VALIDATOR_UDP_HDR_TTL,
     ttl_cell::RegeneratingHeader,
     udp::{PACKET_BUFFER_LENGTH, Packet, UDP_FLOW_TIMEOUT},
 };

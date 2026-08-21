@@ -5,6 +5,7 @@ use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Durat
 use access_server::{AccessServerConfig, AccessServerLoader, AccessServerLoaderSnapshot};
 use ae::anti_replay::{ReplayValidator, TimeValidator};
 use common::{
+    anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
     config::{Merge, merge_map},
     connect::{
         ConnectorConfig, ConnectorConfigUpdater, ConnectorResetSignal, connector_config_cell,
@@ -20,8 +21,7 @@ use common::{
         context::{Runtime, StreamRuntime, UdpRuntime},
         metrics::{stream::StreamSessionTable, udp::UdpSessionTable},
     },
-    anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
-    route::{ConnConfig, ConnSelector, ProbeRtt, Registries},
+    route::{HopConfig, ProbeRtt, Registries, RouteSelector},
     session::SessionSpawner,
     stream::pool::{StreamConnPool, StreamPoolBuilder},
 };
@@ -451,7 +451,7 @@ where
     let stream_tracer: Arc<dyn ProbeRtt + Send + Sync> =
         Arc::new(StreamTracer::new(runtime.stream.clone()));
     let empty_matcher: Arc<HashMap<Arc<str>, Matcher>> = Arc::new(HashMap::new());
-    let empty_conn_selector: HashMap<Arc<str>, ConnSelector> = HashMap::new();
+    let empty_conn_selector: HashMap<Arc<str>, RouteSelector> = HashMap::new();
     let stream_registries = Registries {
         conn: &stream_conn,
         matcher: &empty_matcher,
@@ -573,7 +573,7 @@ pub struct StreamConfig {
     pool: StreamPoolBuilder,
     #[serde(default)]
     #[serde(alias = "conn", alias = "proxy_server")]
-    upstream: HashMap<Arc<str>, ConnConfig>,
+    upstream: HashMap<Arc<str>, HopConfig>,
 }
 impl Merge for StreamConfig {
     type Error = AnyError;
@@ -593,7 +593,7 @@ impl Merge for StreamConfig {
 pub struct UdpConfig {
     #[serde(default)]
     #[serde(alias = "conn", alias = "proxy_server")]
-    upstream: HashMap<Arc<str>, ConnConfig>,
+    upstream: HashMap<Arc<str>, HopConfig>,
 }
 impl Merge for UdpConfig {
     type Error = AnyError;

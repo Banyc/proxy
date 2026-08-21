@@ -9,8 +9,8 @@ use thiserror::Error;
 use crate::{addr::InternetAddr, config::SharableConfig, matcher::Matcher};
 
 use super::{
-    ConnConfigBuildError, ConnSelector, ConnSelectorBuildError, ConnSelectorBuilder, ProbeFutures,
-    Registries,
+    HopConfigBuildError, ProbeFutures, Registries, RouteSelector, RouteSelectorBuildError,
+    RouteSelectorBuilder,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,7 +132,7 @@ pub enum RouteActionTagBuilder {
 #[serde(untagged)]
 pub(crate) enum RouteActionSelector {
     Named { conn_selector: Arc<str> },
-    Sharable(SharableConfig<ConnSelectorBuilder>),
+    Sharable(SharableConfig<RouteSelectorBuilder>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,7 +140,7 @@ pub(crate) enum RouteActionSelector {
 #[serde(untagged)]
 pub(crate) enum RouteActionBuilder {
     Tagged(RouteActionTagBuilder),
-    ConnSelector(RouteActionSelector),
+    RouteSelector(RouteActionSelector),
 }
 impl RouteActionBuilder {
     pub fn resolve(
@@ -151,16 +151,18 @@ impl RouteActionBuilder {
         let action = match self {
             RouteActionBuilder::Tagged(RouteActionTagBuilder::Direct) => RouteAction::Direct,
             RouteActionBuilder::Tagged(RouteActionTagBuilder::Block) => RouteAction::Block,
-            RouteActionBuilder::ConnSelector(RouteActionSelector::Named { conn_selector }) => {
+            RouteActionBuilder::RouteSelector(RouteActionSelector::Named { conn_selector }) => {
                 forbid_reserved_selector_name(&conn_selector)?;
                 let selector = registries
                     .conn_selector
                     .get(&conn_selector)
                     .cloned()
-                    .ok_or(RouteTableBuildError::ConnSelectorKeyNotFound(conn_selector))?;
-                RouteAction::ConnSelector(Arc::new(selector))
+                    .ok_or(RouteTableBuildError::RouteSelectorKeyNotFound(
+                        conn_selector,
+                    ))?;
+                RouteAction::RouteSelector(Arc::new(selector))
             }
-            RouteActionBuilder::ConnSelector(RouteActionSelector::Sharable(
+            RouteActionBuilder::RouteSelector(RouteActionSelector::Sharable(
                 SharableConfig::SharingKey(k),
             )) => {
                 forbid_reserved_selector_name(&k)?;
@@ -168,14 +170,14 @@ impl RouteActionBuilder {
                     .conn_selector
                     .get(&k)
                     .cloned()
-                    .ok_or(RouteTableBuildError::ConnSelectorKeyNotFound(k))?;
-                RouteAction::ConnSelector(Arc::new(selector))
+                    .ok_or(RouteTableBuildError::RouteSelectorKeyNotFound(k))?;
+                RouteAction::RouteSelector(Arc::new(selector))
             }
-            RouteActionBuilder::ConnSelector(RouteActionSelector::Sharable(
+            RouteActionBuilder::RouteSelector(RouteActionSelector::Sharable(
                 SharableConfig::Private(p),
             )) => {
                 let selector = p.resolve(registries, probes)?;
-                RouteAction::ConnSelector(Arc::new(selector))
+                RouteAction::RouteSelector(Arc::new(selector))
             }
         };
         Ok(action)
@@ -184,7 +186,9 @@ impl RouteActionBuilder {
 
 fn forbid_reserved_selector_name(name: &Arc<str>) -> Result<(), RouteTableBuildError> {
     if matches!(name.as_ref(), "direct" | "block") {
-        return Err(RouteTableBuildError::ReservedConnSelectorName(name.clone()));
+        return Err(RouteTableBuildError::ReservedRouteSelectorName(
+            name.clone(),
+        ));
     }
     Ok(())
 }
@@ -193,23 +197,23 @@ fn forbid_reserved_selector_name(name: &Arc<str>) -> Result<(), RouteTableBuildE
 pub enum RouteAction {
     Direct,
     Block,
-    ConnSelector(Arc<ConnSelector>),
+    RouteSelector(Arc<RouteSelector>),
 }
 
 #[derive(Debug, Error)]
 pub enum RouteTableBuildError {
     #[error("Conn selector key not found: `{0}`")]
-    ConnSelectorKeyNotFound(Arc<str>),
+    RouteSelectorKeyNotFound(Arc<str>),
     #[error("Matcher key not found: `{0}`")]
     MatcherKeyNotFound(Arc<str>),
     #[error("Matcher: {0}")]
     Matcher(#[source] regex::Error),
     #[error("Chain config is invalid: {0}")]
-    ChainConfig(#[source] ConnConfigBuildError),
+    ChainConfig(#[source] HopConfigBuildError),
     #[error("{0}")]
-    ConnSelector(#[from] ConnSelectorBuildError),
+    RouteSelector(#[from] RouteSelectorBuildError),
     #[error("Conn selector name `{0}` is reserved (use the `direct`/`block` action instead)")]
-    ReservedConnSelectorName(Arc<str>),
+    ReservedRouteSelectorName(Arc<str>),
 }
 
 #[cfg(test)]
@@ -219,7 +223,7 @@ mod tests {
     use super::*;
     use crate::{
         matcher::Matcher,
-        route::{ConnConfig, ConnSelector, ProbeRtt, WeightedConnChain},
+        route::{HopConfig, ProbeRtt, RouteSelector, WeightedRouteChain},
     };
 
     fn matcher(json: &str) -> Matcher {
@@ -234,10 +238,10 @@ mod tests {
         RouteTableEntry::new(None, matcher, action)
     }
 
-    fn chain(weight: usize) -> WeightedConnChain {
-        WeightedConnChain {
+    fn chain(weight: usize) -> WeightedRouteChain {
+        WeightedRouteChain {
             weight,
-            chain: Arc::from(Vec::<ConnConfig>::new()),
+            chain: Arc::from(Vec::<HopConfig>::new()),
         }
     }
 
@@ -373,7 +377,7 @@ mod tests {
     #[test]
     fn a_conn_selector_action_is_preserved_when_selected() {
         let mut probes = ProbeFutures::new();
-        let selector = ConnSelector::new(
+        let selector = RouteSelector::new(
             vec![chain(1)],
             None::<Arc<dyn ProbeRtt + Send + Sync>>,
             None,
@@ -386,13 +390,13 @@ mod tests {
             vec![RouteTableEntry::new(
                 None,
                 matcher("{}"),
-                RouteAction::ConnSelector(Arc::new(selector)),
+                RouteAction::RouteSelector(Arc::new(selector)),
             )],
             Arc::new(HashMap::new()),
         );
         assert!(matches!(
             table.action(&addr("1.2.3.4:80")),
-            RouteAction::ConnSelector(_)
+            RouteAction::RouteSelector(_)
         ));
     }
 }
