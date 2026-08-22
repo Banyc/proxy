@@ -8,7 +8,7 @@ use common::{
     },
     stream_runtime::{HasIoAddr, IoConnection, OwnedIoStream},
 };
-use mux::LaneClass;
+use rtp_mux::LaneClass;
 use std::{
     io,
     net::SocketAddr,
