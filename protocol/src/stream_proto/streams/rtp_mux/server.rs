@@ -23,8 +23,8 @@ pub struct RtpMuxServer<ConnHandler> {
 }
 impl<ConnHandler> RtpMuxServer<ConnHandler> {
     pub fn new(
-        interactive_listener: rtp::udp::Listener,
-        bulk_listener: rtp::udp::Listener,
+        interactive_listener: ::rtp_mux::Listener,
+        bulk_listener: ::rtp_mux::Listener,
         conn_handler: ConnHandler,
         session_spawner: SessionSpawner,
     ) -> Self {
@@ -45,7 +45,7 @@ impl<ConnHandler> RtpMuxServer<ConnHandler> {
             session_spawner,
         }
     }
-    pub fn listener(&self) -> &rtp::udp::Listener {
+    pub fn listener(&self) -> &::rtp_mux::Listener {
         self.inner.listener()
     }
 }
