@@ -19,7 +19,7 @@ mod tests {
             addr::RouteAddr,
             client::stream::{establish, probe_rtt},
             conn::stream::ConnAndAddr,
-            conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
+            conn_handler::{SpeedLimit, stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
             connect::udp::UdpConnector,
             context::StreamRuntime,
         },
@@ -134,7 +134,7 @@ mod tests {
             stream_context,
             Arc::clone(addr),
             allow_loopback,
-            f64::INFINITY,
+            SpeedLimit::UNLIMITED,
         );
         let proxy_addr = match ty {
             ConcreteStreamType::Tcp => {

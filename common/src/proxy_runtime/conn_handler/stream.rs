@@ -21,6 +21,8 @@ use serde::Deserialize;
 use thiserror::Error;
 use tracing::{instrument, trace, warn};
 
+use super::SpeedLimit;
+
 pub struct StreamProxyFinished {
     pub io: IoCopyFinished,
     pub up: RouteAddr,
@@ -93,7 +95,8 @@ impl StreamProxyConnHandlerBuilder {
             self.stream_context,
             Arc::clone(&self.listen_addr),
             self.allow_loopback,
-            self.speed_limit.unwrap_or(f64::INFINITY),
+            SpeedLimit::from_config(self.speed_limit)
+                .map_err(|e| StreamProxyServerBuildError::SpeedLimit(e.to_string()))?,
         ))
     }
 }
@@ -105,6 +108,8 @@ pub enum StreamProxyServerBuildError {
     PayloadCrypto(String),
     #[error("Stream pool: {0}")]
     StreamPool(#[from] ParseInternetAddrError),
+    #[error("Speed limit: {0}")]
+    SpeedLimit(String),
 }
 
 #[derive(Debug)]
@@ -122,7 +127,7 @@ impl StreamProxyConnHandler {
         stream_context: StreamRuntime,
         listen_addr: Arc<str>,
         allow_loopback: bool,
-        speed_limit: f64,
+        speed_limit: SpeedLimit,
     ) -> Self {
         Self {
             acceptor: StreamProxyAcceptor::new(
@@ -133,7 +138,7 @@ impl StreamProxyConnHandler {
             payload_crypto,
             stream_context,
             listen_addr,
-            speed_limiter: Limiter::new(speed_limit),
+            speed_limiter: Limiter::new(speed_limit.into_inner()),
         }
     }
 

@@ -250,7 +250,7 @@ mod tests {
                 },
                 Arc::clone(&listen_addr),
                 true,
-                f64::INFINITY,
+                common::proxy_runtime::conn_handler::SpeedLimit::UNLIMITED,
             );
             let server =
                 build_tcp_proxy_server(listen_addr.as_ref(), proxy, session_spawner.clone())

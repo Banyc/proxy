@@ -26,7 +26,7 @@ use tokio::net::{ToSocketAddrs, UdpSocket};
 use tracing::{debug, instrument, trace, warn};
 use udp_listener::{Conn, ConnRead, ConnWrite};
 
-use super::ListenerBindError;
+use super::{ListenerBindError, SpeedLimit};
 
 #[derive(Debug)]
 pub struct UdpProxyConnHandler {
@@ -42,14 +42,14 @@ impl UdpProxyConnHandler {
         payload_crypto: Option<tokio_chacha20::config::Config>,
         udp_context: UdpRuntime,
         allow_loopback: bool,
-        speed_limit: f64,
+        speed_limit: SpeedLimit,
     ) -> Self {
         Self {
             header_crypto,
             payload_crypto,
             udp_context,
             allow_loopback,
-            speed_limiter: Limiter::new(speed_limit),
+            speed_limiter: Limiter::new(speed_limit.into_inner()),
         }
     }
 
@@ -680,6 +680,7 @@ impl UdpServerHandleConn for UdpProxyConnHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proxy_runtime::conn_handler::SpeedLimit;
     use crate::{
         anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
         connect::{ConnectorConfig, connector_config_cell},
@@ -710,7 +711,7 @@ mod tests {
             session_spawner,
             retention,
         };
-        UdpProxyConnHandler::new(crypto(), None, udp_context, true, f64::INFINITY)
+        UdpProxyConnHandler::new(crypto(), None, udp_context, true, SpeedLimit::UNLIMITED)
     }
 
     /// A `UdpRecv` that returns its queued packet once and then stalls

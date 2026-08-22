@@ -16,7 +16,7 @@ use common::{
             stream,
             udp::{ProbeFlowEnd, UdpProxyClient, probe_rtt},
         },
-        conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
+        conn_handler::{SpeedLimit, stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
         connect::udp::UdpConnector,
         context::{Runtime, StreamRuntime, UdpRuntime},
     },
@@ -267,14 +267,14 @@ fn initiator_handler(
             runtime.stream.clone(),
             virtual_addr,
             true,
-            f64::INFINITY,
+            SpeedLimit::UNLIMITED,
         )),
         udp_proxy: Arc::new(UdpProxyConnHandler::new(
             crypto,
             None,
             runtime.udp,
             true,
-            f64::INFINITY,
+            SpeedLimit::UNLIMITED,
         )),
         stream_runtime: runtime.stream,
     }
@@ -483,7 +483,7 @@ async fn verify_reverse_udp_proxy_hop(
             Some(first_payload_crypto.clone()),
             runtime.udp.clone(),
             true,
-            f64::INFINITY,
+            SpeedLimit::UNLIMITED,
         )
         .build("127.0.0.1:0")
         .await

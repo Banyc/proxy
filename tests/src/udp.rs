@@ -17,7 +17,7 @@ mod tests {
                 self,
                 udp::{ProbeFlowEnd, UdpProxyClient, UdpProxyClientReadHalf, probe_rtt},
             },
-            conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
+            conn_handler::{SpeedLimit, stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
             connect::udp::UdpConnector,
             context::{Runtime, StreamRuntime, UdpRuntime},
         },
@@ -83,7 +83,7 @@ mod tests {
             payload_crypto.clone(),
             udp_context(scope),
             allow_loopback,
-            f64::INFINITY,
+            SpeedLimit::UNLIMITED,
         );
         let server = proxy.build(addr).await.unwrap();
         let proxy_addr = server.listener().local_addr().unwrap();
@@ -584,14 +584,14 @@ mod tests {
             runtime.stream.clone(),
             Arc::from(format!("udp-over-{protocol}")),
             true,
-            f64::INFINITY,
+            SpeedLimit::UNLIMITED,
         );
         let udp_proxy = UdpProxyConnHandler::new(
             crypto.clone(),
             payload_crypto.clone(),
             runtime.udp.clone(),
             true,
-            f64::INFINITY,
+            SpeedLimit::UNLIMITED,
         );
         let handler = MuxProxyHandler {
             stream: stream_proxy,

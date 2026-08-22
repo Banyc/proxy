@@ -16,7 +16,7 @@ use common::{
     loading,
     proxy_runtime::{
         addr::{ReverseTunnelTransport, RouteAddr, validate_reverse_tunnel_name},
-        conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
+        conn_handler::{SpeedLimit, stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
         context::{Runtime, StreamRuntime},
     },
     session::log_rejection,
@@ -346,14 +346,14 @@ impl ReverseTunnelInitiatorBuilder {
             self.runtime.stream.clone(),
             self.key.clone(),
             self.config.allow_loopback,
-            f64::INFINITY,
+            SpeedLimit::UNLIMITED,
         ));
         let udp_proxy = Arc::new(UdpProxyConnHandler::new(
             registration_crypto.clone(),
             payload_crypto,
             self.runtime.udp,
             self.config.allow_loopback,
-            f64::INFINITY,
+            SpeedLimit::UNLIMITED,
         ));
         Ok(ReverseTunnelInitiatorHandler {
             name: self.config.name,

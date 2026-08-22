@@ -12,7 +12,7 @@ use std::{
 use common::{
     connect::ConnectorResetSignal,
     proxy_runtime::{
-        conn_handler::{stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
+        conn_handler::{SpeedLimit, stream::StreamProxyConnHandler, udp::UdpProxyConnHandler},
         connect::udp::UdpConnection,
         context::UdpRuntime,
     },
@@ -256,7 +256,7 @@ pub fn build_udp_proxy_handler(
         payload_crypto,
         udp_context,
         allow_loopback,
-        f64::INFINITY,
+        SpeedLimit::UNLIMITED,
     )))
 }
 

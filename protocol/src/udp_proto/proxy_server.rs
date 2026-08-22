@@ -3,7 +3,7 @@ use std::sync::Arc;
 use common::{
     loading,
     proxy_runtime::{
-        conn_handler::{ListenerBindError, udp::UdpProxyConnHandler},
+        conn_handler::{ListenerBindError, SpeedLimit, udp::UdpProxyConnHandler},
         context::UdpRuntime,
     },
     udp_runtime::server::UdpServer,
@@ -62,7 +62,8 @@ impl loading::Build for UdpProxyServerBuilder {
             payload_crypto,
             self.udp_context,
             self.config.allow_loopback,
-            self.config.speed_limit.unwrap_or(f64::INFINITY),
+            SpeedLimit::from_config(self.config.speed_limit)
+                .map_err(|e| UdpProxyBuildError::SpeedLimit(e.to_string()))?,
         ))
     }
 
@@ -83,6 +84,8 @@ pub enum UdpProxyBuildError {
     HeaderCrypto(String),
     #[error("PayloadCrypto: {0}")]
     PayloadCrypto(String),
+    #[error("Speed limit: {0}")]
+    SpeedLimit(String),
 }
 #[cfg(test)]
 mod tests {
