@@ -43,8 +43,8 @@ rand = "0.10"
 regex = "1"
 rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.85" }
 # rtp = { path = "../rtp" }
-rtp_mux = { git = "https://github.com/Banyc/rtp_mux.git", tag = "v0.0.9" }
-# rtp_mux = { path = "../rtp_mux" }
+# rtp_mux = { git = "https://github.com/Banyc/rtp_mux.git", tag = "v0.0.9" }
+rtp_mux = { path = "../rtp_mux" }
 scopeguard = "1"
 serde = "1"
 serde_json = "1"

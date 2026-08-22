@@ -2054,7 +2054,6 @@ dependencies = [
 [[package]]
 name = "rtp_mux"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp_mux.git?tag=v0.0.9#68cd3505a16430dddf16fde0d17442df05d6ea7f"
 dependencies = [
  "futures",
  "metrics",
