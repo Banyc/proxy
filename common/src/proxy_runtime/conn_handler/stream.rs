@@ -270,7 +270,7 @@ impl StreamProxyAcceptor {
         .map_err(|e| {
             let downstream_addr = downstream.peer_addr().ok();
             StreamProxyAcceptorError::ConnectUpstream {
-                source: e,
+                source: Box::new(e),
                 downstream_addr,
                 upstream_addr: addr.clone(),
             }
@@ -306,7 +306,7 @@ pub enum StreamProxyAcceptorError {
     #[error("Failed to connect to upstream {upstream_addr}: {source}, {downstream_addr:?}")]
     ConnectUpstream {
         #[source]
-        source: ConnectError,
+        source: Box<ConnectError>,
         downstream_addr: Option<SocketAddr>,
         upstream_addr: RouteAddr,
     },

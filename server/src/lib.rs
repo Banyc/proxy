@@ -233,7 +233,6 @@ where
 }
 
 /// The window that collapses bursts of watcher events into one reload.
-
 pub struct ServerLoader {
     pub access_server: AccessServerLoader,
     pub proxy_server: ProxyServerLoader,

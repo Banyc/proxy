@@ -364,7 +364,7 @@ mod tests {
             sock_addrs: vec![],
         };
         let err = StreamEstablishError::ConnectDestination {
-            source,
+            source: Box::new(source),
             upstream_addr: addr.clone(),
         };
         let tunnel_err = TunnelError::EstablishProxyChain(Box::new(err));
@@ -386,7 +386,7 @@ mod tests {
             sock_addrs: vec![],
         };
         let err = StreamEstablishError::ConnectFirstProxyServer {
-            source,
+            source: Box::new(source),
             upstream_addr: addr.clone(),
         };
         let tunnel_err = TunnelError::from(err);

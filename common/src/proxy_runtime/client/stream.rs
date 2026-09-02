@@ -108,7 +108,7 @@ pub async fn establish(
             connect_with_pool(&destination, stream_context, true, crate::STREAM_IO_TIMEOUT)
                 .await
                 .map_err(|source| StreamEstablishError::ConnectDestination {
-                    source,
+                    source: Box::new(source),
                     upstream_addr: destination.clone(),
                 })?;
         stream.set_stream_name(&destination.address.to_string());
@@ -124,7 +124,7 @@ pub async fn establish(
             connect_with_pool(proxy_addr, stream_context, true, crate::STREAM_IO_TIMEOUT)
                 .await
                 .map_err(|source| StreamEstablishError::ConnectFirstProxyServer {
-                    source,
+                    source: Box::new(source),
                     upstream_addr: proxy_addr.clone(),
                 })?;
         (stream, proxy_addr.clone(), sock_addr)
@@ -161,13 +161,13 @@ pub enum StreamEstablishError {
     #[error("Failed to connect to destination: {source}, {upstream_addr}")]
     ConnectDestination {
         #[source]
-        source: ConnectError,
+        source: Box<ConnectError>,
         upstream_addr: RouteAddr,
     },
     #[error("Failed to connect to first proxy server: {source}, {upstream_addr}")]
     ConnectFirstProxyServer {
         #[source]
-        source: ConnectError,
+        source: Box<ConnectError>,
         upstream_addr: RouteAddr,
     },
     #[error("Failed to write heartbeat upgrade to upstream: {source}, {upstream_addr}")]

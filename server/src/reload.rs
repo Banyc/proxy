@@ -91,6 +91,11 @@ impl<Prepare> ReloadMachine<Prepare> {
         self.state = ReloadState::Preparing(prepare);
     }
 }
+impl<Prepare> Default for ReloadMachine<Prepare> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 /// One resolved step of the reload controller, as driven by the serve loop.
 pub enum ReloadStep<Prepared> {
     /// A config-file change (re)started the debounce window.

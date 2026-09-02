@@ -309,6 +309,7 @@ impl<ConnHandler> ReplaceConnHandlerRx<ConnHandler> {
     /// - `Ok(Some(handler))` — a new handler was delivered.
     /// - `Ok(None)` — a sentinel (no replacement); ignored by callers.
     /// - `Err(())` — all senders were dropped; the listener should despawn.
+    #[allow(clippy::result_unit_err)] // `()` is a zero-information "despawn" sentinel
     pub async fn recv(&mut self) -> Result<Option<Arc<ConnHandler>>, ()> {
         match self.0.changed().await {
             Ok(()) => Ok(self.0.borrow().as_ref().cloned()),
