@@ -249,7 +249,7 @@ where
 #[instrument(skip_all)]
 async fn run_service(
     ctx: &HttpAccessConnContext,
-    req: Request<hyper::body::Incoming>,
+    mut req: Request<hyper::body::Incoming>,
     downstream_ctx: Arc<HttpDownstreamContext>,
     listener: Arc<str>,
     request_error_context: &RequestErrorContext,
@@ -266,10 +266,11 @@ async fn run_service(
         downstream: (*downstream_ctx).clone(),
         listener,
     };
+    let downstream_upgrade = is_upgrade_request(&req).then(|| hyper::upgrade::on(&mut req));
     let res = if Method::CONNECT == req.method() {
         dispatch_tunnel(ctx, req, reporter.clone()).await
     } else {
-        dispatch_proxy(ctx, req, reporter.clone()).await
+        dispatch_proxy(ctx, req, downstream_upgrade, reporter.clone()).await
     };
     retain_failed_request_context(request_error_context, reporter, res)
 }
@@ -318,6 +319,24 @@ impl TunnelError {
             _ => None,
         }
     }
+}
+
+/// A request is an upgrade request when it carries an `Upgrade` header and
+/// nominates `upgrade` as a connection option (RFC 7230 §6.7). Such requests
+/// are forwarded with their upgrade headers intact; if the origin answers
+/// `101 Switching Protocols`, the proxy tunnels the upgraded connection.
+fn is_upgrade_request(req: &Request<hyper::body::Incoming>) -> bool {
+    if !req.headers().contains_key(hyper::header::UPGRADE) {
+        return false;
+    }
+    req.headers()
+        .get(hyper::header::CONNECTION)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+        })
 }
 
 fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {

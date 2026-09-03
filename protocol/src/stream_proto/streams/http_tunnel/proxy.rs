@@ -19,7 +19,6 @@ use crate::stream_proto::{
 };
 use common::{
     addr::{InternetAddr, InternetAddrKind},
-    lifecycle::retention::RetentionActorSender,
     log::Timing,
     proxy_runtime::{
         addr::RouteAddr,
@@ -27,15 +26,15 @@ use common::{
         log::stream::{LOGGER, StreamLogWithoutByteCounts, StreamProxyLogWithoutByteCounts},
         metrics::stream::StreamSession,
         relay::DEAD_SESSION_RETENTION_DURATION,
+        relay::stream::{ConnContext, CopyBidirectional},
     },
     route::{RouteAction, RouteSelector},
-    session::{SessionSpawner, log_rejection},
+    session::log_rejection,
     udp_runtime::UDP_FLOW_TIMEOUT,
 };
 use http_body_util::BodyExt;
-use hyper::{Request, body::Incoming};
+use hyper::{Request, StatusCode, body::Incoming, upgrade::OnUpgrade};
 use hyper_util::rt::TokioIo;
-use monitor_table::table::RowOwnedGuard;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{instrument, trace};
 
@@ -71,10 +70,21 @@ impl fmt::Display for HttpProxyLog {
     }
 }
 
+/// Per-request context for the HTTP proxy (non-CONNECT) path: the access
+/// server context, the per-request failure reporter, and the request's log
+/// fields (captured before the request-target is rewritten to origin-form).
+struct HttpProxyContext<'a> {
+    ctx: &'a HttpAccessConnContext,
+    reporter: HttpFailureReporter,
+    method: String,
+    uri: String,
+}
+
 #[instrument(skip_all, fields(method = %req.method()))]
 pub async fn dispatch_proxy(
     ctx: &HttpAccessConnContext,
     req: Request<hyper::body::Incoming>,
+    downstream_upgrade: Option<OnUpgrade>,
     reporter: HttpFailureReporter,
 ) -> HttpResult {
     let method = req.method().to_string();
@@ -92,28 +102,32 @@ pub async fn dispatch_proxy(
         protocol: ConcreteStreamType::Tcp.to_string().into(),
     };
     let req = req_modify_path(req);
-    dispatch(dst_addr_stream, req, method, uri, ctx, reporter).await
+    let proxy_ctx = HttpProxyContext {
+        ctx,
+        reporter,
+        method,
+        uri,
+    };
+    dispatch(dst_addr_stream, req, downstream_upgrade, proxy_ctx).await
 }
 
 #[instrument(skip_all, fields(addr = ?dst_addr))]
 async fn dispatch(
     dst_addr: RouteAddr,
     req: Request<Incoming>,
-    method: String,
-    uri: String,
-    ctx: &HttpAccessConnContext,
-    reporter: HttpFailureReporter,
+    downstream_upgrade: Option<OnUpgrade>,
+    proxy_ctx: HttpProxyContext<'_>,
 ) -> HttpResult {
-    let action = ctx.route_table.action(&dst_addr.address);
+    let action = proxy_ctx.ctx.route_table.action(&dst_addr.address);
     match action {
         RouteAction::RouteSelector(conn_selector) => {
-            proxy(conn_selector, dst_addr, req, method, uri, ctx, reporter).await
+            proxy(conn_selector, dst_addr, req, downstream_upgrade, proxy_ctx).await
         }
         RouteAction::Block => {
             trace!("Blocked");
             Ok(respond_with_rejection())
         }
-        RouteAction::Direct => direct(dst_addr, req, method, uri, ctx, reporter).await,
+        RouteAction::Direct => direct(dst_addr, req, downstream_upgrade, proxy_ctx).await,
     }
 }
 
@@ -121,51 +135,39 @@ async fn dispatch(
 async fn direct(
     dst_addr: RouteAddr,
     req: Request<Incoming>,
-    method: String,
-    uri: String,
-    ctx: &HttpAccessConnContext,
-    reporter: HttpFailureReporter,
+    downstream_upgrade: Option<OnUpgrade>,
+    proxy_ctx: HttpProxyContext<'_>,
 ) -> HttpResult {
     let start = (std::time::Instant::now(), std::time::SystemTime::now());
     let destination = dst_addr.address.to_string();
     let sock_addrs = dst_addr.address.to_socket_addrs().await.map_err(|e| {
         let err = TunnelError::Direct(e);
-        reporter.report(&err, Some(&destination));
+        proxy_ctx.reporter.report(&err, Some(&destination));
         err
     })?;
-    let (upstream, upstream_sock_addr) = ctx
+    let (upstream, upstream_sock_addr) = proxy_ctx
+        .ctx
         .stream_context
         .connector_table
         .timed_connect_any(TCP_STREAM_TYPE, sock_addrs, UDP_FLOW_TIMEOUT)
         .await
         .map_err(|e| {
             let err = TunnelError::Direct(e);
-            reporter.report(&err, Some(&destination));
+            proxy_ctx.reporter.report(&err, Some(&destination));
             err
         })?;
-    let dn_remote = reporter.downstream.remote;
-    let session_guard = ctx.stream_context.session_table.as_ref().map(|s| {
-        s.set_scope_owned(StreamSession {
-            start: SystemTime::now(),
-            end: None,
-            destination: Some(dst_addr.clone()),
-            upstream_local: upstream.local_addr().ok(),
-            upstream_remote: dst_addr.clone(),
-            downstream_local: Arc::clone(&ctx.listen_addr),
-            downstream_remote: dn_remote,
-            up_gauge: None,
-            dn_gauge: None,
-        })
-    });
-    let res = tls_http(
-        upstream,
-        req,
-        session_guard,
-        &reporter,
-        &ctx.stream_context.session_spawner,
-        &ctx.stream_context.retention,
-    )
-    .await;
+    let dn_remote = proxy_ctx.reporter.downstream.remote;
+    let conn_context = ConnContext {
+        start,
+        upstream_remote: dst_addr.clone(),
+        upstream_remote_sock: upstream_sock_addr,
+        upstream_local: upstream.local_addr().ok(),
+        downstream_remote: dn_remote,
+        downstream_local: Arc::clone(&proxy_ctx.ctx.listen_addr),
+        session_table: proxy_ctx.ctx.stream_context.session_table.clone(),
+        destination: Some(dst_addr.clone()),
+    };
+    let res = tls_http(upstream, req, conn_context, downstream_upgrade, &proxy_ctx).await;
     let end = std::time::Instant::now();
     let timing = Timing { start, end };
     let log = HttpProxyLog {
@@ -177,8 +179,8 @@ async fn direct(
         upstream_sock_addr,
         downstream_addr: dn_remote,
         destination: Some(dst_addr.address),
-        method,
-        uri,
+        method: proxy_ctx.method,
+        uri: proxy_ctx.uri,
     };
     common::info_println!("HTTP direct: Finished {log}");
     res
@@ -189,10 +191,8 @@ async fn proxy(
     conn_selector: &RouteSelector,
     dst_addr: RouteAddr,
     req: Request<Incoming>,
-    method: String,
-    uri: String,
-    ctx: &HttpAccessConnContext,
-    reporter: HttpFailureReporter,
+    downstream_upgrade: Option<OnUpgrade>,
+    proxy_ctx: HttpProxyContext<'_>,
 ) -> HttpResult {
     let start = (std::time::Instant::now(), std::time::SystemTime::now());
     let chain = match conn_selector {
@@ -201,37 +201,35 @@ async fn proxy(
             non_empty_conn_selector.choose_chain().chain.clone()
         }
     };
-    let upstream = match establish(&chain, dst_addr.clone(), &ctx.stream_context).await {
+    let upstream = match establish(&chain, dst_addr.clone(), &proxy_ctx.ctx.stream_context).await {
         Ok(u) => u,
         Err(e) => {
             let tunnel_err = TunnelError::from(e);
             let destination = tunnel_err.upstream_addr().map(|a| a.address.to_string());
-            reporter.report(&tunnel_err, destination.as_deref());
+            proxy_ctx
+                .reporter
+                .report(&tunnel_err, destination.as_deref());
             return Err(tunnel_err);
         }
     };
     let upstream_addr = upstream.addr.clone();
-    let dn_remote = reporter.downstream.remote;
-    let session_guard = ctx.stream_context.session_table.as_ref().map(|s| {
-        s.set_scope_owned(StreamSession {
-            start: SystemTime::now(),
-            end: None,
-            destination: Some(dst_addr.clone()),
-            upstream_local: upstream.stream.local_addr().ok(),
-            upstream_remote: upstream.addr.clone(),
-            downstream_local: Arc::clone(&ctx.listen_addr),
-            downstream_remote: dn_remote,
-            up_gauge: None,
-            dn_gauge: None,
-        })
-    });
+    let dn_remote = proxy_ctx.reporter.downstream.remote;
+    let conn_context = ConnContext {
+        start,
+        upstream_remote: upstream.addr.clone(),
+        upstream_remote_sock: upstream.sock_addr,
+        upstream_local: upstream.stream.local_addr().ok(),
+        downstream_remote: dn_remote,
+        downstream_local: Arc::clone(&proxy_ctx.ctx.listen_addr),
+        session_table: proxy_ctx.ctx.stream_context.session_table.clone(),
+        destination: Some(dst_addr.clone()),
+    };
     let res = tls_http(
         upstream.stream,
         req,
-        session_guard,
-        &reporter,
-        &ctx.stream_context.session_spawner,
-        &ctx.stream_context.retention,
+        conn_context,
+        downstream_upgrade,
+        &proxy_ctx,
     )
     .await;
     let end = std::time::Instant::now();
@@ -240,10 +238,10 @@ async fn proxy(
         timing: timing.clone(),
         upstream_addr: upstream_addr.clone(),
         upstream_sock_addr: upstream.sock_addr,
-        downstream_addr: reporter.downstream.remote,
+        downstream_addr: proxy_ctx.reporter.downstream.remote,
         destination: Some(dst_addr.address.clone()),
-        method,
-        uri,
+        method: proxy_ctx.method,
+        uri: proxy_ctx.uri,
     };
     common::info_println!("HTTP proxy: Finished {log}");
     let record = (&StreamProxyLogWithoutByteCounts {
@@ -251,7 +249,7 @@ async fn proxy(
             timing: timing.clone(),
             upstream_addr,
             upstream_sock_addr: upstream.sock_addr,
-            downstream_addr: reporter.downstream.remote,
+            downstream_addr: proxy_ctx.reporter.downstream.remote,
         },
         destination: dst_addr.address,
     })
@@ -266,14 +264,18 @@ async fn proxy(
 async fn tls_http<Upstream>(
     upstream: Upstream,
     req: Request<Incoming>,
-    session_guard: Option<RowOwnedGuard<StreamSession>>,
-    reporter: &HttpFailureReporter,
-    session_spawner: &SessionSpawner,
-    retention: &RetentionActorSender,
+    conn_context: ConnContext,
+    downstream_upgrade: Option<OnUpgrade>,
+    proxy_ctx: &HttpProxyContext<'_>,
 ) -> HttpResult
 where
     Upstream: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
+    let speed_limiter = proxy_ctx.ctx.speed_limiter.clone();
+    let reporter = proxy_ctx.reporter.clone();
+    let session_spawner = proxy_ctx.ctx.stream_context.session_spawner.clone();
+    let retention = proxy_ctx.ctx.stream_context.retention.clone();
+
     let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
         .preserve_header_case(true)
         .title_case_headers(true)
@@ -284,6 +286,7 @@ where
             reporter.report(&err, None);
             err
         })?;
+    let conn = conn.with_upgrades();
 
     let bg_reporter = reporter.clone();
     let session_spawner = session_spawner.clone();
@@ -300,21 +303,77 @@ where
         log_rejection("http_connection", error);
     }
 
-    let resp = sender.send_request(req).await.map_err(|e| {
+    let mut resp = sender.send_request(req).await.map_err(|e| {
         let err = TunnelError::UpstreamRequestSend(e);
         reporter.report(&err, None);
         err
     })?;
 
-    if let Some(s) = &session_guard {
-        s.inspect_mut(|session| session.end = Some(SystemTime::now()));
+    if resp.status() == StatusCode::SWITCHING_PROTOCOLS {
+        // The origin accepted an upgrade (e.g. WebSocket). Hand the upgraded
+        // connection to the client and tunnel bytes in both directions.
+        if let Some(downstream_upgrade) = downstream_upgrade {
+            let upstream_upgrade = hyper::upgrade::on(&mut resp);
+            let reporter = reporter.clone();
+            let retention = retention.clone();
+            if let Err(error) = session_spawner
+                .spawn(async move {
+                    let (downstream, upstream) = tokio::join!(downstream_upgrade, upstream_upgrade);
+                    match (downstream, upstream) {
+                        (Ok(downstream), Ok(upstream)) => {
+                            let (io, res) = CopyBidirectional {
+                                downstream: TokioIo::new(downstream),
+                                upstream: TokioIo::new(upstream),
+                                payload_crypto: None,
+                                speed_limiter,
+                                conn_context,
+                                retention,
+                            }
+                            .serve_as_access_server()
+                            .await;
+                            match &res {
+                                Ok(()) => common::info_println!("HTTP upgrade: Finished {io}"),
+                                Err(err) => {
+                                    common::info_println!("HTTP upgrade: Error {io}: {err}")
+                                }
+                            }
+                        }
+                        (Err(e), _) | (_, Err(e)) => {
+                            let err = TunnelError::HyperError(e);
+                            reporter.report(&err, None);
+                        }
+                    }
+                    Ok(())
+                })
+                .await
+            {
+                log_rejection("http_upgrade", error);
+            }
+        }
+    } else {
+        let session_guard = conn_context.session_table.as_ref().map(|s| {
+            s.set_scope_owned(StreamSession {
+                start: conn_context.start.1,
+                end: None,
+                destination: conn_context.destination.clone(),
+                upstream_local: conn_context.upstream_local,
+                upstream_remote: conn_context.upstream_remote.clone(),
+                downstream_local: Arc::clone(&conn_context.downstream_local),
+                downstream_remote: conn_context.downstream_remote,
+                up_gauge: None,
+                dn_gauge: None,
+            })
+        });
+        if let Some(s) = &session_guard {
+            s.inspect_mut(|session| session.end = Some(SystemTime::now()));
+        }
+        retention
+            .retain(
+                Box::new(session_guard),
+                Instant::now() + DEAD_SESSION_RETENTION_DURATION,
+            )
+            .await;
     }
-    retention
-        .retain(
-            Box::new(session_guard),
-            Instant::now() + DEAD_SESSION_RETENTION_DURATION,
-        )
-        .await;
 
     Ok(resp.map(|b| b.boxed()))
 }
