@@ -7,14 +7,12 @@ use std::{
 };
 
 use super::authority::get_authority_from_req;
+use super::upstream;
 use crate::stream_proto::{
     addr::ConcreteStreamType,
-    streams::{
-        http_tunnel::{
-            HttpAccessConnContext, HttpFailureReporter, HttpResult, TunnelError, redacted_uri,
-            respond_with_rejection,
-        },
-        tcp::listener::TCP_STREAM_TYPE,
+    streams::http_tunnel::{
+        HttpAccessConnContext, HttpFailureReporter, HttpResult, TunnelError, redacted_uri,
+        respond_with_rejection,
     },
 };
 use common::{
@@ -22,15 +20,12 @@ use common::{
     log::Timing,
     proxy_runtime::{
         addr::RouteAddr,
-        client::stream::establish,
         log::stream::{LOGGER, StreamLogWithoutByteCounts, StreamProxyLogWithoutByteCounts},
         metrics::stream::StreamSession,
         relay::DEAD_SESSION_RETENTION_DURATION,
         relay::stream::{ConnContext, CopyBidirectional},
     },
-    route::{RouteAction, RouteSelector},
     session::log_rejection,
-    udp_runtime::UDP_FLOW_TIMEOUT,
 };
 use http_body_util::BodyExt;
 use hyper::{Request, StatusCode, body::Incoming, upgrade::OnUpgrade};
@@ -70,11 +65,10 @@ impl fmt::Display for HttpProxyLog {
     }
 }
 
-/// Per-request context for the HTTP proxy (non-CONNECT) path: the access
-/// server context, the per-request failure reporter, and the request's log
-/// fields (captured before the request-target is rewritten to origin-form).
-struct HttpProxyContext<'a> {
-    ctx: &'a HttpAccessConnContext,
+/// Per-request context for the HTTP proxy (non-CONNECT) path: the per-request
+/// failure reporter and the request's log fields (captured before the
+/// request-target is rewritten to origin-form).
+struct HttpProxyContext {
     reporter: HttpFailureReporter,
     method: String,
     uri: String,
@@ -102,160 +96,110 @@ pub async fn dispatch_proxy(
         protocol: ConcreteStreamType::Tcp.to_string().into(),
     };
     let req = req_modify_path(req);
+    let router = upstream::Router::from_ctx(ctx);
     let proxy_ctx = HttpProxyContext {
-        ctx,
         reporter,
         method,
         uri,
     };
-    dispatch(dst_addr_stream, req, downstream_upgrade, proxy_ctx).await
+    dispatch(router, dst_addr_stream, req, downstream_upgrade, proxy_ctx).await
 }
 
 #[instrument(skip_all, fields(addr = ?dst_addr))]
 async fn dispatch(
+    router: upstream::Router,
     dst_addr: RouteAddr,
     req: Request<Incoming>,
     downstream_upgrade: Option<OnUpgrade>,
-    proxy_ctx: HttpProxyContext<'_>,
+    proxy_ctx: HttpProxyContext,
 ) -> HttpResult {
-    let action = proxy_ctx.ctx.route_table.action(&dst_addr.address);
-    match action {
-        RouteAction::RouteSelector(conn_selector) => {
-            proxy(conn_selector, dst_addr, req, downstream_upgrade, proxy_ctx).await
-        }
-        RouteAction::Block => {
-            trace!("Blocked");
-            Ok(respond_with_rejection())
-        }
-        RouteAction::Direct => direct(dst_addr, req, downstream_upgrade, proxy_ctx).await,
-    }
+    let action = router.route_table.action(&dst_addr.address);
+    let Some(plan) = upstream::plan(dst_addr.clone(), action) else {
+        trace!("Blocked");
+        return Ok(respond_with_rejection());
+    };
+    relay(plan, dst_addr, req, downstream_upgrade, router, proxy_ctx).await
 }
 
 #[instrument(skip_all)]
-async fn direct(
+async fn relay(
+    plan: upstream::RoutePlan,
     dst_addr: RouteAddr,
     req: Request<Incoming>,
     downstream_upgrade: Option<OnUpgrade>,
-    proxy_ctx: HttpProxyContext<'_>,
+    router: upstream::Router,
+    proxy_ctx: HttpProxyContext,
 ) -> HttpResult {
-    let start = (std::time::Instant::now(), std::time::SystemTime::now());
-    let destination = dst_addr.address.to_string();
-    let sock_addrs = dst_addr.address.to_socket_addrs().await.map_err(|e| {
-        let err = TunnelError::Direct(e);
-        proxy_ctx.reporter.report(&err, Some(&destination));
-        err
-    })?;
-    let (upstream, upstream_sock_addr) = proxy_ctx
-        .ctx
-        .stream_context
-        .connector_table
-        .timed_connect_any(TCP_STREAM_TYPE, sock_addrs, UDP_FLOW_TIMEOUT)
-        .await
-        .map_err(|e| {
-            let err = TunnelError::Direct(e);
-            proxy_ctx.reporter.report(&err, Some(&destination));
-            err
-        })?;
-    let dn_remote = proxy_ctx.reporter.downstream.remote;
-    let conn_context = ConnContext {
-        start,
-        upstream_remote: dst_addr.clone(),
-        upstream_remote_sock: upstream_sock_addr,
-        upstream_local: upstream.local_addr().ok(),
-        downstream_remote: dn_remote,
-        downstream_local: Arc::clone(&proxy_ctx.ctx.listen_addr),
-        session_table: proxy_ctx.ctx.stream_context.session_table.clone(),
-        destination: Some(dst_addr.clone()),
-    };
-    let res = tls_http(upstream, req, conn_context, downstream_upgrade, &proxy_ctx).await;
-    let end = std::time::Instant::now();
-    let timing = Timing { start, end };
-    let log = HttpProxyLog {
-        timing,
-        upstream_addr: RouteAddr {
-            address: dst_addr.address.clone(),
-            protocol: ConcreteStreamType::Tcp.to_string().into(),
-        },
-        upstream_sock_addr,
-        downstream_addr: dn_remote,
-        destination: Some(dst_addr.address),
-        method: proxy_ctx.method,
-        uri: proxy_ctx.uri,
-    };
-    common::info_println!("HTTP direct: Finished {log}");
-    res
-}
-
-#[instrument(skip_all)]
-async fn proxy(
-    conn_selector: &RouteSelector,
-    dst_addr: RouteAddr,
-    req: Request<Incoming>,
-    downstream_upgrade: Option<OnUpgrade>,
-    proxy_ctx: HttpProxyContext<'_>,
-) -> HttpResult {
-    let start = (std::time::Instant::now(), std::time::SystemTime::now());
-    let chain = match conn_selector {
-        common::route::RouteSelector::Empty => [].into(),
-        common::route::RouteSelector::Some(non_empty_conn_selector) => {
-            non_empty_conn_selector.choose_chain().chain.clone()
-        }
-    };
-    let upstream = match establish(&chain, dst_addr.clone(), &proxy_ctx.ctx.stream_context).await {
-        Ok(u) => u,
+    let upstream = match upstream::connect(plan.clone(), &router).await {
+        Ok(upstream) => upstream,
         Err(e) => {
-            let tunnel_err = TunnelError::from(e);
-            let destination = tunnel_err.upstream_addr().map(|a| a.address.to_string());
-            proxy_ctx
-                .reporter
-                .report(&tunnel_err, destination.as_deref());
-            return Err(tunnel_err);
+            // The attempted upstream for the failure log: the chain error's
+            // own upstream address, or the direct destination.
+            let attempted =
+                e.upstream_addr()
+                    .map(|a| a.address.to_string())
+                    .or_else(|| match &plan {
+                        upstream::RoutePlan::Direct(dst_addr) => Some(dst_addr.address.to_string()),
+                        upstream::RoutePlan::Chain { .. } => None,
+                    });
+            proxy_ctx.reporter.report(&e, attempted.as_deref());
+            return Err(e);
         }
     };
-    let upstream_addr = upstream.addr.clone();
     let dn_remote = proxy_ctx.reporter.downstream.remote;
-    let conn_context = ConnContext {
-        start,
-        upstream_remote: upstream.addr.clone(),
-        upstream_remote_sock: upstream.sock_addr,
-        upstream_local: upstream.stream.local_addr().ok(),
-        downstream_remote: dn_remote,
-        downstream_local: Arc::clone(&proxy_ctx.ctx.listen_addr),
-        session_table: proxy_ctx.ctx.stream_context.session_table.clone(),
-        destination: Some(dst_addr.clone()),
-    };
+    let conn_context = upstream::conn_context(&upstream, dst_addr.clone(), dn_remote, &router);
     let res = tls_http(
         upstream.stream,
         req,
         conn_context,
         downstream_upgrade,
+        &router,
         &proxy_ctx,
     )
     .await;
     let end = std::time::Instant::now();
-    let timing = Timing { start, end };
-    let log = HttpProxyLog {
-        timing: timing.clone(),
-        upstream_addr: upstream_addr.clone(),
-        upstream_sock_addr: upstream.sock_addr,
-        downstream_addr: proxy_ctx.reporter.downstream.remote,
-        destination: Some(dst_addr.address.clone()),
-        method: proxy_ctx.method,
-        uri: proxy_ctx.uri,
+    let timing = Timing {
+        start: upstream.start,
+        end,
     };
-    common::info_println!("HTTP proxy: Finished {log}");
-    let record = (&StreamProxyLogWithoutByteCounts {
-        stream: StreamLogWithoutByteCounts {
-            timing: timing.clone(),
-            upstream_addr,
-            upstream_sock_addr: upstream.sock_addr,
-            downstream_addr: proxy_ctx.reporter.downstream.remote,
-        },
-        destination: dst_addr.address,
-    })
-        .into();
-    if let Some(x) = LOGGER.lock().unwrap().as_ref() {
-        x.write(&record);
+    match &plan {
+        upstream::RoutePlan::Direct(_) => {
+            let log = HttpProxyLog {
+                timing,
+                upstream_addr: upstream.addr.clone(),
+                upstream_sock_addr: upstream.sock_addr,
+                downstream_addr: dn_remote,
+                destination: Some(dst_addr.address.clone()),
+                method: proxy_ctx.method,
+                uri: proxy_ctx.uri,
+            };
+            common::info_println!("HTTP direct: Finished {log}");
+        }
+        upstream::RoutePlan::Chain { .. } => {
+            let log = HttpProxyLog {
+                timing: timing.clone(),
+                upstream_addr: upstream.addr.clone(),
+                upstream_sock_addr: upstream.sock_addr,
+                downstream_addr: proxy_ctx.reporter.downstream.remote,
+                destination: Some(dst_addr.address.clone()),
+                method: proxy_ctx.method,
+                uri: proxy_ctx.uri,
+            };
+            common::info_println!("HTTP proxy: Finished {log}");
+            let record = (&StreamProxyLogWithoutByteCounts {
+                stream: StreamLogWithoutByteCounts {
+                    timing: timing.clone(),
+                    upstream_addr: upstream.addr.clone(),
+                    upstream_sock_addr: upstream.sock_addr,
+                    downstream_addr: proxy_ctx.reporter.downstream.remote,
+                },
+                destination: dst_addr.address,
+            })
+                .into();
+            if let Some(x) = LOGGER.lock().unwrap().as_ref() {
+                x.write(&record);
+            }
+        }
     }
     res
 }
@@ -266,15 +210,16 @@ async fn tls_http<Upstream>(
     req: Request<Incoming>,
     conn_context: ConnContext,
     downstream_upgrade: Option<OnUpgrade>,
-    proxy_ctx: &HttpProxyContext<'_>,
+    router: &upstream::Router,
+    proxy_ctx: &HttpProxyContext,
 ) -> HttpResult
 where
     Upstream: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
-    let speed_limiter = proxy_ctx.ctx.speed_limiter.clone();
+    let speed_limiter = router.speed_limiter.clone();
     let reporter = proxy_ctx.reporter.clone();
-    let session_spawner = proxy_ctx.ctx.stream_context.session_spawner.clone();
-    let retention = proxy_ctx.ctx.stream_context.retention.clone();
+    let session_spawner = router.stream.session_spawner.clone();
+    let retention = router.stream.retention.clone();
 
     let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
         .preserve_header_case(true)

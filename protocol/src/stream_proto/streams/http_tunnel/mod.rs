@@ -30,6 +30,7 @@ mod authority;
 mod failure;
 mod proxy;
 mod tunnel;
+mod upstream;
 
 use authority::{host_and_port, redacted_uri};
 use failure::{

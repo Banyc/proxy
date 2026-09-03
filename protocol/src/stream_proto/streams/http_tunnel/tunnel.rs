@@ -1,36 +1,24 @@
-use std::{fmt, sync::Arc};
+use std::{fmt, net::SocketAddr};
 
+use super::upstream;
 use crate::stream_proto::{
     addr::ConcreteStreamType,
-    streams::{
-        http_tunnel::{
-            HttpAccessConnContext, HttpFailureReporter, HttpResult, TunnelError, full,
-            host_and_port, redacted_uri, respond_with_rejection,
-        },
-        tcp::listener::TCP_STREAM_TYPE,
+    streams::http_tunnel::{
+        HttpAccessConnContext, HttpFailureReporter, HttpResult, TunnelError, full, host_and_port,
+        redacted_uri, respond_with_rejection,
     },
 };
-use async_speed_limit::Limiter;
 use bytes::Bytes;
 use common::{
     addr::InternetAddr,
     proxy_runtime::{
-        addr::RouteAddr,
-        client::stream::{StreamEstablishError, establish},
-        connect::stream::StreamConnectorTable,
-        context::StreamRuntime,
-        log::stream::IoCopyFinished,
-        metrics::stream::StreamSessionTable,
-        relay::stream::{ConnContext, CopyBidirectional},
+        addr::RouteAddr, log::stream::IoCopyFinished, relay::stream::CopyBidirectional,
     },
-    route::{RouteAction, RouteSelector},
     session::log_rejection,
-    udp_runtime::UDP_FLOW_TIMEOUT,
 };
 use http_body_util::{BodyExt, Empty, combinators::BoxBody};
-use hyper::{Request, Response, body::Incoming, upgrade::Upgraded};
+use hyper::{Request, Response, body::Incoming};
 use hyper_util::rt::TokioIo;
-use thiserror::Error;
 use tracing::{instrument, trace, warn};
 
 pub struct HttpTunnelLog {
@@ -48,14 +36,6 @@ impl fmt::Display for HttpTunnelLog {
         }
         Ok(())
     }
-}
-
-#[derive(Debug)]
-enum ConnectFailure {
-    Upgrade(hyper::Error),
-    Resolution(std::io::Error),
-    DirectConnect(std::io::Error),
-    EstablishProxyChain(StreamEstablishError),
 }
 
 #[instrument(skip_all)]
@@ -94,54 +74,24 @@ async fn dispatch(
 ) -> HttpResult {
     let method = req.method().to_string();
     let uri = redacted_uri(req.uri());
-    let action = ctx.route_table.action(&dst_addr);
-    let action = match &action {
-        RouteAction::RouteSelector(conn_selector) => {
-            let proxy_ctx = ProxyContext {
-                conn_selector: Arc::clone(conn_selector),
-                speed_limiter: ctx.speed_limiter.clone(),
-                stream_context: ctx.stream_context.clone(),
-                listen_addr: Arc::clone(&ctx.listen_addr),
-                dst_addr: dst_addr.clone(),
-                downstream: reporter.downstream.clone(),
-                method: method.clone(),
-                uri: uri.clone(),
-            };
-            UpgradeAction::Proxy(proxy_ctx)
-        }
-        RouteAction::Block => {
-            trace!(addr = ?dst_addr, "Blocked CONNECT");
-            return Ok(respond_with_rejection());
-        }
-        RouteAction::Direct => {
-            let direct_ctx = DirectContext {
-                speed_limiter: ctx.speed_limiter.clone(),
-                session_table: ctx.stream_context.session_table.clone(),
-                listen_addr: Arc::clone(&ctx.listen_addr),
-                connector_table: ctx.stream_context.connector_table.clone(),
-                dst_addr: dst_addr.clone(),
-                downstream: reporter.downstream.clone(),
-                method: method.clone(),
-                uri: uri.clone(),
-                retention: ctx.stream_context.retention.clone(),
-            };
-            UpgradeAction::Direct(direct_ctx)
-        }
+    let dst_route = RouteAddr {
+        address: dst_addr.clone(),
+        protocol: ConcreteStreamType::Tcp.to_string().into(),
     };
-    let reporter_dst_addr = dst_addr.clone();
+    let action = ctx.route_table.action(&dst_addr);
+    let Some(plan) = upstream::plan(dst_route.clone(), action) else {
+        trace!(addr = ?dst_addr, "Blocked CONNECT");
+        return Ok(respond_with_rejection());
+    };
+    let router = upstream::Router::from_ctx(ctx);
+    let reporter_dst_addr = dst_addr;
+    let downstream_remote = reporter.downstream.remote;
     let session_spawner = ctx.stream_context.session_spawner.clone();
     if let Err(error) = session_spawner
         .spawn(async move {
-            if let Err(failure) = upgrade(req, action).await {
-                let tunnel_err: TunnelError = match failure {
-                    ConnectFailure::Upgrade(e) => TunnelError::HyperError(e),
-                    ConnectFailure::Resolution(e) | ConnectFailure::DirectConnect(e) => {
-                        TunnelError::Direct(e)
-                    }
-                    ConnectFailure::EstablishProxyChain(e) => {
-                        TunnelError::EstablishProxyChain(Box::new(e))
-                    }
-                };
+            if let Err(tunnel_err) =
+                upgrade(req, plan, router, dst_route, downstream_remote, method, uri).await
+            {
                 reporter.report(&tunnel_err, Some(&reporter_dst_addr.to_string()));
             }
             Ok(())
@@ -150,158 +100,45 @@ async fn dispatch(
     {
         log_rejection("http_upgrade", error);
     }
-
     Ok(Response::new(empty()))
 }
 
-#[derive(Debug)]
-enum UpgradeAction {
-    Proxy(ProxyContext),
-    Direct(DirectContext),
-}
 #[instrument(skip_all)]
-async fn upgrade(req: Request<Incoming>, action: UpgradeAction) -> Result<(), ConnectFailure> {
+async fn upgrade(
+    req: Request<Incoming>,
+    plan: upstream::RoutePlan,
+    router: upstream::Router,
+    destination: RouteAddr,
+    downstream_remote: Option<SocketAddr>,
+    method: String,
+    uri: String,
+) -> Result<(), TunnelError> {
     let upgraded = hyper::upgrade::on(req)
         .await
-        .map_err(ConnectFailure::Upgrade)?;
-    match action {
-        UpgradeAction::Direct(ctx) => {
-            direct(ctx, upgraded).await?;
-        }
-        UpgradeAction::Proxy(ctx) => {
-            proxy(&ctx, upgraded).await.map_err(|e| match e {
-                ProxyError::EstablishProxyChain(inner) => {
-                    ConnectFailure::EstablishProxyChain(inner)
-                }
-            })?;
-        }
-    }
-    Ok(())
-}
-
-#[derive(Debug)]
-struct DirectContext {
-    pub speed_limiter: Limiter,
-    pub session_table: Option<StreamSessionTable>,
-    pub listen_addr: Arc<str>,
-    pub connector_table: Arc<StreamConnectorTable>,
-    pub dst_addr: InternetAddr,
-    pub downstream: super::HttpDownstreamContext,
-    pub method: String,
-    pub uri: String,
-    pub retention: common::lifecycle::retention::RetentionActorSender,
-}
-#[instrument(skip_all)]
-async fn direct(ctx: DirectContext, upgraded: Upgraded) -> Result<(), ConnectFailure> {
-    let dst_sock_addrs = ctx
-        .dst_addr
-        .to_socket_addrs()
-        .await
-        .map_err(ConnectFailure::Resolution)?;
-    let (upstream, dst_sock_addr) = ctx
-        .connector_table
-        .timed_connect_any(
-            TCP_STREAM_TYPE,
-            dst_sock_addrs.iter().copied(),
-            UDP_FLOW_TIMEOUT,
-        )
-        .await
-        .map_err(ConnectFailure::DirectConnect)?;
-    let upstream_addr = RouteAddr {
-        protocol: ConcreteStreamType::Tcp.to_string().into(),
-        address: ctx.dst_addr,
-    };
-    let conn_context = ConnContext {
-        start: (std::time::Instant::now(), std::time::SystemTime::now()),
-        upstream_remote: upstream_addr.clone(),
-        upstream_remote_sock: dst_sock_addr,
-        upstream_local: upstream.local_addr().ok(),
-        downstream_remote: ctx.downstream.remote,
-        downstream_local: ctx.listen_addr,
-        session_table: ctx.session_table,
-        destination: Some(upstream_addr),
-    };
-    let retention = ctx.retention;
+        .map_err(TunnelError::HyperError)?;
+    let upstream = upstream::connect(plan.clone(), &router).await?;
+    let conn_context = upstream::conn_context(&upstream, destination, downstream_remote, &router);
+    let retention = router.stream.retention.clone();
     let (io, res) = CopyBidirectional {
         downstream: TokioIo::new(upgraded),
-        upstream,
+        upstream: upstream.stream,
         payload_crypto: None,
-        speed_limiter: ctx.speed_limiter,
+        speed_limiter: router.speed_limiter,
         conn_context,
         retention,
     }
     .serve_as_access_server()
     .await;
-    let log = HttpTunnelLog {
-        io,
-        method: ctx.method,
-        uri: ctx.uri,
-    };
-    match &res {
-        Ok(()) => common::info_println!("HTTP CONNECT direct: Finished {log}"),
-        Err(err) => common::info_println!("HTTP CONNECT direct: Error {log}: {err}"),
-    }
-    Ok(())
-}
-
-#[derive(Debug)]
-struct ProxyContext {
-    pub conn_selector: Arc<RouteSelector>,
-    pub speed_limiter: Limiter,
-    pub stream_context: StreamRuntime,
-    pub listen_addr: Arc<str>,
-    pub dst_addr: InternetAddr,
-    pub downstream: super::HttpDownstreamContext,
-    pub method: String,
-    pub uri: String,
-}
-#[instrument(skip_all, fields(ctx.dst_addr))]
-async fn proxy(ctx: &ProxyContext, upgraded: Upgraded) -> Result<(), ProxyError> {
-    let destination = RouteAddr {
-        address: ctx.dst_addr.clone(),
-        protocol: ConcreteStreamType::Tcp.to_string().into(),
-    };
-    let chain = match &ctx.conn_selector.as_ref() {
-        common::route::RouteSelector::Empty => [].into(),
-        common::route::RouteSelector::Some(non_empty_conn_selector) => {
-            non_empty_conn_selector.choose_chain().chain.clone()
-        }
-    };
-    let upstream = establish(&chain, destination.clone(), &ctx.stream_context).await?;
-    let conn_context = ConnContext {
-        start: (std::time::Instant::now(), std::time::SystemTime::now()),
-        upstream_remote: upstream.addr,
-        upstream_remote_sock: upstream.sock_addr,
-        downstream_remote: ctx.downstream.remote,
-        downstream_local: Arc::clone(&ctx.listen_addr),
-        upstream_local: upstream.stream.local_addr().ok(),
-        session_table: ctx.stream_context.session_table.clone(),
-        destination: Some(destination),
-    };
-    let method = ctx.method.clone();
-    let uri = ctx.uri.clone();
-    let retention = ctx.stream_context.retention.clone();
-    let io_copy = CopyBidirectional {
-        downstream: TokioIo::new(upgraded),
-        upstream: upstream.stream,
-        payload_crypto: None,
-        speed_limiter: ctx.speed_limiter.clone(),
-        conn_context,
-        retention,
-    }
-    .serve_as_access_server();
-    let (io, res) = io_copy.await;
     let log = HttpTunnelLog { io, method, uri };
+    let tag = match &plan {
+        upstream::RoutePlan::Direct(_) => "HTTP CONNECT direct",
+        upstream::RoutePlan::Chain { .. } => "HTTP CONNECT",
+    };
     match &res {
-        Ok(()) => common::info_println!("HTTP CONNECT: Finished {log}"),
-        Err(err) => common::info_println!("HTTP CONNECT: Error {log}: {err}"),
+        Ok(()) => common::info_println!("{tag}: Finished {log}"),
+        Err(err) => common::info_println!("{tag}: Error {log}: {err}"),
     }
     Ok(())
-}
-#[derive(Debug, Error)]
-enum ProxyError {
-    #[error("Failed to establish proxy chain")]
-    EstablishProxyChain(#[from] StreamEstablishError),
 }
 
 fn host_addr(uri: &hyper::http::Uri) -> Option<String> {
