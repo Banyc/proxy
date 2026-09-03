@@ -137,7 +137,12 @@ where
                 continue;
             }
             let (set_conn_handler_tx, set_conn_handler_rx) = replace_conn_handler_channel();
-            let server = builder.build_server().await?;
+            let server = builder.build_server().await.map_err(|e| {
+                // Name the listener that failed so a port collision is
+                // diagnosable: every config-driven listener binds through
+                // this prepare.
+                crate::error::bind_error(key.as_ref(), &*AnyError::from(e))
+            })?;
             ops.push(PreparedOp::Spawn {
                 key: key.clone(),
                 tx: set_conn_handler_tx,

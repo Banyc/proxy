@@ -3,7 +3,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use axum::Router;
 use clap::Parser;
 use common::{
-    error::AnyResult,
+    error::{AnyResult, bind_error},
     lifecycle::process::{RootTaskExit, handle_root_task_exit},
     lifecycle::retention::RetentionActor,
     lifecycle::suspend::spawn_suspend_watcher,
@@ -69,7 +69,9 @@ async fn main() -> AnyResult {
         #[cfg(feature = "dhat-heap")]
         let router = router.merge(server::profiling::profiler_router(profiler));
 
-        let listener = tokio::net::TcpListener::bind(&monitor_addr).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(monitor_addr)
+            .await
+            .map_err(|e| bind_error(monitor_addr, &e))?;
         let listen_addr = listener.local_addr().unwrap();
         let server = axum::serve(listener, router.into_make_service());
         info!("Monitoring HTTP server listening addr: {listen_addr}");
