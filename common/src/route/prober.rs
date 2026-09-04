@@ -36,6 +36,34 @@ impl fmt::Debug for RttLog {
         fmt::Display::fmt(self, f)
     }
 }
+/// A prober loss fraction for log output: at most two decimals, no trailing
+/// `.0` (a zero loss prints `0`, not `0.0`).
+struct LossLog(Option<f64>);
+impl fmt::Display for LossLog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(loss) = &self.0 {
+            write!(f, "{}", fmt_2dec(*loss))?;
+        }
+        Ok(())
+    }
+}
+impl fmt::Debug for LossLog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+/// Rounds to at most two decimals, trimming trailing zeros (and a bare
+/// decimal point), so `0.0` renders as `0` and `0.123456` as `0.12`.
+fn fmt_2dec(value: f64) -> String {
+    let mut rendered = format!("{value:.2}");
+    while rendered.ends_with('0') {
+        rendered.pop();
+    }
+    if rendered.ends_with('.') {
+        rendered.pop();
+    }
+    rendered
+}
 fn fmt_rtt(d: Duration) -> String {
     let secs = d.as_secs_f64();
     let (value, unit) = if secs >= 1. {
@@ -47,14 +75,7 @@ fn fmt_rtt(d: Duration) -> String {
     } else {
         (secs * 1e9, "ns")
     };
-    let mut rendered = format!("{value:.2}");
-    while rendered.ends_with('0') {
-        rendered.pop();
-    }
-    if rendered.ends_with('.') {
-        rendered.pop();
-    }
-    format!("{rendered}{unit}")
+    format!("{}{unit}", fmt_2dec(value))
 }
 const PROBE_MEAN_INTERVAL_DEAD: Duration =
     Duration::from_millis(PROBE_DEAD_INTERVAL.as_millis() as u64 / PROBES_PER_INTERVAL as u64);
@@ -231,7 +252,7 @@ pub(crate) async fn probe_task(
                 rtt = ?RttLog(rtt),
                 rttvar = ?RttLog(rttvar),
                 rtt_eff = ?RttLog(rtt_eff),
-                loss = ?OptLog(loss),
+                loss = ?LossLog(loss),
                 mux = ?OptLog(mux.as_deref()),
                 "Probed RTT"
             );
