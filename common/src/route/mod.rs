@@ -14,6 +14,20 @@ pub use route_chain::*;
 pub use route_selector::*;
 pub use route_table::*;
 
+/// Rounds to at most two decimals, trimming trailing zeros (and a bare
+/// decimal point), so `0.0` renders as `0` and `0.123456` as `0.12`.
+/// Shared by the route log formatters (RTT, loss, scores).
+pub(crate) fn fmt_2dec(value: f64) -> String {
+    let mut rendered = format!("{value:.2}");
+    while rendered.ends_with('0') {
+        rendered.pop();
+    }
+    if rendered.ends_with('.') {
+        rendered.pop();
+    }
+    rendered
+}
+
 /// Probe futures collected during route/selector preparation.
 ///
 /// Probe tasks are NOT started during prepare: the futures are collected

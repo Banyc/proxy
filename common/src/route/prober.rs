@@ -42,7 +42,7 @@ struct LossLog(Option<f64>);
 impl fmt::Display for LossLog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(loss) = &self.0 {
-            write!(f, "{}", fmt_2dec(*loss))?;
+            write!(f, "{}", super::fmt_2dec(*loss))?;
         }
         Ok(())
     }
@@ -54,16 +54,6 @@ impl fmt::Debug for LossLog {
 }
 /// Rounds to at most two decimals, trimming trailing zeros (and a bare
 /// decimal point), so `0.0` renders as `0` and `0.123456` as `0.12`.
-fn fmt_2dec(value: f64) -> String {
-    let mut rendered = format!("{value:.2}");
-    while rendered.ends_with('0') {
-        rendered.pop();
-    }
-    if rendered.ends_with('.') {
-        rendered.pop();
-    }
-    rendered
-}
 fn fmt_rtt(d: Duration) -> String {
     let secs = d.as_secs_f64();
     let (value, unit) = if secs >= 1. {
@@ -75,7 +65,7 @@ fn fmt_rtt(d: Duration) -> String {
     } else {
         (secs * 1e9, "ns")
     };
-    format!("{}{unit}", fmt_2dec(value))
+    format!("{}{unit}", super::fmt_2dec(value))
 }
 const PROBE_MEAN_INTERVAL_DEAD: Duration =
     Duration::from_millis(PROBE_DEAD_INTERVAL.as_millis() as u64 / PROBES_PER_INTERVAL as u64);

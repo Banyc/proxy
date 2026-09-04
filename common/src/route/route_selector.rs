@@ -19,6 +19,29 @@ use super::{
     chain_selection::{EligibilityGate, ScoredChain, chain_score, pick_weighted},
 };
 
+/// Scores for the "Calculated scores" log line: each [0,1] score rendered
+/// with at most two decimals (no trailing `.0`), instead of full f64 Debug
+/// precision.
+struct ScoresLog<'a>(&'a [(usize, f64)]);
+impl fmt::Display for ScoresLog<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[")?;
+        for (i, (index, score)) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "({index}, {})", super::fmt_2dec(*score))?;
+        }
+        write!(f, "]")?;
+        Ok(())
+    }
+}
+impl fmt::Debug for ScoresLog<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
 /// The merged-config registries plus runtime handles the route builders resolve
 /// their names against.
 #[derive(Clone)]
@@ -198,7 +221,11 @@ impl NonEmptyRouteSelector {
             Some(scores) => scores,
             None => {
                 let scores: Arc<[_]> = self.scores().into();
-                info!(kind = self.probe_kind, ?scores, "Calculated scores");
+                info!(
+                    kind = self.probe_kind,
+                    scores = ?ScoresLog(scores.as_ref()),
+                    "Calculated scores"
+                );
                 let sum = scores.iter().map(|(_, s)| *s).sum::<f64>();
                 let scores = Scores { scores, sum };
                 self.score_store.write().unwrap().set(scores.clone());
