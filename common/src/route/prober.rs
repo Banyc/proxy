@@ -18,6 +18,44 @@ pub const PROBE_DEAD_INTERVAL: Duration = Duration::from_secs(60 * 2);
 const PROBES_PER_INTERVAL: u32 = 5;
 const PROBE_MEAN_INTERVAL: Duration =
     Duration::from_millis(PROBE_ROUND_INTERVAL.as_millis() as u64 / PROBES_PER_INTERVAL as u64);
+
+/// A prober RTT value for log output: formatted with at most two decimals
+/// and a human unit (s/ms/µs/ns), instead of `Duration`'s full-precision
+/// Debug rendering.
+struct RttLog(Option<Duration>);
+impl fmt::Display for RttLog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(d) = &self.0 {
+            write!(f, "{}", fmt_rtt(*d))?;
+        }
+        Ok(())
+    }
+}
+impl fmt::Debug for RttLog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+fn fmt_rtt(d: Duration) -> String {
+    let secs = d.as_secs_f64();
+    let (value, unit) = if secs >= 1. {
+        (secs, "s")
+    } else if secs >= 1e-3 {
+        (secs * 1e3, "ms")
+    } else if secs >= 1e-6 {
+        (secs * 1e6, "µs")
+    } else {
+        (secs * 1e9, "ns")
+    };
+    let mut rendered = format!("{value:.2}");
+    while rendered.ends_with('0') {
+        rendered.pop();
+    }
+    if rendered.ends_with('.') {
+        rendered.pop();
+    }
+    format!("{rendered}{unit}")
+}
 const PROBE_MEAN_INTERVAL_DEAD: Duration =
     Duration::from_millis(PROBE_DEAD_INTERVAL.as_millis() as u64 / PROBES_PER_INTERVAL as u64);
 const PROBE_MIN_INTERVAL: Duration = Duration::from_millis(500);
@@ -164,8 +202,8 @@ pub(crate) async fn probe_task(
                 info!(
                     %addresses,
                     kind,
-                    srtt = ?srtt,
-                    rtt_eff = ?OptLog(rtt_eff),
+                    srtt = ?RttLog(Some(srtt)),
+                    rtt_eff = ?RttLog(rtt_eff),
                     mux = ?OptLog(mux.as_deref()),
                     "Chain RTT degraded; recycling first-hop session"
                 );
@@ -174,8 +212,8 @@ pub(crate) async fn probe_task(
                 info!(
                     %addresses,
                     kind,
-                    srtt = ?srtt,
-                    rtt_eff = ?OptLog(rtt_eff),
+                    srtt = ?RttLog(Some(srtt)),
+                    rtt_eff = ?RttLog(rtt_eff),
                     mux = ?OptLog(mux.as_deref()),
                     "Chain RTT degraded; recycle suppressed (min interval), accepting as new baseline"
                 );
@@ -189,10 +227,10 @@ pub(crate) async fn probe_task(
             info!(
                 %addresses,
                 kind,
-                sample = ?OptLog(sample),
-                rtt = ?OptLog(rtt),
-                rttvar = ?OptLog(rttvar),
-                rtt_eff = ?OptLog(rtt_eff),
+                sample = ?RttLog(sample),
+                rtt = ?RttLog(rtt),
+                rttvar = ?RttLog(rttvar),
+                rtt_eff = ?RttLog(rtt_eff),
                 loss = ?OptLog(loss),
                 mux = ?OptLog(mux.as_deref()),
                 "Probed RTT"
