@@ -31,7 +31,7 @@ use http_body_util::BodyExt;
 use hyper::{Request, StatusCode, body::Incoming, upgrade::OnUpgrade};
 use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tracing::{instrument, trace};
+use tracing::{info, instrument, trace};
 
 struct HttpProxyLog {
     timing: Timing,
@@ -173,7 +173,7 @@ async fn relay(
                 method: proxy_ctx.method,
                 uri: proxy_ctx.uri,
             };
-            common::info_println!("HTTP direct: Finished {log}");
+            info!("HTTP direct: Finished {log}");
         }
         upstream::RoutePlan::Chain { .. } => {
             let log = HttpProxyLog {
@@ -185,7 +185,7 @@ async fn relay(
                 method: proxy_ctx.method,
                 uri: proxy_ctx.uri,
             };
-            common::info_println!("HTTP proxy: Finished {log}");
+            info!("HTTP proxy: Finished {log}");
             let record = (&StreamProxyLogWithoutByteCounts {
                 stream: StreamLogWithoutByteCounts {
                     timing: timing.clone(),
@@ -277,9 +277,9 @@ where
                             .serve_as_access_server()
                             .await;
                             match &res {
-                                Ok(()) => common::info_println!("HTTP upgrade: Finished {io}"),
+                                Ok(()) => info!("HTTP upgrade: Finished {io}"),
                                 Err(err) => {
-                                    common::info_println!("HTTP upgrade: Error {io}: {err}")
+                                    info!("HTTP upgrade: Error {io}: {err}")
                                 }
                             }
                         }

@@ -18,7 +18,7 @@ use common::{
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{instrument, warn};
+use tracing::{info, instrument, warn};
 
 pub struct TcpAccessLog {
     pub io: IoCopyFinished,
@@ -173,8 +173,8 @@ impl TcpAccessConnHandler {
         let (io, res) = io_copy.await;
         let log = TcpAccessLog { io, dst };
         match &res {
-            Ok(()) => common::info_println!("TCP: Finished {log}"),
-            Err(err) => common::info_println!("TCP: Error {log}: {err}"),
+            Ok(()) => info!("TCP: Finished {log}"),
+            Err(err) => info!("TCP: Error {log}: {err}"),
         }
         Ok(())
     }

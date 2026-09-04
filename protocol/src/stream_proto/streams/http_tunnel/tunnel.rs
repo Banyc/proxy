@@ -19,7 +19,7 @@ use common::{
 use http_body_util::{BodyExt, Empty, combinators::BoxBody};
 use hyper::{Request, Response, body::Incoming};
 use hyper_util::rt::TokioIo;
-use tracing::{instrument, trace, warn};
+use tracing::{info, instrument, trace, warn};
 
 pub struct HttpTunnelLog {
     pub io: IoCopyFinished,
@@ -135,8 +135,8 @@ async fn upgrade(
         upstream::RoutePlan::Chain { .. } => "HTTP CONNECT",
     };
     match &res {
-        Ok(()) => common::info_println!("{tag}: Finished {log}"),
-        Err(err) => common::info_println!("{tag}: Error {log}: {err}"),
+        Ok(()) => info!("{tag}: Finished {log}"),
+        Err(err) => info!("{tag}: Error {log}: {err}"),
     }
     Ok(())
 }

@@ -19,7 +19,7 @@ use crate::{
 use async_speed_limit::Limiter;
 use serde::Deserialize;
 use thiserror::Error;
-use tracing::{instrument, trace, warn};
+use tracing::{info, instrument, trace, warn};
 
 use super::SpeedLimit;
 
@@ -184,8 +184,8 @@ impl StreamProxyConnHandler {
         let (io, res) = io_copy.await;
         let log = StreamProxyFinished { io, up };
         match &res {
-            Ok(()) => crate::info_println!("Stream: Finished {log}"),
-            Err(err) => crate::info_println!("Stream: Error {log}: {err}"),
+            Ok(()) => info!("Stream: Finished {log}"),
+            Err(err) => info!("Stream: Error {log}: {err}"),
         }
         Ok(ProxyResult::IoCopy)
     }

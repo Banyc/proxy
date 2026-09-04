@@ -8,17 +8,6 @@ use std::{fmt, time::Duration};
 /// Stream I/O timeout used across the relay plumbing (connect/header/copy).
 pub const STREAM_IO_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Print a line to stdout when the INFO log level is enabled.
-/// Replaces noisy `info!()` for user-facing terminal output.
-#[macro_export]
-macro_rules! info_println {
-    ($($arg:tt)*) => {
-        if tracing::level_enabled!(tracing::Level::INFO) {
-            println!($($arg)*);
-        }
-    }
-}
-
 /// Wraps an `Option` for log rendering so a value prints on its own when
 /// present — no `Some(...)` — and nothing at all when `None` — no `None`
 /// item. Use with `?OptLog(x)`/`%OptLog(x)` in tracing fields or embed it
