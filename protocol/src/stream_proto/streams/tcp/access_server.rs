@@ -188,7 +188,7 @@ pub enum TcpAccessProxyError {
 }
 impl loading::HandleConn for TcpAccessConnHandler {}
 impl StreamServerHandleConn for TcpAccessConnHandler {
-    #[instrument(skip(self, stream))]
+    #[instrument(skip_all)]
     async fn handle_stream<Stream>(&self, stream: Stream)
     where
         Stream: OwnedIoStream + HasIoAddr,

@@ -64,7 +64,7 @@ impl UdpProxyConnHandler {
         Ok(UdpServer::new(listener, self, session_spawner))
     }
 
-    #[instrument(skip(self, conn))]
+    #[instrument(skip_all)]
     async fn proxy(&self, mut conn: Conn<UdpSocket, FlowKey, Packet>) -> Result<(), UdpProxyError> {
         let downstream = match conn.conn_key() {
             FlowKey::Identified { downstream, .. } => *downstream,

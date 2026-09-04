@@ -97,7 +97,7 @@ impl HasIoAddr for PayloadCryptoConn {
     }
 }
 
-#[instrument(skip(proxies, stream_context))]
+#[instrument(skip_all)]
 pub async fn establish(
     proxies: &RouteChain,
     destination: RouteAddr,
