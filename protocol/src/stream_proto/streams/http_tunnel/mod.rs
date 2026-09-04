@@ -238,8 +238,8 @@ where
             warn!(
                 event = "http_tunnel_proxy_failed",
                 error = %e,
-                dn = ?downstream_ctx.remote,
-                dn_local = ?downstream_ctx.local,
+                dn = ?common::OptLog(downstream_ctx.remote),
+                dn_local = ?common::OptLog(downstream_ctx.local),
                 listener = %ctx.listen_addr,
                 "HTTP tunnel proxy top-level failure"
             );

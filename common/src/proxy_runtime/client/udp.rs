@@ -25,6 +25,7 @@ use bytes::BytesMut;
 use metrics::counter;
 use primitive::arena::obj_pool::ArcObjPool;
 use std::{
+    fmt,
     io::{self, Write},
     net::SocketAddr,
     num::NonZeroUsize,
@@ -321,11 +322,19 @@ impl UdpProxyClientWriteHalf {
     }
 }
 #[derive(Debug, Error)]
-#[error("Failed to send to upstream: {source}, {sock_addr:?}")]
 pub struct SendError {
     #[source]
     source: io::Error,
     sock_addr: Option<SocketAddr>,
+}
+impl fmt::Display for SendError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Failed to send to upstream: {}", self.source)?;
+        if let Some(addr) = &self.sock_addr {
+            write!(f, ", {addr}")?;
+        }
+        Ok(())
+    }
 }
 
 fn time_validator() -> TimeValidator {
@@ -455,22 +464,41 @@ impl UdpProxyClientReadHalf {
 }
 #[derive(Debug, Error)]
 pub enum RecvError {
-    #[error("Failed to recv from upstream: {source}, {sock_addr:?}")]
     RecvUpstream {
         #[source]
         source: io::Error,
         sock_addr: Option<SocketAddr>,
     },
-    #[error("Failed to read response from upstream: {0}")]
     Header(#[from] CodecError),
-    #[error("Failed to decrypt UDP payload from {addr}: {source}")]
     PayloadCrypto {
         #[source]
         source: io::Error,
         addr: InternetAddr,
     },
-    #[error("Upstream responded with an error: {err}, {addr}")]
-    Response { err: RouteError, addr: InternetAddr },
+    Response {
+        err: RouteError,
+        addr: InternetAddr,
+    },
+}
+impl fmt::Display for RecvError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RecvUpstream { source, sock_addr } => {
+                write!(f, "Failed to recv from upstream: {source}")?;
+                if let Some(addr) = sock_addr {
+                    write!(f, ", {addr}")?;
+                }
+                Ok(())
+            }
+            Self::Header(e) => write!(f, "Failed to read response from upstream: {e}"),
+            Self::PayloadCrypto { source, addr } => {
+                write!(f, "Failed to decrypt UDP payload from {addr}: {source}")
+            }
+            Self::Response { err, addr } => {
+                write!(f, "Upstream responded with an error: {err}, {addr}")
+            }
+        }
+    }
 }
 
 #[derive(Debug)]

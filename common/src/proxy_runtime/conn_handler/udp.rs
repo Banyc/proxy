@@ -216,7 +216,7 @@ impl UdpProxyConnHandler {
                 // it at debug instead of surfacing a warning.
                 Err(UdpProxyError::Tunnel(error)) if is_echo_flow_idle(&error) => {
                     counter!("udp.echo_flow_idle_timeouts").increment(1);
-                    debug!(?error, %downstream, "UDP echo flow idled out");
+                    debug!(%error, %downstream, "UDP echo flow idled out");
                     Ok(())
                 }
                 result => result,
@@ -305,13 +305,13 @@ impl UdpProxyConnHandler {
             Err(e) => {
                 let peer_addr = dn_write.peer_addr();
                 if matches!(e, UdpProxyError::RouteUnavailable) {
-                    trace!(?e, ?peer_addr, "Dropping unrouted compact flow");
+                    trace!(%e, ?peer_addr, "Dropping unrouted compact flow");
                     return;
                 }
-                warn!(?e, ?peer_addr, "Proxy failed");
+                warn!(%e, ?peer_addr, "Proxy failed");
                 let kind = error_kind_from_proxy_error(e);
                 if let Err(e) = respond_with_error(dn_write, kind, &self.header_crypto).await {
-                    trace!(?e, ?peer_addr, "Failed to respond with error");
+                    trace!(%e, ?peer_addr, "Failed to respond with error");
                 }
             }
         }

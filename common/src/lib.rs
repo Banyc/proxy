@@ -3,7 +3,7 @@
 #[cfg(feature = "nightly")]
 extern crate test;
 
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 /// Stream I/O timeout used across the relay plumbing (connect/header/copy).
 pub const STREAM_IO_TIMEOUT: Duration = Duration::from_secs(60);
@@ -16,6 +16,28 @@ macro_rules! info_println {
         if tracing::level_enabled!(tracing::Level::INFO) {
             println!($($arg)*);
         }
+    }
+}
+
+/// Wraps an `Option` for log rendering so a value prints on its own when
+/// present — no `Some(...)` — and nothing at all when `None` — no `None`
+/// item. Use with `?OptLog(x)`/`%OptLog(x)` in tracing fields or embed it
+/// in a `Display` message.
+pub struct OptLog<T>(pub Option<T>);
+impl<T: fmt::Display> fmt::Display for OptLog<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(v) = &self.0 {
+            write!(f, "{v}")?;
+        }
+        Ok(())
+    }
+}
+impl<T: fmt::Debug> fmt::Debug for OptLog<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(v) = &self.0 {
+            write!(f, "{v:?}")?;
+        }
+        Ok(())
     }
 }
 

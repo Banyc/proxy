@@ -195,7 +195,7 @@ impl UdpServerHandleConn for UdpAccessConnHandler {
         match res {
             Ok(()) => (),
             Err(e) => {
-                warn!(?e, "Failed to proxy");
+                warn!(%e, "Failed to proxy");
             }
         }
     }

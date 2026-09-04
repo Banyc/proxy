@@ -63,14 +63,14 @@ impl HttpFailureReporter {
         warn!(
             event = "http_tunnel_proxy_failed",
             error = %error,
-            dn = ?self.downstream.remote,
-            dn_local = ?self.downstream.local,
+            dn = ?common::OptLog(self.downstream.remote),
+            dn_local = ?common::OptLog(self.downstream.local),
             listener = %self.listener,
             method = %request.method,
             uri = %request.uri,
-            host = ?request.host,
-            ?destination,
-            ?up,
+            host = ?common::OptLog(request.host.as_deref()),
+            destination = ?common::OptLog(destination),
+            up = ?common::OptLog(up),
             "HTTP tunnel proxy failed"
         );
     }

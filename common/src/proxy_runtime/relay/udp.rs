@@ -203,7 +203,7 @@ where
                 info!(%log, "{log_prefix}: I/O copy finished");
             }
             Err(e) => {
-                info!(?e, "{log_prefix}: I/O copy error");
+                info!(%e, "{log_prefix}: I/O copy error");
             }
         }
 
@@ -278,7 +278,7 @@ where
                         if outcome == ShutdownOutcome::Unsupported {
                             // A raw-UDP hop cannot signal EOF: the flow is
                             // retained until the safety timeout below aborts it.
-                            trace!(?flow, "Downstream closed but the upstream hop cannot signal EOF; flow retained until its safety timeout");
+                            trace!(%flow, "Downstream closed but the upstream hop cannot signal EOF; flow retained until its safety timeout");
                         }
                         break;
                     }
@@ -344,7 +344,7 @@ where
                         if outcome == ShutdownOutcome::Unsupported {
                             // A raw-UDP hop cannot signal EOF: the flow is
                             // retained until the safety timeout below aborts it.
-                            trace!(?flow, "Upstream closed but the downstream hop cannot signal EOF; flow retained until its safety timeout");
+                            trace!(%flow, "Upstream closed but the downstream hop cannot signal EOF; flow retained until its safety timeout");
                         }
                         break;
                     }
@@ -410,7 +410,7 @@ where
                 let last_uplink_packet = *last_uplink_packet.read().unwrap();
                 let last_downlink_packet = *last_downlink_packet.read().unwrap();
                 if now.duration_since(last_uplink_packet) > UDP_FLOW_TIMEOUT && now.duration_since(last_downlink_packet) > UDP_FLOW_TIMEOUT {
-                    trace!(?flow, "Flow timed out");
+                    trace!(%flow, "Flow timed out");
                     break;
                 }
             }
@@ -497,7 +497,7 @@ fn log_crypto_drop(flow: &Flow, last_warn: &RwLock<std::time::Instant>) {
     let mut last_warn = last_warn.write().unwrap();
     if now.duration_since(*last_warn) > CRYPTO_FAIL_WARN_INTERVAL {
         *last_warn = now;
-        warn!(?flow, "Dropped packet due to crypto failure");
+        warn!(%flow, "Dropped packet due to crypto failure");
     }
 }
 

@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{fmt, net::SocketAddr};
 
 use ae::anti_replay::{ReplayValidator, ValidatorRef};
 use metrics::counter;
@@ -75,22 +75,58 @@ where
 }
 #[derive(Debug, Error)]
 pub enum SteerError {
-    #[error("Failed to read heartbeat header from downstream: {source}, {downstream_addr:?}")]
     ReadHeartbeatUpgrade {
         #[source]
         source: PreambleError,
         downstream_addr: Option<SocketAddr>,
     },
-    #[error("Failed to read stream request header from downstream: {source}, {downstream_addr:?}")]
     ReadStreamRequestHeader {
         #[source]
         source: CodecError,
         downstream_addr: Option<SocketAddr>,
     },
-    #[error("Failed to write echo response to downstream: {source}, {downstream_addr:?}")]
     WriteEchoResponse {
         #[source]
         source: CodecError,
         downstream_addr: Option<SocketAddr>,
     },
+}
+impl fmt::Display for SteerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReadHeartbeatUpgrade {
+                source,
+                downstream_addr,
+            } => {
+                write!(
+                    f,
+                    "Failed to read heartbeat header from downstream: {source}"
+                )?;
+                write_downstream_addr(f, downstream_addr)
+            }
+            Self::ReadStreamRequestHeader {
+                source,
+                downstream_addr,
+            } => {
+                write!(
+                    f,
+                    "Failed to read stream request header from downstream: {source}"
+                )?;
+                write_downstream_addr(f, downstream_addr)
+            }
+            Self::WriteEchoResponse {
+                source,
+                downstream_addr,
+            } => {
+                write!(f, "Failed to write echo response to downstream: {source}")?;
+                write_downstream_addr(f, downstream_addr)
+            }
+        }
+    }
+}
+fn write_downstream_addr(f: &mut fmt::Formatter<'_>, addr: &Option<SocketAddr>) -> fmt::Result {
+    if let Some(addr) = addr {
+        write!(f, ", {addr}")?;
+    }
+    Ok(())
 }

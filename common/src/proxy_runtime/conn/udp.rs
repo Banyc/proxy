@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{fmt, net::SocketAddr};
 
 use hdv_derive::HdvSerde;
 
@@ -29,6 +29,16 @@ pub struct UpstreamAddr(pub RouteAddr);
 pub struct Flow {
     pub upstream: Option<UpstreamAddr>,
     pub downstream: DownstreamAddr,
+}
+impl fmt::Display for Flow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(up) = &self.upstream {
+            write!(f, "up:{}", up.0)?;
+            write!(f, ",")?;
+        }
+        write!(f, "dn:{}", self.downstream.0)?;
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FlowKey {

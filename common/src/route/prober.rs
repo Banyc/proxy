@@ -8,7 +8,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracing::{info, trace};
 
-use crate::error::AnyError;
+use crate::{OptLog, error::AnyError};
 
 use super::degradation::{RecyclePacer, RttDegradation};
 use super::rtt_stats::{RttStats, ewma_loss};
@@ -114,7 +114,7 @@ pub(crate) async fn probe_task(
                 match outcome.rtt {
                     Ok(rtt) => Some(rtt),
                     Err(e) => {
-                        trace!(kind, "probe error: {e:?}");
+                        trace!(kind, "probe error: {e}");
                         None
                     }
                 }
@@ -161,10 +161,24 @@ pub(crate) async fn probe_task(
             let mux = tracer.session_stats(&chain).await;
             let addresses = DisplayChain(&chain);
             if pacer.allow(std::time::Instant::now()) {
-                info!(%addresses, kind, ?srtt, ?rtt_eff, ?mux, "Chain RTT degraded; recycling first-hop session");
+                info!(
+                    %addresses,
+                    kind,
+                    srtt = ?srtt,
+                    rtt_eff = ?OptLog(rtt_eff),
+                    mux = ?OptLog(mux.as_deref()),
+                    "Chain RTT degraded; recycling first-hop session"
+                );
                 let _ = tokio::time::timeout(RTT_TIMEOUT, tracer.recycle(&chain)).await;
             } else {
-                info!(%addresses, kind, ?srtt, ?rtt_eff, ?mux, "Chain RTT degraded; recycle suppressed (min interval), accepting as new baseline");
+                info!(
+                    %addresses,
+                    kind,
+                    srtt = ?srtt,
+                    rtt_eff = ?OptLog(rtt_eff),
+                    mux = ?OptLog(mux.as_deref()),
+                    "Chain RTT degraded; recycle suppressed (min interval), accepting as new baseline"
+                );
             }
         }
         probes_since_log += 1;
@@ -172,7 +186,17 @@ pub(crate) async fn probe_task(
             probes_since_log = 0;
             let mux = tracer.session_stats(&chain).await;
             let addresses = DisplayChain(&chain);
-            info!(%addresses, kind, sample = ?sample, rtt = ?rtt, rttvar = ?rttvar, rtt_eff = ?rtt_eff, ?loss, ?mux, "Probed RTT");
+            info!(
+                %addresses,
+                kind,
+                sample = ?OptLog(sample),
+                rtt = ?OptLog(rtt),
+                rttvar = ?OptLog(rttvar),
+                rtt_eff = ?OptLog(rtt_eff),
+                loss = ?OptLog(loss),
+                mux = ?OptLog(mux.as_deref()),
+                "Probed RTT"
+            );
         }
         let mean = if consecutive_failures >= DEAD_CONSECUTIVE_FAILURES {
             PROBE_MEAN_INTERVAL_DEAD

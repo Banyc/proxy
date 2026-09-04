@@ -201,15 +201,19 @@ impl StreamServerHandleConn for StreamProxyConnHandler {
         let peer_addr = stream.peer_addr().ok();
         match self.proxy(stream).await {
             Ok(ProxyResult::IoCopy) => (),
-            Ok(ProxyResult::Echo) => trace!(?local_addr, ?peer_addr, "Echo finished"),
+            Ok(ProxyResult::Echo) => trace!(
+                local_addr = ?crate::OptLog(local_addr),
+                peer_addr = ?crate::OptLog(peer_addr),
+                "Echo finished"
+            ),
             Err(e) => {
                 let upstream_addr = e.upstream_addr();
                 warn!(
                     event = "stream_proxy_failed",
-                    ?e,
-                    dn = ?peer_addr,
-                    up = ?upstream_addr,
-                    dn_local = ?local_addr,
+                    error = %e,
+                    dn = ?crate::OptLog(peer_addr),
+                    up = ?crate::OptLog(upstream_addr),
+                    dn_local = ?crate::OptLog(local_addr),
                     listener = %self.listen_addr,
                     "Proxy error"
                 );
@@ -301,15 +305,31 @@ impl StreamProxyServerError {
 
 #[derive(Debug, Error)]
 pub enum StreamProxyAcceptorError {
-    #[error("Steer error: {0}")]
     Steer(#[from] SteerError),
-    #[error("Failed to connect to upstream {upstream_addr}: {source}, {downstream_addr:?}")]
     ConnectUpstream {
         #[source]
         source: Box<ConnectError>,
         downstream_addr: Option<SocketAddr>,
         upstream_addr: RouteAddr,
     },
+}
+impl fmt::Display for StreamProxyAcceptorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Steer(e) => write!(f, "Steer error: {e}"),
+            Self::ConnectUpstream {
+                source,
+                downstream_addr,
+                upstream_addr,
+            } => {
+                write!(f, "Failed to connect to upstream {upstream_addr}: {source}")?;
+                if let Some(addr) = downstream_addr {
+                    write!(f, ", {addr}")?;
+                }
+                Ok(())
+            }
+        }
+    }
 }
 impl StreamProxyAcceptorError {
     fn upstream_addr(&self) -> Option<&RouteAddr> {
