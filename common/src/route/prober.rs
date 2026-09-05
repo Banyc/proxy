@@ -81,6 +81,11 @@ fn poisson_interval(mean: Duration) -> Duration {
 }
 
 pub struct DisplayChain<'chain>(&'chain RouteChain);
+impl<'chain> DisplayChain<'chain> {
+    pub fn new(chain: &'chain RouteChain) -> Self {
+        Self(chain)
+    }
+}
 impl fmt::Display for DisplayChain<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[")?;

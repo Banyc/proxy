@@ -14,15 +14,16 @@ use tracing::info;
 use crate::{proxy_runtime::connect::stream::StreamConnectorTable, ttl_cell::TtlCell};
 
 use super::{
-    GaugedRouteChain, HopConfig, PROBE_ROUND_INTERVAL, ProbeFutures, ProbeRtt, WeightedRouteChain,
-    WeightedRouteChainBuildError, WeightedRouteChainBuilder,
+    DisplayChain, GaugedRouteChain, HopConfig, PROBE_ROUND_INTERVAL, ProbeFutures, ProbeRtt,
+    WeightedRouteChain, WeightedRouteChainBuildError, WeightedRouteChainBuilder,
     chain_selection::{EligibilityGate, ScoredChain, chain_score, pick_weighted},
 };
 
-/// Scores for the "Calculated scores" log line: each [0,1] score rendered
-/// with at most two decimals (no trailing `.0`), instead of full f64 Debug
+/// Scores for the "Calculated scores" log line: each chain rendered by
+/// its hop names (or addresses) with its [0,1] score at most two decimals
+/// (no trailing `.0`), instead of the bare chain index and full f64 Debug
 /// precision.
-struct ScoresLog<'a>(&'a [(usize, f64)]);
+struct ScoresLog<'a>(&'a [(usize, f64)], &'a [GaugedRouteChain]);
 impl fmt::Display for ScoresLog<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[")?;
@@ -30,7 +31,13 @@ impl fmt::Display for ScoresLog<'_> {
             if i > 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "({index}, {})", super::fmt_2dec(*score))?;
+            let chain = &self.1[*index].weighted().chain;
+            write!(
+                f,
+                "({}, {})",
+                DisplayChain::new(chain),
+                super::fmt_2dec(*score)
+            )?;
         }
         write!(f, "]")?;
         Ok(())
@@ -223,7 +230,7 @@ impl NonEmptyRouteSelector {
                 let scores: Arc<[_]> = self.scores().into();
                 info!(
                     kind = self.probe_kind,
-                    scores = ?ScoresLog(scores.as_ref()),
+                    scores = ?ScoresLog(scores.as_ref(), &self.chains),
                     "Calculated scores"
                 );
                 let sum = scores.iter().map(|(_, s)| *s).sum::<f64>();
@@ -301,6 +308,38 @@ mod tests {
             weight,
             chain: Arc::from(Vec::<HopConfig>::new()),
         }
+    }
+    fn named_chain(weight: usize, name: &str) -> WeightedRouteChain {
+        WeightedRouteChain {
+            weight,
+            chain: Arc::from([HopConfig {
+                name: Some(name.into()),
+                address: "tcp://127.0.0.1:1".parse().unwrap(),
+                header_crypto: tokio_chacha20::config::Config::new(
+                    [7; tokio_chacha20::KEY_BYTES].into(),
+                ),
+                payload_crypto: None,
+            }]),
+        }
+    }
+    #[test]
+    fn scores_log_prints_the_chain_names_not_the_indexes() {
+        let mut probes = ProbeFutures::new();
+        let selector = NonEmptyRouteSelector::new(
+            vec![named_chain(1, "tcp1"), named_chain(2, "mptcp1")],
+            None::<Arc<dyn ProbeRtt + Send + Sync>>,
+            None,
+            None,
+            CancellationToken::new(),
+            &mut probes,
+        )
+        .unwrap();
+        let scores: Arc<[_]> = selector.scores().into();
+        let rendered = ScoresLog(scores.as_ref(), &selector.chains).to_string();
+        assert!(rendered.contains("tcp1"), "{rendered}");
+        assert!(rendered.contains("mptcp1"), "{rendered}");
+        assert!(!rendered.contains("(0,"), "{rendered}");
+        assert!(!rendered.contains("(1,"), "{rendered}");
     }
     #[test]
     fn a_zero_sum_falls_back_within_the_eligible_set() {
