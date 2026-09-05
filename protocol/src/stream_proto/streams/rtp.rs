@@ -141,17 +141,28 @@ pub use common::lifecycle::serve_loop::ServeLoopError;
 pub struct RtpConnector {
     config: ConnectorConfigReader,
     fec: bool,
+    /// The obfuscation key is a deployment-time setting, fixed at
+    /// construction (like `fec`): changing it requires a restart, matching
+    /// the rtpmux connector which captures its key when built. The bind
+    /// address selection stays reloadable through `config`.
+    obfuscation_key: Option<[u8; 32]>,
 }
 impl RtpConnector {
     pub fn new(config: ConnectorConfigReader, fec: bool) -> Self {
-        Self { config, fec }
+        let obfuscation_key = config.current().obfuscation_key;
+        Self {
+            config,
+            fec,
+            obfuscation_key,
+        }
     }
 }
 #[async_trait]
 impl StreamConnect for RtpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
-        let config = self.config.current();
-        let bind = config
+        let bind = self
+            .config
+            .current()
             .bind
             .get_matched(&addr.ip())
             .map(|ip| SocketAddr::new(ip, 0))
@@ -162,7 +173,7 @@ impl StreamConnect for RtpConnector {
             rtp::udp::ConnectConfig {
                 handshake: false,
                 fec: self.fec,
-                obfuscation_key: config.obfuscation_key,
+                obfuscation_key: self.obfuscation_key,
                 ..rtp::udp::ConnectConfig::default()
             },
         )
