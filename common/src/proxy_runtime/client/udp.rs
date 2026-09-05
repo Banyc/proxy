@@ -395,7 +395,7 @@ impl UdpProxyClientReadHalf {
         let mut start = 0;
         let mut end = n;
         for node in self.proxies.iter() {
-            trace!(?node.address, "Reading response");
+            trace!(%node, "Reading response");
             let validator = ValidatorRef::Time(&self.time_validator);
             let (resp, consumed): (RouteResponse, usize) = {
                 let packet = if in_read_buf {
@@ -408,7 +408,7 @@ impl UdpProxyClientReadHalf {
                 (response, usize::try_from(reader.position()).unwrap())
             };
             if let Err(err) = resp.result {
-                warn!(?err, %node.address, "Upstream responded with an error");
+                warn!(?err, %node, "Upstream responded with an error");
                 return Err(RecvError::Response {
                     err,
                     addr: node.address.address.clone(),
@@ -703,12 +703,12 @@ pub async fn probe_rtt(
     let end = Instant::now();
     let mut packet = pkt_buf[..n].to_vec();
     for (index, node) in proxies.iter().enumerate() {
-        trace!(?node.address, "Reading response");
+        trace!(%node, "Reading response");
         let validator = ValidatorRef::Time(&context.time_validator);
         let mut reader = io::Cursor::new(&packet);
         let resp: RouteResponse = read_header(&mut reader, *node.header_crypto.key(), &validator)?;
         if let Err(err) = resp.result {
-            warn!(?err, %node.address, "Upstream responded with an error");
+            warn!(?err, %node, "Upstream responded with an error");
             return Err(TraceError::Response {
                 err,
                 addr: node.address.address.clone(),
@@ -831,6 +831,7 @@ mod tests {
 
         let crypto = tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into());
         let node = crate::route::HopConfig {
+            name: None,
             address: RouteAddr::udp("127.0.0.1:9".parse::<SocketAddr>().unwrap().into()),
             header_crypto: crypto.clone(),
             payload_crypto: None,

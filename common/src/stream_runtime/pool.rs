@@ -35,13 +35,21 @@ impl PoolBuilder {
         let c = self
             .0
             .into_iter()
-            .map(|c| match c {
-                SharableConfig::SharingKey(k) => registries
-                    .conn
-                    .get(&k)
-                    .cloned()
-                    .ok_or(PoolBuildError::ProxyServerKeyNotFound(k)),
-                SharableConfig::Private(c) => Ok(c),
+            .map(|c| -> Result<HopConfig, PoolBuildError> {
+                match c {
+                    SharableConfig::SharingKey(k) => {
+                        let mut conn = registries
+                            .conn
+                            .get(&k)
+                            .cloned()
+                            .ok_or(PoolBuildError::ProxyServerKeyNotFound(k.clone()))?;
+                        // Keep the config key as the conn's name so pool
+                        // logs print the name instead of the raw address.
+                        conn.name = Some(k);
+                        Ok(conn)
+                    }
+                    SharableConfig::Private(c) => Ok(c),
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
         let entries =
@@ -316,6 +324,7 @@ mod tests {
 
     fn conn_config(addr: &str, protocol: &str) -> HopConfig {
         HopConfig {
+            name: None,
             address: stream_addr(addr, protocol),
             header_crypto: tokio_chacha20::config::Config::new(
                 [7; tokio_chacha20::KEY_BYTES].into(),

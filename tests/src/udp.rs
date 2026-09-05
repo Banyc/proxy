@@ -93,6 +93,7 @@ mod tests {
             server.serve(set_conn_handler_rx).await
         });
         HopConfig {
+            name: None,
             address: common::proxy_runtime::addr::RouteAddr::udp(proxy_addr.into()),
             header_crypto: crypto,
             payload_crypto,
@@ -625,6 +626,7 @@ mod tests {
             other => panic!("unsupported mux protocol {other}"),
         };
         HopConfig {
+            name: None,
             address: RouteAddr {
                 address: proxy_addr.into(),
                 protocol: protocol.into(),

@@ -1,6 +1,9 @@
 [stream.upstream]
 # Each entry may define its own payload_key; chains nest all configured layers.
 # Keys are unpadded-base64 strings: `printf secret | base64 | tr -d '='`.
+# The map key is the conn's name: chains reference it by key, and logs print
+# the name instead of the raw address. An inline conn (inside a chain) may
+# carry an optional `name` field for the same log display.
 "tcp1" = { address = "tcp://proxy.example.org:80", header_key = "cHJveHktZXhhbXBsZS1rZXk", payload_key = "cHJveHktZXhhbXBsZS1rZXk" }
 "mptcp1" = { address = "mptcp://proxy.example.org:81", header_key = "cHJveHktZXhhbXBsZS1rZXk", payload_key = "cHJveHktZXhhbXBsZS1rZXk" }
 "tcpmux1" = { address = "tcpmux://proxy.example.org:82", header_key = "cHJveHktZXhhbXBsZS1rZXk", payload_key = "cHJveHktZXhhbXBsZS1rZXk" }

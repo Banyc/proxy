@@ -364,6 +364,7 @@ async fn verify_reverse_proxy_hop_with_payload(transport: ReverseTunnelTransport
         .parse()
         .unwrap();
     let chain = [HopConfig {
+        name: None,
         address: reverse_addr,
         header_crypto: header_crypto.clone(),
         payload_crypto: Some(payload_crypto.clone()),
@@ -494,12 +495,14 @@ async fn verify_reverse_udp_proxy_hop(
             server.serve(rx).await.unwrap();
         });
         chain.push(HopConfig {
+            name: None,
             address: RouteAddr::udp(server_addr.into()),
             header_crypto: first_header_crypto,
             payload_crypto: Some(first_payload_crypto),
         });
     }
     chain.push(HopConfig {
+        name: None,
         address: reverse_addr,
         header_crypto,
         payload_crypto: Some(payload_crypto),
@@ -584,6 +587,7 @@ async fn rtp_reverse_tunnel_probe_closes_the_flow_promptly() {
         initiator.serve(rx).await.unwrap();
     });
     let chain: Arc<RouteChain> = Arc::from([HopConfig {
+        name: None,
         address: "revtunrtp://private-udp".parse().unwrap(),
         header_crypto: crypto,
         payload_crypto: None,
@@ -683,6 +687,7 @@ async fn verify_reverse_proxy_hop(transport: ReverseTunnelTransport) {
         .parse()
         .unwrap();
     let chain = [HopConfig {
+        name: None,
         address: reverse_addr,
         header_crypto: crypto,
         payload_crypto: None,

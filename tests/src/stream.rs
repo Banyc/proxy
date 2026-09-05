@@ -232,6 +232,7 @@ mod tests {
             }
         };
         HopConfig {
+            name: None,
             address: RouteAddr {
                 address: proxy_addr.into(),
                 protocol: ty.to_string().into(),

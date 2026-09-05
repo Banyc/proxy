@@ -85,7 +85,9 @@ impl fmt::Display for DisplayChain<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[")?;
         for (i, c) in self.0.iter().enumerate() {
-            write!(f, "{}", c.address)?;
+            // A named conn prints its name; an unnamed one falls back to
+            // its raw address.
+            write!(f, "{c}")?;
             if i + 1 != self.0.len() {
                 write!(f, ",")?;
             }

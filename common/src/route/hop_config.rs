@@ -1,3 +1,5 @@
+use std::{fmt, sync::Arc};
+
 use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -6,9 +8,20 @@ use crate::proxy_runtime::addr::RouteAddrStr;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HopConfig {
+    /// The conn's name, kept from the config key (or an inline `name`
+    /// field) so logs can print it instead of the raw address.
+    pub name: Option<Arc<str>>,
     pub address: crate::proxy_runtime::addr::RouteAddr,
     pub header_crypto: tokio_chacha20::config::Config,
     pub payload_crypto: Option<tokio_chacha20::config::Config>,
+}
+impl fmt::Display for HopConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.name {
+            Some(name) => write!(f, "{name}"),
+            None => write!(f, "{}", self.address),
+        }
+    }
 }
 impl<'de> Deserialize<'de> for HopConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -18,11 +31,14 @@ impl<'de> Deserialize<'de> for HopConfig {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct HopConfigSeed {
+            #[serde(default)]
+            name: Option<Arc<str>>,
             address: RouteAddrStr,
             header_key: String,
             payload_key: Option<String>,
         }
         let HopConfigSeed {
+            name,
             address,
             header_key,
             payload_key,
@@ -39,6 +55,7 @@ impl<'de> Deserialize<'de> for HopConfig {
                 D::Error::custom(HopConfigBuildError::PayloadCrypto(e.source.to_string()))
             })?;
         Ok(HopConfig {
+            name,
             address: address.0,
             header_crypto,
             payload_crypto,
@@ -64,6 +81,9 @@ mod tests {
         let e = serde_json::from_str::<HopConfig>(&src).unwrap_err();
         format!("{e}")
     }
+    fn conn(src: &str) -> HopConfig {
+        serde_json::from_str(src).unwrap()
+    }
     #[test]
     fn a_key_that_fails_to_decode_is_not_repeated_back_into_the_log() {
         let e = build(BAD_KEY, "aGVsbG8");
@@ -74,5 +94,21 @@ mod tests {
         let e = build("aGVsbG8", BAD_KEY);
         assert!(e.contains("PayloadCrypto"), "{e}");
         assert!(!e.contains("HeaderCrypto"), "{e}");
+    }
+    #[test]
+    fn a_conn_definition_name_is_optional() {
+        let named =
+            conn(r#"{"name": "tcp1", "address": "tcp://127.0.0.1:1", "header_key": "aGVsbG8"}"#);
+        assert_eq!(named.name.as_deref(), Some("tcp1"));
+        let unnamed = conn(r#"{"address": "tcp://127.0.0.1:1", "header_key": "aGVsbG8"}"#);
+        assert_eq!(unnamed.name, None);
+    }
+    #[test]
+    fn a_named_conn_prints_its_name_and_an_unnamed_one_its_address() {
+        let named =
+            conn(r#"{"name": "tcp1", "address": "tcp://127.0.0.1:1", "header_key": "aGVsbG8"}"#);
+        assert_eq!(named.to_string(), "tcp1");
+        let unnamed = conn(r#"{"address": "tcp://127.0.0.1:1", "header_key": "aGVsbG8"}"#);
+        assert_eq!(unnamed.to_string(), "tcp://127.0.0.1:1");
     }
 }

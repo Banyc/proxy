@@ -58,13 +58,19 @@ impl WeightedRouteChainBuilder {
         let chain = self
             .chain
             .into_iter()
-            .map(|c| match c {
-                SharableConfig::SharingKey(k) => registries
-                    .conn
-                    .get(&k)
-                    .cloned()
-                    .ok_or(WeightedRouteChainBuildError::ProxyServerKeyNotFound(k)),
-                SharableConfig::Private(c) => Ok(c),
+            .map(|c| -> Result<HopConfig, WeightedRouteChainBuildError> {
+                match c {
+                    SharableConfig::SharingKey(k) => {
+                        let mut conn = registries.conn.get(&k).cloned().ok_or(
+                            WeightedRouteChainBuildError::ProxyServerKeyNotFound(k.clone()),
+                        )?;
+                        // Keep the config key as the conn's name so chain
+                        // logs print the name instead of the raw address.
+                        conn.name = Some(k);
+                        Ok(conn)
+                    }
+                    SharableConfig::Private(c) => Ok(c),
+                }
             })
             .collect::<Result<Arc<_>, _>>()?;
         Ok(WeightedRouteChain {
@@ -232,8 +238,13 @@ impl GaugedRouteChain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::route::ProbeOutcome;
+    use crate::{
+        connect::{ConnectorConfig, connector_config_cell},
+        proxy_runtime::connect::stream::StreamConnectorTable,
+        route::ProbeOutcome,
+    };
     use std::{
+        collections::HashMap,
         pin::Pin,
         sync::atomic::{AtomicUsize, Ordering},
     };
@@ -388,5 +399,52 @@ mod tests {
             chain.probe_healthy(),
             "Cancelled must be reflected as healthy"
         );
+    }
+
+    #[test]
+    fn a_chain_resolved_by_key_keeps_the_conn_name() {
+        struct NoTracer;
+        impl ProbeRtt for NoTracer {
+            fn probe_rtt(
+                &self,
+                _chain: &RouteChain,
+            ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>> {
+                unreachable!()
+            }
+        }
+        let conn: HashMap<Arc<str>, HopConfig> = HashMap::from([(
+            Arc::from("tcp1"),
+            HopConfig {
+                name: None,
+                address: "tcp://127.0.0.1:1".parse().unwrap(),
+                header_crypto: tokio_chacha20::config::Config::new(
+                    [7; tokio_chacha20::KEY_BYTES].into(),
+                ),
+                payload_crypto: None,
+            },
+        )]);
+        let matcher = Arc::new(HashMap::new());
+        let conn_selector = HashMap::new();
+        let tracer: Arc<dyn ProbeRtt + Send + Sync> = Arc::new(NoTracer);
+        let connector_table = Arc::new(StreamConnectorTable::new(
+            connector_config_cell(ConnectorConfig::default()).0,
+            HashMap::new(),
+        ));
+        let registries = Registries {
+            conn: &conn,
+            matcher: &matcher,
+            conn_selector: &conn_selector,
+            tracer: &tracer,
+            connector_table: &connector_table,
+            cancellation: CancellationToken::new(),
+        };
+        let chain = WeightedRouteChainBuilder {
+            weight: 1,
+            chain: vec![SharableConfig::SharingKey("tcp1".into())],
+        }
+        .resolve(&registries)
+        .unwrap();
+        assert_eq!(chain.chain[0].name.as_deref(), Some("tcp1"));
+        assert_eq!(chain.chain[0].to_string(), "tcp1");
     }
 }
