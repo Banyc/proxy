@@ -39,7 +39,9 @@ impl RtpMuxConnector {
                 .map(|ip| SocketAddr::new(ip, 0))
                 .unwrap_or_else(|| any_addr(&addr.ip()))
         });
-        let (inner, inner_driver) = ::rtp_mux::RtpMuxConnector::new(bind);
+        let (inner, inner_driver) = ::rtp_mux::RtpMuxConnector::with_config(
+            ::rtp_mux::RtpMuxConnectorConfig::standard(bind),
+        );
         let inner = Arc::new(inner);
         let reset_driver = {
             let inner = Arc::clone(&inner);
@@ -64,8 +66,19 @@ impl RtpMuxConnector {
 }
 #[async_trait]
 impl StreamConnect for RtpMuxConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
-        let mut stream = self.inner.connect_stream(addr).await?;
+    async fn connect(
+        &self,
+        addr: SocketAddr,
+        obfuscation_key: Option<[u8; 32]>,
+    ) -> io::Result<Box<dyn IoConnection>> {
+        let mut stream = self
+            .inner
+            .connect_stream_with_lane_and_key(
+                addr,
+                LaneClass::Interactive,
+                obfuscation_key.map(::rtp_mux::ObfuscationKey::from_bytes),
+            )
+            .await?;
         write_flow_kind(&mut stream, MuxFlowKind::Stream).await?;
         Ok(Box::new(ProxyRtpMuxClientStream(stream)))
     }
@@ -87,10 +100,18 @@ impl StreamConnect for RtpMuxConnector {
 }
 #[async_trait]
 impl UdpMuxDialer for RtpMuxConnector {
-    async fn dial_udp(&self, addr: SocketAddr) -> io::Result<UdpConnection> {
+    async fn dial_udp(
+        &self,
+        addr: SocketAddr,
+        obfuscation_key: Option<[u8; 32]>,
+    ) -> io::Result<UdpConnection> {
         let mut stream = self
             .inner
-            .connect_stream_with_lane(addr, LaneClass::Interactive)
+            .connect_stream_with_lane_and_key(
+                addr,
+                LaneClass::Interactive,
+                obfuscation_key.map(::rtp_mux::ObfuscationKey::from_bytes),
+            )
             .await?;
         write_flow_kind(&mut stream, MuxFlowKind::Udp).await?;
         let addr = stream.addr();

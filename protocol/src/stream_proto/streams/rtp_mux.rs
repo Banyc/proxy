@@ -95,7 +95,10 @@ pub async fn build_rtp_mux_proxy_server(
 ) -> Result<RtpMuxServer<MuxProxyHandler>, ListenerBindError> {
     let server = ::rtp_mux::RtpMuxServer::bind(listen_addr)
         .await
-        .map_err(ListenerBindError)?;
+        .map_err(ListenerBindError)?
+        .with_obfuscation_key(Some(::rtp_mux::ObfuscationKey::from_bytes(
+            *handler.stream.header_crypto().key(),
+        )));
     Ok(RtpMuxServer::from_core(server, handler, session_spawner))
 }
 

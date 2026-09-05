@@ -415,7 +415,17 @@ impl loading::Build for RtpReverseTunnelResponderBuilder {
     type Server = RtpReverseTunnelResponder;
     type Err = BuildError;
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
-        let server = rtp_mux::RtpMuxServer::bind(self.listen_addr.address.to_string()).await?;
+        // The rtpmux transport is always obfuscated with the header key the
+        // initiator shares.
+        let obfuscation_key = self
+            .header_key
+            .build()
+            .map_err(|error| BuildError::HeaderCrypto(error.source.to_string()))?;
+        let server = rtp_mux::RtpMuxServer::bind(self.listen_addr.address.to_string())
+            .await?
+            .with_obfuscation_key(Some(rtp_mux::ObfuscationKey::from_bytes(
+                *obfuscation_key.key(),
+            )));
         let session_spawner = self.runtime.session_spawner.clone();
         Ok(RtpReverseTunnelResponder {
             server,

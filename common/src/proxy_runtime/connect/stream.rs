@@ -16,7 +16,14 @@ use crate::{connect::ConnectorConfigReader, stream_runtime::IoConnection};
 
 #[async_trait]
 pub trait StreamConnect: std::fmt::Debug + Sync + Send + 'static {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>>;
+    /// Connect to `addr`. `obfuscation_key` is the per-conn datagram
+    /// obfuscation key for the rtp/rtpmux transports; other transports
+    /// ignore it.
+    async fn connect(
+        &self,
+        addr: SocketAddr,
+        obfuscation_key: Option<[u8; 32]>,
+    ) -> io::Result<Box<dyn IoConnection>>;
     fn reset_addr(&self, _addr: SocketAddr) {}
     fn reoptimize(&self, _addr: SocketAddr) {}
     fn session_stats(&self, _addr: SocketAddr) -> Option<String> {
@@ -30,13 +37,14 @@ pub trait StreamConnectExt: StreamConnect {
     fn timed_connect(
         &self,
         addr: SocketAddr,
+        obfuscation_key: Option<[u8; 32]>,
         timeout: Duration,
     ) -> impl Future<Output = io::Result<Box<dyn IoConnection>>> + Send
     where
         Self: Sync,
     {
         async move {
-            let res = tokio::time::timeout(timeout, self.connect(addr)).await;
+            let res = tokio::time::timeout(timeout, self.connect(addr, obfuscation_key)).await;
             match res {
                 Ok(res) => res,
                 Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "Timed out")),
@@ -186,11 +194,14 @@ impl StreamConnectorTable {
         &self,
         stream_type: &str,
         addrs: impl IntoIterator<Item = SocketAddr>,
+        obfuscation_key: Option<[u8; 32]>,
         timeout: Duration,
     ) -> io::Result<(Box<dyn IoConnection>, SocketAddr)> {
         let mut last_res = None;
         for addr in addrs {
-            let res = self.timed_connect(stream_type, addr, timeout).await;
+            let res = self
+                .timed_connect(stream_type, addr, obfuscation_key, timeout)
+                .await;
             match res {
                 Ok(res) => {
                     last_res = Some(Ok((res, addr)));
@@ -206,6 +217,7 @@ impl StreamConnectorTable {
         &self,
         stream_type: &str,
         addr: SocketAddr,
+        obfuscation_key: Option<[u8; 32]>,
         timeout: Duration,
     ) -> io::Result<Box<dyn IoConnection>> {
         let Some(connector) = self.connectors.get(stream_type) else {
@@ -214,7 +226,7 @@ impl StreamConnectorTable {
                 format!("invalid stream type: `{stream_type}`"),
             ));
         };
-        StreamConnectExt::timed_connect(connector.deref(), addr, timeout).await
+        StreamConnectExt::timed_connect(connector.deref(), addr, obfuscation_key, timeout).await
     }
     pub fn reset_addr(&self, stream_type: &str, addr: SocketAddr) {
         if let Some(connector) = self.connectors.get(stream_type) {
@@ -342,7 +354,11 @@ mod tests {
 
     #[async_trait]
     impl StreamConnect for FallbackConnector {
-        async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
+        async fn connect(
+            &self,
+            addr: SocketAddr,
+            _obfuscation_key: Option<[u8; 32]>,
+        ) -> io::Result<Box<dyn IoConnection>> {
             self.attempted.lock().unwrap().push(addr);
             if addr != self.successful {
                 return Err(io::Error::from(io::ErrorKind::NetworkUnreachable));
@@ -371,6 +387,7 @@ mod tests {
             .timed_connect_any(
                 STREAM_TYPE,
                 [unreachable, successful],
+                None,
                 Duration::from_secs(1),
             )
             .await

@@ -137,7 +137,14 @@ impl UdpSend for UdpConnectionWrite {
 /// uses, so the wire format on the stream is identical in both cases.
 #[async_trait]
 pub trait UdpMuxDialer: std::fmt::Debug + Sync + Send + 'static {
-    async fn dial_udp(&self, addr: SocketAddr) -> io::Result<UdpConnection>;
+    /// Dial a UDP flow over the mux transport to `addr`. `obfuscation_key`
+    /// is the per-conn datagram obfuscation key for the rtp transport;
+    /// other transports ignore it.
+    async fn dial_udp(
+        &self,
+        addr: SocketAddr,
+        obfuscation_key: Option<[u8; 32]>,
+    ) -> io::Result<UdpConnection>;
 }
 #[async_trait]
 pub trait NamedUdpConnect: std::fmt::Debug + Sync + Send + 'static {
@@ -279,6 +286,7 @@ impl UdpConnector {
     pub async fn connect_route(
         &self,
         addr: &RouteAddr,
+        obfuscation_key: Option<[u8; 32]>,
         timeout: Duration,
     ) -> io::Result<UdpConnection> {
         if let Some((_, name)) = addr.reverse_tunnel() {
@@ -292,7 +300,7 @@ impl UdpConnector {
         };
         if let Some(dialer) = dialer {
             let sock_addr = *addr.address.to_socket_addrs().await?.first();
-            return tokio::time::timeout(timeout, dialer.dial_udp(sock_addr))
+            return tokio::time::timeout(timeout, dialer.dial_udp(sock_addr, obfuscation_key))
                 .await
                 .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "timed out"))?;
         }

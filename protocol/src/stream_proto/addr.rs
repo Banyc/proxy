@@ -2,8 +2,6 @@ use std::{fmt, str::FromStr};
 
 use common::addr::ParseInternetAddrError;
 
-use super::protos::STREAM_PROTOS;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConcreteStreamType {
     Tcp,
@@ -13,19 +11,38 @@ pub enum ConcreteStreamType {
     Rtp,
     RtpMux,
 }
+impl ConcreteStreamType {
+    /// The wire protocol name, e.g. `"rtpmux"`. The rtp/rtpmux variants are
+    /// not part of [`super::protos::STREAM_PROTOS`] (which only carries the
+    /// non-rtp builders), so the mapping is explicit here.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tcp => "tcp",
+            Self::TcpMux => "tcpmux",
+            Self::Kcp => "kcp",
+            Self::Mptcp => "mptcp",
+            Self::Rtp => "rtp",
+            Self::RtpMux => "rtpmux",
+        }
+    }
+}
 impl fmt::Display for ConcreteStreamType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        let (_, ty, _) = STREAM_PROTOS.iter().find(|(x, _, _)| x == self).unwrap();
-        write!(f, "{ty}")
+        write!(f, "{}", self.as_str())
     }
 }
 impl FromStr for ConcreteStreamType {
     type Err = ParseInternetAddrError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let Some((ty, _, _)) = STREAM_PROTOS.iter().find(|(_, x, _)| *x == s) else {
-            return Err(ParseInternetAddrError);
-        };
-        Ok(*ty)
+        match s {
+            "tcp" => Ok(Self::Tcp),
+            "tcpmux" => Ok(Self::TcpMux),
+            "kcp" => Ok(Self::Kcp),
+            "mptcp" => Ok(Self::Mptcp),
+            "rtp" => Ok(Self::Rtp),
+            "rtpmux" => Ok(Self::RtpMux),
+            _ => Err(ParseInternetAddrError),
+        }
     }
 }
 

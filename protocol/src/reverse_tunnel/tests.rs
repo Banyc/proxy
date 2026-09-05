@@ -280,6 +280,13 @@ fn initiator_handler(
     }
 }
 
+async fn bind_rtp_responder(key: [u8; 32]) -> rtp_mux::RtpMuxServer {
+    rtp_mux::RtpMuxServer::bind("127.0.0.1:0")
+        .await
+        .unwrap()
+        .with_obfuscation_key(Some(rtp_mux::ObfuscationKey::from_bytes(key)))
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn invalid_payload_key_is_reported_as_payload_crypto() {
     let mut scope = TestScope::new();
@@ -329,7 +336,7 @@ async fn verify_reverse_proxy_hop_with_payload(transport: ReverseTunnelTransport
             format!("tcp://{addr}").parse().unwrap()
         }
         ReverseTunnelTransport::Rtp => {
-            let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0").await.unwrap();
+            let server = bind_rtp_responder(*header_crypto.key()).await;
             let addr = server.listener().local_addr();
             let server = RtpReverseTunnelResponder {
                 server,
@@ -365,6 +372,7 @@ async fn verify_reverse_proxy_hop_with_payload(transport: ReverseTunnelTransport
         .unwrap();
     let chain = [HopConfig {
         name: None,
+
         address: reverse_addr,
         header_crypto: header_crypto.clone(),
         payload_crypto: Some(payload_crypto.clone()),
@@ -432,7 +440,7 @@ async fn verify_reverse_udp_proxy_hop(
             format!("tcp://{addr}").parse().unwrap()
         }
         ReverseTunnelTransport::Rtp => {
-            let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0").await.unwrap();
+            let server = bind_rtp_responder(*header_crypto.key()).await;
             let addr = server.listener().local_addr();
             let server = RtpReverseTunnelResponder {
                 server,
@@ -496,6 +504,7 @@ async fn verify_reverse_udp_proxy_hop(
         });
         chain.push(HopConfig {
             name: None,
+
             address: RouteAddr::udp(server_addr.into()),
             header_crypto: first_header_crypto,
             payload_crypto: Some(first_payload_crypto),
@@ -503,6 +512,7 @@ async fn verify_reverse_udp_proxy_hop(
     }
     chain.push(HopConfig {
         name: None,
+
         address: reverse_addr,
         header_crypto,
         payload_crypto: Some(payload_crypto),
@@ -561,7 +571,7 @@ async fn rtp_reverse_tunnel_probe_closes_the_flow_promptly() {
         stream_runtime: runtime.stream.clone(),
         udp_runtime: runtime.udp.clone(),
     };
-    let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0").await.unwrap();
+    let server = bind_rtp_responder(*crypto.key()).await;
     let addr = server.listener().local_addr();
     let server = RtpReverseTunnelResponder {
         server,
@@ -588,6 +598,7 @@ async fn rtp_reverse_tunnel_probe_closes_the_flow_promptly() {
     });
     let chain: Arc<RouteChain> = Arc::from([HopConfig {
         name: None,
+
         address: "revtunrtp://private-udp".parse().unwrap(),
         header_crypto: crypto,
         payload_crypto: None,
@@ -655,7 +666,7 @@ async fn verify_reverse_proxy_hop(transport: ReverseTunnelTransport) {
             format!("tcp://{addr}").parse().unwrap()
         }
         ReverseTunnelTransport::Rtp => {
-            let server = rtp_mux::RtpMuxServer::bind("127.0.0.1:0").await.unwrap();
+            let server = bind_rtp_responder(*crypto.key()).await;
             let addr = server.listener().local_addr();
             let server = RtpReverseTunnelResponder {
                 server,
@@ -688,6 +699,7 @@ async fn verify_reverse_proxy_hop(transport: ReverseTunnelTransport) {
         .unwrap();
     let chain = [HopConfig {
         name: None,
+
         address: reverse_addr,
         header_crypto: crypto,
         payload_crypto: None,

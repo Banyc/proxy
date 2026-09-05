@@ -41,7 +41,11 @@ impl TcpConnector {
 }
 #[async_trait]
 impl StreamConnect for TcpConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
+    async fn connect(
+        &self,
+        addr: SocketAddr,
+        _obfuscation_key: Option<[u8; 32]>,
+    ) -> io::Result<Box<dyn IoConnection>> {
         let bind = self
             .config
             .current()

@@ -33,6 +33,7 @@ use super::{
 /// [`UdpMuxDialer`]s: they are registered into `udp_connector` so UDP proxy
 /// chains can open datagram flows over the same mux sessions, using the
 /// same wire format as reverse tunneling.
+///
 pub fn build_concrete_stream_connector_table(
     config: ConnectorConfigReader,
     reset: ConnectorResetSignal,

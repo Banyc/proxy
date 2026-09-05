@@ -104,13 +104,18 @@ pub async fn establish(
     stream_context: &StreamRuntime,
 ) -> Result<ConnAndAddr, StreamEstablishError> {
     if proxies.is_empty() {
-        let (stream, sock_addr) =
-            connect_with_pool(&destination, stream_context, true, crate::STREAM_IO_TIMEOUT)
-                .await
-                .map_err(|source| StreamEstablishError::ConnectDestination {
-                    source: Box::new(source),
-                    upstream_addr: destination.clone(),
-                })?;
+        let (stream, sock_addr) = connect_with_pool(
+            &destination,
+            None,
+            stream_context,
+            true,
+            crate::STREAM_IO_TIMEOUT,
+        )
+        .await
+        .map_err(|source| StreamEstablishError::ConnectDestination {
+            source: Box::new(source),
+            upstream_addr: destination.clone(),
+        })?;
         stream.set_stream_name(&destination.address.to_string());
         return Ok(ConnAndAddr {
             stream,
@@ -120,13 +125,19 @@ pub async fn establish(
     }
     let (mut stream, addr, sock_addr) = {
         let proxy_addr = &proxies[0].address;
-        let (stream, sock_addr) =
-            connect_with_pool(proxy_addr, stream_context, true, crate::STREAM_IO_TIMEOUT)
-                .await
-                .map_err(|source| StreamEstablishError::ConnectFirstProxyServer {
-                    source: Box::new(source),
-                    upstream_addr: proxy_addr.clone(),
-                })?;
+        let proxy_key = Some(*proxies[0].header_crypto.key());
+        let (stream, sock_addr) = connect_with_pool(
+            proxy_addr,
+            proxy_key,
+            stream_context,
+            true,
+            crate::STREAM_IO_TIMEOUT,
+        )
+        .await
+        .map_err(|source| StreamEstablishError::ConnectFirstProxyServer {
+            source: Box::new(source),
+            upstream_addr: proxy_addr.clone(),
+        })?;
         (stream, proxy_addr.clone(), sock_addr)
     };
     stream.set_stream_name(&destination.address.to_string());
@@ -291,8 +302,15 @@ pub async fn probe_rtt(
     }
     let (mut stream, _addr, _sock_addr) = {
         let proxy_addr = &proxies[0].address;
-        let (stream, sock_addr) =
-            connect_with_pool(proxy_addr, stream_context, true, crate::STREAM_IO_TIMEOUT).await?;
+        let proxy_key = Some(*proxies[0].header_crypto.key());
+        let (stream, sock_addr) = connect_with_pool(
+            proxy_addr,
+            proxy_key,
+            stream_context,
+            true,
+            crate::STREAM_IO_TIMEOUT,
+        )
+        .await?;
         (stream, proxy_addr.clone(), sock_addr)
     };
     let pairs = convert_proxies_to_header_crypto_pairs(proxies, None);

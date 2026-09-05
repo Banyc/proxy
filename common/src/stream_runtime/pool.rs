@@ -116,7 +116,12 @@ impl tokio_conn_pool::Connect for PoolConnector {
         let sock_addrs = addr.address.to_socket_addrs().await.ok()?;
         let (stream, _sock_addr) = self
             .connector_table
-            .timed_connect_any(&self.conn.address.protocol, sock_addrs, HEARTBEAT_INTERVAL)
+            .timed_connect_any(
+                &self.conn.address.protocol,
+                sock_addrs,
+                Some(*self.conn.header_crypto.key()),
+                HEARTBEAT_INTERVAL,
+            )
             .await
             .ok()?;
         Some(stream)
@@ -144,6 +149,7 @@ impl tokio_conn_pool::Heartbeat for PoolHeartbeat {
 
 pub async fn connect_with_pool(
     addr: &RouteAddr,
+    obfuscation_key: Option<[u8; 32]>,
     stream_context: &StreamRuntime,
     allow_loopback: bool,
     timeout: Duration,
@@ -190,7 +196,12 @@ pub async fn connect_with_pool(
     }
     let (stream, sock_addr) = stream_context
         .connector_table
-        .timed_connect_any(&addr.protocol, sock_addrs.iter().copied(), timeout)
+        .timed_connect_any(
+            &addr.protocol,
+            sock_addrs.iter().copied(),
+            obfuscation_key,
+            timeout,
+        )
         .await
         .map_err(|e| ConnectError::ConnectAddr {
             source: e,

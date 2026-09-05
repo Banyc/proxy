@@ -124,7 +124,10 @@ mod tests {
         allow_loopback: bool,
         encrypt_payload: bool,
     ) -> HopConfig {
-        let crypto = create_random_crypto();
+        // A fixed shared header key, so multi-hop rtp/rtpmux chains (where
+        // each leg reuses the relay's own header key for obfuscation) agree
+        // across hops; payload keys stay random per hop for the layered tests.
+        let crypto = tokio_chacha20::config::Config::new([0x42; 32].into());
         let payload_crypto = encrypt_payload.then(create_random_crypto);
         let stream_context = stream_context(scope);
         let session_spawner = stream_context.session_spawner.clone();
@@ -934,10 +937,16 @@ mod tests {
             protocol: "tcpmux".into(),
         };
         let dial = || async {
-            connect_with_pool(&proxy_route, &stream_context, true, Duration::from_secs(10))
-                .await
-                .unwrap()
-                .0
+            connect_with_pool(
+                &proxy_route,
+                None,
+                &stream_context,
+                true,
+                Duration::from_secs(10),
+            )
+            .await
+            .unwrap()
+            .0
         };
         let round_trip = |byte: u8| async move {
             let mut stream = dial().await;

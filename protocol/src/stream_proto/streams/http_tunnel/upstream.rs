@@ -71,7 +71,7 @@ pub(super) async fn connect(plan: RoutePlan, router: &Router) -> Result<Upstream
             let (stream, sock_addr) = router
                 .stream
                 .connector_table
-                .timed_connect_any(TCP_STREAM_TYPE, sock_addrs, UDP_FLOW_TIMEOUT)
+                .timed_connect_any(TCP_STREAM_TYPE, sock_addrs, None, UDP_FLOW_TIMEOUT)
                 .await
                 .map_err(TunnelError::Direct)?;
             Ok(Upstream {

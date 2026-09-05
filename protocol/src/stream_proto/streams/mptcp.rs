@@ -132,7 +132,11 @@ pub use common::lifecycle::serve_loop::ServeLoopError;
 pub struct MptcpConnector;
 #[async_trait]
 impl StreamConnect for MptcpConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
+    async fn connect(
+        &self,
+        addr: SocketAddr,
+        _obfuscation_key: Option<[u8; 32]>,
+    ) -> io::Result<Box<dyn IoConnection>> {
         let addrs = std::iter::repeat_n((), STREAMS).map(|()| addr);
         let stream = MptcpStream::connect(addrs).await?;
         counter!("stream.mptcp.connects").increment(1);

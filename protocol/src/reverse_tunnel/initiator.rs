@@ -144,7 +144,9 @@ async fn run_rtp_initiator(
         let bind: rtp_mux::BindSelector = Arc::new(move |peer| connector_table.bind_addr_for(peer));
         match rtp_mux::connect_bidirectional_session(
             addr,
-            rtp_mux::RtpMuxConnectorConfig::standard(bind),
+            rtp_mux::RtpMuxConnectorConfig::standard(bind).with_obfuscation_key(Some(
+                rtp_mux::ObfuscationKey::from_bytes(*handler.registration_crypto.key()),
+            )),
         )
         .await
         {
@@ -306,6 +308,7 @@ async fn connect_concrete(
         .timed_connect_any(
             &addr.protocol,
             sock_addrs.iter().copied(),
+            None,
             common::STREAM_IO_TIMEOUT,
         )
         .await

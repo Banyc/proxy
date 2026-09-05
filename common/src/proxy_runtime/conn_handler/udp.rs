@@ -123,7 +123,11 @@ impl UdpProxyConnHandler {
         let upstream = self
             .udp_context
             .connector
-            .connect_route(upstream_route, crate::STREAM_IO_TIMEOUT)
+            .connect_route(
+                upstream_route,
+                Some(*self.header_crypto.key()),
+                crate::STREAM_IO_TIMEOUT,
+            )
             .await
             .map_err(|e| UdpProxyError::ConnectUpstream {
                 source: e,

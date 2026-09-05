@@ -269,7 +269,11 @@ impl UdpMuxDialer for TcpMuxConnector {
     /// Opens a fresh mux stream, writes the UDP flow-kind byte, and frames
     /// datagrams exactly like reverse tunneling: `[kind=1]` followed by
     /// `udp_mux` length-prefixed datagrams.
-    async fn dial_udp(&self, addr: SocketAddr) -> io::Result<UdpConnection> {
+    async fn dial_udp(
+        &self,
+        addr: SocketAddr,
+        _obfuscation_key: Option<[u8; 32]>,
+    ) -> io::Result<UdpConnection> {
         let ((reader, mut writer), addr) = self.connect_request_tx.send(addr).await?;
         counter!("stream.tcp_mux.mux.connects").increment(1);
         write_flow_kind(&mut writer, MuxFlowKind::Udp).await?;
@@ -283,7 +287,11 @@ impl UdpMuxDialer for TcpMuxConnector {
 }
 #[async_trait]
 impl StreamConnect for TcpMuxConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
+    async fn connect(
+        &self,
+        addr: SocketAddr,
+        _obfuscation_key: Option<[u8; 32]>,
+    ) -> io::Result<Box<dyn IoConnection>> {
         let ((reader, mut writer), addr) = self.connect_request_tx.send(addr).await?;
         counter!("stream.tcp_mux.mux.connects").increment(1);
         write_flow_kind(&mut writer, MuxFlowKind::Stream).await?;

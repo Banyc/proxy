@@ -121,6 +121,12 @@ pub struct StreamProxyConnHandler {
     speed_limiter: Limiter,
 }
 impl StreamProxyConnHandler {
+    /// The header crypto used to authenticate relay headers; its derived
+    /// 32-byte key also obfuscates the rtp/rtpmux transport to this server.
+    pub fn header_crypto(&self) -> &tokio_chacha20::config::Config {
+        self.acceptor.header_crypto()
+    }
+
     pub fn new(
         header_crypto: tokio_chacha20::config::Config,
         payload_crypto: Option<tokio_chacha20::config::Config>,
@@ -234,6 +240,12 @@ pub struct StreamProxyAcceptor {
     allow_loopback: bool,
 }
 impl StreamProxyAcceptor {
+    /// The header crypto used to authenticate this listener's relay headers;
+    /// its derived key also obfuscates the rtp/rtpmux transport to this hop.
+    pub fn header_crypto(&self) -> &tokio_chacha20::config::Config {
+        &self.crypto
+    }
+
     pub fn new(
         crypto: tokio_chacha20::config::Config,
         stream_context: StreamRuntime,
@@ -266,6 +278,7 @@ impl StreamProxyAcceptor {
         };
         let (upstream, sock_addr) = connect_with_pool(
             &addr,
+            Some(*self.crypto.key()),
             &self.stream_context,
             self.allow_loopback,
             crate::STREAM_IO_TIMEOUT,

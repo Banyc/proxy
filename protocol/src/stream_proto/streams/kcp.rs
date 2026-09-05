@@ -147,7 +147,11 @@ impl KcpConnector {
 }
 #[async_trait]
 impl StreamConnect for KcpConnector {
-    async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
+    async fn connect(
+        &self,
+        addr: SocketAddr,
+        _obfuscation_key: Option<[u8; 32]>,
+    ) -> io::Result<Box<dyn IoConnection>> {
         let bind = self
             .config
             .current()
@@ -313,7 +317,7 @@ mod tests {
             })
             .0,
         );
-        let stream = connector.connect(listen_addr).await.unwrap();
+        let stream = connector.connect(listen_addr, None).await.unwrap();
         let local_addr = stream.local_addr().unwrap();
         assert_ne!(local_addr.port(), 0, "{local_addr}");
         drop(accept_tasks);

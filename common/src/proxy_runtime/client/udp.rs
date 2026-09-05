@@ -123,9 +123,10 @@ impl UdpProxyClient {
             });
         }
         let proxy_addr = proxies[0].address.clone();
+        let proxy_key = Some(*proxies[0].header_crypto.key());
         let upstream = context
             .connector
-            .connect_route(&proxy_addr, crate::STREAM_IO_TIMEOUT)
+            .connect_route(&proxy_addr, proxy_key, crate::STREAM_IO_TIMEOUT)
             .await
             .map_err(|source| EstablishError::ConnectFirstProxy {
                 source,
@@ -652,9 +653,10 @@ pub async fn probe_rtt(
         ));
     }
     let proxy_addr = &proxies[0].address;
+    let proxy_key = Some(*proxies[0].header_crypto.key());
     let upstream = context
         .connector
-        .connect_route(proxy_addr, crate::STREAM_IO_TIMEOUT)
+        .connect_route(proxy_addr, proxy_key, crate::STREAM_IO_TIMEOUT)
         .await?;
     let (mut upstream_read, mut upstream_write) = upstream.into_split();
     let pairs = convert_proxies_to_header_crypto_pairs(proxies, None);

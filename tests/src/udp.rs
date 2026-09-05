@@ -578,7 +578,10 @@ mod tests {
         protocol: &str,
         payload_crypto: Option<tokio_chacha20::config::Config>,
     ) -> HopConfig {
-        let crypto = create_random_crypto();
+        // A fixed shared header key, so multi-hop rtpmux chains (where each
+        // leg reuses the relay's own header key for obfuscation) agree
+        // across hops.
+        let crypto = tokio_chacha20::config::Config::new([0x42; 32].into());
         let stream_proxy = StreamProxyConnHandler::new(
             crypto.clone(),
             payload_crypto.clone(),
