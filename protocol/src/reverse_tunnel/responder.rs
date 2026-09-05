@@ -408,6 +408,7 @@ pub struct RtpReverseTunnelResponderBuilder {
     pub(crate) key: Arc<str>,
     pub(crate) listen_addr: RouteAddr,
     pub(crate) header_key: tokio_chacha20::config::ConfigBuilder,
+    pub(crate) obfuscation_key: Option<[u8; 32]>,
     pub(crate) runtime: Runtime,
 }
 impl loading::Build for RtpReverseTunnelResponderBuilder {
@@ -415,7 +416,12 @@ impl loading::Build for RtpReverseTunnelResponderBuilder {
     type Server = RtpReverseTunnelResponder;
     type Err = BuildError;
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
-        let server = rtp_mux::RtpMuxServer::bind(self.listen_addr.address.to_string()).await?;
+        let server = rtp_mux::RtpMuxServer::bind(self.listen_addr.address.to_string())
+            .await?
+            .with_obfuscation_key(
+                self.obfuscation_key
+                    .map(rtp_mux::ObfuscationKey::from_bytes),
+            );
         let session_spawner = self.runtime.session_spawner.clone();
         Ok(RtpReverseTunnelResponder {
             server,

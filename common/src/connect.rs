@@ -7,11 +7,18 @@ use crate::{addr::DualStackBind, config::Merge, notify::Notify};
 #[serde(deny_unknown_fields)]
 pub struct ConnectorConfig {
     pub bind: DualStackBind,
+    /// Optional datagram obfuscation key for the rtp/rtpmux connectors:
+    /// when set, every RTP datagram is prefixed with a 24-byte random nonce
+    /// and chacha20-encrypted with this key. The peer server must use the
+    /// same key; `None` (the default) sends datagrams in the clear.
+    #[serde(default)]
+    pub obfuscation_key: Option<[u8; 32]>,
 }
 impl Default for ConnectorConfig {
     fn default() -> Self {
         Self {
             bind: DualStackBind { v4: None, v6: None },
+            obfuscation_key: None,
         }
     }
 }
@@ -25,6 +32,8 @@ impl Merge for ConnectorConfig {
             .map_err(|()| String::from("repeated bind.v4"))?;
         self.bind.v6 = option_merge(self.bind.v6, other.bind.v6)
             .map_err(|()| String::from("repeated bind.v6"))?;
+        self.obfuscation_key = option_merge(self.obfuscation_key, other.obfuscation_key)
+            .map_err(|()| String::from("repeated obfuscation_key"))?;
         Ok(self)
     }
 }
@@ -99,6 +108,7 @@ mod tests {
                 v4: Some("192.0.2.1".parse().unwrap()),
                 v6: None,
             },
+            obfuscation_key: None,
         };
         updater.replace(replaced);
         assert_eq!(

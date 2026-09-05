@@ -51,6 +51,7 @@ pub struct ReverseTunnelInitiatorHandler {
     pub(crate) stream_proxy: Arc<StreamProxyConnHandler>,
     pub(crate) udp_proxy: Arc<UdpProxyConnHandler>,
     pub(crate) stream_runtime: StreamRuntime,
+    pub(crate) obfuscation_key: Option<[u8; 32]>,
 }
 impl loading::HandleConn for ReverseTunnelInitiatorHandler {}
 
@@ -142,9 +143,11 @@ async fn run_rtp_initiator(
     for addr in sock_addrs.iter().copied() {
         let connector_table = Arc::clone(&handler.stream_runtime.connector_table);
         let bind: rtp_mux::BindSelector = Arc::new(move |peer| connector_table.bind_addr_for(peer));
+        let obfuscation_key = handler.obfuscation_key;
         match rtp_mux::connect_bidirectional_session(
             addr,
-            rtp_mux::RtpMuxConnectorConfig::standard(bind),
+            rtp_mux::RtpMuxConnectorConfig::standard(bind)
+                .with_obfuscation_key(obfuscation_key.map(rtp_mux::ObfuscationKey::from_bytes)),
         )
         .await
         {
@@ -363,6 +366,7 @@ impl ReverseTunnelInitiatorBuilder {
             stream_proxy,
             udp_proxy,
             stream_runtime: self.runtime.stream,
+            obfuscation_key: self.config.obfuscation_key,
         })
     }
 }

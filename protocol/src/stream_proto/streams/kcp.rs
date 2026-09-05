@@ -310,6 +310,7 @@ mod tests {
         let connector = KcpConnector::new(
             common::connect::connector_config_cell(ConnectorConfig {
                 bind: DualStackBind { v4: None, v6: None },
+                obfuscation_key: None,
             })
             .0,
         );

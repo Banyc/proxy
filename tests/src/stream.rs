@@ -198,9 +198,10 @@ mod tests {
                 proxy_addr
             }
             ConcreteStreamType::Rtp => {
-                let server = build_rtp_proxy_server(addr.as_ref(), proxy, session_spawner.clone())
-                    .await
-                    .unwrap();
+                let server =
+                    build_rtp_proxy_server(addr.as_ref(), proxy, None, session_spawner.clone())
+                        .await
+                        .unwrap();
                 let proxy_addr = server.listener().local_addr();
                 let (set_conn_handler_tx, set_conn_handler_rx) =
                     loading::replace_conn_handler_channel();
@@ -217,6 +218,7 @@ mod tests {
                         stream: proxy,
                         udp: None,
                     },
+                    None,
                     session_spawner.clone(),
                 )
                 .await

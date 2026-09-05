@@ -31,6 +31,7 @@ impl RtpMuxConnector {
         config: ConnectorConfigReader,
         reset: ConnectorResetSignal,
     ) -> (Self, MuxConnectorDriver) {
+        let obfuscation_key = config.current().obfuscation_key;
         let bind = Arc::new(move |addr: SocketAddr| {
             config
                 .current()
@@ -39,7 +40,10 @@ impl RtpMuxConnector {
                 .map(|ip| SocketAddr::new(ip, 0))
                 .unwrap_or_else(|| any_addr(&addr.ip()))
         });
-        let (inner, inner_driver) = ::rtp_mux::RtpMuxConnector::new(bind);
+        let (inner, inner_driver) = ::rtp_mux::RtpMuxConnector::with_config(
+            ::rtp_mux::RtpMuxConnectorConfig::standard(bind)
+                .with_obfuscation_key(obfuscation_key.map(::rtp_mux::ObfuscationKey::from_bytes)),
+        );
         let inner = Arc::new(inner);
         let reset_driver = {
             let inner = Arc::clone(&inner);

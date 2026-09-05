@@ -220,6 +220,7 @@ mod tests {
             let listen_addr = Arc::from("localhost:0");
             let (connector_config, _updater) = connector_config_cell(ConnectorConfig {
                 bind: DualStackBind { v4: None, v6: None },
+                obfuscation_key: None,
             });
             let mut connector_drivers = tokio::task::JoinSet::new();
             let udp_connector = UdpConnector::new(connector_config.clone());

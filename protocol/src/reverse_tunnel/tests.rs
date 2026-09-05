@@ -156,6 +156,7 @@ fn initiator_config(
         header_key,
         payload_key,
         allow_loopback: true,
+        obfuscation_key: None,
     }
 }
 
@@ -277,6 +278,7 @@ fn initiator_handler(
             SpeedLimit::UNLIMITED,
         )),
         stream_runtime: runtime.stream,
+        obfuscation_key: None,
     }
 }
 

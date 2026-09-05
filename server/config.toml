@@ -20,6 +20,14 @@
 [stream]
 pool = ["tcp1", "mptcp1"]
 
+# Send-side connector tuning, shared by every stream/UDP connector. The
+# optional obfuscation_key applies to the rtp/rtpmux connectors: when set,
+# every RTP datagram is prefixed with a 24-byte random nonce and
+# chacha20-encrypted with this key (32 bytes). The peer server must use the
+# same key; unset = datagrams in the clear.
+# [connector]
+# obfuscation_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+
 [udp.upstream]
 "udp1" = { address = "proxy.example.org:80", header_key = "cHJveHktZXhhbXBsZS1rZXk", payload_key = "cHJveHktZXhhbXBsZS1rZXk" }
 # The same tunnels carry UDP flows; each UDP access flow shares one framed mux substream.
@@ -116,6 +124,14 @@ header_key = "cHJveHktZXhhbXBsZS1rZXk"
 listen_addr = "0.0.0.0:80"
 header_key = "cHJveHktZXhhbXBsZS1rZXk"
 # payload_key = "cHJveHktZXhhbXBsZS1rZXk"
+# obfuscation_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32] # must match the connector's key
+# speed_limit = 1024.0 # 1.0 KiB/s
+
+[[proxy_server.rtp_mux_server]]
+listen_addr = "0.0.0.0:80"
+header_key = "cHJveHktZXhhbXBsZS1rZXk"
+# payload_key = "cHJveHktZXhhbXBsZS1rZXk"
+# obfuscation_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32] # must match the connector's key
 # speed_limit = 1024.0 # 1.0 KiB/s
 
 [[proxy_server.udp_server]]
@@ -139,6 +155,7 @@ header_key = "cHJveHktZXhhbXBsZS1rZXk"
 [[reverse_tunnel.responder]]
 listen_addr = "rtpmux://0.0.0.0:7100"
 header_key = "cHJveHktZXhhbXBsZS1rZXk"
+# obfuscation_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32] # must match the initiator's key
 
 # Private side (the machine behind NAT) — dials out to the responder above:
 [[reverse_tunnel.initiator]]
@@ -153,3 +170,4 @@ name = "private-b"
 responder_addr = "rtpmux://proxy.example.org:7100"
 header_key = "cHJveHktZXhhbXBsZS1rZXk"
 payload_key = "cHJveHktZXhhbXBsZS1rZXk"
+# obfuscation_key = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32] # must match the responder's key

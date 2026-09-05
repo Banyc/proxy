@@ -35,6 +35,7 @@ pub struct RtpServer<ConnHandler> {
     listener: rtp::udp::Listener,
     conn_handler: ConnHandler,
     fec: bool,
+    obfuscation_key: Option<[u8; 32]>,
     session_spawner: SessionSpawner,
 }
 impl<ConnHandler> RtpServer<ConnHandler> {
@@ -42,12 +43,14 @@ impl<ConnHandler> RtpServer<ConnHandler> {
         listener: rtp::udp::Listener,
         conn_handler: ConnHandler,
         fec: bool,
+        obfuscation_key: Option<[u8; 32]>,
         session_spawner: SessionSpawner,
     ) -> Self {
         Self {
             listener,
             conn_handler,
             fec,
+            obfuscation_key,
             session_spawner,
         }
     }
@@ -85,6 +88,7 @@ where
         let addr = self.listener.local_addr();
         let listener = &self.listener;
         let fec = self.fec;
+        let obfuscation_key = self.obfuscation_key;
         let session_spawner = self.session_spawner.clone();
         let mut state = ();
         common::lifecycle::serve_loop::serve_loop(
@@ -95,6 +99,7 @@ where
             || {
                 listener.accept_without_handshake_with(rtp::udp::AcceptConfig {
                     fec,
+                    obfuscation_key,
                     ..rtp::udp::AcceptConfig::default()
                 })
             },
@@ -145,9 +150,8 @@ impl RtpConnector {
 #[async_trait]
 impl StreamConnect for RtpConnector {
     async fn connect(&self, addr: SocketAddr) -> io::Result<Box<dyn IoConnection>> {
-        let bind = self
-            .config
-            .current()
+        let config = self.config.current();
+        let bind = config
             .bind
             .get_matched(&addr.ip())
             .map(|ip| SocketAddr::new(ip, 0))
@@ -158,6 +162,7 @@ impl StreamConnect for RtpConnector {
             rtp::udp::ConnectConfig {
                 handshake: false,
                 fec: self.fec,
+                obfuscation_key: config.obfuscation_key,
                 ..rtp::udp::ConnectConfig::default()
             },
         )
@@ -231,6 +236,12 @@ impl AsyncWrite for AddressedRtpStream {
 #[serde(deny_unknown_fields)]
 pub struct RtpProxyServerConfig {
     pub listen_addr: Arc<str>,
+    /// Optional datagram obfuscation key: when set, every RTP datagram is
+    /// prefixed with a 24-byte random nonce and chacha20-encrypted with this
+    /// key. The peer connector must use the same key; `None` (the default)
+    /// sends datagrams in the clear.
+    #[serde(default)]
+    pub obfuscation_key: Option<[u8; 32]>,
     #[serde(flatten)]
     pub inner: StreamProxyConnHandlerConfig,
 }
@@ -240,6 +251,7 @@ impl RtpProxyServerConfig {
         let inner = self.inner.into_builder(stream_context, listen_addr);
         RtpProxyServerBuilder {
             listen_addr: self.listen_addr,
+            obfuscation_key: self.obfuscation_key,
             inner,
         }
     }
@@ -248,6 +260,7 @@ impl RtpProxyServerConfig {
 #[derive(Debug, Clone)]
 pub struct RtpProxyServerBuilder {
     pub listen_addr: Arc<str>,
+    pub obfuscation_key: Option<[u8; 32]>,
     pub inner: StreamProxyConnHandlerBuilder,
 }
 impl loading::Build for RtpProxyServerBuilder {
@@ -258,10 +271,16 @@ impl loading::Build for RtpProxyServerBuilder {
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let session_spawner = self.inner.stream_context.session_spawner.clone();
+        let obfuscation_key = self.obfuscation_key;
         let stream_proxy = self.build_conn_handler()?;
-        build_rtp_proxy_server(listen_addr.as_ref(), stream_proxy, session_spawner)
-            .await
-            .map_err(|e| e.into())
+        build_rtp_proxy_server(
+            listen_addr.as_ref(),
+            stream_proxy,
+            obfuscation_key,
+            session_spawner,
+        )
+        .await
+        .map_err(|e| e.into())
     }
 
     fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
@@ -282,12 +301,39 @@ pub enum RtpProxyServerBuildError {
 pub async fn build_rtp_proxy_server(
     listen_addr: impl ToSocketAddrs,
     stream_proxy: StreamProxyConnHandler,
+    obfuscation_key: Option<[u8; 32]>,
     session_spawner: SessionSpawner,
 ) -> Result<RtpServer<StreamProxyConnHandler>, ListenerBindError> {
     let fec = false;
     let listener = rtp::udp::Listener::bind(listen_addr)
         .await
         .map_err(ListenerBindError)?;
-    let server = RtpServer::new(listener, stream_proxy, fec, session_spawner);
+    let server = RtpServer::new(
+        listener,
+        stream_proxy,
+        fec,
+        obfuscation_key,
+        session_spawner,
+    );
     Ok(server)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_config_accepts_an_optional_obfuscation_key() {
+        let key = [7; 32];
+        let config = serde_json::from_str::<RtpProxyServerConfig>(&format!(
+            r#"{{ "listen_addr": "127.0.0.1:7000", "header_key": "aGVsbG8", "obfuscation_key": {key:?} }}"#
+        ))
+        .unwrap();
+        assert_eq!(config.obfuscation_key, Some(key));
+        let plain = serde_json::from_str::<RtpProxyServerConfig>(
+            r#"{ "listen_addr": "127.0.0.1:7000", "header_key": "aGVsbG8" }"#,
+        )
+        .unwrap();
+        assert_eq!(plain.obfuscation_key, None);
+    }
 }

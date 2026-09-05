@@ -51,6 +51,12 @@ pub struct ReverseTunnelInitiatorConfig {
     pub payload_key: Option<tokio_chacha20::config::ConfigBuilder>,
     #[serde(default)]
     pub allow_loopback: bool,
+    /// Optional datagram obfuscation key for the rtpmux transport: when set,
+    /// every RTP datagram is prefixed with a 24-byte random nonce and
+    /// chacha20-encrypted with this key. The responder must use the same
+    /// key; `None` (the default) sends datagrams in the clear.
+    #[serde(default)]
+    pub obfuscation_key: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -58,6 +64,12 @@ pub struct ReverseTunnelInitiatorConfig {
 pub struct ReverseTunnelResponderConfig {
     pub listen_addr: RouteAddrStr,
     pub header_key: tokio_chacha20::config::ConfigBuilder,
+    /// Optional datagram obfuscation key for the rtpmux transport: when set,
+    /// every RTP datagram is prefixed with a 24-byte random nonce and
+    /// chacha20-encrypted with this key. The initiator must use the same
+    /// key; `None` (the default) sends datagrams in the clear.
+    #[serde(default)]
+    pub obfuscation_key: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Error)]
@@ -172,6 +184,7 @@ pub async fn prepare(
                 key,
                 listen_addr,
                 header_key: config.header_key,
+                obfuscation_key: config.obfuscation_key,
                 runtime: runtime.clone(),
             }),
         }

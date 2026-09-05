@@ -2030,7 +2030,7 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.85#81ffc5a08ea37484ab3dedf6e511647208729900"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.86#1a519791df9587ad9a847e96f1cc422e26fbf041"
 dependencies = [
  "async-trait",
  "async_async_io",
@@ -2047,6 +2047,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
+ "tokio_chacha20",
  "tokio_udp",
  "udp_listener 0.1.0 (git+https://github.com/Banyc/udp_listener.git?tag=v0.0.17)",
 ]
@@ -2054,7 +2055,7 @@ dependencies = [
 [[package]]
 name = "rtp_mux"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp_mux.git?tag=v0.0.10#454dc199c848ca06a567d28c186f6603c82913c4"
+source = "git+https://github.com/Banyc/rtp_mux.git?tag=v0.0.11#7ec6aad201c1cc20a25efe2e9c1978f6317f6edc"
 dependencies = [
  "futures",
  "metrics",

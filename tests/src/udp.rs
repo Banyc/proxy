@@ -613,9 +613,10 @@ mod tests {
                 addr
             }
             "rtpmux" => {
-                let server = build_rtp_mux_proxy_server("127.0.0.1:0", handler, session_spawner)
-                    .await
-                    .unwrap();
+                let server =
+                    build_rtp_mux_proxy_server("127.0.0.1:0", handler, None, session_spawner)
+                        .await
+                        .unwrap();
                 let addr = server.listener().local_addr();
                 scope.spawn_required(async move {
                     let _set_conn_handler_tx = set_conn_handler_tx;
