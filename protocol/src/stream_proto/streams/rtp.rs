@@ -35,7 +35,6 @@ pub struct RtpServer<ConnHandler> {
     listener: rtp::udp::Listener,
     conn_handler: ConnHandler,
     fec: bool,
-    obfuscation_key: Option<[u8; 32]>,
     session_spawner: SessionSpawner,
 }
 impl<ConnHandler> RtpServer<ConnHandler> {
@@ -43,14 +42,12 @@ impl<ConnHandler> RtpServer<ConnHandler> {
         listener: rtp::udp::Listener,
         conn_handler: ConnHandler,
         fec: bool,
-        obfuscation_key: Option<[u8; 32]>,
         session_spawner: SessionSpawner,
     ) -> Self {
         Self {
             listener,
             conn_handler,
             fec,
-            obfuscation_key,
             session_spawner,
         }
     }
@@ -88,7 +85,6 @@ where
         let addr = self.listener.local_addr();
         let listener = &self.listener;
         let fec = self.fec;
-        let obfuscation_key = self.obfuscation_key;
         let session_spawner = self.session_spawner.clone();
         let mut state = ();
         common::lifecycle::serve_loop::serve_loop(
@@ -99,7 +95,6 @@ where
             || {
                 listener.accept_without_handshake_with(rtp::udp::AcceptConfig {
                     fec,
-                    obfuscation_key,
                     ..rtp::udp::AcceptConfig::default()
                 })
             },
@@ -295,19 +290,14 @@ pub async fn build_rtp_proxy_server(
     session_spawner: SessionSpawner,
 ) -> Result<RtpServer<StreamProxyConnHandler>, ListenerBindError> {
     let fec = false;
-    let listener = rtp::udp::Listener::bind(listen_addr)
-        .await
-        .map_err(ListenerBindError)?;
     // The rtp transport to this hop is always obfuscated with the derived
     // header key, so the peer connector (which holds the same header key)
-    // matches.
+    // matches. The key is fixed at bind: the listener decrypts each datagram
+    // once at the dispatch and routes decrypted bytes to connections.
     let obfuscation_key = Some(*stream_proxy.header_crypto().key());
-    let server = RtpServer::new(
-        listener,
-        stream_proxy,
-        fec,
-        obfuscation_key,
-        session_spawner,
-    );
+    let listener = rtp::udp::Listener::bind_with_key(listen_addr, obfuscation_key)
+        .await
+        .map_err(ListenerBindError)?;
+    let server = RtpServer::new(listener, stream_proxy, fec, session_spawner);
     Ok(server)
 }
