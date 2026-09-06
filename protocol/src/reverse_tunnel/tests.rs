@@ -281,9 +281,11 @@ fn initiator_handler(
 }
 
 async fn bind_rtp_responder(key: [u8; 32]) -> rtp_mux::RtpMuxServer {
-    rtp_mux::RtpMuxServer::bind_with_obfuscation_key(
+    rtp_mux::RtpMuxServer::bind(
         "127.0.0.1:0",
-        Some(rtp_mux::ObfuscationKey::from_bytes(key)),
+        rtp_mux::RtpMuxServerConfig {
+            obfuscation_key: Some(rtp_mux::ObfuscationKey::from_bytes(key)),
+        },
     )
     .await
     .unwrap()

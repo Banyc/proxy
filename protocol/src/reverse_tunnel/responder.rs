@@ -421,9 +421,11 @@ impl loading::Build for RtpReverseTunnelResponderBuilder {
             .header_key
             .build()
             .map_err(|error| BuildError::HeaderCrypto(error.source.to_string()))?;
-        let server = rtp_mux::RtpMuxServer::bind_with_obfuscation_key(
+        let server = rtp_mux::RtpMuxServer::bind(
             self.listen_addr.address.to_string(),
-            Some(rtp_mux::ObfuscationKey::from_bytes(*obfuscation_key.key())),
+            rtp_mux::RtpMuxServerConfig {
+                obfuscation_key: Some(rtp_mux::ObfuscationKey::from_bytes(*obfuscation_key.key())),
+            },
         )
         .await?;
         let session_spawner = self.runtime.session_spawner.clone();
