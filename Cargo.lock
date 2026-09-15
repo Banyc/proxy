@@ -708,7 +708,7 @@ dependencies = [
 [[package]]
 name = "fec"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/fec.git?tag=v0.0.3#f82ac96590536ec4a8cbf34d365a9d9ba393a0af"
+source = "git+https://github.com/Banyc/fec.git?tag=v0.0.4#e2c1cc81dbfca2449738492ca2e52083fe14815a"
 dependencies = [
  "bon",
  "reed-solomon-erasure",
@@ -2021,7 +2021,6 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.89#900b0a3f82ea7b5e853777ed84174db559b0896a"
 dependencies = [
  "async-trait",
  "async_async_io",
@@ -2046,7 +2045,6 @@ dependencies = [
 [[package]]
 name = "rtp_mux"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp_mux.git?tag=v0.0.14#e7044caf49979deb0834dc1f68d7f2acd7d56308"
 dependencies = [
  "futures",
  "metrics",
