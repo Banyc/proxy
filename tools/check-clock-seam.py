@@ -58,13 +58,6 @@ ALLOWLIST: list[tuple[str, str, int, str]] = [
         "(a) the SystemClock implementation of the Clock seam itself",
     ),
     (
-        "common/src/lifecycle/suspend.rs",
-        "Instant::now()",
-        2,
-        "(b) suspend-gap baseline (unmigrated: needs a Clock through "
-        "spawn_suspend_watcher)",
-    ),
-    (
         "common/src/proxy_runtime/client/stream.rs",
         "Instant::now()",
         2,

@@ -1,6 +1,11 @@
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::Arc;
+use std::time::Duration;
 
-use crate::{lifecycle::process::RootTaskExit, notify::Notify};
+use crate::{
+    clock::{Clock, SystemClock},
+    lifecycle::process::RootTaskExit,
+    notify::Notify,
+};
 
 const SUSPEND_CHECK_INTERVAL: Duration = Duration::from_millis(200);
 /// The tolerance factor applied to the suspend check interval before a gap is
@@ -23,16 +28,26 @@ pub struct SystemResumeSignal(pub Notify);
 pub fn spawn_suspend_watcher(
     process_tasks: &mut tokio::task::JoinSet<RootTaskExit>,
 ) -> SystemResumeSignal {
+    spawn_suspend_watcher_with_clock(process_tasks, Arc::new(SystemClock))
+}
+
+/// Construct with an explicit clock. Production uses [`spawn_suspend_watcher`]
+/// (the system clock); a test can inject a controlled clock and advance it past
+/// the tolerance so a suspend gap is signalled without a real suspend.
+pub fn spawn_suspend_watcher_with_clock(
+    process_tasks: &mut tokio::task::JoinSet<RootTaskExit>,
+    clock: Arc<dyn Clock>,
+) -> SystemResumeSignal {
     let system_suspend = SystemResumeSignal(Notify::new());
     process_tasks.spawn({
         let system_suspend = system_suspend.clone();
         async move {
-            let mut prev = (Instant::now(), SystemTime::now());
+            let mut prev = clock.now();
             loop {
                 tokio::time::sleep(SUSPEND_CHECK_INTERVAL).await;
-                let now = (Instant::now(), SystemTime::now());
+                let now = clock.now();
                 let prev = scopeguard::guard(&mut prev, |prev| *prev = now);
-                let elapsed = now.0.duration_since(prev.0);
+                let elapsed = now.duration_since(**prev);
                 if is_system_suspend(elapsed) {
                     system_suspend.0.notify_waiters();
                 }
@@ -86,5 +101,31 @@ mod tests {
         let system_suspend = spawn_suspend_watcher(&mut process_tasks);
         let mut system_suspend = system_suspend.0.subscription();
         system_suspend.notified().await;
+    }
+
+    /// A gap longer than the tolerance between two checks must signal a
+    /// system suspend, and the `VirtualClock` follows tokio's virtual time,
+    /// so the gap is produced without a real suspend (and without waiting
+    /// the wall-clock interval). The gap is delivered between the watcher's
+    /// baseline and its next check.
+    #[tokio::test(start_paused = true)]
+    async fn a_gap_past_the_tolerance_notifies_the_resume_signal() {
+        use crate::clock::test_support::VirtualClock;
+
+        let clock = Arc::new(VirtualClock::new());
+        let mut process_tasks = tokio::task::JoinSet::new();
+        let system_suspend = spawn_suspend_watcher_with_clock(
+            &mut process_tasks,
+            Arc::clone(&clock) as Arc<dyn Clock>,
+        );
+        let mut subscription = system_suspend.0.subscription();
+        // Let the watcher take its baseline at virtual `t0` before the gap.
+        tokio::task::yield_now().await;
+        // One check interval plus more than the tolerance of virtual time:
+        // the next check observes an elapsed gap that is a suspend.
+        tokio::time::advance(SUSPEND_CHECK_INTERVAL + suspend_toleration()).await;
+        tokio::time::timeout(Duration::from_secs(1), subscription.notified())
+            .await
+            .expect("a gap past the suspend tolerance must notify the resume signal");
     }
 }
