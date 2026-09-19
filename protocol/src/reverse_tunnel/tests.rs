@@ -360,12 +360,12 @@ async fn verify_reverse_proxy_hop_with_payload(transport: ReverseTunnelTransport
         ConfigBuilder(header_key.into()),
         Some(ConfigBuilder(payload_key.into())),
     );
-    let initiator = ReverseTunnelInitiator {
-        handler: ReverseTunnelInitiatorBuilder::new(config, runtime.clone())
+    let initiator = ReverseTunnelInitiator::new(
+        ReverseTunnelInitiatorBuilder::new(config, runtime.clone())
             .unwrap()
             .handler()
             .unwrap(),
-    };
+    );
     scope.spawn_required("initiator", async move {
         let (_tx, rx) = loading::replace_conn_handler_channel();
         initiator.serve(rx).await.unwrap();
@@ -464,12 +464,12 @@ async fn verify_reverse_udp_proxy_hop(
         ConfigBuilder(header_key.into()),
         Some(ConfigBuilder(payload_key.into())),
     );
-    let initiator = ReverseTunnelInitiator {
-        handler: ReverseTunnelInitiatorBuilder::new(config, runtime.clone())
+    let initiator = ReverseTunnelInitiator::new(
+        ReverseTunnelInitiatorBuilder::new(config, runtime.clone())
             .unwrap()
             .handler()
             .unwrap(),
-    };
+    );
     scope.spawn_required("initiator", async move {
         let (_tx, rx) = loading::replace_conn_handler_channel();
         initiator.serve(rx).await.unwrap();
@@ -587,15 +587,13 @@ async fn rtp_reverse_tunnel_probe_closes_the_flow_promptly() {
         server.serve(rx).await.unwrap();
     });
     let responder_addr: RouteAddr = format!("rtpmux://{addr}").parse().unwrap();
-    let initiator = ReverseTunnelInitiator {
-        handler: initiator_handler(
-            "private-udp",
-            responder_addr,
-            ReverseTunnelTransport::Rtp,
-            crypto.clone(),
-            runtime.clone(),
-        ),
-    };
+    let initiator = ReverseTunnelInitiator::new(initiator_handler(
+        "private-udp",
+        responder_addr,
+        ReverseTunnelTransport::Rtp,
+        crypto.clone(),
+        runtime.clone(),
+    ));
     scope.spawn_required("initiator", async move {
         let (_tx, rx) = loading::replace_conn_handler_channel();
         initiator.serve(rx).await.unwrap();
@@ -684,15 +682,13 @@ async fn verify_reverse_proxy_hop(transport: ReverseTunnelTransport) {
             format!("rtpmux://{addr}").parse().unwrap()
         }
     };
-    let initiator = ReverseTunnelInitiator {
-        handler: initiator_handler(
-            "private-a",
-            responder_addr,
-            transport,
-            crypto.clone(),
-            runtime.clone(),
-        ),
-    };
+    let initiator = ReverseTunnelInitiator::new(initiator_handler(
+        "private-a",
+        responder_addr,
+        transport,
+        crypto.clone(),
+        runtime.clone(),
+    ));
     scope.spawn_required("initiator", async move {
         let (_tx, rx) = loading::replace_conn_handler_channel();
         initiator.serve(rx).await.unwrap();
@@ -739,4 +735,106 @@ async fn tcp_reverse_tunnel_is_a_named_proxy_hop() {
 #[tokio::test(flavor = "multi_thread")]
 async fn rtp_reverse_tunnel_is_a_named_proxy_hop() {
     verify_reverse_proxy_hop(ReverseTunnelTransport::Rtp).await;
+}
+
+/// A clock that follows tokio's (paused) virtual time, so a task driven under
+/// `start_paused` observes the same advance that `tokio::time::sleep`
+/// produces. Lets the reconnect loop's session-stability boundary be placed
+/// at an exact virtual instant instead of a real 30-second wait.
+#[derive(Debug)]
+struct VirtualClock {
+    base: std::time::Instant,
+    epoch: tokio::time::Instant,
+}
+impl VirtualClock {
+    fn new() -> Self {
+        Self {
+            base: std::time::Instant::now(),
+            epoch: tokio::time::Instant::now(),
+        }
+    }
+}
+impl common::clock::Clock for VirtualClock {
+    fn now(&self) -> std::time::Instant {
+        self.base + self.epoch.elapsed()
+    }
+}
+
+/// The reconnect loop folds each session's measured stability into the backoff
+/// at its `on_session_ended` call site, using the injected clock. Two short
+/// sessions grow the backoff (250ms, then 500ms); a stable third session must
+/// reset it, so the wait before the fourth session is the initial 250ms again.
+/// Removing the call (or mis-guarding its `>=` stability check) leaves the
+/// grown backoff in place, and the fourth session's start instant moves.
+#[tokio::test(start_paused = true)]
+async fn a_stable_session_resets_the_reconnect_backoff_at_the_serve_call_site() {
+    use std::sync::Mutex;
+
+    use super::initiator::{INITIAL_RECONNECT_DELAY, STABLE_SESSION, serve_initiator_session_loop};
+    use common::clock::Clock;
+
+    let mut scope = TestScope::new();
+    let (runtime, _spawner) = test_runtime(&mut scope).await;
+    let handler = initiator_handler(
+        "private-a",
+        "tcp://127.0.0.1:7000".parse().unwrap(),
+        ReverseTunnelTransport::Tcp,
+        tokio_chacha20::config::Config::new([7; 32].into()),
+        runtime,
+    );
+    let clock = Arc::new(VirtualClock::new());
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    let (tx, rx) = loading::replace_conn_handler_channel();
+    let mut tx = Some(tx);
+    let mut calls = 0usize;
+    serve_initiator_session_loop(
+        handler,
+        Arc::clone(&clock) as Arc<dyn common::clock::Clock>,
+        rx,
+        {
+            let clock = Arc::clone(&clock);
+            let starts = Arc::clone(&starts);
+            move |_handler| {
+                let index = calls;
+                calls += 1;
+                starts.lock().unwrap().push(clock.now());
+                if index == 3 {
+                    // End the loop by dropping the replacement channel after the
+                    // fourth session has started.
+                    drop(tx.take());
+                }
+                let stable = index == 2;
+                Box::pin(async move {
+                    if stable {
+                        tokio::time::sleep(STABLE_SESSION).await;
+                    }
+                    Err(super::wire::ReverseTunnelSessionError::Closed)
+                })
+            }
+        },
+    )
+    .await
+    .unwrap();
+
+    let starts = starts.lock().unwrap().clone();
+    assert_eq!(
+        starts.len(),
+        4,
+        "the loop must run the four scripted sessions"
+    );
+    assert_eq!(
+        starts[1] - starts[0],
+        INITIAL_RECONNECT_DELAY,
+        "the first post-session wait is the initial backoff"
+    );
+    assert_eq!(
+        starts[2] - starts[1],
+        INITIAL_RECONNECT_DELAY * 2,
+        "a second short session doubles the backoff"
+    );
+    assert_eq!(
+        starts[3] - starts[2],
+        STABLE_SESSION + INITIAL_RECONNECT_DELAY,
+        "a stable session must reset the backoff at the serve call site"
+    );
 }

@@ -2,15 +2,11 @@
 //! registers its name, and dispatches accepted streams/UDP flows to the
 //! stream/UDP proxy handlers.
 
-use std::{
-    io,
-    net::SocketAddr,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{future::Future, io, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
 use ae::anti_replay::ValidatorRef;
 use common::{
+    clock::{Clock, SystemClock},
     error::AnyResult,
     header::codec::{timed_read_header_async, timed_write_header_async},
     loading,
@@ -38,9 +34,9 @@ use super::{
     },
 };
 
-const INITIAL_RECONNECT_DELAY: Duration = Duration::from_millis(250);
+pub(crate) const INITIAL_RECONNECT_DELAY: Duration = Duration::from_millis(250);
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
-const STABLE_SESSION: Duration = Duration::from_secs(30);
+pub(crate) const STABLE_SESSION: Duration = Duration::from_secs(30);
 
 /// The reconnect-delay policy for the initiator's serve loop. A session
 /// that stayed up for at least [`STABLE_SESSION`] proves the responder is
@@ -94,48 +90,89 @@ impl loading::HandleConn for ReverseTunnelInitiatorHandler {}
 #[derive(Debug)]
 pub struct ReverseTunnelInitiator {
     pub(crate) handler: ReverseTunnelInitiatorHandler,
+    clock: Arc<dyn Clock>,
 }
+impl ReverseTunnelInitiator {
+    pub(crate) fn new(handler: ReverseTunnelInitiatorHandler) -> Self {
+        Self::with_clock(handler, Arc::new(SystemClock))
+    }
+
+    /// Construct with an explicit clock. Production uses [`Self::new`] (the
+    /// system clock); tests install a controlled clock so a session's
+    /// measured stability can be driven without waiting 30 real seconds.
+    pub(crate) fn with_clock(
+        handler: ReverseTunnelInitiatorHandler,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        Self { handler, clock }
+    }
+}
+
+/// The session future the reconnect loop races against a handler
+/// replacement, boxed so the loop can be driven by a test session.
+type SessionFuture =
+    Pin<Box<dyn Future<Output = Result<(), ReverseTunnelSessionError>> + Send + 'static>>;
+
 impl loading::Serve for ReverseTunnelInitiator {
     type ConnHandler = ReverseTunnelInitiatorHandler;
     async fn serve(
         self,
-        mut replacement_rx: loading::ReplaceConnHandlerRx<Self::ConnHandler>,
+        replacement_rx: loading::ReplaceConnHandlerRx<Self::ConnHandler>,
     ) -> AnyResult {
-        let mut handler = Arc::new(self.handler);
-        let mut backoff = ReconnectBackoff::new();
-        loop {
-            let started = Instant::now();
-            tokio::select! {
-                result = run_initiator_session(Arc::clone(&handler)) => {
-                    warn!(?result, name = %handler.name, responder = %handler.responder_addr, "Reverse tunnel session ended");
-                    counter!("revtun.session.disconnected").increment(1);
-                    backoff.on_session_ended(started.elapsed());
-                }
-                replacement = replacement_rx.recv() => {
-                    match replacement {
-                        Ok(Some(new_handler)) => {
-                            handler = new_handler;
-                            backoff.reset();
-                            continue;
-                        }
-                        Ok(None) => continue,
-                        Err(()) => return Ok(()),
+        serve_initiator_session_loop(self.handler, self.clock, replacement_rx, |handler| {
+            Box::pin(run_initiator_session(handler))
+        })
+        .await
+    }
+}
+
+/// The reconnect loop: run a session, fold its measured stability into the
+/// backoff, then wait out the backoff while still accepting a replacement
+/// handler. Extracted from [`loading::Serve::serve`] so a test can supply the
+/// session future and drive the `on_session_ended` call site directly.
+pub(crate) async fn serve_initiator_session_loop<F>(
+    handler: ReverseTunnelInitiatorHandler,
+    clock: Arc<dyn Clock>,
+    mut replacement_rx: loading::ReplaceConnHandlerRx<ReverseTunnelInitiatorHandler>,
+    mut run_session: F,
+) -> AnyResult
+where
+    F: FnMut(Arc<ReverseTunnelInitiatorHandler>) -> SessionFuture,
+{
+    let mut handler = Arc::new(handler);
+    let mut backoff = ReconnectBackoff::new();
+    loop {
+        let started = clock.now();
+        tokio::select! {
+            result = run_session(Arc::clone(&handler)) => {
+                warn!(?result, name = %handler.name, responder = %handler.responder_addr, "Reverse tunnel session ended");
+                counter!("revtun.session.disconnected").increment(1);
+                backoff.on_session_ended(clock.now().saturating_duration_since(started));
+            }
+            replacement = replacement_rx.recv() => {
+                match replacement {
+                    Ok(Some(new_handler)) => {
+                        handler = new_handler;
+                        backoff.reset();
+                        continue;
                     }
+                    Ok(None) => continue,
+                    Err(()) => return Ok(()),
                 }
             }
-            tokio::select! {
-                () = tokio::time::sleep(backoff.delay()) => {
-                    backoff.advance();
-                }
-                replacement = replacement_rx.recv() => {
-                    match replacement {
-                        Ok(Some(new_handler)) => {
-                            handler = new_handler;
-                            backoff.reset();
-                        }
-                        Ok(None) => {}
-                        Err(()) => return Ok(()),
+        }
+        tokio::select! {
+            () = tokio::time::sleep(backoff.delay()) => {
+                backoff.advance();
+            }
+            replacement = replacement_rx.recv() => {
+                match replacement {
+                    Ok(Some(new_handler)) => {
+                        handler = new_handler;
+                        backoff.reset();
                     }
+                    Ok(None) => {}
+                    Err(()) => return Ok(()),
                 }
             }
         }
@@ -418,9 +455,7 @@ impl loading::Build for ReverseTunnelInitiatorBuilder {
     type Server = ReverseTunnelInitiator;
     type Err = BuildError;
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
-        Ok(ReverseTunnelInitiator {
-            handler: self.handler()?,
-        })
+        Ok(ReverseTunnelInitiator::new(self.handler()?))
     }
     fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
         self.handler()

@@ -35,6 +35,7 @@ tokio-util = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
 
 [lints.clippy]
 disallowed_methods = "deny"
