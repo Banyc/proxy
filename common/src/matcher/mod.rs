@@ -466,4 +466,50 @@ mod tests {
         assert!(matches(&m2, "10.0.0.1:80"));
         assert!(!matches(&m2, "10.0.0.1:443"));
     }
+
+    /// Domain-name rules are a distinct matcher kind from IP ranges: the
+    /// regex must match a `DomainName` address and never an IP. The list
+    /// shapes (`addr: [...]`, `port: [...]`, a top-level list) and the named
+    /// reference each round-trip through JSON, so the build and serialize
+    /// arms for every kind are driven.
+    #[test]
+    fn domain_name_and_list_shapes_match_and_round_trip() {
+        let m = matcher(r#"{"addr": "localhost"}"#);
+        assert!(matches(&m, "localhost:80"), "the domain regex matches");
+        assert!(
+            !matches(&m, "other.example:80"),
+            "the domain regex does not match"
+        );
+        assert!(
+            !matches(&m, "10.0.0.1:80"),
+            "a domain rule never matches an IP"
+        );
+
+        let m = matcher(r#"{"addr": ["10.0.0.1", "10.0.0.2"]}"#);
+        assert!(matches(&m, "10.0.0.1:80"));
+        assert!(matches(&m, "10.0.0.2:80"));
+        assert!(!matches(&m, "10.0.0.3:80"));
+        let json = serde_json::to_string(&m).unwrap();
+        let m2: Matcher = serde_json::from_str(&json).unwrap();
+        assert!(matches(&m2, "10.0.0.1:80"));
+        assert!(!matches(&m2, "10.0.0.3:80"));
+
+        let m = matcher(r#"{"port": [80, 443]}"#);
+        assert!(matches(&m, "8.8.8.8:80"));
+        assert!(matches(&m, "8.8.8.8:443"));
+        assert!(!matches(&m, "8.8.8.8:22"));
+        let json = serde_json::to_string(&m).unwrap();
+        let m2: Matcher = serde_json::from_str(&json).unwrap();
+        assert!(matches(&m2, "8.8.8.8:443"));
+        assert!(!matches(&m2, "8.8.8.8:22"));
+
+        let named = matcher(r#""private""#);
+        assert_eq!(serde_json::to_string(&named).unwrap(), r#""private""#);
+        let list = matcher(r#"[{"addr": "10.0.0.1"}, {"port": 80}]"#);
+        let json = serde_json::to_string(&list).unwrap();
+        let list2: Matcher = serde_json::from_str(&json).unwrap();
+        assert!(matches(&list2, "10.0.0.1:1"));
+        assert!(matches(&list2, "8.8.8.8:80"));
+        assert!(!matches(&list2, "8.8.8.8:1"));
+    }
 }
