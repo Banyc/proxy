@@ -180,3 +180,85 @@ pub enum CopyBiError {
     #[error("error copying from B to A: {0}")]
     FromBToA(std::io::Error),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::ReadBuf;
+
+    struct ReadFails;
+    impl AsyncRead for ReadFails {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::Error::other("read failed")))
+        }
+    }
+    impl AsyncWrite for ReadFails {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    struct ReadPending;
+    impl AsyncRead for ReadPending {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
+    }
+    impl AsyncWrite for ReadPending {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// An error reading the first stream is an A-to-B error; mislabelling it
+    /// hides which direction of the relay failed.
+    #[tokio::test]
+    async fn an_error_reading_a_is_labelled_from_a() {
+        let mut a = ReadFails;
+        let mut b = ReadPending;
+        let (result, _amounts) = copy_bidirectional(&mut a, &mut b).await;
+        assert!(
+            matches!(&result, Err(CopyBiError::FromAToB(_))),
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_error_reading_b_is_labelled_from_b() {
+        let mut a = ReadPending;
+        let mut b = ReadFails;
+        let (result, _amounts) = copy_bidirectional(&mut a, &mut b).await;
+        assert!(
+            matches!(&result, Err(CopyBiError::FromBToA(_))),
+            "{result:?}"
+        );
+    }
+}

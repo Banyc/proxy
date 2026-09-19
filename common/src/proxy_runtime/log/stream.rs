@@ -219,3 +219,58 @@ impl Display for IoCopyFinished {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        str::FromStr,
+        time::{Instant, SystemTime},
+    };
+
+    fn timing() -> Timing {
+        let now = Instant::now();
+        Timing {
+            start: (now, SystemTime::now()),
+            end: now,
+        }
+    }
+
+    fn log(upstream_addr: RouteAddr) -> StreamLog {
+        StreamLog {
+            timing: timing(),
+            bytes_uplink: 1,
+            bytes_downlink: 2,
+            upstream_addr,
+            upstream_sock_addr: "10.0.0.1:9000".parse().unwrap(),
+            downstream_addr: None,
+        }
+    }
+
+    /// A socket upstream already carries the resolved ip; it must render as
+    /// just the address, not `address,ip`.
+    #[test]
+    fn a_socket_upstream_is_rendered_without_a_redundant_resolved_ip() {
+        let rendered = log(RouteAddr::from_str("tcp://10.0.0.1:9000").unwrap()).to_string();
+        assert!(rendered.contains("up{tcp://10.0.0.1:9000}"), "{rendered}");
+        assert!(
+            !rendered.contains(",10.0.0.1}"),
+            "a socket upstream has no separate resolved ip: {rendered}"
+        );
+    }
+
+    /// A named upstream needs its resolved ip appended, or a log reader
+    /// cannot tell which backend the name actually reached.
+    #[test]
+    fn a_named_upstream_is_rendered_with_its_resolved_ip() {
+        let addr = RouteAddr {
+            address: InternetAddr::from_host_and_port("example.com", 9000).unwrap(),
+            protocol: Arc::from("tcp"),
+        };
+        let rendered = log(addr).to_string();
+        assert!(
+            rendered.contains("up{tcp://example.com:9000,10.0.0.1}"),
+            "{rendered}"
+        );
+    }
+}

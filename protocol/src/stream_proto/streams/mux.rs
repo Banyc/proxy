@@ -532,3 +532,38 @@ impl<R, W> HasIoAddr for AddressedMuxStream<R, W> {
         Ok(self.addr.local_addr)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The flow-kind byte is wire format shared with peers of every mux
+    /// transport: `0` is stream, `1` is UDP, and anything else is rejected.
+    /// Round-trip symmetry alone would hide a swap of the two constants.
+    #[test]
+    fn the_flow_kind_wire_bytes_are_stable_and_unknown_bytes_are_rejected() {
+        assert_eq!(STREAM_FLOW_KIND, 0);
+        assert_eq!(UDP_FLOW_KIND, 1);
+        assert_eq!(MuxFlowKind::Stream.byte(), 0);
+        assert_eq!(MuxFlowKind::Udp.byte(), 1);
+        assert_eq!(MuxFlowKind::from_byte(0), Some(MuxFlowKind::Stream));
+        assert_eq!(MuxFlowKind::from_byte(1), Some(MuxFlowKind::Udp));
+        assert_eq!(MuxFlowKind::from_byte(2), None);
+        assert_eq!(MuxFlowKind::from_byte(u8::MAX), None);
+    }
+
+    #[tokio::test]
+    async fn read_flow_kind_round_trips_and_rejects_an_unknown_byte() {
+        let mut encoded = Vec::new();
+        write_flow_kind(&mut encoded, MuxFlowKind::Udp)
+            .await
+            .unwrap();
+        assert_eq!(encoded, vec![1]);
+        let mut reader = encoded.as_slice();
+        assert_eq!(read_flow_kind(&mut reader).await.unwrap(), MuxFlowKind::Udp);
+
+        let mut unknown = [2u8].as_slice();
+        let error = read_flow_kind(&mut unknown).await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+}

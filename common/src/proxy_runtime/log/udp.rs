@@ -76,3 +76,56 @@ impl From<&FlowLog> for FlowLogHdv {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proxy_runtime::{
+        addr::RouteAddr,
+        conn::udp::{DownstreamAddr, UpstreamAddr},
+    };
+    use std::{
+        str::FromStr,
+        time::{Instant, SystemTime},
+    };
+
+    fn timing() -> Timing {
+        let now = Instant::now();
+        Timing {
+            start: (now, SystemTime::now()),
+            end: now,
+        }
+    }
+
+    /// The `up{}` slot must render the uplink counters and `dn{}` the
+    /// downlink counters; swapping them silently mislabels every flow record.
+    #[test]
+    fn display_reports_upstream_and_downstream_traffic_in_their_own_slots() {
+        let log = FlowLog {
+            flow: Flow {
+                upstream: Some(UpstreamAddr(
+                    RouteAddr::from_str("tcp://10.0.0.1:9000").unwrap(),
+                )),
+                downstream: DownstreamAddr("127.0.0.1:5000".parse().unwrap()),
+            },
+            timing: timing(),
+            up: TrafficLog {
+                bytes: 11,
+                packets: 1,
+            },
+            dn: TrafficLog {
+                bytes: 22,
+                packets: 2,
+            },
+        };
+        let rendered = log.to_string();
+        assert!(
+            rendered.contains("up{1,"),
+            "the up slot must carry the uplink counters: {rendered}"
+        );
+        assert!(
+            rendered.contains("dn{2,"),
+            "the dn slot must carry the downlink counters: {rendered}"
+        );
+    }
+}

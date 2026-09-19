@@ -527,4 +527,31 @@ mod tests {
         let step = drive_reload(&mut machine, &mut server_tasks, &mut config_changed).await;
         assert!(matches!(step, Err(ServerServeError::ServerTask(_))));
     }
+
+    /// A config change arriving during the debounce window must be handed to
+    /// the machine by `drive_reload`'s select guard, so the window resets.
+    /// If the guard only admits changes while idle, the second change is left
+    /// pending and the debounce simply expires instead.
+    #[tokio::test(start_paused = true)]
+    async fn a_change_while_debouncing_is_consumed_by_the_call_site() {
+        let (signal, mut config_changed) = test_signal();
+        let mut machine = test_machine();
+        let mut server_tasks = tokio::task::JoinSet::new();
+
+        signal.notify_waiters();
+        let step = drive_reload(&mut machine, &mut server_tasks, &mut config_changed)
+            .await
+            .unwrap();
+        assert!(matches!(step, ReloadStep::ConfigChanged));
+        assert!(machine.is_debouncing());
+
+        signal.notify_waiters();
+        let step = drive_reload(&mut machine, &mut server_tasks, &mut config_changed)
+            .await
+            .unwrap();
+        assert!(
+            matches!(step, ReloadStep::ConfigChanged),
+            "a change during the debounce window must reset it, not be left pending"
+        );
+    }
 }

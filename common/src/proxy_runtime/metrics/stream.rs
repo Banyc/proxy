@@ -109,3 +109,35 @@ impl StreamSessionView {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// A finished session's duration is `end - start`, frozen at its end; it
+    /// must not keep growing with wall-clock time.
+    #[test]
+    fn a_finished_session_reports_its_frozen_duration() {
+        let start = UNIX_EPOCH + Duration::from_secs(1000);
+        let end = UNIX_EPOCH + Duration::from_secs(1005);
+        let session = StreamSession {
+            start,
+            end: Some(end),
+            destination: None,
+            upstream_local: None,
+            upstream_remote: "tcp://127.0.0.1:1".parse().unwrap(),
+            downstream_local: Arc::from("down"),
+            downstream_remote: None,
+            up_gauge: None,
+            dn_gauge: None,
+        };
+        let view = StreamSessionView::from_stream_session(&session);
+        assert_eq!(
+            view.duration, 5000,
+            "a finished session's duration must be end - start, not now - start"
+        );
+        assert_eq!(view.start_ms, 1_000_000);
+        assert_eq!(view.end_ms, Some(1_005_000));
+    }
+}

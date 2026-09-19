@@ -152,4 +152,32 @@ Morbi vitae eleifend dui. Vestibulum lobortis commodo pellentesque. Suspendisse 
             res.unwrap();
         }
     }
+
+    /// A copy that ends in an IO timeout must report its end one timeout
+    /// window in the past: the peer stopped making progress a full timeout
+    /// before the error surfaced, and the log timing must reflect that.
+    #[tokio::test(start_paused = true)]
+    async fn a_timed_out_copy_ends_before_its_call() {
+        use std::time::Instant as StdInstant;
+        let started_at = StdInstant::now();
+        // Neither peer ever reads or writes, so both directions block until
+        // the IO timeout fires.
+        let (a, _a_peer) = tokio::io::duplex(64);
+        let (b, _b_peer) = tokio::io::duplex(64);
+        let result = timed_copy_bidirectional(a, b, Limiter::new(f64::INFINITY)).await;
+        assert!(
+            matches!(
+                &result.io_result,
+                Err(CopyBiError::FromAToB(_) | CopyBiError::FromBToA(_))
+            ),
+            "{:?}",
+            result.io_result
+        );
+        assert!(
+            result.end < started_at,
+            "a timed-out copy must end one timeout before now: end={:?}, start={:?}",
+            result.end,
+            started_at
+        );
+    }
 }

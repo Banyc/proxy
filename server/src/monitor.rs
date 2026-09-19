@@ -80,3 +80,27 @@ struct SessionsParams {
     #[serde(alias = "udp_sql")]
     udp_query: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The default stream query targets the stream table's flattened
+    /// `destination.addr.*` columns, and the default udp query the udp
+    /// table's `destination.*` columns; swapping them silently queries the
+    /// wrong table.
+    #[test]
+    fn the_default_queries_target_their_own_session_table() {
+        let params: SessionsParams = toml::from_str("").unwrap();
+        assert!(
+            params.stream_query.contains("destination.addr.host"),
+            "stream default query: {}",
+            params.stream_query
+        );
+        assert!(
+            params.udp_query.contains("destination.host"),
+            "udp default query: {}",
+            params.udp_query
+        );
+    }
+}

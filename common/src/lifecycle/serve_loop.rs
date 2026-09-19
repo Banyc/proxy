@@ -417,4 +417,77 @@ mod tests {
         assert!(future.as_mut().poll(&mut cx).is_pending());
         assert!(!polled.load(Ordering::SeqCst));
     }
+
+    /// Drive `serve_loop` with an accept that fails with a non-fatal error a
+    /// few times before a fatal one, recording the virtual instant of each
+    /// call. `counts_dispatch_errors` selects the call site that handles the
+    /// error; the recorded instants pin which one the loop actually picks.
+    async fn accept_instants(counts_dispatch_errors: bool) -> Vec<tokio::time::Instant> {
+        let instants = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
+        let (_tx, rx) = crate::loading::replace_conn_handler_channel::<()>();
+        let mut state = ();
+        let result = serve_loop(
+            addr,
+            Arc::new(()),
+            rx,
+            |_| {},
+            {
+                let instants = Arc::clone(&instants);
+                move || {
+                    let instants = Arc::clone(&instants);
+                    async move {
+                        let count = {
+                            let mut instants = instants.lock().unwrap();
+                            instants.push(tokio::time::Instant::now());
+                            instants.len()
+                        };
+                        if count < 4 {
+                            Err(io::Error::new(io::ErrorKind::WouldBlock, "test"))
+                        } else {
+                            Err(io::Error::new(io::ErrorKind::InvalidInput, "fatal"))
+                        }
+                    }
+                }
+            },
+            |_, _stream: (), _handler: Arc<()>| Box::pin(async {}),
+            &mut state,
+            |_| Box::pin(std::future::pending()),
+            ServeLoopConfig {
+                label: "test",
+                counter_name: None,
+                counts_dispatch_errors,
+            },
+        )
+        .await;
+        assert!(result.is_err(), "the fatal accept error must end the loop");
+        let instants = instants.lock().unwrap().clone();
+        assert!(instants.len() >= 4);
+        instants
+    }
+
+    /// A listener that counts dispatch errors retries immediately: it must
+    /// not sleep, or it would stall datagram dispatch on a transient error.
+    #[tokio::test(start_paused = true)]
+    async fn a_dispatching_listener_retries_without_backoff() {
+        let instants = accept_instants(true).await;
+        let first = instants[0];
+        for instant in instants.iter() {
+            assert_eq!(
+                *instant, first,
+                "a dispatching listener must not sleep between retries"
+            );
+        }
+    }
+
+    /// An ordinary listener backs off between retries, so a hot accept error
+    /// cannot spin the loop at full speed.
+    #[tokio::test(start_paused = true)]
+    async fn an_ordinary_listener_backs_off_between_retries() {
+        let instants = accept_instants(false).await;
+        assert!(
+            instants[1] > instants[0],
+            "an ordinary listener must sleep before retrying"
+        );
+    }
 }

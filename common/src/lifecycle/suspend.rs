@@ -39,6 +39,17 @@ pub fn spawn_suspend_watcher(
 mod tests {
     use super::*;
 
+    /// The tolerance must exceed the check interval: ordinary scheduler
+    /// jitter between two checks must not be mistaken for a system suspend,
+    /// or every resume subscriber wakes on every tick.
+    #[test]
+    fn the_suspend_tolerance_exceeds_the_check_interval() {
+        assert!(
+            suspend_toleration() > SUSPEND_CHECK_INTERVAL,
+            "a tolerance at or below the check interval false-triggers a suspend"
+        );
+    }
+
     #[tokio::test]
     #[ignore = "requires an actual system suspend to trigger the notification"]
     async fn basics() {

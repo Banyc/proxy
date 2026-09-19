@@ -98,3 +98,36 @@ impl UdpSessionHdv {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// A finished session's duration is `end - start`, frozen at its end; it
+    /// must not keep growing with wall-clock time.
+    #[test]
+    fn a_finished_session_reports_its_frozen_duration() {
+        let start = UNIX_EPOCH + Duration::from_secs(1000);
+        let end = UNIX_EPOCH + Duration::from_secs(1005);
+        let (up, _up_gauge) = tokio_throughput::gauge();
+        let (dn, _dn_gauge) = tokio_throughput::gauge();
+        let session = UdpSession {
+            start,
+            end: Some(end),
+            destination: None,
+            upstream_local: None,
+            upstream_remote: "127.0.0.1:1".parse().unwrap(),
+            downstream_remote: "127.0.0.1:2".parse().unwrap(),
+            up_gauge: Mutex::new(up),
+            dn_gauge: Mutex::new(dn),
+        };
+        let view = UdpSessionHdv::from_udp_session(&session);
+        assert_eq!(
+            view.duration, 5000,
+            "a finished session's duration must be end - start, not now - start"
+        );
+        assert_eq!(view.start_ms, 1_000_000);
+        assert_eq!(view.end_ms, Some(1_005_000));
+    }
+}

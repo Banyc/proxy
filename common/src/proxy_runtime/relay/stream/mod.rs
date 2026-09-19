@@ -230,3 +230,53 @@ fn get_log_from_copy_result(
 
     (log, result.io_result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    /// `a_to_b` on the access-server copy is client-to-server (uplink) and
+    /// `b_to_a` is server-to-client (downlink); swapping them mislabels every
+    /// session record.
+    #[tokio::test]
+    async fn access_server_copy_reports_uplink_and_downlink_separately() {
+        let (downstream, mut downstream_peer) = tokio::io::duplex(64);
+        let (upstream, mut upstream_peer) = tokio::io::duplex(64);
+
+        // 6 bytes client -> server (uplink), 3 bytes server -> client (downlink).
+        downstream_peer.write_all(b"uplink").await.unwrap();
+        downstream_peer.shutdown().await.unwrap();
+        upstream_peer.write_all(b"dnl").await.unwrap();
+        upstream_peer.shutdown().await.unwrap();
+
+        let (_actor, retention) = crate::lifecycle::retention::RetentionActor::new();
+        let copy = CopyBidirectional {
+            downstream,
+            upstream,
+            payload_crypto: None,
+            speed_limiter: async_speed_limit::Limiter::new(f64::INFINITY),
+            conn_context: ConnContext {
+                start: (Instant::now(), SystemTime::now()),
+                upstream_remote: "tcp://127.0.0.1:1".parse().unwrap(),
+                upstream_remote_sock: "127.0.0.1:1".parse().unwrap(),
+                downstream_remote: None,
+                downstream_local: Arc::from("local"),
+                upstream_local: None,
+                session_table: None,
+                destination: None,
+            },
+            retention,
+        };
+        let (finished, result) = copy.serve_as_access_server().await;
+        result.unwrap();
+        assert_eq!(
+            finished.bytes_uplink, 6,
+            "client->server bytes must be reported as uplink"
+        );
+        assert_eq!(
+            finished.bytes_downlink, 3,
+            "server->client bytes must be reported as downlink"
+        );
+    }
+}
