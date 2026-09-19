@@ -1,0 +1,71 @@
+//! Exercise the real on-disk config watcher: a write to a watched file must
+//! signal the production [`ConfigChangeSignal`] the serve loop reloads on.
+//!
+//! The test leaks its runtime on purpose. The underlying `file_watcher_tokio`
+//! crate delivers events through a bounded channel whose callback unwraps the
+//! send; when the watched future is dropped the channel closes and a late
+//! fsevents delivery panics inside a C callback that cannot unwind, aborting
+//! the whole test process. Keeping the watcher task (and therefore the
+//! channel) alive until process exit avoids that teardown abort entirely.
+
+use std::{sync::Arc, time::Duration};
+
+use common::lifecycle::process::RootTaskExit;
+use server::config::spawn_watch_tasks;
+
+fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "proxy-watch-test-{tag}-{}-{nanos}",
+        std::process::id()
+    ))
+}
+
+#[test]
+fn a_real_file_change_signals_the_config_watcher() {
+    let dir = unique_temp_dir("watch");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "initial = 1\n").unwrap();
+    let watched: Arc<str> = Arc::from(path.to_str().unwrap());
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let notified = runtime.block_on(async {
+        let mut process_tasks: tokio::task::JoinSet<RootTaskExit> = tokio::task::JoinSet::new();
+        let signal = spawn_watch_tasks(&mut process_tasks, std::slice::from_ref(&watched));
+        let mut subscription = signal.0.subscription();
+
+        // The OS watcher registers asynchronously, so retry the write until
+        // the signal fires. The signal is the success condition; the timeout
+        // only bounds each attempt.
+        let mut notified = false;
+        for attempt in 0..20 {
+            std::fs::write(&path, format!("change = {attempt}\n")).unwrap();
+            if tokio::time::timeout(Duration::from_millis(500), subscription.notified())
+                .await
+                .is_ok()
+            {
+                notified = true;
+                break;
+            }
+        }
+        // Do not drop `process_tasks`: see the module comment.
+        std::mem::forget(process_tasks);
+        notified
+    });
+    std::mem::forget(runtime);
+
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(
+        notified,
+        "a real change to the watched file must signal the config watcher"
+    );
+}
