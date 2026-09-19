@@ -1,6 +1,7 @@
 use crate::{
     addr::InternetAddr,
     anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
+    clock::{Clock, SystemClock},
     error::AnyError,
     header::{
         codec::{CodecError, read_header, write_header},
@@ -36,29 +37,42 @@ use thiserror::Error;
 use tokio::sync::watch;
 use tracing::{instrument, trace, warn};
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct RouteConfirmation {
     last_response: Mutex<Option<ConfirmationTime>>,
+    clock: Arc<dyn Clock>,
 }
 #[derive(Debug)]
 struct ConfirmationTime {
     monotonic: Instant,
     wall: SystemTime,
 }
+impl Default for RouteConfirmation {
+    fn default() -> Self {
+        Self::with_clock(Arc::new(SystemClock))
+    }
+}
 impl RouteConfirmation {
+    fn with_clock(clock: Arc<dyn Clock>) -> Self {
+        Self {
+            last_response: Mutex::new(None),
+            clock,
+        }
+    }
     fn confirm(&self) {
         *self.last_response.lock().unwrap() = Some(ConfirmationTime {
-            monotonic: Instant::now(),
+            monotonic: self.clock.now(),
             wall: SystemTime::now(),
         });
     }
     fn is_fresh(&self) -> bool {
+        let monotonic = self.clock.now();
         self.last_response
             .lock()
             .unwrap()
             .as_ref()
             .is_some_and(|confirmed| {
-                confirmed.monotonic.elapsed() < UDP_FLOW_TIMEOUT
+                monotonic.duration_since(confirmed.monotonic) < UDP_FLOW_TIMEOUT
                     && confirmed
                         .wall
                         .elapsed()
@@ -948,5 +962,28 @@ mod tests {
             other => panic!("expected a routed request after wall-clock aging, got {other:?}"),
         }
         assert_eq!(payload, b"fourth");
+    }
+
+    /// The monotonic freshness term is measured on the confirmation's
+    /// injected clock: one nanosecond short of the flow timeout is still
+    /// fresh and the exact timeout is stale. Before the clock seam this
+    /// boundary was reachable only by aging the stored instant by hand.
+    #[test]
+    fn route_confirmation_freshness_follows_the_injected_monotonic_clock() {
+        use crate::clock::test_support::ManualClock;
+
+        let clock = Arc::new(ManualClock::new());
+        let confirmation = RouteConfirmation::with_clock(Arc::clone(&clock) as Arc<dyn Clock>);
+        confirmation.confirm();
+        clock.advance(UDP_FLOW_TIMEOUT - Duration::from_nanos(1));
+        assert!(
+            confirmation.is_fresh(),
+            "one nanosecond short of the flow timeout is still fresh"
+        );
+        clock.advance(Duration::from_nanos(1));
+        assert!(
+            !confirmation.is_fresh(),
+            "at exactly the flow timeout the monotonic freshness term is stale"
+        );
     }
 }

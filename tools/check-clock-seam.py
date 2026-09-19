@@ -66,8 +66,8 @@ ALLOWLIST: list[tuple[str, str, int, str]] = [
     (
         "common/src/proxy_runtime/client/udp.rs",
         "Instant::now()",
-        3,
-        "(c) route-confirmation timestamps + RTT-probe measurement",
+        2,
+        "(c) RTT-probe start/end measurement, no threshold",
     ),
     (
         "common/src/proxy_runtime/client/udp.rs",
@@ -78,9 +78,10 @@ ALLOWLIST: list[tuple[str, str, int, str]] = [
     (
         "common/src/proxy_runtime/client/udp.rs",
         ".elapsed()",
-        2,
-        "(b) RouteConfirmation::is_fresh freshness decision (unmigrated: "
-        "needs a Clock on RouteConfirmation)",
+        1,
+        "(c) RouteConfirmation::is_fresh wall-clock term (SystemTime "
+        "semantics the monotonic Clock seam does not model); the monotonic "
+        "term is on the seam",
     ),
     (
         "common/src/proxy_runtime/conn_handler/stream.rs",
