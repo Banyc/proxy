@@ -187,3 +187,46 @@ async fn a_missing_config_file_is_fatal_after_the_monitor_starts() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A config file that exists but cannot be read as TOML fails the initial
+/// serve preparation; `main` must return that error and exit normally. The
+/// normal exit (not a kill) is what lets the coverage runtime flush, and it
+/// exercises the no-monitor serve-context branch.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreadable_config_exits_the_process_normally() {
+    let dir = unique_temp_dir("bad-config");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config_path = dir.join("bad.toml");
+    std::fs::write(&config_path, "this is not = valid toml [[[").unwrap();
+
+    let child = tokio::process::Command::new(proxy_bin())
+        .arg(config_path.to_str().unwrap())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+
+    let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
+        .await
+        .expect("the process must exit on an unreadable config, not hang")
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "an unreadable config must be fatal: {output:?}"
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        text.contains("bad.toml"),
+        "the failure must name the config file it could not read: {text}"
+    );
+    assert!(
+        text.contains("Config"),
+        "the failure must be classified as a config error: {text}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
