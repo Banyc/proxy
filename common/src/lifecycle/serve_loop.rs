@@ -4,7 +4,10 @@ use metrics::counter;
 use thiserror::Error;
 use tracing::{info, trace};
 
-use crate::loading;
+use crate::{
+    clock::{Clock, SystemClock},
+    loading,
+};
 
 const INITIAL_BACKOFF_MS: u64 = 25;
 const MAX_BACKOFF_MS: u64 = 1000;
@@ -22,7 +25,7 @@ fn is_fatal(kind: io::ErrorKind) -> bool {
     )
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AcceptErrorBackoff {
     error_count: u64,
     first_error: Option<String>,
@@ -30,16 +33,38 @@ pub struct AcceptErrorBackoff {
     started_at: Option<std::time::Instant>,
     logged: bool,
     retry_at: Option<std::time::Instant>,
+    clock: Arc<dyn Clock>,
+}
+
+impl Default for AcceptErrorBackoff {
+    fn default() -> Self {
+        Self::with_clock(Arc::new(SystemClock))
+    }
 }
 
 impl AcceptErrorBackoff {
+    /// Construct with an explicit clock. Production uses `default()` (the
+    /// system clock); a test installs a controlled clock so the retry
+    /// boundary (`retry_at` versus now) is deterministic.
+    pub fn with_clock(clock: Arc<dyn Clock>) -> Self {
+        Self {
+            error_count: 0,
+            first_error: None,
+            last_error: None,
+            started_at: None,
+            logged: false,
+            retry_at: None,
+            clock,
+        }
+    }
+
     pub fn failed(
         &mut self,
         listener: &'static str,
         addr: SocketAddr,
         error: io::Error,
     ) -> io::Result<()> {
-        let now = std::time::Instant::now();
+        let now = self.clock.now();
         let fatal = is_fatal(error.kind());
         let error_msg = format!("{error}");
         self.record(error_msg);
@@ -71,7 +96,7 @@ impl AcceptErrorBackoff {
     }
 
     fn record(&mut self, error_msg: String) {
-        let now = std::time::Instant::now();
+        let now = self.clock.now();
         self.error_count += 1;
         if self.started_at.is_none() {
             self.started_at = Some(now);
@@ -90,7 +115,7 @@ impl AcceptErrorBackoff {
             self.logged = true;
             let elapsed = self
                 .started_at
-                .map(|start| std::time::Instant::now().duration_since(start))
+                .map(|start| self.clock.now().duration_since(start))
                 .unwrap_or_default();
             if fatal {
                 tracing::error!(
@@ -119,7 +144,7 @@ impl AcceptErrorBackoff {
 
     pub fn retry_delay(&self) -> Option<Duration> {
         self.retry_at.map(|retry_at| {
-            let now = std::time::Instant::now();
+            let now = self.clock.now();
             if retry_at > now {
                 retry_at.duration_since(now)
             } else {
@@ -137,7 +162,7 @@ impl AcceptErrorBackoff {
         if self.error_count > 0 && !self.logged {
             let elapsed = self
                 .started_at
-                .map(|start| std::time::Instant::now().duration_since(start))
+                .map(|start| self.clock.now().duration_since(start))
                 .unwrap_or_default();
             tracing::warn!(
                 error_count = self.error_count,
@@ -321,6 +346,37 @@ mod tests {
         let now = std::time::Instant::now();
         let delay = backoff.retry_at().unwrap().duration_since(now);
         assert!(delay.as_millis() <= u128::from(MAX_BACKOFF_MS), "{delay:?}");
+    }
+
+    /// The retry countdown is measured against the injected clock: `retry_at`
+    /// is fixed at `failed()` time and `retry_delay()` reports the exact
+    /// remaining time, reaching zero at the deadline. Real time cannot pin
+    /// that boundary; the injected clock can.
+    #[test]
+    fn retry_delay_counts_down_against_the_injected_clock() {
+        let clock = Arc::new(crate::clock::test_support::ManualClock::new());
+        let mut backoff = AcceptErrorBackoff::with_clock(Arc::clone(&clock) as Arc<dyn Clock>);
+        let addr = "127.0.0.1:1234".parse().unwrap();
+        let _ = backoff.failed(
+            "tcp",
+            addr,
+            io::Error::new(io::ErrorKind::WouldBlock, "test"),
+        );
+        assert_eq!(
+            backoff.retry_delay(),
+            Some(Duration::from_millis(INITIAL_BACKOFF_MS))
+        );
+        clock.advance(Duration::from_millis(10));
+        assert_eq!(
+            backoff.retry_delay(),
+            Some(Duration::from_millis(INITIAL_BACKOFF_MS - 10))
+        );
+        clock.advance(Duration::from_millis(INITIAL_BACKOFF_MS));
+        assert_eq!(
+            backoff.retry_delay(),
+            Some(Duration::ZERO),
+            "past the deadline the remaining delay is zero, not negative"
+        );
     }
 
     #[test]

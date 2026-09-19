@@ -8,6 +8,13 @@
 //! sites did before; a test can install a controlled clock so the boundary
 //! (which is otherwise reachable only by waiting real seconds, or never at
 //! all for an exact-equality comparison) becomes deterministic.
+//!
+//! The rule is enforced: `tools/check-clock-seam.py` fails on any direct
+//! `Instant::now()` / `SystemTime::now()` / `.elapsed()` in `common/src`,
+//! `protocol/src`, or `server/src` that is not the clock implementation or a
+//! listed non-decision use. A new decision read must take a [`Clock`], never
+//! call the clock directly — a direct read re-hides the boundary behind wall
+//! time, which is exactly what this seam exists to prevent.
 
 use std::time::Instant;
 

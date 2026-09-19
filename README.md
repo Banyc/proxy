@@ -45,6 +45,25 @@ A `tcpmux://host:port` / `rtpmux://host:port` address therefore works as a hop i
 
 RTP-mux owns a fixed, lane-aware FEC policy: the interactive lane enables FEC by default (with optional interactive tuning), while the bulk lane always remains FEC-free — no proxy-facing switch or protocol alias can override either lane's mode.
 
+## Checking tools
+
+The clock seam (`common/src/clock.rs`) is machine-checked: decision code —
+anything that compares a stored instant/timestamp against "now" or measures a
+duration against a threshold — takes a `Clock` instead of calling
+`Instant::now()` / `SystemTime::now()` directly. Run
+
+```sh
+python3 tools/check-clock-seam.py
+```
+
+from the repo root. It scans `common/src`, `protocol/src`, and `server/src`
+(test modules excluded) and fails on any direct time read not listed in its
+allowlist, naming the file, line, and rule. Legitimate non-decision uses
+(logging/metrics timestamps, session start/end stamps, pure duration
+measurements, tokio timer primitives) are allowlisted with a reason; an
+unmigrated decision site is allowlisted as `unmigrated: needs <X>`. The
+`common/clippy.toml` disallowed-methods list is the other in-repo checker.
+
 ## Protocol
 
 ### TCP variant
