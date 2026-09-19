@@ -294,6 +294,38 @@ where
 mod tests {
     use super::*;
 
+    /// The accept-error policy treats exactly the listed kinds as fatal (stop
+    /// the listener) and every other kind as retryable. The table pins each
+    /// fatal kind individually; dropping one from the `matches!` list fails
+    /// its row.
+    #[test]
+    fn every_fatal_accept_error_kind_is_recognised() {
+        let fatal = [
+            io::ErrorKind::InvalidInput,
+            io::ErrorKind::InvalidData,
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::AddrNotAvailable,
+            io::ErrorKind::NotConnected,
+            io::ErrorKind::Unsupported,
+        ];
+        for kind in fatal {
+            assert!(is_fatal(kind), "{kind:?} must be fatal");
+        }
+
+        let retryable = [
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::ConnectionRefused,
+            io::ErrorKind::ConnectionAborted,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::TimedOut,
+            io::ErrorKind::Interrupted,
+            io::ErrorKind::Other,
+        ];
+        for kind in retryable {
+            assert!(!is_fatal(kind), "{kind:?} must be retryable");
+        }
+    }
+
     #[test]
     fn dispatching_listener_records_error_without_pausing() {
         let mut backoff = AcceptErrorBackoff::default();
