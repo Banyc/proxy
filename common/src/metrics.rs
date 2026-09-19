@@ -62,3 +62,81 @@ impl GaugeView {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every header class must pick its own formatter, every value kind must
+    /// be converted (or fall through unchanged), and an absent value must
+    /// render as the empty string. The table drives one row per arm so a
+    /// dropped or reordered arm fails here.
+    #[test]
+    fn each_header_class_formats_its_own_value_kind() {
+        let dur = |v| display_value("dur", Some(v));
+        let bytes = |v| display_value("bytes", Some(v));
+        let thruput = |v| display_value("thruput", Some(v));
+
+        let cases: Vec<(&str, String)> = vec![
+            // "dur" | "duration": integer, unsigned and float milliseconds.
+            (
+                "duration is the alias",
+                display_value("duration", Some(LiteralValue::UInt(1500))),
+            ),
+            ("int milliseconds", dur(LiteralValue::Int(1500))),
+            (
+                "float milliseconds truncate",
+                dur(LiteralValue::Float(1500.9)),
+            ),
+            (
+                "a non-numeric duration falls through",
+                dur(LiteralValue::Bool(true)),
+            ),
+            // "bytes" | "up.bytes" | "dn.bytes": every alias and value kind.
+            (
+                "up.bytes alias",
+                display_value("up.bytes", Some(LiteralValue::Int(2048))),
+            ),
+            (
+                "dn.bytes alias",
+                display_value("dn.bytes", Some(LiteralValue::Float(2048.0))),
+            ),
+            ("uint bytes", bytes(LiteralValue::UInt(2048))),
+            (
+                "a non-numeric byte count falls through",
+                bytes(LiteralValue::String("n/a".into())),
+            ),
+            // "thruput" | "up.thruput" | "dn.thruput": the byte form plus "/s".
+            (
+                "up.thruput alias",
+                display_value("up.thruput", Some(LiteralValue::Int(2048))),
+            ),
+            (
+                "dn.thruput alias",
+                display_value("dn.thruput", Some(LiteralValue::Float(2048.0))),
+            ),
+            ("uint thruput", thruput(LiteralValue::UInt(2048))),
+            (
+                "a non-numeric thruput falls through",
+                thruput(LiteralValue::Bool(false)),
+            ),
+            // Unknown header: the value's own rendering.
+            (
+                "unknown header",
+                display_value("unknown", Some(LiteralValue::UInt(5))),
+            ),
+        ];
+
+        let expected = [
+            "1.5 s", "1.5 s", "1.5 s", "true", "2.0 KB", "2.0 KB", "2.0 KB", "n/a", "2.0 KB/s",
+            "2.0 KB/s", "2.0 KB/s", "false", "5",
+        ];
+        assert_eq!(cases.len(), expected.len());
+        for ((name, got), want) in cases.iter().zip(expected) {
+            assert_eq!(got, want, "{name}");
+        }
+
+        assert_eq!(display_value("dur", None), "", "an absent value is empty");
+        assert_eq!(display_value("bytes", None), "");
+    }
+}
