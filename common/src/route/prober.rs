@@ -8,7 +8,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracing::{info, trace};
 
-use crate::{OptLog, error::AnyError};
+use crate::{OptLog, clock::Clock, error::AnyError};
 
 use super::degradation::{RecyclePacer, RttDegradation};
 use super::rtt_stats::{RttStats, ewma_loss};
@@ -145,13 +145,14 @@ pub(crate) async fn probe_task(
     chain: Arc<RouteChain>,
     rtt_stats_store: Arc<RwLock<RttStats>>,
     loss_store: Arc<RwLock<Option<f64>>>,
+    clock: Arc<dyn Clock>,
     cancellation: CancellationToken,
 ) {
     let mut consecutive_failures: u32 = 0;
     let mut probes_since_log: u32 = 0;
     let mut degradation = RttDegradation::default();
-    let mut pacer = RecyclePacer::new(std::time::Instant::now());
-    let mut reoptimize_pacer = RecyclePacer::new(std::time::Instant::now());
+    let mut pacer = RecyclePacer::new(clock.now());
+    let mut reoptimize_pacer = RecyclePacer::new(clock.now());
     let kind = tracer.probe_kind();
     // Each probe round's teardown epilog is owned here, in this task's
     // scope: the future is spawned into this JoinSet instead of escaping
@@ -206,7 +207,7 @@ pub(crate) async fn probe_task(
         } else {
             consecutive_failures.saturating_add(1)
         };
-        if reoptimize_pacer.allow(std::time::Instant::now()) {
+        if reoptimize_pacer.allow(clock.now()) {
             let addresses = DisplayChain(&chain);
             trace!(%addresses, kind, "Timer reoptimize: reoptimizing first-hop relay");
             let _ = tokio::time::timeout(RTT_TIMEOUT, tracer.reoptimize(&chain)).await;
@@ -216,7 +217,7 @@ pub(crate) async fn probe_task(
         {
             let mux = tracer.session_stats(&chain).await;
             let addresses = DisplayChain(&chain);
-            if pacer.allow(std::time::Instant::now()) {
+            if pacer.allow(clock.now()) {
                 info!(
                     %addresses,
                     kind,
@@ -321,6 +322,7 @@ mod tests {
             chain,
             rtt_stats,
             loss,
+            Arc::new(crate::clock::SystemClock),
             cancellation.clone(),
         ));
         for _ in 0..100 {
@@ -376,6 +378,7 @@ mod tests {
             chain,
             rtt_stats,
             loss,
+            Arc::new(crate::clock::SystemClock),
             cancellation.clone(),
         ));
         tokio::time::timeout(Duration::from_secs(5), epilog_started.notified())
@@ -389,5 +392,124 @@ mod tests {
         })
         .await
         .expect("probe_task must abort and reap its outstanding epilog before returning");
+    }
+
+    /// A tracer that scripts a two-step RTT regression and crosses the
+    /// pacer interval on the injected clock. The first degradation fires
+    /// while the injected clock is still at its start, so the 600s
+    /// `RecyclePacer` must suppress it; the second fires after the clock
+    /// has been advanced by exactly 600s, so it must be allowed through.
+    /// `reoptimize` is polled every round, so it too is gated by its own
+    /// `RecyclePacer`.
+    struct PacingTracer {
+        clock: std::sync::Arc<crate::clock::test_support::ManualClock>,
+        calls: AtomicUsize,
+        recycles: AtomicUsize,
+        reoptimizes: AtomicUsize,
+        recycle_instants: std::sync::Mutex<Vec<std::time::Instant>>,
+    }
+    impl ProbeRtt for PacingTracer {
+        fn probe_rtt(
+            &self,
+            _chain: &RouteChain,
+        ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            // Call 0 seeds the degradation baseline. Calls 1..=5 hold the
+            // 3x jump long enough to fire the first degrade; calls 6..
+            // hold a second, larger jump that fires again. Crossing the
+            // pacer interval only from call 6 leaves the first degrade
+            // suppressed.
+            let rtt = match call {
+                0 => Duration::from_millis(10),
+                1..=5 => Duration::from_millis(50),
+                _ => Duration::from_millis(200),
+            };
+            if call == 6 {
+                self.clock.advance(Duration::from_secs(600));
+            }
+            Box::pin(async move {
+                ProbeOutcome {
+                    rtt: Ok(rtt),
+                    epilog: None,
+                }
+            })
+        }
+        fn recycle(&self, _chain: &RouteChain) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            self.recycles.fetch_add(1, Ordering::SeqCst);
+            self.recycle_instants.lock().unwrap().push(self.clock.now());
+            Box::pin(async {})
+        }
+        fn reoptimize(&self, _chain: &RouteChain) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            self.reoptimizes.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {})
+        }
+    }
+
+    /// The prober's recycle/reoptimize pacing must read the injected clock:
+    /// the first degradation (before the clock advances) is suppressed by
+    /// the 600s `RecyclePacer`, the second (exactly 600s later) is allowed,
+    /// and `reoptimize` — polled every round — is allowed on the same
+    /// crossing. No real 600s wait: a `ManualClock` is advanced by the
+    /// scripted tracer between probe rounds.
+    #[tokio::test(start_paused = true)]
+    async fn probe_task_paces_recycle_and_reoptimize_on_the_injected_clock() {
+        use crate::clock::test_support::ManualClock;
+        use crate::route::HopConfig;
+
+        let clock = std::sync::Arc::new(ManualClock::new());
+        let tracer = std::sync::Arc::new(PacingTracer {
+            clock: std::sync::Arc::clone(&clock),
+            calls: AtomicUsize::new(0),
+            recycles: AtomicUsize::new(0),
+            reoptimizes: AtomicUsize::new(0),
+            recycle_instants: std::sync::Mutex::new(Vec::new()),
+        });
+        let chain: Arc<RouteChain> = Arc::from(Vec::<HopConfig>::new());
+        let rtt_stats = Arc::new(RwLock::new(RttStats::default()));
+        let loss = Arc::new(RwLock::new(None));
+        let cancellation = CancellationToken::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(probe_task(
+            std::sync::Arc::clone(&tracer) as Arc<dyn ProbeRtt + Send + Sync>,
+            chain,
+            rtt_stats,
+            loss,
+            std::sync::Arc::clone(&clock) as Arc<dyn Clock>,
+            cancellation.clone(),
+        ));
+        // Each round sleeps a Poisson interval of at most 60s, so advancing
+        // virtual time by 61s runs at least one further round; the scripted
+        // regressions complete within the first eleven rounds.
+        for _ in 0..40 {
+            tokio::time::advance(Duration::from_secs(61)).await;
+            tokio::task::yield_now().await;
+        }
+        cancellation.cancel();
+        while let Some(res) = tasks.join_next().await {
+            res.unwrap();
+        }
+        assert_eq!(
+            tracer.recycles.load(Ordering::SeqCst),
+            1,
+            "the first degradation is inside the 600s pacer window and must be \
+             suppressed; only the post-interval one may recycle"
+        );
+        assert_eq!(
+            tracer.reoptimizes.load(Ordering::SeqCst),
+            1,
+            "reoptimize is polled every round but gated by its own 600s pacer; \
+             it must fire exactly once, on the clock crossing"
+        );
+        let instants = tracer.recycle_instants.lock().unwrap();
+        assert_eq!(
+            instants.len(),
+            1,
+            "exactly one recycle must have been recorded"
+        );
+        assert_eq!(
+            instants[0].duration_since(clock.now()),
+            Duration::ZERO,
+            "the recycle must occur at the advanced clock instant, not at wall time"
+        );
     }
 }

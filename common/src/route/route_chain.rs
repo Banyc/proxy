@@ -153,7 +153,15 @@ impl GaugedRouteChain {
             let rtt_stats = rtt_stats.clone();
             let loss = loss.clone();
             probes.push(async move {
-                probe_task(tracer, chain, rtt_stats, loss, probe_cancellation.clone()).await;
+                probe_task(
+                    tracer,
+                    chain,
+                    rtt_stats,
+                    loss,
+                    Arc::new(crate::clock::SystemClock),
+                    probe_cancellation.clone(),
+                )
+                .await;
                 // `probe_task` only returns after its cancellation token
                 // fires, so reaching here means the generation was cancelled.
                 // Any panic inside `probe_task` propagates out of this future

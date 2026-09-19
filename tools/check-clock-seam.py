@@ -165,14 +165,6 @@ ALLOWLIST: list[tuple[str, str, int, str]] = [
         "activity/session timestamps",
     ),
     (
-        "common/src/route/prober.rs",
-        "Instant::now()",
-        4,
-        "(b) RecyclePacer baseline + allow() interval decisions (unmigrated: "
-        "needs a Clock through probe_task; RecyclePacer is already "
-        "instant-parameterised)",
-    ),
-    (
         "protocol/src/reverse_tunnel/responder.rs",
         ".elapsed()",
         2,
