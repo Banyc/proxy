@@ -488,3 +488,75 @@ async fn connect_routes_through_a_configured_proxy_chain() {
         Err(_) => panic!("the configured chain was bypassed: the relay did not terminate"),
     }
 }
+
+/// A WebSocket-style origin: reads the request head, asserts the upgrade
+/// request was forwarded intact, answers `101 Switching Protocols`, then
+/// echoes one `ping`/`pong` exchange over the upgraded connection.
+async fn spawn_ws_echo_origin(tasks: &mut Tasks) -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tasks.spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            let n = stream.read(&mut byte).await.unwrap();
+            if n == 0 {
+                return;
+            }
+            head.push(byte[0]);
+            if head.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+        let head = String::from_utf8(head).unwrap();
+        assert!(head.starts_with("GET "), "origin got {head:?}");
+        assert!(
+            head.to_ascii_lowercase().contains("upgrade: websocket"),
+            "the upgrade header must be forwarded intact: {head:?}"
+        );
+        stream
+            .write_all(
+                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        let mut buf = [0u8; 4];
+        stream.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"ping");
+        stream.write_all(b"pong").await.unwrap();
+    });
+    addr
+}
+
+/// When the origin answers `101 Switching Protocols`, the access server must
+/// hand the upgraded connection to both peers and tunnel bytes byte-exactly,
+/// rather than returning the 101 and closing.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_upgrade_response_is_tunnelled_after_the_101() {
+    let mut tasks = Tasks::new();
+    let server_addr = spawn_http_access(&mut tasks, direct_route_table()).await;
+    let origin = spawn_ws_echo_origin(&mut tasks).await;
+
+    let mut stream = TcpStream::connect(server_addr).await.unwrap();
+    let request = format!(
+        "GET http://{origin}/ws HTTP/1.1\r\nHost: {origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let head = read_http_head(&mut stream).await;
+    assert!(
+        head.starts_with("HTTP/1.1 101"),
+        "the origin's 101 must be relayed: {head:?}"
+    );
+    assert!(
+        head.to_ascii_lowercase().contains("upgrade: websocket"),
+        "the 101 must keep its upgrade header: {head:?}"
+    );
+    stream.write_all(b"ping").await.unwrap();
+    let mut buf = [0u8; 4];
+    tokio::time::timeout(Duration::from_secs(10), stream.read_exact(&mut buf))
+        .await
+        .expect("timed out reading the tunnelled echo")
+        .unwrap();
+    assert_eq!(&buf, b"pong");
+}

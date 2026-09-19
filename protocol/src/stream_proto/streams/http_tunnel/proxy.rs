@@ -389,3 +389,46 @@ mod address_tests {
         assert_eq!(uri.to_string(), "/pub/WWW/TheProject.html");
     }
 }
+
+#[cfg(test)]
+mod log_tests {
+    use super::*;
+    use std::time::{Duration, Instant, SystemTime};
+
+    fn timing_2s() -> Timing {
+        let start = Instant::now();
+        Timing {
+            start: (start, SystemTime::now()),
+            end: start + Duration::from_secs(2),
+        }
+    }
+
+    /// The HTTP proxy log renders the upstream address, then the optional
+    /// downstream and destination, then the request method and URI.
+    #[test]
+    fn the_http_proxy_log_renders_its_optional_and_required_fields() {
+        let base = HttpProxyLog {
+            timing: timing_2s(),
+            upstream_addr: "tcp://10.0.0.1:9000".parse().unwrap(),
+            upstream_sock_addr: "10.0.0.1:9000".parse().unwrap(),
+            downstream_addr: Some("10.0.0.2:7000".parse().unwrap()),
+            destination: Some("10.0.0.3:6000".parse().unwrap()),
+            method: "GET".into(),
+            uri: "/x".into(),
+        };
+        assert_eq!(
+            base.to_string(),
+            "2.0s,up{tcp://10.0.0.1:9000},dn:10.0.0.2:7000,dt:10.0.0.3:6000,method:GET,uri:/x"
+        );
+
+        let minimal = HttpProxyLog {
+            downstream_addr: None,
+            destination: None,
+            ..base
+        };
+        assert_eq!(
+            minimal.to_string(),
+            "2.0s,up{tcp://10.0.0.1:9000},method:GET,uri:/x"
+        );
+    }
+}
