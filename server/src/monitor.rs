@@ -103,4 +103,15 @@ mod tests {
             params.udp_query
         );
     }
+
+    /// The `stream_sql`/`udp_sql` aliases are part of the query contract; if
+    /// an alias is dropped a client using it silently falls back to the
+    /// default query instead of the one it asked for.
+    #[test]
+    fn the_sql_aliases_override_the_default_queries() {
+        let params: SessionsParams =
+            toml::from_str("stream_sql = \"select 1\"\nudp_sql = \"select 2\"").unwrap();
+        assert_eq!(params.stream_query, "select 1");
+        assert_eq!(params.udp_query, "select 2");
+    }
 }
