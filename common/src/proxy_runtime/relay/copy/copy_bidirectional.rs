@@ -261,4 +261,130 @@ mod tests {
             "{result:?}"
         );
     }
+
+    /// Reads always fail with the given kind; writes and shutdown succeed.
+    struct ReadFailsKind(io::ErrorKind);
+    impl AsyncRead for ReadFailsKind {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::Error::new(self.0, "read failed")))
+        }
+    }
+    impl AsyncWrite for ReadFailsKind {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// Reads its bytes once, then EOF; accepts writes. `poll_shutdown` fails
+    /// with `shutdown_kind` so the post-copy shutdown path can be exercised.
+    struct ReadOnceThenEof {
+        data: Vec<u8>,
+        pos: usize,
+        shutdown_kind: Option<io::ErrorKind>,
+    }
+    impl ReadOnceThenEof {
+        fn new(data: &[u8]) -> Self {
+            Self {
+                data: data.to_vec(),
+                pos: 0,
+                shutdown_kind: None,
+            }
+        }
+        fn shutdown_fails(data: &[u8], shutdown_kind: io::ErrorKind) -> Self {
+            Self {
+                data: data.to_vec(),
+                pos: 0,
+                shutdown_kind: Some(shutdown_kind),
+            }
+        }
+    }
+    impl AsyncRead for ReadOnceThenEof {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            let remaining = &self.data[self.pos..];
+            let n = remaining.len().min(buf.remaining());
+            buf.put_slice(&remaining[..n]);
+            self.pos += n;
+            Poll::Ready(Ok(()))
+        }
+    }
+    impl AsyncWrite for ReadOnceThenEof {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            match self.shutdown_kind {
+                Some(kind) => Poll::Ready(Err(io::Error::new(kind, "shutdown failed"))),
+                None => Poll::Ready(Ok(())),
+            }
+        }
+    }
+
+    /// A localhost half-close surfaces as `NotConnected`, `ConnectionReset`,
+    /// or `BrokenPipe` on macOS; the fork treats all three as EOF so the
+    /// other direction can still drain. Dropping any one from the ignore set
+    /// turns a clean relay teardown into a spurious copy error.
+    #[tokio::test]
+    async fn a_peer_went_away_read_error_is_treated_as_eof() {
+        for kind in [
+            io::ErrorKind::NotConnected,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::BrokenPipe,
+        ] {
+            let mut a = ReadFailsKind(kind);
+            let mut b = ReadOnceThenEof::new(b"payload");
+            let (result, amounts) = copy_bidirectional(&mut a, &mut b).await;
+            assert!(
+                result.is_ok(),
+                "a {kind:?} read error must be treated as EOF, got {result:?}"
+            );
+            assert_eq!(amounts.a_to_b, 0, "{kind:?}");
+            assert_eq!(amounts.b_to_a, 7, "the other direction still drained");
+        }
+    }
+
+    /// The same tolerance applies to the post-copy write-half shutdown: a
+    /// peer that already went away makes `poll_shutdown` return one of these
+    /// kinds, which must not surface as a copy error.
+    #[tokio::test]
+    async fn a_peer_went_away_shutdown_error_is_not_a_copy_error() {
+        for kind in [
+            io::ErrorKind::NotConnected,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::BrokenPipe,
+        ] {
+            let mut a = ReadFailsKind(io::ErrorKind::ConnectionReset);
+            let mut b = ReadOnceThenEof::shutdown_fails(b"payload", kind);
+            let (result, amounts) = copy_bidirectional(&mut a, &mut b).await;
+            assert!(
+                result.is_ok(),
+                "a {kind:?} shutdown error must be tolerated, got {result:?}"
+            );
+            assert_eq!(amounts.b_to_a, 7, "{kind:?}");
+        }
+    }
 }

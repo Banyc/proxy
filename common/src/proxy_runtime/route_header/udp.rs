@@ -150,4 +150,25 @@ mod tests {
         let mut cursor = io::Cursor::new(&buf[..]);
         assert!(decode_request_route(&mut cursor, &crypto, &validator).is_err());
     }
+
+    /// The request-kind byte is wire format shared with peers: `0` is a
+    /// routed request, `1` is compact, and the 16-byte flow id follows.
+    /// A round-trip test alone is symmetric under a swap of the two
+    /// constants, so the byte values must be pinned independently.
+    #[test]
+    fn the_request_kind_wire_bytes_are_stable() {
+        let id = UdpFlowId::from_bytes([9; UDP_FLOW_ID_LEN]);
+        let mut routed = Vec::new();
+        id.write_routed(&mut routed);
+        assert_eq!(routed[0], 0, "a routed request must start with kind byte 0");
+        assert_eq!(&routed[1..], &[9; UDP_FLOW_ID_LEN][..]);
+
+        let mut compact = Vec::new();
+        id.write_compact(&mut compact);
+        assert_eq!(
+            compact[0], 1,
+            "a compact request must start with kind byte 1"
+        );
+        assert_eq!(&compact[1..], &[9; UDP_FLOW_ID_LEN][..]);
+    }
 }

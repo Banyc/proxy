@@ -228,6 +228,27 @@ mod tests {
     }
 
     #[test]
+    fn a_chain_exactly_at_the_eligibility_cutoff_still_survives() {
+        // `max_rtt_ratio` is inclusive: a chain whose RTT is exactly
+        // `best * ratio` is within the ratio and must stay eligible. The
+        // cutoff is derived the same way the gate derives it, so the
+        // boundary is exact rather than an f64 approximation.
+        let best = ms(100);
+        let ratio = 1.5;
+        let cutoff = Duration::try_from_secs_f64(best.as_secs_f64() * ratio).unwrap();
+        let chains = vec![
+            measured(0, 1.0, best),
+            measured(1, 1.0, cutoff),
+            measured(2, 1.0, cutoff + Duration::from_nanos(1)),
+        ];
+        assert_eq!(
+            survivors(chains, ratio),
+            vec![0, 1],
+            "a chain exactly at the cutoff is eligible; only one past it is dropped"
+        );
+    }
+
+    #[test]
     fn an_enormous_ratio_admits_everything_instead_of_panicking() {
         let chains = vec![measured(0, 1.0, ms(1)), measured(1, 0.5, ms(5000))];
         assert_eq!(survivors(chains, 1e30), vec![0, 1]);

@@ -288,6 +288,39 @@ mod tests {
     }
 
     #[test]
+    fn a_dual_stack_bind_selects_the_family_matching_the_dial_target() {
+        // The connector picks the bind address for the family it is about to
+        // dial; returning the other family's address silently binds the
+        // wrong socket (or none) for every configured dual-stack bind.
+        let both = DualStackBind {
+            v4: Some("192.0.2.1".parse().unwrap()),
+            v6: Some("2001:db8::1".parse().unwrap()),
+        };
+        assert_eq!(
+            both.get_matched(&"203.0.113.9".parse().unwrap()),
+            Some("192.0.2.1".parse::<IpAddr>().unwrap()),
+            "an IPv4 target must select the IPv4 bind"
+        );
+        assert_eq!(
+            both.get_matched(&"2001:db8::2".parse().unwrap()),
+            Some("2001:db8::1".parse::<IpAddr>().unwrap()),
+            "an IPv6 target must select the IPv6 bind"
+        );
+        // A family with no configured bind yields no bind for that family,
+        // never the other family's address.
+        let v4_only = DualStackBind {
+            v4: Some("192.0.2.1".parse().unwrap()),
+            v6: None,
+        };
+        assert_eq!(v4_only.get_matched(&"2001:db8::2".parse().unwrap()), None);
+        let v6_only = DualStackBind {
+            v4: None,
+            v6: Some("2001:db8::1".parse().unwrap()),
+        };
+        assert_eq!(v6_only.get_matched(&"203.0.113.9".parse().unwrap()), None);
+    }
+
+    #[test]
     fn serde_socket_address() {
         let s = "\"127.0.0.1:1\"";
         let v: InternetAddrStr = serde_json::from_str(s).unwrap();
