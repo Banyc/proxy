@@ -34,8 +34,8 @@ metrics-exporter-prometheus = { version = "0.18", default-features = false }
 # monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.0.18" }
 monitor_table = { path = "../monitor_table" }
 mptcp = { git = "https://github.com/Banyc/mptcp.git", tag = "v0.0.2" }
-mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.28" }
-# mux = { path = "../mux" }
+# mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.28" }
+mux = { path = "../mux" }
 pin-project-lite = "0.2"
 postcard = "1"
 primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.59" }
