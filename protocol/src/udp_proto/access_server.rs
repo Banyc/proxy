@@ -200,3 +200,57 @@ impl UdpServerHandleConn for UdpAccessConnHandler {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ae::anti_replay::TimeValidator;
+    use common::{
+        connect::{ConnectorConfig, connector_config_cell},
+        proxy_runtime::{addr::RouteAddr, connect::udp::UdpConnector},
+        route::RouteSelector,
+        udp_runtime::server::UdpPacketRoute,
+    };
+    use std::time::Duration;
+
+    fn udp_runtime() -> UdpRuntime {
+        UdpRuntime {
+            session_table: None,
+            time_validator: Arc::new(TimeValidator::new(Duration::from_secs(1))),
+            connector: Arc::new(UdpConnector::new(
+                connector_config_cell(ConnectorConfig::default()).0,
+            )),
+            session_spawner: {
+                let (spawner, _rx) = common::session::SessionSpawner::channel();
+                spawner
+            },
+            retention: {
+                let (_actor, sender) = common::lifecycle::retention::RetentionActor::new();
+                sender
+            },
+        }
+    }
+
+    /// A datagram accepted by the access server is routed to the single
+    /// destination the operator configured, under a routed (not
+    /// flow-id) key. Returning `upstream: None` would make every flow
+    /// unroutable; returning a different address would proxy elsewhere.
+    #[test]
+    fn a_routed_access_packet_carries_the_configured_destination_as_its_upstream() {
+        let destination: InternetAddr = "10.0.0.7:9000".parse().unwrap();
+        let handler = UdpAccessConnHandler::new(
+            RouteSelector::Empty,
+            destination.clone(),
+            f64::INFINITY,
+            udp_runtime(),
+        );
+        let route = UdpServerHandleConn::parse_packet_route(&handler, &mut io::Cursor::new(&[]));
+        assert_eq!(
+            route,
+            Some(UdpPacketRoute::Routed {
+                flow_id: None,
+                upstream: Some(UpstreamAddr(RouteAddr::udp(destination))),
+            })
+        );
+    }
+}
