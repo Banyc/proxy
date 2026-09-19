@@ -351,3 +351,332 @@ pub enum TraceError {
     #[error("Upstream responded with an error: {err}")]
     Response { err: RouteError },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME},
+        connect::{ConnectorConfig, connector_config_cell},
+        lifecycle::retention::{RetentionActor, RetentionActorSender},
+        proxy_runtime::{
+            addr::REVERSE_TUNNEL_TCP_PROTOCOL,
+            connect::stream::{NamedStreamConnect, StreamConnect, StreamConnectorTable},
+        },
+        session::SessionSpawner,
+        stream_runtime::pool::StreamConnPool,
+    };
+    use ae::anti_replay::ReplayValidator;
+    use async_trait::async_trait;
+    use std::{
+        collections::HashMap,
+        io,
+        net::SocketAddr,
+        str::FromStr,
+        sync::{Arc, Mutex},
+    };
+    use swap::Swap;
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+    /// A stream whose writes either always fail or fail after the first
+    /// `poll_write`. Each `write_header_async` call issues exactly one
+    /// `poll_write`, so the two modes deterministically fail the preamble or
+    /// the request header respectively.
+    #[derive(Debug)]
+    struct FailingConn {
+        addr: SocketAddr,
+        first_write_only: bool,
+        wrote: Mutex<bool>,
+    }
+    impl AsyncRead for FailingConn {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+    impl AsyncWrite for FailingConn {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            let this = self.get_mut();
+            if this.first_write_only {
+                let mut wrote = this.wrote.lock().unwrap();
+                if !*wrote {
+                    *wrote = true;
+                    return Poll::Ready(Ok(buf.len()));
+                }
+            }
+            Poll::Ready(Err(io::Error::from(io::ErrorKind::BrokenPipe)))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+    impl HasIoAddr for FailingConn {
+        fn peer_addr(&self) -> io::Result<SocketAddr> {
+            Ok(self.addr)
+        }
+        fn local_addr(&self) -> io::Result<SocketAddr> {
+            Ok(self.addr)
+        }
+    }
+    impl OwnedIoStream for FailingConn {}
+    impl IoConnection for FailingConn {}
+
+    #[derive(Debug, Clone, Copy)]
+    enum MockOutcome {
+        Refused,
+        Failing,
+        FirstWriteOnly,
+    }
+
+    #[derive(Debug)]
+    struct MockConnect {
+        outcome: MockOutcome,
+        resets: Mutex<Vec<SocketAddr>>,
+        reoptimized: Mutex<Vec<SocketAddr>>,
+    }
+    impl MockConnect {
+        fn refused() -> Self {
+            Self {
+                outcome: MockOutcome::Refused,
+                resets: Mutex::new(Vec::new()),
+                reoptimized: Mutex::new(Vec::new()),
+            }
+        }
+        fn failing() -> Self {
+            Self {
+                outcome: MockOutcome::Failing,
+                resets: Mutex::new(Vec::new()),
+                reoptimized: Mutex::new(Vec::new()),
+            }
+        }
+        fn first_write_only() -> Self {
+            Self {
+                outcome: MockOutcome::FirstWriteOnly,
+                resets: Mutex::new(Vec::new()),
+                reoptimized: Mutex::new(Vec::new()),
+            }
+        }
+    }
+    #[async_trait]
+    impl StreamConnect for MockConnect {
+        async fn connect(
+            &self,
+            addr: SocketAddr,
+            _obfuscation_key: Option<[u8; 32]>,
+        ) -> io::Result<Box<dyn IoConnection>> {
+            match self.outcome {
+                MockOutcome::Refused => Err(io::Error::from(io::ErrorKind::ConnectionRefused)),
+                MockOutcome::Failing => Ok(Box::new(FailingConn {
+                    addr,
+                    first_write_only: false,
+                    wrote: Mutex::new(false),
+                })),
+                MockOutcome::FirstWriteOnly => Ok(Box::new(FailingConn {
+                    addr,
+                    first_write_only: true,
+                    wrote: Mutex::new(false),
+                })),
+            }
+        }
+        fn reset_addr(&self, addr: SocketAddr) {
+            self.resets.lock().unwrap().push(addr);
+        }
+        fn reoptimize(&self, addr: SocketAddr) {
+            self.reoptimized.lock().unwrap().push(addr);
+        }
+        fn session_stats(&self, addr: SocketAddr) -> Option<String> {
+            Some(format!("stats@{addr}"))
+        }
+        fn reports_session_stats(&self) -> bool {
+            true
+        }
+    }
+
+    /// A named connector that reports statistics without ever dialing.
+    #[derive(Debug)]
+    struct NamedStats;
+    #[async_trait]
+    impl NamedStreamConnect for NamedStats {
+        async fn connect(&self) -> io::Result<Box<dyn IoConnection>> {
+            Err(io::Error::other("not dialed in this test"))
+        }
+        fn session_stats(&self) -> Option<String> {
+            Some("peer=10.0.0.9:1,uptime=1s".to_string())
+        }
+    }
+
+    fn test_runtime(connectors: HashMap<Arc<str>, Arc<dyn StreamConnect>>) -> StreamRuntime {
+        // The runtime's actors are not exercised here (nothing spawns a session
+        // or retains a guard), so the channel endpoints are held only long
+        // enough to construct a valid `StreamRuntime`.
+        let (session_spawner, _session_rx) = SessionSpawner::channel();
+        let (_retention_actor, retention): (RetentionActor, RetentionActorSender) =
+            RetentionActor::new();
+        StreamRuntime {
+            session_table: None,
+            pool: Swap::new(StreamConnPool::empty()),
+            connector_table: Arc::new(StreamConnectorTable::new(
+                connector_config_cell(ConnectorConfig::default()).0,
+                connectors,
+            )),
+            replay_validator: Arc::new(ReplayValidator::new(
+                VALIDATOR_TIME_FRAME,
+                VALIDATOR_CAPACITY,
+            )),
+            session_spawner,
+            retention,
+        }
+    }
+
+    fn tcp_connectors(mock: Arc<MockConnect>) -> HashMap<Arc<str>, Arc<dyn StreamConnect>> {
+        HashMap::from([(Arc::from("tcp"), mock as Arc<dyn StreamConnect>)])
+    }
+
+    fn hop(address: &str) -> HopConfig {
+        HopConfig {
+            name: None,
+            address: RouteAddr::from_str(address).unwrap(),
+            header_crypto: tokio_chacha20::config::Config::new([0x11; 32].into()),
+            payload_crypto: None,
+        }
+    }
+
+    fn destination(addr: &str) -> RouteAddr {
+        RouteAddr {
+            address: crate::addr::InternetAddr::from_str(addr).unwrap(),
+            protocol: Arc::from("tcp"),
+        }
+    }
+
+    /// An empty chain connects straight to the destination; a refused
+    /// destination is reported as `ConnectDestination`, not as a proxy error.
+    #[tokio::test]
+    async fn establish_reports_a_destination_connect_failure() {
+        let mock = Arc::new(MockConnect::refused());
+        let runtime = test_runtime(tcp_connectors(mock));
+        let err = establish(&[], destination("127.0.0.1:9"), &runtime)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StreamEstablishError::ConnectDestination { .. }),
+            "expected ConnectDestination, got {err:?}"
+        );
+    }
+
+    /// With a chain, the first hop's dial failure is reported as
+    /// `ConnectFirstProxyServer`.
+    #[tokio::test]
+    async fn establish_reports_a_first_proxy_connect_failure() {
+        let mock = Arc::new(MockConnect::refused());
+        let runtime = test_runtime(tcp_connectors(mock));
+        let chain = vec![hop("tcp://10.0.0.1:9000")];
+        let err = establish(&chain, destination("127.0.0.1:9"), &runtime)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StreamEstablishError::ConnectFirstProxyServer { .. }),
+            "expected ConnectFirstProxyServer, got {err:?}"
+        );
+    }
+
+    /// A stream that refuses every write fails the chain at the heartbeat
+    /// upgrade, not at the header.
+    #[tokio::test]
+    async fn establish_reports_a_refused_heartbeat_upgrade() {
+        let mock = Arc::new(MockConnect::failing());
+        let runtime = test_runtime(tcp_connectors(mock));
+        let chain = vec![hop("tcp://10.0.0.1:9000")];
+        let err = establish(&chain, destination("127.0.0.1:9"), &runtime)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StreamEstablishError::WriteHeartbeatUpgrade { .. }),
+            "expected WriteHeartbeatUpgrade, got {err:?}"
+        );
+    }
+
+    /// A stream that accepts the (single-write) upgrade but refuses the next
+    /// write fails the chain at the request header.
+    #[tokio::test]
+    async fn establish_reports_a_refused_request_header_write() {
+        let mock = Arc::new(MockConnect::first_write_only());
+        let runtime = test_runtime(tcp_connectors(mock));
+        let chain = vec![hop("tcp://10.0.0.1:9000")];
+        let err = establish(&chain, destination("127.0.0.1:9"), &runtime)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StreamEstablishError::WriteStreamRequestHeader { .. }),
+            "expected WriteStreamRequestHeader, got {err:?}"
+        );
+    }
+
+    /// The stream tracer labels itself, probes an empty chain as zero, and
+    /// applies each first-hop decision to the resolved first-hop address.
+    #[tokio::test]
+    async fn stream_tracer_applies_first_hop_decisions_to_the_resolved_addr() {
+        let mock = Arc::new(MockConnect::refused());
+        let runtime = test_runtime(tcp_connectors(Arc::clone(&mock)));
+        let tracer = StreamTracer::new(runtime);
+        assert_eq!(tracer.probe_kind(), "stream");
+
+        let chain = vec![hop("tcp://10.0.0.1:9000")];
+        tracer.recycle(&chain).await;
+        assert_eq!(
+            mock.resets.lock().unwrap().as_slice(),
+            ["10.0.0.1:9000".parse::<SocketAddr>().unwrap()]
+        );
+        tracer.reoptimize(&chain).await;
+        assert_eq!(
+            mock.reoptimized.lock().unwrap().as_slice(),
+            ["10.0.0.1:9000".parse::<SocketAddr>().unwrap()]
+        );
+        assert_eq!(
+            tracer.session_stats(&chain).await.as_deref(),
+            Some("stats@10.0.0.1:9000")
+        );
+
+        // An empty chain has no first hop: no probe, no stats, no reset.
+        let empty: Vec<HopConfig> = Vec::new();
+        assert_eq!(tracer.session_stats(&empty).await, None);
+        tracer.recycle(&empty).await;
+        tracer.reoptimize(&empty).await;
+        let zero = tracer
+            .probe_rtt(&empty)
+            .await
+            .rtt
+            .expect("an empty chain probes as zero");
+        assert_eq!(zero, Duration::ZERO);
+    }
+
+    /// A reverse-tunnel first hop is addressed by its registered name: the
+    /// tracer reads the named session stats and neither resets nor
+    /// reoptimizes the (non-dialable) virtual hop.
+    #[tokio::test]
+    async fn stream_tracer_reads_a_reverse_tunnel_hops_named_stats() {
+        let runtime = test_runtime(HashMap::new());
+        let _registration = runtime.connector_table.register_named(
+            Arc::from(REVERSE_TUNNEL_TCP_PROTOCOL),
+            Arc::from("private-a"),
+            Arc::new(NamedStats),
+        );
+        let tracer = StreamTracer::new(runtime);
+        let chain = vec![hop("revtuntcp://private-a")];
+        assert_eq!(
+            tracer.session_stats(&chain).await.as_deref(),
+            Some("peer=10.0.0.9:1,uptime=1s")
+        );
+        tracer.recycle(&chain).await;
+        tracer.reoptimize(&chain).await;
+    }
+}
