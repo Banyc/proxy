@@ -3,7 +3,7 @@
 //!
 //! A [`Matcher`] is built from a `MatcherBuilderKind` that may be a single
 //! `addr`/`port` predicate, a named reference to another matcher, or a list
-//! of matchers (all-of). The resulting matcher tests a destination address and
+//! of matchers (any-of). The resulting matcher tests a destination address and
 //! port, supporting IPv4/IPv6 literals, ranges, and domain-name regexes.
 
 use std::{
@@ -442,6 +442,20 @@ mod tests {
         let m = matcher(r#"{"addr": {"start": "::", "end": "ffff::"}}"#);
         assert!(matches(&m, "[::ffff:10.0.0.1]:80"));
         assert!(!matches(&m, "10.0.0.1:80"));
+    }
+
+    #[test]
+    fn a_list_of_matchers_matches_when_any_entry_matches() {
+        // The shape real configs use, e.g. a `localhost` matcher spelled as
+        // `[{addr = "127.0.0.1"}, {addr = "::1"}, {addr = "localhost"}]`:
+        // the list is any-of, so a single matching entry is enough.
+        let m = matcher(r#"[{"addr": "10.0.0.1"}, {"port": 80}]"#);
+        assert!(
+            matches(&m, "10.0.0.1:1234"),
+            "the first entry alone matches"
+        );
+        assert!(matches(&m, "8.8.8.8:80"), "the second entry alone matches");
+        assert!(!matches(&m, "8.8.8.8:1234"));
     }
 
     #[test]

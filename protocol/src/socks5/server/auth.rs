@@ -180,4 +180,115 @@ mod tests {
             );
         }
     }
+
+    #[derive(Debug)]
+    struct TestConn(tokio::io::DuplexStream);
+    impl common::stream_runtime::HasIoAddr for TestConn {
+        fn peer_addr(&self) -> io::Result<std::net::SocketAddr> {
+            Ok("127.0.0.1:1".parse().unwrap())
+        }
+        fn local_addr(&self) -> io::Result<std::net::SocketAddr> {
+            Ok("127.0.0.1:2".parse().unwrap())
+        }
+    }
+    impl common::stream_runtime::OwnedIoStream for TestConn {}
+    impl tokio::io::AsyncRead for TestConn {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
+        }
+    }
+    impl tokio::io::AsyncWrite for TestConn {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<io::Result<usize>> {
+            std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
+        }
+        fn poll_flush(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::pin::Pin::new(&mut self.0).poll_flush(cx)
+        }
+        fn poll_shutdown(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
+        }
+    }
+
+    /// Drive [`Users::negotiate`] over a duplex: send the client's offered
+    /// methods, read the server's selected method, supply credentials when
+    /// username/password was selected, and report `(accepted, method)`.
+    async fn negotiate_method(
+        users: &Users,
+        offered: &[MethodIdentifier],
+        creds: Option<(&[u8], &[u8])>,
+    ) -> (bool, Option<MethodIdentifier>) {
+        let (server, mut client) = tokio::io::duplex(4096);
+        // Run the server and the client exchange concurrently on this task:
+        // the server writes the selected method, then may block waiting for
+        // credentials, which the client supplies below.
+        let server = users.negotiate(TestConn(server));
+        let client_exchange = async {
+            NegotiationRequest {
+                methods: offered.to_vec(),
+            }
+            .encode(&mut client)
+            .await
+            .unwrap();
+            let mut resp = [0u8; 2];
+            client.read_exact(&mut resp).await.unwrap();
+            let method = NegotiationResponse::decode(&mut io::Cursor::new(&resp[..]))
+                .await
+                .unwrap()
+                .method;
+            if method == Some(MethodIdentifier::UsernamePassword) {
+                let (username, password) = creds.expect("selected method needs credentials");
+                UsernamePasswordRequest::new(username, password)
+                    .unwrap()
+                    .encode(&mut client)
+                    .await
+                    .unwrap();
+            }
+            method
+        };
+        let (server_result, method) = tokio::join!(server, client_exchange);
+        (server_result.is_ok(), method)
+    }
+
+    #[tokio::test]
+    async fn a_configured_user_set_requires_username_password_and_refuses_no_auth() {
+        let users = users(&[(b"alice", b"hunter2")]);
+        // Offering username/password selects it (and completes the login).
+        let (accepted, method) = negotiate_method(
+            &users,
+            &[MethodIdentifier::UsernamePassword],
+            Some((b"alice", b"hunter2")),
+        )
+        .await;
+        assert!(accepted);
+        assert_eq!(method, Some(MethodIdentifier::UsernamePassword));
+
+        // Offering only no-auth must be refused even though the client asked
+        // for it: a configured user set must never admit unauthenticated
+        // traffic.
+        let (accepted, method) = negotiate_method(&users, &[MethodIdentifier::NoAuth], None).await;
+        assert!(!accepted, "a configured user set must never accept no-auth");
+        assert_eq!(method, None);
+    }
+
+    #[tokio::test]
+    async fn an_empty_user_set_allows_no_auth() {
+        let users = users(&[]);
+        let (accepted, method) = negotiate_method(&users, &[MethodIdentifier::NoAuth], None).await;
+        assert!(accepted);
+        assert_eq!(method, Some(MethodIdentifier::NoAuth));
+    }
 }

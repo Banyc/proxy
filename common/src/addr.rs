@@ -300,6 +300,17 @@ mod tests {
     }
 
     #[test]
+    fn a_host_containing_a_colon_is_rejected_instead_of_becoming_a_domain_name() {
+        // A domain name cannot contain ':', and letting one through would
+        // smuggle host/port structure into the domain string (e.g. from a
+        // SOCKS5 domain-name field). Such a host must be rejected, not
+        // silently accepted as a domain.
+        assert!(InternetAddr::from_host_and_port("example.website", 80).is_ok());
+        assert!(InternetAddr::from_host_and_port("evil:80", 80).is_err());
+        assert!(InternetAddr::from_host_and_port("http://evil", 80).is_err());
+    }
+
+    #[test]
     fn serde_domain_name() {
         let s = "\"example.website:1\"";
         let v: InternetAddrStr = serde_json::from_str(s).unwrap();

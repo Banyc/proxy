@@ -188,6 +188,29 @@ mod tests {
     }
 
     #[test]
+    fn a_reverse_tunnel_name_at_the_length_limit_is_accepted() {
+        let at_limit = format!("revtuntcp://{}", "a".repeat(MAX_REVERSE_TUNNEL_NAME_LEN));
+        let parsed: RouteAddr = at_limit.parse().unwrap();
+        assert_eq!(
+            parsed.reverse_tunnel().unwrap().1,
+            "a".repeat(MAX_REVERSE_TUNNEL_NAME_LEN)
+        );
+    }
+
+    #[test]
+    fn a_reverse_tunnel_protocol_with_a_real_port_is_not_a_reverse_tunnel() {
+        // Only the portless `host` form names a reverse tunnel. A
+        // programmatically-built RouteAddr that reuses the protocol tag on a
+        // real address must fall through to normal dialing instead of being
+        // routed to a tunnel by that name.
+        let addr = RouteAddr {
+            protocol: REVERSE_TUNNEL_TCP_PROTOCOL.into(),
+            address: InternetAddr::from_host_and_port("private-a", 443).unwrap(),
+        };
+        assert!(addr.reverse_tunnel().is_none());
+    }
+
+    #[test]
     fn a_plain_address_defaults_to_the_udp_tag() {
         let addr: RouteAddr = "127.0.0.1:1".parse().unwrap();
         assert_eq!(

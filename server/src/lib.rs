@@ -352,3 +352,39 @@ impl Merge for ServerConfig {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server_config(src: &str) -> ServerConfig {
+        toml::from_str(src).unwrap()
+    }
+
+    #[test]
+    fn merging_config_files_rejects_a_duplicate_upstream_key() {
+        // Two config files both defining `stream.upstream.a` must be rejected:
+        // a later file may add keys, never silently override an earlier one.
+        let first = server_config(
+            "[stream.upstream.a]\naddress = \"tcp://127.0.0.1:1\"\nheader_key = \"aGVsbG8\"\n",
+        );
+        let second = server_config(
+            "[stream.upstream.a]\naddress = \"tcp://127.0.0.1:2\"\nheader_key = \"aGVsbG8\"\n",
+        );
+        let err = first.merge(second).unwrap_err();
+        assert!(format!("{err}").contains("Repeated key"), "{err}");
+    }
+
+    #[test]
+    fn merging_config_files_keeps_every_distinct_upstream_key() {
+        let first = server_config(
+            "[stream.upstream.a]\naddress = \"tcp://127.0.0.1:1\"\nheader_key = \"aGVsbG8\"\n",
+        );
+        let second = server_config(
+            "[stream.upstream.b]\naddress = \"tcp://127.0.0.1:2\"\nheader_key = \"aGVsbG8\"\n",
+        );
+        let merged = first.merge(second).unwrap();
+        assert!(merged.stream.upstream.contains_key("a"));
+        assert!(merged.stream.upstream.contains_key("b"));
+    }
+}

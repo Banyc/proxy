@@ -545,6 +545,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_domain_name_field_containing_a_colon_is_rejected() {
+        // The domain-name field is raw length-prefixed bytes, so a client
+        // could smuggle host/port structure into the domain string. A domain
+        // name cannot contain ':', so decoding must reject it rather than
+        // turning it into an InternetAddr domain.
+        let wire = [
+            AddressType::DomainName.into(),
+            0x5,
+            b'h',
+            b'o',
+            b's',
+            b't',
+            b':',
+            0x1f,
+            0x90,
+        ];
+        let mut rdr = io::Cursor::new(&wire[..]);
+        assert!(decode_address(&mut rdr).await.is_err());
+    }
+
+    #[tokio::test]
     async fn relay_request() {
         let expected = RelayRequest {
             command: Command::Connect,

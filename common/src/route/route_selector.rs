@@ -341,6 +341,58 @@ mod tests {
         assert!(!rendered.contains("(0,"), "{rendered}");
         assert!(!rendered.contains("(1,"), "{rendered}");
     }
+    fn selector_with(
+        chains: Vec<WeightedRouteChain>,
+        active_chains: Option<std::num::NonZeroUsize>,
+        max_rtt_ratio: Option<f64>,
+    ) -> Result<RouteSelector, RouteSelectorError> {
+        let mut probes = ProbeFutures::new();
+        RouteSelector::new(
+            chains,
+            None::<Arc<dyn ProbeRtt + Send + Sync>>,
+            active_chains,
+            max_rtt_ratio,
+            CancellationToken::new(),
+            &mut probes,
+        )
+    }
+
+    #[test]
+    fn every_chain_may_be_active_at_once_but_not_one_more() {
+        // `active_chains == chains.len()` is the document maximum and must be
+        // accepted; one past it is the too-many error.
+        let at_max = std::num::NonZeroUsize::new(2);
+        assert!(selector_with(vec![chain(1), chain(1)], at_max, None).is_ok());
+        let over = std::num::NonZeroUsize::new(3);
+        assert!(matches!(
+            selector_with(vec![chain(1), chain(1)], over, None),
+            Err(RouteSelectorError::TooManyActiveChains)
+        ));
+    }
+
+    #[test]
+    fn a_ratio_of_exactly_one_is_a_valid_gate() {
+        // 1.0 means "only the best RTT tier is eligible" and is documented as
+        // valid, so the boundary must not be rejected.
+        assert!(selector_with(vec![chain(1), chain(1)], None, Some(1.0)).is_ok());
+        assert!(matches!(
+            selector_with(vec![chain(1), chain(1)], None, Some(0.999)),
+            Err(RouteSelectorError::InvalidMaxRttRatio(_))
+        ));
+        assert!(matches!(
+            selector_with(vec![chain(1), chain(1)], None, Some(f64::NAN)),
+            Err(RouteSelectorError::InvalidMaxRttRatio(_))
+        ));
+    }
+
+    #[test]
+    fn an_all_zero_weight_selector_is_rejected() {
+        assert!(matches!(
+            selector_with(vec![chain(0), chain(0)], None, None),
+            Err(RouteSelectorError::ZeroAccumulatedWeight)
+        ));
+    }
+
     #[test]
     fn a_zero_sum_falls_back_within_the_eligible_set() {
         let mut probes = ProbeFutures::new();
