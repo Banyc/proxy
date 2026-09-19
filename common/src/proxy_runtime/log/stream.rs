@@ -225,7 +225,7 @@ mod tests {
     use super::*;
     use std::{
         str::FromStr,
-        time::{Instant, SystemTime},
+        time::{Duration, Instant, SystemTime},
     };
 
     fn timing() -> Timing {
@@ -233,6 +233,16 @@ mod tests {
         Timing {
             start: (now, SystemTime::now()),
             end: now,
+        }
+    }
+
+    /// A two-second session, so throughput fields render deterministically
+    /// (bytes / 2.0s) instead of dividing by a near-zero elapsed time.
+    fn timing_2s() -> Timing {
+        let start = Instant::now();
+        Timing {
+            start: (start, SystemTime::now()),
+            end: start + Duration::from_secs(2),
         }
     }
 
@@ -247,11 +257,22 @@ mod tests {
         }
     }
 
+    fn tcp_addr(addr: &str) -> RouteAddr {
+        RouteAddr::from_str(addr).unwrap()
+    }
+
+    fn named_addr(host: &str, port: u16) -> RouteAddr {
+        RouteAddr {
+            address: InternetAddr::from_host_and_port(host, port).unwrap(),
+            protocol: Arc::from("tcp"),
+        }
+    }
+
     /// A socket upstream already carries the resolved ip; it must render as
     /// just the address, not `address,ip`.
     #[test]
     fn a_socket_upstream_is_rendered_without_a_redundant_resolved_ip() {
-        let rendered = log(RouteAddr::from_str("tcp://10.0.0.1:9000").unwrap()).to_string();
+        let rendered = log(tcp_addr("tcp://10.0.0.1:9000")).to_string();
         assert!(rendered.contains("up{tcp://10.0.0.1:9000}"), "{rendered}");
         assert!(
             !rendered.contains(",10.0.0.1}"),
@@ -263,14 +284,171 @@ mod tests {
     /// cannot tell which backend the name actually reached.
     #[test]
     fn a_named_upstream_is_rendered_with_its_resolved_ip() {
-        let addr = RouteAddr {
-            address: InternetAddr::from_host_and_port("example.com", 9000).unwrap(),
-            protocol: Arc::from("tcp"),
-        };
+        let addr = named_addr("example.com", 9000);
         let rendered = log(addr).to_string();
         assert!(
             rendered.contains("up{tcp://example.com:9000,10.0.0.1}"),
             "{rendered}"
         );
+    }
+
+    /// The downstream address is optional; when present it must be rendered
+    /// as a trailing `,dn:` field for every log shape.
+    #[test]
+    fn a_present_downstream_address_is_rendered_as_a_trailing_field() {
+        let downstream: SocketAddr = "10.0.0.2:7000".parse().unwrap();
+        let mut with = log(tcp_addr("tcp://10.0.0.1:9000"));
+        with.timing = timing_2s();
+        with.bytes_uplink = 100;
+        with.bytes_downlink = 200;
+        with.downstream_addr = Some(downstream);
+        let rendered = with.to_string();
+        assert!(rendered.starts_with("2.0s,"), "{rendered}");
+        assert!(rendered.ends_with(",dn:10.0.0.2:7000"), "{rendered}");
+    }
+
+    /// The byte-count-free stream log shares the upstream rendering but omits
+    /// the throughput fields entirely (there is no count to divide).
+    #[test]
+    fn the_byte_count_free_stream_log_omits_throughput_and_appends_downstream() {
+        let addr = named_addr("example.com", 9000);
+        let rendered = StreamLogWithoutByteCounts {
+            timing: timing_2s(),
+            upstream_addr: addr,
+            upstream_sock_addr: "10.0.0.1:9000".parse().unwrap(),
+            downstream_addr: Some("10.0.0.2:7000".parse().unwrap()),
+        }
+        .to_string();
+        assert_eq!(
+            rendered,
+            "2.0s,up{tcp://example.com:9000,10.0.0.1},dn:10.0.0.2:7000"
+        );
+    }
+
+    /// A proxy log must surface the destination the request was routed to,
+    /// and a byte-count-free proxy log must still carry it.
+    #[test]
+    fn proxy_logs_render_the_destination_after_the_stream_fields() {
+        let destination: InternetAddr = "10.0.0.3:6000".parse().unwrap();
+        let stream = StreamLog {
+            timing: timing_2s(),
+            bytes_uplink: 4,
+            bytes_downlink: 8,
+            upstream_addr: tcp_addr("tcp://10.0.0.1:9000"),
+            upstream_sock_addr: "10.0.0.1:9000".parse().unwrap(),
+            downstream_addr: None,
+        };
+        let with_bytes = StreamProxyLog {
+            stream: stream.clone(),
+            destination: destination.clone(),
+        }
+        .to_string();
+        assert!(with_bytes.ends_with(",dt:10.0.0.3:6000"), "{with_bytes}");
+
+        let without_bytes = StreamProxyLogWithoutByteCounts {
+            stream: StreamLogWithoutByteCounts {
+                timing: stream.timing,
+                upstream_addr: stream.upstream_addr,
+                upstream_sock_addr: stream.upstream_sock_addr,
+                downstream_addr: stream.downstream_addr,
+            },
+            destination,
+        }
+        .to_string();
+        assert!(
+            without_bytes.ends_with(",dt:10.0.0.3:6000"),
+            "{without_bytes}"
+        );
+        assert!(!without_bytes.contains("/s"), "{without_bytes}");
+    }
+
+    /// `IoCopyFinished` renders the throughput fields, the destination when
+    /// known, and nothing extra when it is not.
+    #[test]
+    fn io_copy_finished_renders_throughput_and_an_optional_destination() {
+        let base = IoCopyFinished {
+            timing: timing_2s(),
+            bytes_uplink: 100,
+            bytes_downlink: 200,
+            upstream_addr: tcp_addr("tcp://10.0.0.1:9000"),
+            upstream_sock_addr: "10.0.0.1:9000".parse().unwrap(),
+            downstream_addr: Some("10.0.0.2:7000".parse().unwrap()),
+            destination: None,
+        };
+        let rendered = base.to_string();
+        assert_eq!(
+            rendered,
+            "2.0s,up{100.0 B,50.0 B/s},dn{200.0 B,100.0 B/s},up{tcp://10.0.0.1:9000},dn:10.0.0.2:7000"
+        );
+
+        let with_destination = IoCopyFinished {
+            destination: Some("10.0.0.3:6000".parse().unwrap()),
+            ..base
+        }
+        .to_string();
+        assert_eq!(
+            with_destination,
+            "2.0s,up{100.0 B,50.0 B/s},dn{200.0 B,100.0 B/s},up{tcp://10.0.0.1:9000},dn:10.0.0.2:7000,dt:10.0.0.3:6000"
+        );
+    }
+
+    /// The Hdv conversion distinguishes a measured log (byte counts present)
+    /// from an unmeasured one (both counts absent), and attaches the
+    /// destination only for the proxy log shapes.
+    #[test]
+    fn hdv_conversions_preserve_byte_counts_and_destination() {
+        let upstream_addr = tcp_addr("tcp://10.0.0.1:9000");
+        let sock: SocketAddr = "10.0.0.1:9000".parse().unwrap();
+        let downstream: SocketAddr = "10.0.0.2:7000".parse().unwrap();
+        let destination: InternetAddr = "10.0.0.3:6000".parse().unwrap();
+
+        let measured = StreamLog {
+            timing: timing_2s(),
+            bytes_uplink: 11,
+            bytes_downlink: 22,
+            upstream_addr: upstream_addr.clone(),
+            upstream_sock_addr: sock,
+            downstream_addr: Some(downstream),
+        };
+        let hdv: StreamLogHdv = (&measured).into();
+        assert_eq!(hdv.up_bytes, Some(11));
+        assert_eq!(hdv.dn_bytes, Some(22));
+        assert!(hdv.destination.is_none());
+        assert!(hdv.downstream_addr.is_some());
+
+        let unmeasured = StreamLogWithoutByteCounts {
+            timing: timing_2s(),
+            upstream_addr: upstream_addr.clone(),
+            upstream_sock_addr: sock,
+            downstream_addr: Some(downstream),
+        };
+        let hdv: StreamLogHdv = (&unmeasured).into();
+        assert_eq!(hdv.up_bytes, None);
+        assert_eq!(hdv.dn_bytes, None);
+        assert!(hdv.destination.is_none());
+
+        let proxy = StreamProxyLog {
+            stream: measured.clone(),
+            destination: destination.clone(),
+        };
+        let hdv: StreamLogHdv = (&proxy).into();
+        assert_eq!(hdv.up_bytes, Some(11));
+        assert_eq!(hdv.dn_bytes, Some(22));
+        let d = hdv
+            .destination
+            .expect("a proxy log carries its destination");
+        assert_eq!((d.host.as_ref(), d.port), ("10.0.0.3", 6000));
+
+        let proxy_unmeasured = StreamProxyLogWithoutByteCounts {
+            stream: unmeasured,
+            destination,
+        };
+        let hdv: StreamLogHdv = (&proxy_unmeasured).into();
+        assert_eq!(hdv.up_bytes, None);
+        assert_eq!(hdv.dn_bytes, None);
+        let d = hdv
+            .destination
+            .expect("a proxy log carries its destination");
+        assert_eq!((d.host.as_ref(), d.port), ("10.0.0.3", 6000));
     }
 }
