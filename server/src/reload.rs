@@ -554,4 +554,23 @@ mod tests {
             "a change during the debounce window must reset it, not be left pending"
         );
     }
+
+    /// The debounce window must last exactly `RELOAD_DEBOUNCE` of virtual
+    /// time: the reset test drives multiples of the constant, so a value
+    /// change there would go unnoticed. The measured instant is virtual
+    /// (`start_paused`), not wall-clock.
+    #[tokio::test(start_paused = true)]
+    async fn the_debounce_window_lasts_the_configured_interval() {
+        let mut machine = test_machine();
+        let start = tokio::time::Instant::now();
+        machine.on_config_changed();
+        let step = reload_step(&mut machine).await;
+        assert!(matches!(step, ReloadStep::DebounceElapsed));
+        assert_eq!(
+            start.elapsed(),
+            Duration::from_secs(1),
+            "the debounce window must be exactly one second"
+        );
+        assert_eq!(RELOAD_DEBOUNCE, Duration::from_secs(1));
+    }
 }
