@@ -10,6 +10,13 @@ fn suspend_toleration() -> Duration {
     SUSPEND_CHECK_INTERVAL.mul_f64(SUSPEND_TOLERATION_COEFFICIENT)
 }
 
+/// Whether a monotonic gap between two checks is a system suspend rather than
+/// ordinary scheduler jitter. The comparison is strict: a gap exactly at the
+/// tolerance is jitter.
+fn is_system_suspend(elapsed: Duration) -> bool {
+    suspend_toleration() < elapsed
+}
+
 #[derive(Debug, Clone)]
 pub struct SystemResumeSignal(pub Notify);
 
@@ -26,7 +33,7 @@ pub fn spawn_suspend_watcher(
                 let now = (Instant::now(), SystemTime::now());
                 let prev = scopeguard::guard(&mut prev, |prev| *prev = now);
                 let elapsed = now.0.duration_since(prev.0);
-                if suspend_toleration() < elapsed {
+                if is_system_suspend(elapsed) {
                     system_suspend.0.notify_waiters();
                 }
             }
@@ -47,6 +54,28 @@ mod tests {
         assert!(
             suspend_toleration() > SUSPEND_CHECK_INTERVAL,
             "a tolerance at or below the check interval false-triggers a suspend"
+        );
+    }
+
+    /// The tolerance is the check interval scaled by the configured
+    /// coefficient, and a gap must *exceed* it (strict) to count as a suspend.
+    /// The exact threshold is unobservable with real time; the pure comparison
+    /// makes it deterministic, and pinning the tolerance by value catches a
+    /// retune that the earlier "exceeds the interval" check would accept.
+    #[test]
+    fn the_suspend_threshold_pins_the_coefficient_and_is_strict() {
+        assert_eq!(
+            suspend_toleration(),
+            Duration::from_micros(620_000),
+            "the tolerance is the 200ms check interval scaled by the configured coefficient"
+        );
+        assert!(
+            !is_system_suspend(suspend_toleration()),
+            "a gap exactly at the tolerance is jitter, not a suspend"
+        );
+        assert!(
+            is_system_suspend(suspend_toleration() + Duration::from_nanos(1)),
+            "a gap one nanosecond past the tolerance is a suspend"
         );
     }
 
