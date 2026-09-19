@@ -44,6 +44,13 @@ impl RetentionActorSender {
     pub async fn retain_for(&self, guard: Box<dyn Any + Send>, duration: Duration) {
         self.retain(guard, self.clock.now() + duration).await;
     }
+
+    /// The process clock the actor and this handle were built with. Relay
+    /// code that must timestamp or compare against the process monotonic
+    /// clock reads it from here rather than calling `Instant::now()`.
+    pub(crate) fn clock(&self) -> Arc<dyn Clock> {
+        Arc::clone(&self.clock)
+    }
 }
 
 impl std::fmt::Debug for RetentionActorSender {

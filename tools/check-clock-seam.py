@@ -145,11 +145,10 @@ ALLOWLIST: list[tuple[str, str, int, str]] = [
     ),
     (
         "common/src/proxy_runtime/relay/udp.rs",
-        "Instant::now()",
-        8,
-        "(b) flow-idle timeout and crypto-warn throttle decisions "
-        "(unmigrated: needs a Clock through copy_bidirectional_udp) + (c) "
-        "activity/session timestamps",
+        "start = (clock.now(), std::time::SystemTime::now())",
+        1,
+        "(c) copy start wall timestamp (the monotonic half is on the Clock "
+        "seam)",
     ),
     (
         "protocol/src/reverse_tunnel/responder.rs",

@@ -1,6 +1,7 @@
 use crate::{
     addr::InternetAddr,
     anti_replay::VALIDATOR_UDP_HDR_TTL,
+    clock::Clock,
     error::AnyError,
     log::Timing,
     proxy_runtime::{
@@ -159,18 +160,20 @@ where
         log_prefix: &str,
         en_dir: EncryptionDirection,
     ) -> Result<FlowLog, CopyBiError> {
+        let clock = self.retention.clock();
         let res = match session {
             Some((session, r, w)) => {
-                let res = copy_bidirectional(
-                    self.flow.clone(),
-                    (self.upstream, self.downstream),
-                    self.speed_limiter,
-                    self.payload_crypto,
-                    self.response_header,
+                let policy = CopyPolicy {
+                    speed_limiter: self.speed_limiter,
+                    payload_crypto: self.payload_crypto,
+                    response_header: self.response_header,
                     en_dir,
-                    Some((r, w)),
-                )
-                .await;
+                    gauges: Some((r, w)),
+                    clock: Arc::clone(&clock),
+                };
+                let res =
+                    copy_bidirectional(self.flow.clone(), (self.upstream, self.downstream), policy)
+                        .await;
 
                 session.inspect_mut(|session| {
                     session.end = Some(SystemTime::now());
@@ -180,16 +183,16 @@ where
                 res
             }
             None => {
-                copy_bidirectional(
-                    self.flow.clone(),
-                    (self.upstream, self.downstream),
-                    self.speed_limiter,
-                    self.payload_crypto,
-                    self.response_header,
+                let policy = CopyPolicy {
+                    speed_limiter: self.speed_limiter,
+                    payload_crypto: self.payload_crypto,
+                    response_header: self.response_header,
                     en_dir,
-                    None,
-                )
-                .await
+                    gauges: None,
+                    clock: Arc::clone(&clock),
+                };
+                copy_bidirectional(self.flow.clone(), (self.upstream, self.downstream), policy)
+                    .await
             }
         };
 
@@ -223,17 +226,32 @@ fn both_directions_idle(
         && now.duration_since(last_downlink) > UDP_FLOW_TIMEOUT
 }
 
-pub async fn copy_bidirectional<R, W, DownstreamRead, DownstreamWrite>(
-    flow: Flow,
-    streams: (
-        UpstreamParts<R, W>,
-        DownstreamParts<DownstreamRead, DownstreamWrite>,
-    ),
+/// Whether a crypto-failure warning is due at `now`, given the last warning
+/// was emitted at `last_warn`. The `>` boundary is exclusive: exactly
+/// [`CRYPTO_FAIL_WARN_INTERVAL`] after the last warning is not yet due, so a
+/// failure at the interval boundary stays suppressed.
+fn crypto_warn_is_due(now: std::time::Instant, last_warn: std::time::Instant) -> bool {
+    now.duration_since(last_warn) > CRYPTO_FAIL_WARN_INTERVAL
+}
+
+/// The per-flow policy and instrumentation for a UDP relay copy, bundled so
+/// the copy entry point takes its data arguments and a single settings value.
+pub(crate) struct CopyPolicy {
     speed_limiter: Limiter,
     payload_crypto: Option<tokio_chacha20::config::Config>,
     response_header: Option<Box<dyn Fn() -> Arc<[u8]> + Send>>,
     en_dir: EncryptionDirection,
     gauges: Option<(ReadGauge, WriteGauge)>,
+    clock: Arc<dyn Clock>,
+}
+
+pub(crate) async fn copy_bidirectional<R, W, DownstreamRead, DownstreamWrite>(
+    flow: Flow,
+    streams: (
+        UpstreamParts<R, W>,
+        DownstreamParts<DownstreamRead, DownstreamWrite>,
+    ),
+    policy: CopyPolicy,
 ) -> Result<FlowLog, CopyBiError>
 where
     R: UdpRecv + Send + 'static,
@@ -241,15 +259,23 @@ where
     DownstreamRead: UdpRecv + Send + 'static,
     DownstreamWrite: UdpSend + Send + 'static,
 {
+    let CopyPolicy {
+        speed_limiter,
+        payload_crypto,
+        response_header,
+        en_dir,
+        gauges,
+        clock,
+    } = policy;
     counter!("udp.io_copies").increment(1);
     gauge!("udp.current_io_copies").increment(1.);
     defer!(gauge!("udp.current_io_copies").decrement(1.));
-    let start = (std::time::Instant::now(), std::time::SystemTime::now());
+    let start = (clock.now(), std::time::SystemTime::now());
     let (mut upstream, mut downstream) = streams;
     let mut activity_check = tokio::time::interval(ACTIVITY_CHECK_INTERVAL);
-    let last_uplink_packet = Arc::new(RwLock::new(std::time::Instant::now()));
-    let last_downlink_packet = Arc::new(RwLock::new(std::time::Instant::now()));
-    let last_crypto_fail_warn = Arc::new(RwLock::new(std::time::Instant::now()));
+    let last_uplink_packet = Arc::new(RwLock::new(clock.now()));
+    let last_downlink_packet = Arc::new(RwLock::new(clock.now()));
+    let last_crypto_fail_warn = Arc::new(RwLock::new(clock.now()));
     let bytes_uplink = Arc::new(AtomicU64::new(0));
     let bytes_downlink = Arc::new(AtomicU64::new(0));
     let packets_uplink = Arc::new(AtomicU64::new(0));
@@ -267,6 +293,7 @@ where
         let last_crypto_fail_warn = Arc::clone(&last_crypto_fail_warn);
         let speed_limiter = speed_limiter.clone();
         let payload_crypto = payload_crypto.clone();
+        let clock = Arc::clone(&clock);
         async move {
             let mut downstream_buf = [0; PACKET_BUFFER_LENGTH];
             loop {
@@ -304,7 +331,7 @@ where
                 let packet = if let Some(payload_crypto) = &payload_crypto {
                     let Some(pkt) = send_dyn(packet, &mut send_dyn_buf, payload_crypto, en_dir)
                     else {
-                        log_crypto_drop(&flow, &last_crypto_fail_warn);
+                        log_crypto_drop(&flow, &last_crypto_fail_warn, clock.as_ref());
                         continue;
                     };
                     pkt
@@ -318,7 +345,7 @@ where
                     .map_err(CopyBiError::SendUpstream)?;
                 bytes_uplink.fetch_add(packet.len() as u64, Ordering::Relaxed);
                 packets_uplink.fetch_add(1, Ordering::Relaxed);
-                *last_uplink_packet.write().unwrap() = std::time::Instant::now();
+                *last_uplink_packet.write().unwrap() = clock.now();
             }
             Ok(())
         }
@@ -330,6 +357,7 @@ where
         let packets_downlink = Arc::clone(&packets_downlink);
         let last_crypto_fail_warn = Arc::clone(&last_crypto_fail_warn);
         let payload_crypto = payload_crypto.clone();
+        let clock = Arc::clone(&clock);
         let mut downlink_buf = [0; PACKET_BUFFER_LENGTH];
         let mut downlink_protocol_buf = vec![];
         let mut response_header_ttl =
@@ -378,7 +406,7 @@ where
                 let pkt = if let Some(payload_crypto) = &payload_crypto {
                     let Some(pkt) = send_dyn(pkt, &mut send_dyn_buf, payload_crypto, en_dir.flip())
                     else {
-                        log_crypto_drop(&flow, &last_crypto_fail_warn);
+                        log_crypto_drop(&flow, &last_crypto_fail_warn, clock.as_ref());
                         continue;
                     };
                     pkt
@@ -397,7 +425,7 @@ where
                 .map_err(CopyBiError::SendDownstream)?;
                 bytes_downlink.fetch_add(downlink_n as u64, Ordering::Relaxed);
                 packets_downlink.fetch_add(1, Ordering::Relaxed);
-                *last_downlink_packet.write().unwrap() = std::time::Instant::now();
+                *last_downlink_packet.write().unwrap() = clock.now();
             }
             Ok(())
         }
@@ -418,7 +446,7 @@ where
             }
             _ = activity_check.tick() => {
                 trace!("Checking if flow is still alive");
-                let now = std::time::Instant::now();
+                let now = clock.now();
                 let last_uplink_packet = *last_uplink_packet.read().unwrap();
                 let last_downlink_packet = *last_downlink_packet.read().unwrap();
                 if both_directions_idle(now, last_uplink_packet, last_downlink_packet) {
@@ -503,11 +531,11 @@ impl UdpRecv for Arc<UdpSocket> {
     }
 }
 
-fn log_crypto_drop(flow: &Flow, last_warn: &RwLock<std::time::Instant>) {
+fn log_crypto_drop(flow: &Flow, last_warn: &RwLock<std::time::Instant>, clock: &dyn Clock) {
     counter!("udp.relay.crypto_drops").increment(1);
-    let now = std::time::Instant::now();
+    let now = clock.now();
     let mut last_warn = last_warn.write().unwrap();
-    if now.duration_since(*last_warn) > CRYPTO_FAIL_WARN_INTERVAL {
+    if crypto_warn_is_due(now, *last_warn) {
         *last_warn = now;
         warn!(%flow, "Dropped packet due to crypto failure");
     }
@@ -618,6 +646,26 @@ mod tests {
         assert!(
             !both_directions_idle(exactly_at_timeout, base, base),
             "exactly one timeout of silence is not yet an idle expiry"
+        );
+    }
+
+    /// A crypto-failure warning is throttled to at most one per
+    /// `CRYPTO_FAIL_WARN_INTERVAL`. The `>` boundary is exclusive: a failure
+    /// exactly one interval after the last warning is suppressed, one
+    /// nanosecond past it is due.
+    #[test]
+    fn a_crypto_warning_is_due_only_past_the_interval() {
+        let base = std::time::Instant::now();
+        assert!(
+            !crypto_warn_is_due(base + CRYPTO_FAIL_WARN_INTERVAL, base),
+            "exactly one warning interval after the last warning is not yet due"
+        );
+        assert!(
+            crypto_warn_is_due(
+                base + CRYPTO_FAIL_WARN_INTERVAL + Duration::from_nanos(1),
+                base
+            ),
+            "one nanosecond past the warning interval is due"
         );
     }
 }
