@@ -20,7 +20,7 @@ use common::{
         connect::udp::UdpConnector,
         context::{Runtime, StreamRuntime, UdpRuntime},
     },
-    route::{HopConfig, RouteChain},
+    route::{HopConfig, ProbeRtt, RouteChain},
     stream_runtime::pool::StreamConnPool,
     udp_runtime::PACKET_BUFFER_LENGTH,
 };
@@ -723,6 +723,24 @@ async fn verify_reverse_proxy_hop(transport: ReverseTunnelTransport) {
             })
             .await
             .expect("reverse proxy stream stalled");
+            // The registered tunnel is addressable by name on both the stream
+            // and UDP connector tables; each must report its peer and uptime.
+            let tracer = stream::StreamTracer::new(runtime.stream.clone());
+            let stream_stats = tracer.session_stats(&chain).await;
+            assert!(
+                stream_stats
+                    .as_deref()
+                    .is_some_and(|s| s.starts_with("peer=")),
+                "stream named-session stats: {stream_stats:?}"
+            );
+            let udp_stats = runtime
+                .udp
+                .connector
+                .named_session_stats(transport.protocol(), "private-a");
+            assert!(
+                udp_stats.as_deref().is_some_and(|s| s.starts_with("peer=")),
+                "udp named-session stats: {udp_stats:?}"
+            );
         })
         .await;
 }
@@ -837,4 +855,147 @@ async fn a_stable_session_resets_the_reconnect_backoff_at_the_serve_call_site() 
         STABLE_SESSION + INITIAL_RECONNECT_DELAY,
         "a stable session must reset the backoff at the serve call site"
     );
+}
+
+/// A raw (non-initiator) client proves the responder validates the
+/// registration request before it registers anything: an unsupported wire
+/// version and an invalid tunnel name are each rejected with their own
+/// `RegisterError` and no mux session is started.
+#[tokio::test(flavor = "multi_thread")]
+async fn responder_rejects_an_unsupported_version_and_an_invalid_name() {
+    use super::wire::{REGISTER_VERSION, RegisterError, RegisterRequest, RegisterResponse};
+    use ae::anti_replay::ValidatorRef;
+    use common::header::codec::{timed_read_header_async, timed_write_header_async};
+
+    let mut scope = TestScope::new();
+    let (runtime, _session_spawner) = test_runtime(&mut scope).await;
+    let crypto = tokio_chacha20::config::Config::new([9; 32].into());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handler = ReverseTunnelResponderHandler {
+        registration_crypto: crypto.clone(),
+        stream_runtime: runtime.stream.clone(),
+        udp_runtime: runtime.udp.clone(),
+    };
+    let server = TcpReverseTunnelResponder { listener, handler };
+    scope.spawn_required("tcp responder server", async move {
+        let (_tx, rx) = loading::replace_conn_handler_channel();
+        server.serve(rx).await.unwrap();
+    });
+    scope
+        .run(async {
+            let validator = ValidatorRef::Replay(&runtime.stream.replay_validator);
+            for (version, name, expected) in [
+                (
+                    REGISTER_VERSION.wrapping_add(1),
+                    "private-a",
+                    RegisterError::UnsupportedVersion,
+                ),
+                (REGISTER_VERSION, "bad name!", RegisterError::InvalidName),
+            ] {
+                let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+                timed_write_header_async(
+                    &mut client,
+                    &RegisterRequest {
+                        version,
+                        name: name.into(),
+                    },
+                    *crypto.key(),
+                    common::STREAM_IO_TIMEOUT,
+                )
+                .await
+                .unwrap();
+                let response: RegisterResponse = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    timed_read_header_async(
+                        &mut client,
+                        *crypto.key(),
+                        &validator,
+                        common::STREAM_IO_TIMEOUT,
+                    ),
+                )
+                .await
+                .expect("timed out reading the register response")
+                .unwrap();
+                assert_eq!(
+                    response.result,
+                    Err(expected),
+                    "version={version} name={name}"
+                );
+            }
+        })
+        .await;
+}
+
+/// The prepare pipeline rejects a duplicate initiator name and a duplicate
+/// responder listen address with the offending key, and otherwise binds each
+/// responder transport through its own builder.
+#[tokio::test(flavor = "multi_thread")]
+async fn prepare_reports_duplicate_keys_and_binds_both_responder_transports() {
+    let mut scope = TestScope::new();
+    let (runtime, _session_spawner) = test_runtime(&mut scope).await;
+    let loader = ReverseTunnelLoader::new();
+    let snapshot = loader.snapshot();
+    scope
+        .run(async {
+            let header_key = || ConfigBuilder("aGVsbG8".into());
+            let dup_initiators = ReverseTunnelConfig {
+                initiator: vec![
+                    initiator_config(
+                        "private-a",
+                        "tcp://127.0.0.1:1".parse().unwrap(),
+                        header_key(),
+                        None,
+                    ),
+                    initiator_config(
+                        "private-a",
+                        "tcp://127.0.0.1:2".parse().unwrap(),
+                        header_key(),
+                        None,
+                    ),
+                ],
+                responder: vec![],
+            };
+            let err = match prepare(dup_initiators, &snapshot, runtime.clone()).await {
+                Ok(_) => panic!("a duplicate initiator key must be rejected"),
+                Err(err) => err,
+            };
+            let text = format!("{err}");
+            assert!(
+                text.contains("duplicate reverse tunnel configuration key")
+                    && text.contains("private-a"),
+                "{err}"
+            );
+
+            let responder = |addr: &str| ReverseTunnelResponderConfig {
+                listen_addr: RouteAddrStr(addr.parse().unwrap()),
+                header_key: header_key(),
+            };
+            let dup_responders = ReverseTunnelConfig {
+                initiator: vec![],
+                responder: vec![
+                    responder("tcp://127.0.0.1:0"),
+                    responder("tcp://127.0.0.1:0"),
+                ],
+            };
+            let err = match prepare(dup_responders, &snapshot, runtime.clone()).await {
+                Ok(_) => panic!("a duplicate responder key must be rejected"),
+                Err(err) => err,
+            };
+            assert!(
+                format!("{err}").contains("duplicate reverse tunnel configuration key"),
+                "{err}"
+            );
+
+            for listen in ["tcp://127.0.0.1:0", "rtpmux://127.0.0.1:0"] {
+                let config = ReverseTunnelConfig {
+                    initiator: vec![],
+                    responder: vec![responder(listen)],
+                };
+                prepare(config, &snapshot, runtime.clone())
+                    .await
+                    .unwrap_or_else(|e| panic!("prepare failed for {listen}: {e}"));
+            }
+        })
+        .await;
 }
