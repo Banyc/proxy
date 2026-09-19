@@ -32,6 +32,7 @@ impl<T: fmt::Debug> fmt::Debug for OptLog<T> {
 
 pub mod addr;
 pub mod anti_replay;
+pub mod clock;
 pub mod config;
 pub mod connect;
 pub mod error;
