@@ -63,4 +63,27 @@ pub(crate) mod test_support {
             self.base + Duration::from_nanos(self.nanos.load(Ordering::Relaxed))
         }
     }
+
+    /// A clock that follows tokio's (possibly paused) virtual time, so a task
+    /// driven under `#[tokio::test(start_paused = true)]` observes the same
+    /// advance that `tokio::time::sleep` produces. Lets a deadline be placed
+    /// exactly at virtual "now".
+    #[derive(Debug)]
+    pub(crate) struct VirtualClock {
+        base: Instant,
+        epoch: tokio::time::Instant,
+    }
+    impl VirtualClock {
+        pub(crate) fn new() -> Self {
+            Self {
+                base: Instant::now(),
+                epoch: tokio::time::Instant::now(),
+            }
+        }
+    }
+    impl Clock for VirtualClock {
+        fn now(&self) -> Instant {
+            self.base + self.epoch.elapsed()
+        }
+    }
 }

@@ -2,12 +2,16 @@ use std::{
     any::Any,
     future::Future,
     pin::Pin,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use tokio::sync::mpsc;
 
-use crate::lifecycle::process::RootTaskExit;
+use crate::{
+    clock::{Clock, SystemClock},
+    lifecycle::process::RootTaskExit,
+};
 
 /// Burst buffer for retained guards. Retention submissions happen once per
 /// session/tunnel teardown, so steady-state occupancy is tiny; the actor
@@ -46,15 +50,24 @@ impl std::fmt::Debug for RetentionActorSender {
 pub struct RetentionActor {
     rx: mpsc::Receiver<Retain>,
     guards: Vec<(Instant, Box<dyn Any + Send>)>,
+    clock: Arc<dyn Clock>,
 }
 
 impl RetentionActor {
     pub fn new() -> (Self, RetentionActorSender) {
+        Self::with_clock(Arc::new(SystemClock))
+    }
+
+    /// Construct with an explicit clock. Production uses [`RetentionActor::new`]
+    /// (the system clock); a test can advance the clock to a guard's deadline
+    /// exactly, so the expiry boundary is deterministic.
+    pub fn with_clock(clock: Arc<dyn Clock>) -> (Self, RetentionActorSender) {
         let (tx, rx) = mpsc::channel(RETENTION_CHANNEL_CAPACITY);
         (
             Self {
                 rx,
                 guards: Vec::new(),
+                clock,
             },
             RetentionActorSender { tx },
         )
@@ -69,7 +82,7 @@ impl RetentionActor {
                 .map(|(until, _)| *until)
                 .min()
                 .map(|deadline| {
-                    let now = Instant::now();
+                    let now = self.clock.now();
                     let duration = if deadline > now {
                         deadline - now
                     } else {
@@ -90,7 +103,7 @@ impl RetentionActor {
                     }
                 }
                 () = sleep => {
-                    let now = Instant::now();
+                    let now = self.clock.now();
                     self.guards.retain(|(until, _)| *until > now);
                 }
             }
@@ -145,6 +158,34 @@ mod tests {
         assert!(
             !dropped.load(Ordering::SeqCst),
             "guard must outlive the deadline"
+        );
+        drop(sender);
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap();
+        }
+    }
+
+    /// The expiry guard is exclusive of the deadline: a guard whose `until`
+    /// equals `now` is dropped, not kept. A `>`→`>=` mutation differs only at
+    /// that exact instant; the injected clock places the actor's wakeup
+    /// exactly on the deadline so the boundary is deterministic.
+    #[tokio::test(start_paused = true)]
+    async fn a_guard_is_dropped_at_exactly_its_deadline() {
+        let clock = Arc::new(crate::clock::test_support::VirtualClock::new());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let (actor, sender) = RetentionActor::with_clock(Arc::clone(&clock) as Arc<dyn Clock>);
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(actor.run());
+        let guard = Box::new(DropGuard(dropped.clone()));
+        let deadline = clock.now() + Duration::from_millis(100);
+        sender.retain(guard, deadline).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(100)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "a guard at exactly its deadline is expired; the boundary is exclusive"
         );
         drop(sender);
         while let Some(result) = tasks.join_next().await {
