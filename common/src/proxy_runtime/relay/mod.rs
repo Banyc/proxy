@@ -25,10 +25,7 @@ pub async fn retain_dead_session<Session: Send + Sync + 'static>(
     retention: &crate::lifecycle::retention::RetentionActorSender,
 ) {
     retention
-        .retain(
-            Box::new(session),
-            std::time::Instant::now() + DEAD_SESSION_RETENTION_DURATION,
-        )
+        .retain_for(Box::new(session), DEAD_SESSION_RETENTION_DURATION)
         .await;
 }
 

@@ -1,10 +1,4 @@
-use std::{
-    fmt,
-    net::SocketAddr,
-    ops::Deref,
-    sync::Arc,
-    time::{Instant, SystemTime},
-};
+use std::{fmt, net::SocketAddr, ops::Deref, sync::Arc, time::SystemTime};
 
 use super::authority::get_authority_from_req;
 use super::upstream;
@@ -313,10 +307,7 @@ where
             s.inspect_mut(|session| session.end = Some(SystemTime::now()));
         }
         retention
-            .retain(
-                Box::new(session_guard),
-                Instant::now() + DEAD_SESSION_RETENTION_DURATION,
-            )
+            .retain_for(Box::new(session_guard), DEAD_SESSION_RETENTION_DURATION)
             .await;
     }
 

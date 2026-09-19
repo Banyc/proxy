@@ -29,12 +29,20 @@ struct Retain {
 #[derive(Clone)]
 pub struct RetentionActorSender {
     tx: mpsc::Sender<Retain>,
+    clock: Arc<dyn Clock>,
 }
 
 impl RetentionActorSender {
     /// Keep `guard` alive at least until `until`, then drop it.
     pub async fn retain(&self, guard: Box<dyn Any + Send>, until: Instant) {
         let _ = self.tx.send(Retain { guard, until }).await;
+    }
+
+    /// Keep `guard` alive for `duration` measured on the actor's clock, then
+    /// drop it. Session retentions compute their deadline this way; a test
+    /// with an injected clock can reach the deadline exactly.
+    pub async fn retain_for(&self, guard: Box<dyn Any + Send>, duration: Duration) {
+        self.retain(guard, self.clock.now() + duration).await;
     }
 }
 
@@ -67,9 +75,9 @@ impl RetentionActor {
             Self {
                 rx,
                 guards: Vec::new(),
-                clock,
+                clock: Arc::clone(&clock),
             },
-            RetentionActorSender { tx },
+            RetentionActorSender { tx, clock },
         )
     }
 
@@ -186,6 +194,42 @@ mod tests {
         assert!(
             dropped.load(Ordering::SeqCst),
             "a guard at exactly its deadline is expired; the boundary is exclusive"
+        );
+        drop(sender);
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap();
+        }
+    }
+
+    /// `retain_for` measures its deadline on the sender's clock, not wall
+    /// time: a `VirtualClock` guard is kept one nanosecond short of the
+    /// duration and dropped at exactly the duration. A sender that read
+    /// `Instant::now()` instead would place the deadline a real-time skew
+    /// past the virtual boundary, so the guard would outlive the advanced
+    /// clock and the drop assertion fails.
+    #[tokio::test(start_paused = true)]
+    async fn retain_for_uses_the_injected_clock_deadline() {
+        let clock = Arc::new(crate::clock::test_support::VirtualClock::new());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let (actor, sender) = RetentionActor::with_clock(Arc::clone(&clock) as Arc<dyn Clock>);
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(actor.run());
+        let guard = Box::new(DropGuard(dropped.clone()));
+        sender.retain_for(guard, Duration::from_secs(5)).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(5) - Duration::from_nanos(1)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        assert!(
+            !dropped.load(Ordering::SeqCst),
+            "a guard one nanosecond short of the retention duration must be kept"
+        );
+        tokio::time::advance(Duration::from_nanos(1)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "a guard at exactly the retention duration must be dropped"
         );
         drop(sender);
         while let Some(result) = tasks.join_next().await {

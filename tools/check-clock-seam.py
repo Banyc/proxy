@@ -125,13 +125,6 @@ ALLOWLIST: list[tuple[str, str, int, str]] = [
         "(c) tokio timer primitive (tokio::time::Instant, virtual-time aware)",
     ),
     (
-        "common/src/proxy_runtime/relay/mod.rs",
-        "Instant::now()",
-        1,
-        "(b) retain_dead_session retention deadline (unmigrated: needs a "
-        "Clock on the retention sender or its callers)",
-    ),
-    (
         "common/src/proxy_runtime/relay/stream/mod.rs",
         "SystemTime::now()",
         2,
@@ -178,9 +171,8 @@ ALLOWLIST: list[tuple[str, str, int, str]] = [
     (
         "protocol/src/stream_proto/streams/http_tunnel/proxy.rs",
         "Instant::now()",
-        2,
-        "(b) retention deadline at :318 (unmigrated: needs a Clock on the "
-        "retention sender or its callers) + (c) copy end timestamp at :160",
+        1,
+        "(c) copy end timestamp at :160",
     ),
     (
         "protocol/src/stream_proto/streams/http_tunnel/proxy.rs",
