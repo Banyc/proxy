@@ -182,4 +182,76 @@ mod tests {
         assert!(!writer.write_or_warn(&Record { n: 1 }));
         writer.flush_or_warn();
     }
+
+    /// The epochs (file stems) of the `N.csv` files currently in `dir`,
+    /// in ascending order. The rotation is driven entirely by the
+    /// `HdvLogger` rotation policy, so the stems identify which epochs
+    /// have been retained.
+    fn csv_epochs(dir: &std::path::Path) -> Vec<u64> {
+        let mut epochs = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "csv"))
+            .map(|path| path.file_stem().unwrap().to_string_lossy().parse().unwrap())
+            .collect::<Vec<u64>>();
+        epochs.sort_unstable();
+        epochs
+    }
+
+    /// The number of records in an `N.csv` file, ignoring the single
+    /// header row written on the first record.
+    fn data_rows(path: &std::path::Path) -> usize {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .count()
+            .saturating_sub(1)
+    }
+
+    /// Rotation must trigger exactly at the record limit and retain only
+    /// the newest `max_epochs` files; the production policy is otherwise
+    /// unobservable. Written to a fresh temp directory so the harness is
+    /// hermetic. (The one time-based rotation poll is `DailyContains`, so
+    /// a test that straddles local midnight would see one extra epoch.)
+    #[test]
+    fn the_logger_rotates_at_the_record_limit_and_retains_max_epochs() {
+        let dir = std::env::temp_dir().join(format!(
+            "proxy-hdvlogger-rotation-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let logger = HdvLogger::<Record>::new(dir.clone());
+
+        let max_records = 1024 * 64;
+        for n in 0..(max_records - 1) {
+            logger.write(&Record { n: n as u64 });
+        }
+        logger.flush();
+        // One record below the limit nothing has rotated: a single file
+        // holding every record so far.
+        assert_eq!(csv_epochs(&dir), vec![0]);
+        assert_eq!(data_rows(&dir.join("0.csv")), max_records - 1);
+
+        logger.write(&Record {
+            n: (max_records - 1) as u64,
+        });
+        logger.flush();
+        // The record that reaches the limit rotates: a fresh epoch file
+        // appears and the sealed one holds exactly `max_records` records.
+        assert_eq!(csv_epochs(&dir), vec![0, 1]);
+        assert_eq!(data_rows(&dir.join("0.csv")), max_records);
+
+        // Drive four full epochs so the `max_epochs` retention is
+        // exercised: the oldest file is deleted and four remain.
+        for n in max_records..(max_records * 4) {
+            logger.write(&Record { n: n as u64 });
+        }
+        logger.flush();
+        assert_eq!(csv_epochs(&dir), vec![1, 2, 3, 4]);
+        assert_eq!(data_rows(&dir.join("1.csv")), max_records);
+        assert_eq!(data_rows(&dir.join("4.csv")), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
