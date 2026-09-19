@@ -697,6 +697,59 @@ mod tests {
     use ae::anti_replay::TimeValidator;
     use std::sync::Arc;
 
+    /// The route kind is what the peer is told: a loopback refusal stays
+    /// loopback, every other proxy failure is reported as an io error. The
+    /// table drives one row per variant, covering both grouped arms; a
+    /// swapped or merged arm fails here.
+    #[test]
+    fn each_proxy_error_maps_to_its_documented_route_kind() {
+        use crate::proxy_runtime::relay::udp::CopyBiError;
+
+        let addr = crate::proxy_runtime::addr::RouteAddr::udp("127.0.0.1:9".parse().unwrap());
+        let cases = [
+            (
+                UdpProxyError::Resolve {
+                    source: io::Error::other("resolve"),
+                    addr: addr.clone(),
+                },
+                RouteErrorKind::Io,
+            ),
+            (
+                UdpProxyError::ConnectUpstream {
+                    source: io::Error::other("connect"),
+                    addr: addr.clone(),
+                },
+                RouteErrorKind::Io,
+            ),
+            (
+                UdpProxyError::Loopback {
+                    addr: addr.clone(),
+                    sock_addr: "127.0.0.1:9".parse().unwrap(),
+                },
+                RouteErrorKind::Loopback,
+            ),
+            (
+                UdpProxyError::Tunnel(Box::new(io::Error::other("tunnel"))),
+                RouteErrorKind::Io,
+            ),
+            (
+                UdpProxyError::Copy(CopyBiError::RecvUpstream(Box::new(io::Error::other(
+                    "copy",
+                )))),
+                RouteErrorKind::Io,
+            ),
+            (UdpProxyError::InvalidFlowKey, RouteErrorKind::Io),
+            (
+                UdpProxyError::InitialPacket(io::Error::other("initial")),
+                RouteErrorKind::Io,
+            ),
+            (UdpProxyError::RouteUnavailable, RouteErrorKind::Io),
+        ];
+        for (error, want) in cases {
+            assert_eq!(error_kind_from_proxy_error(error), want);
+        }
+    }
+
     fn crypto() -> tokio_chacha20::config::Config {
         tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into())
     }
