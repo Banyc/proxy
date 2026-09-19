@@ -77,3 +77,45 @@ impl From<&Flow> for FlowHdv {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn routed() -> FlowKey {
+        FlowKey::Routed(Flow {
+            upstream: None,
+            downstream: DownstreamAddr("127.0.0.1:1000".parse().unwrap()),
+        })
+    }
+
+    fn identified() -> FlowKey {
+        FlowKey::Identified {
+            downstream: DownstreamAddr("127.0.0.1:2000".parse().unwrap()),
+            flow_id: UdpFlowId::from_bytes([7; UDP_FLOW_ID_LEN]),
+        }
+    }
+
+    /// Both key shapes report their downstream, but only a routed key owns a
+    /// flow. Driving both variants pins every arm; a swapped or copied arm
+    /// fails here.
+    #[test]
+    fn a_flow_key_exposes_its_flow_only_when_routed() {
+        let routed = routed();
+        assert_eq!(
+            routed.downstream(),
+            DownstreamAddr("127.0.0.1:1000".parse().unwrap())
+        );
+        assert!(routed.routed_flow().is_some(), "a routed key owns a flow");
+
+        let identified = identified();
+        assert_eq!(
+            identified.downstream(),
+            DownstreamAddr("127.0.0.1:2000".parse().unwrap())
+        );
+        assert!(
+            identified.routed_flow().is_none(),
+            "an identified key has no routed flow"
+        );
+    }
+}
