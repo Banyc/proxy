@@ -199,3 +199,34 @@ impl StreamServerHandleConn for TcpAccessConnHandler {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant, SystemTime};
+
+    /// The TCP access log appends the routed destination after the shared
+    /// io-copy fields.
+    #[test]
+    fn the_tcp_access_log_appends_the_destination() {
+        let start = Instant::now();
+        let log = TcpAccessLog {
+            io: IoCopyFinished {
+                timing: common::log::Timing {
+                    start: (start, SystemTime::now()),
+                    end: start + Duration::from_secs(2),
+                },
+                bytes_uplink: 0,
+                bytes_downlink: 0,
+                upstream_addr: "tcp://10.0.0.1:9000".parse().unwrap(),
+                upstream_sock_addr: "10.0.0.1:9000".parse().unwrap(),
+                downstream_addr: None,
+                destination: None,
+            },
+            dst: "tcp://10.0.0.3:6000".parse().unwrap(),
+        };
+        let rendered = log.to_string();
+        assert!(rendered.starts_with("2.0s,"), "{rendered}");
+        assert!(rendered.ends_with(",dst:tcp://10.0.0.3:6000"), "{rendered}");
+    }
+}

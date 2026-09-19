@@ -23,7 +23,7 @@ mod tests {
             connect::udp::UdpConnector,
             context::StreamRuntime,
         },
-        route::HopConfig,
+        route::{HopConfig, RouteSelector},
         stream_runtime::{
             IoConnection, StreamServerHandleConn,
             pool::{StreamConnPool, connect_with_pool},
@@ -38,7 +38,10 @@ mod tests {
             mux::{MuxProxyConnHandler, MuxProxyHandler},
             rtp::build_rtp_proxy_server,
             rtp_mux::build_rtp_mux_proxy_server,
-            tcp::proxy_server::build_tcp_proxy_server,
+            tcp::{
+                access_server::TcpAccessConnHandler, listener::TcpServer,
+                proxy_server::build_tcp_proxy_server,
+            },
             tcp_mux::{TcpMuxServer, build_tcp_mux_proxy_server},
         },
     };
@@ -391,6 +394,47 @@ mod tests {
                 .unwrap();
                 assert!(rtt > Duration::ZERO);
                 assert!(rtt < Duration::from_secs(1));
+            })
+            .await;
+    }
+
+    /// A plain TCP access server (no mux, no protocol handshake) relays the
+    /// downstream bytes to its configured destination, byte-exactly. This is
+    /// the `tcp://` ingress, distinct from the mux and SOCKS5 access servers.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_plain_tcp_access_server_relays_to_its_destination_byte_exact() {
+        let mut scope = TestRuntimeScope::new();
+        let stream_context = stream_context(&mut scope);
+        let req_msg = b"hello through the tcp access server";
+        let resp_msg = b"goodbye through the tcp access server";
+        let destination = spawn_greet(&mut scope, "[::]:0", req_msg, resp_msg, 1).await;
+        let session_spawner = stream_context.session_spawner.clone();
+        let listen_addr: Arc<str> = Arc::from("127.0.0.1:0");
+        let handler = TcpAccessConnHandler::new(
+            RouteSelector::Empty,
+            destination,
+            f64::INFINITY,
+            stream_context,
+            Arc::clone(&listen_addr),
+        );
+        let listener = TcpListener::bind(listen_addr.as_ref()).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = TcpServer::new(listener, handler, session_spawner);
+        let (set_conn_handler_tx, set_conn_handler_rx) = loading::replace_conn_handler_channel();
+        scope.spawn_required(async move {
+            let _set_conn_handler_tx = set_conn_handler_tx;
+            server.serve(set_conn_handler_rx).await
+        });
+        scope
+            .run(async {
+                let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+                stream.write_all(req_msg).await.unwrap();
+                let mut buf = vec![0; resp_msg.len()];
+                tokio::time::timeout(Duration::from_secs(10), stream.read_exact(&mut buf))
+                    .await
+                    .expect("timed out reading the access server response")
+                    .unwrap();
+                assert_eq!(buf, resp_msg);
             })
             .await;
     }
