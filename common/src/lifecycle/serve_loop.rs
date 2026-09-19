@@ -490,4 +490,22 @@ mod tests {
             "an ordinary listener must sleep before retrying"
         );
     }
+
+    /// The first retry waits exactly `INITIAL_BACKOFF_MS`: the exponent is
+    /// zero-based. An off-by-one doubles the whole schedule while still
+    /// leaving a gap, so the exact first interval must be pinned.
+    #[tokio::test(start_paused = true)]
+    async fn the_first_retry_waits_exactly_the_initial_backoff() {
+        let instants = accept_instants(false).await;
+        assert_eq!(
+            instants[1] - instants[0],
+            Duration::from_millis(INITIAL_BACKOFF_MS),
+            "the first retry must wait the initial backoff, not twice it"
+        );
+        assert_eq!(
+            instants[2] - instants[1],
+            Duration::from_millis(INITIAL_BACKOFF_MS * 2),
+            "the second retry must double the initial backoff"
+        );
+    }
 }
