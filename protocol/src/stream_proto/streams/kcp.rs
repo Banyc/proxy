@@ -12,7 +12,7 @@ use tokio_kcp::{KcpConfig, KcpListener, KcpNoDelayConfig, KcpStream};
 use tracing::instrument;
 
 use common::{
-    addr::any_addr,
+    addr::{any_addr, dialable_addr},
     connect::ConnectorConfigReader,
     error::AnyResult,
     loading,
@@ -162,7 +162,7 @@ impl StreamConnect for KcpConnector {
         let socket = UdpSocket::bind(bind).await?;
         let local_addr = socket.local_addr()?;
         let config = fast_kcp_config();
-        let stream = KcpStream::connect_with_socket(&config, socket, addr).await?;
+        let stream = KcpStream::connect_with_socket(&config, socket, dialable_addr(addr)).await?;
         let stream = AddressedKcpStream {
             stream,
             local_addr,
@@ -299,6 +299,7 @@ mod tests {
     use super::*;
     use common::addr::DualStackBind;
     use common::connect::ConnectorConfig;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
     async fn a_connected_stream_reports_the_address_the_kernel_assigned() {
@@ -320,6 +321,50 @@ mod tests {
         let stream = connector.connect(listen_addr, None).await.unwrap();
         let local_addr = stream.local_addr().unwrap();
         assert_ne!(local_addr.port(), 0, "{local_addr}");
+        drop(accept_tasks);
+    }
+
+    /// A listener bound to `0.0.0.0` reports `0.0.0.0:<port>` as its
+    /// address. Dialing that verbatim names no host and fails (macOS
+    /// refuses UDP to `0.0.0.0` with `EHOSTUNREACH`), so the connector must
+    /// canonicalize an unspecified dial address to the matching loopback
+    /// address, exactly as the RTP transport does.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unspecified_dial_address_reaches_the_bound_listener() {
+        let listener = KcpListener::bind(fast_kcp_config(), "0.0.0.0:0")
+            .await
+            .unwrap();
+        let listen_addr = listener.local_addr().unwrap();
+        assert!(listen_addr.ip().is_unspecified(), "{listen_addr}");
+        let mut accept_tasks = tokio::task::JoinSet::new();
+        accept_tasks.spawn(async move {
+            let mut listener = listener;
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4];
+            stream.read_exact(&mut buf).await.unwrap();
+            assert_eq!(&buf, b"ping");
+            stream.write_all(b"pong").await.unwrap();
+            stream.flush().await.unwrap();
+        });
+        let connector = KcpConnector::new(
+            common::connect::connector_config_cell(ConnectorConfig {
+                bind: DualStackBind { v4: None, v6: None },
+            })
+            .0,
+        );
+        // Dial the exact address the listener reported (unspecified).
+        let mut stream = connector.connect(listen_addr, None).await.unwrap();
+        stream.write_all(b"ping").await.unwrap();
+        stream.flush().await.unwrap();
+        let mut buf = [0u8; 4];
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.read_exact(&mut buf),
+        )
+        .await
+        .expect("dialing the listener's unspecified address must reach it")
+        .unwrap();
+        assert_eq!(&buf, b"pong");
         drop(accept_tasks);
     }
 }

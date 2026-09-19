@@ -456,7 +456,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
-    #[ignore = "kcp stress is flaky in CI; run manually on demand"]
     async fn stress_test_kcp() {
         stress_test(ConcreteStreamType::Kcp).await
     }

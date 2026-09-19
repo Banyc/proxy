@@ -53,6 +53,24 @@ pub fn any_addr(ip_version: &IpAddr) -> SocketAddr {
     SocketAddr::new(any_ip, 0)
 }
 
+/// The address to actually dial for `addr`. An unspecified address
+/// (`0.0.0.0` / `::`) names no host but is routinely used as a listener
+/// bind address returned by `local_addr()`; dialing it verbatim fails
+/// (`EHOSTUNREACH` for UDP on macOS) instead of reaching the local host.
+/// Canonicalize it to the matching loopback address so a client may dial
+/// a bound listener's reported address, mirroring the RTP transport's
+/// dial normalization.
+pub fn dialable_addr(addr: SocketAddr) -> SocketAddr {
+    if !addr.ip().is_unspecified() {
+        return addr;
+    }
+    let loopback = match addr.ip() {
+        IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::LOCALHOST),
+    };
+    SocketAddr::new(loopback, addr.port())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct InternetAddr(InternetAddrKind);
 impl Deref for InternetAddr {
@@ -251,6 +269,21 @@ mod tests {
         for ip in ["1.1.1.1", "::ffff:1.1.1.1", "2606:4700:4700::1111"] {
             let ip: IpAddr = ip.parse().unwrap();
             assert!(!reaches_loopback(&ip), "{ip}");
+        }
+    }
+
+    #[test]
+    fn an_unspecified_dial_address_is_canonicalized_to_loopback() {
+        for (input, expected) in [
+            ("0.0.0.0:80", "127.0.0.1:80"),
+            ("[::]:80", "[::1]:80"),
+            ("127.0.0.1:80", "127.0.0.1:80"),
+            ("[::1]:80", "[::1]:80"),
+            ("1.1.1.1:80", "1.1.1.1:80"),
+        ] {
+            let input: SocketAddr = input.parse().unwrap();
+            let expected: SocketAddr = expected.parse().unwrap();
+            assert_eq!(dialable_addr(input), expected, "{input}");
         }
     }
 
