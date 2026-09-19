@@ -136,3 +136,34 @@ fn unwrap_ready<T>(poll: Poll<io::Result<T>>) -> io::Result<T> {
         Poll::Pending => Err(io::Error::from(io::ErrorKind::WouldBlock)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `flip` is an involution: each direction maps to the other, and
+    /// flipping twice returns to the start. Driving both variants pins both
+    /// arms; a self-flip or a copied arm fails here.
+    #[test]
+    fn flipping_an_encryption_direction_is_an_involution() {
+        for dir in [EncryptionDirection::Encrypt, EncryptionDirection::Decrypt] {
+            let flipped = dir.flip();
+            assert!(
+                matches!(
+                    (dir, flipped),
+                    (EncryptionDirection::Encrypt, EncryptionDirection::Decrypt)
+                        | (EncryptionDirection::Decrypt, EncryptionDirection::Encrypt)
+                ),
+                "{dir:?} must flip to the other direction"
+            );
+            assert!(
+                matches!(
+                    (dir, flipped.flip()),
+                    (EncryptionDirection::Encrypt, EncryptionDirection::Encrypt)
+                        | (EncryptionDirection::Decrypt, EncryptionDirection::Decrypt)
+                ),
+                "{dir:?} flipped twice must return to itself"
+            );
+        }
+    }
+}
