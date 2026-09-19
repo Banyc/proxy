@@ -42,6 +42,43 @@ const INITIAL_RECONNECT_DELAY: Duration = Duration::from_millis(250);
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
 const STABLE_SESSION: Duration = Duration::from_secs(30);
 
+/// The reconnect-delay policy for the initiator's serve loop. A session
+/// that stayed up for at least [`STABLE_SESSION`] proves the responder is
+/// reachable, so the next reconnect starts again from
+/// [`INITIAL_RECONNECT_DELAY`]; a shorter session keeps doubling the delay
+/// (saturating at [`MAX_RECONNECT_DELAY`]). Extracted from the loop so the
+/// stability boundary and the doubling/cap can be pinned without real
+/// session timing.
+#[derive(Debug)]
+struct ReconnectBackoff {
+    delay: Duration,
+}
+impl ReconnectBackoff {
+    fn new() -> Self {
+        Self {
+            delay: INITIAL_RECONNECT_DELAY,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.delay = INITIAL_RECONNECT_DELAY;
+    }
+
+    fn on_session_ended(&mut self, elapsed: Duration) {
+        if elapsed >= STABLE_SESSION {
+            self.reset();
+        }
+    }
+
+    fn delay(&self) -> Duration {
+        self.delay
+    }
+
+    fn advance(&mut self) {
+        self.delay = self.delay.saturating_mul(2).min(MAX_RECONNECT_DELAY);
+    }
+}
+
 #[derive(Debug)]
 pub struct ReverseTunnelInitiatorHandler {
     pub(crate) name: Arc<str>,
@@ -65,22 +102,20 @@ impl loading::Serve for ReverseTunnelInitiator {
         mut replacement_rx: loading::ReplaceConnHandlerRx<Self::ConnHandler>,
     ) -> AnyResult {
         let mut handler = Arc::new(self.handler);
-        let mut reconnect_delay = INITIAL_RECONNECT_DELAY;
+        let mut backoff = ReconnectBackoff::new();
         loop {
             let started = Instant::now();
             tokio::select! {
                 result = run_initiator_session(Arc::clone(&handler)) => {
                     warn!(?result, name = %handler.name, responder = %handler.responder_addr, "Reverse tunnel session ended");
                     counter!("revtun.session.disconnected").increment(1);
-                    if started.elapsed() >= STABLE_SESSION {
-                        reconnect_delay = INITIAL_RECONNECT_DELAY;
-                    }
+                    backoff.on_session_ended(started.elapsed());
                 }
                 replacement = replacement_rx.recv() => {
                     match replacement {
                         Ok(Some(new_handler)) => {
                             handler = new_handler;
-                            reconnect_delay = INITIAL_RECONNECT_DELAY;
+                            backoff.reset();
                             continue;
                         }
                         Ok(None) => continue,
@@ -89,14 +124,14 @@ impl loading::Serve for ReverseTunnelInitiator {
                 }
             }
             tokio::select! {
-                () = tokio::time::sleep(reconnect_delay) => {
-                    reconnect_delay = reconnect_delay.saturating_mul(2).min(MAX_RECONNECT_DELAY);
+                () = tokio::time::sleep(backoff.delay()) => {
+                    backoff.advance();
                 }
                 replacement = replacement_rx.recv() => {
                     match replacement {
                         Ok(Some(new_handler)) => {
                             handler = new_handler;
-                            reconnect_delay = INITIAL_RECONNECT_DELAY;
+                            backoff.reset();
                         }
                         Ok(None) => {}
                         Err(()) => return Ok(()),
@@ -400,5 +435,53 @@ pub(crate) fn initiator_transport(addr: &RouteAddr) -> Result<ReverseTunnelTrans
         "tcp" => Ok(ReverseTunnelTransport::Tcp),
         "rtpmux" => Ok(ReverseTunnelTransport::Rtp),
         protocol => Err(BuildError::UnsupportedPhysicalTransport(protocol.into())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A session that lasted at least `STABLE_SESSION` must reset the delay
+    /// to the initial value; one that lasted even a nanosecond less must
+    /// keep the grown delay. This is the only place the stability boundary
+    /// (`>=`) is observable without a real 30-second session.
+    #[test]
+    fn a_stable_session_resets_the_backoff_and_a_shorter_one_does_not() {
+        let mut backoff = ReconnectBackoff::new();
+        backoff.advance();
+        backoff.advance();
+        assert_eq!(backoff.delay(), INITIAL_RECONNECT_DELAY * 4);
+
+        backoff.on_session_ended(STABLE_SESSION);
+        assert_eq!(
+            backoff.delay(),
+            INITIAL_RECONNECT_DELAY,
+            "a session at the stability threshold must reset the delay"
+        );
+
+        let mut backoff = ReconnectBackoff::new();
+        backoff.advance();
+        let grown = backoff.delay();
+        assert_ne!(grown, INITIAL_RECONNECT_DELAY);
+        backoff.on_session_ended(STABLE_SESSION - Duration::from_nanos(1));
+        assert_eq!(
+            backoff.delay(),
+            grown,
+            "a session below the stability threshold must not reset the delay"
+        );
+    }
+
+    #[test]
+    fn the_backoff_doubles_and_caps_at_max_reconnect_delay() {
+        let mut backoff = ReconnectBackoff::new();
+        let mut seen = vec![backoff.delay()];
+        for _ in 0..32 {
+            backoff.advance();
+            seen.push(backoff.delay());
+        }
+        assert_eq!(seen[1], INITIAL_RECONNECT_DELAY * 2);
+        assert_eq!(seen[2], INITIAL_RECONNECT_DELAY * 4);
+        assert_eq!(*seen.last().unwrap(), MAX_RECONNECT_DELAY);
     }
 }
