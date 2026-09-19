@@ -244,6 +244,23 @@ mod tests {
         time::Duration,
     };
 
+    /// Every rejection reason must carry its own stable label, both through
+    /// `as_str` and through `Display` (which delegates to it). The table
+    /// drives one row per variant so a copied label or a dropped arm fails
+    /// here.
+    #[test]
+    fn each_session_spawn_error_reports_its_own_reason() {
+        let cases = [
+            (SessionSpawnError::AtCapacity, "at_capacity"),
+            (SessionSpawnError::QueueFull, "queue_full"),
+            (SessionSpawnError::ScopeClosed, "scope_closed"),
+        ];
+        for (error, want) in cases {
+            assert_eq!(error.as_str(), want, "{error:?} label");
+            assert_eq!(error.to_string(), want, "{error:?} display");
+        }
+    }
+
     #[tokio::test]
     async fn a_scope_runs_complete_futures_and_normal_shutdown_drains_them() {
         let (spawner, mut rx) = SessionSpawner::channel();
