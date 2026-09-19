@@ -1,12 +1,12 @@
 //! Exercise the real on-disk config watcher: a write to a watched file must
 //! signal the production [`ConfigChangeSignal`] the serve loop reloads on.
 //!
-//! The test leaks its runtime on purpose. The underlying `file_watcher_tokio`
-//! crate delivers events through a bounded channel whose callback unwraps the
-//! send; when the watched future is dropped the channel closes and a late
-//! fsevents delivery panics inside a C callback that cannot unwind, aborting
-//! the whole test process. Keeping the watcher task (and therefore the
-//! channel) alive until process exit avoids that teardown abort entirely.
+//! [`spawn_watch_tasks`] runs each `file_watcher_tokio` watcher on a detached
+//! OS thread whose receiver is never closed before process exit; that is what
+//! makes the normal teardown below safe. The abort this avoids (a
+//! `blocking_send(...).unwrap()` panicking inside the FSEvents C callback) is
+//! pinned separately by `config_watch_teardown.rs`, which observes it as a
+//! child-process abort.
 
 use std::{sync::Arc, time::Duration};
 
@@ -57,11 +57,11 @@ fn a_real_file_change_signals_the_config_watcher() {
                 break;
             }
         }
-        // Do not drop `process_tasks`: see the module comment.
-        std::mem::forget(process_tasks);
+        // The watcher tasks may now be torn down normally: the watcher future
+        // (and its receiver) lives on a detached thread, not in this set.
         notified
     });
-    std::mem::forget(runtime);
+    drop(runtime);
 
     std::fs::remove_dir_all(&dir).ok();
     assert!(
