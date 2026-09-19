@@ -50,6 +50,26 @@ impl FromStr for ConcreteStreamType {
 mod tests {
     use super::*;
 
+    /// Every concrete stream type must own one wire name, and that name must
+    /// parse back to the same variant. The table drives one row per variant
+    /// so a copied name or a dropped parse arm fails here.
+    #[test]
+    fn every_concrete_stream_type_round_trips_through_its_wire_name() {
+        let cases = [
+            (ConcreteStreamType::Tcp, "tcp"),
+            (ConcreteStreamType::TcpMux, "tcpmux"),
+            (ConcreteStreamType::Kcp, "kcp"),
+            (ConcreteStreamType::Mptcp, "mptcp"),
+            (ConcreteStreamType::Rtp, "rtp"),
+            (ConcreteStreamType::RtpMux, "rtpmux"),
+        ];
+        for (ty, wire) in cases {
+            assert_eq!(ty.as_str(), wire, "{ty:?} label");
+            assert_eq!(ty.to_string(), wire, "{ty:?} display");
+            assert_eq!(wire.parse::<ConcreteStreamType>().unwrap(), ty, "{wire}");
+        }
+    }
+
     #[test]
     fn rtpmux_is_the_only_rtp_mux_protocol() {
         assert_eq!(
