@@ -211,6 +211,18 @@ where
     }
 }
 
+/// Whether a flow has been idle in *both* directions for longer than
+/// [`UDP_FLOW_TIMEOUT`]. A unidirectional flow (one direction active, the
+/// other silent) is alive and must not be reaped.
+fn both_directions_idle(
+    now: std::time::Instant,
+    last_uplink: std::time::Instant,
+    last_downlink: std::time::Instant,
+) -> bool {
+    now.duration_since(last_uplink) > UDP_FLOW_TIMEOUT
+        && now.duration_since(last_downlink) > UDP_FLOW_TIMEOUT
+}
+
 pub async fn copy_bidirectional<R, W, DownstreamRead, DownstreamWrite>(
     flow: Flow,
     streams: (
@@ -409,7 +421,7 @@ where
                 let now = std::time::Instant::now();
                 let last_uplink_packet = *last_uplink_packet.read().unwrap();
                 let last_downlink_packet = *last_downlink_packet.read().unwrap();
-                if now.duration_since(last_uplink_packet) > UDP_FLOW_TIMEOUT && now.duration_since(last_downlink_packet) > UDP_FLOW_TIMEOUT {
+                if both_directions_idle(now, last_uplink_packet, last_downlink_packet) {
                     trace!(%flow, "Flow timed out");
                     break;
                 }
@@ -578,5 +590,34 @@ mod tests {
                 "a {len}-byte ciphertext is shorter than the {X_NONCE_BYTES}-byte nonce",
             );
         }
+    }
+
+    /// A flow ends only when *both* directions have been idle past the
+    /// timeout; a unidirectional flow with one side still sending must
+    /// survive. The `>` boundary is exclusive: exactly `UDP_FLOW_TIMEOUT` of
+    /// silence is not yet an idle expiry.
+    #[test]
+    fn a_flow_times_out_only_when_both_directions_are_idle() {
+        let base = std::time::Instant::now();
+        let idle = base;
+        let active = base + UDP_FLOW_TIMEOUT + Duration::from_secs(1);
+        let now = base + UDP_FLOW_TIMEOUT * 2;
+        assert!(
+            both_directions_idle(now, idle, idle),
+            "a flow idle in both directions must time out"
+        );
+        assert!(
+            !both_directions_idle(now, active, idle),
+            "an active uplink must keep the flow alive"
+        );
+        assert!(
+            !both_directions_idle(now, idle, active),
+            "an active downlink must keep the flow alive"
+        );
+        let exactly_at_timeout = base + UDP_FLOW_TIMEOUT;
+        assert!(
+            !both_directions_idle(exactly_at_timeout, base, base),
+            "exactly one timeout of silence is not yet an idle expiry"
+        );
     }
 }
