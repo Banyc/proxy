@@ -52,6 +52,39 @@ tests/src/stream.rs::perf_bulk_rtp_mux = perf
 common/src/lifecycle/suspend.rs::basics = unrunnable
 ```
 
+## Performance: the tri-mandate constitution (pointer)
+
+The operator's product constitution is **three mandates** — low tail latency
+of the interactive lane, reasonable goodput of that lane (`delivery = 1.000`
+without inflating its own wire), and high goodput of the bulk lane — and they
+apply to this workspace's product as a whole, `proxy` included. The mandates
+are **asserted by `rtp_mux`**, which owns the production dual-lane topology
+(`rtp_mux/GATE.md`, "Performance", states the full constitution with each
+bound's derivation; `netem_test/tests/README.md` carries the pointer table).
+The bounds are never restated here, or anywhere else — one authority per
+mandate.
+
+Run the asserting gates from the `rtp_mux` checkout:
+
+```sh
+# M2 (default tier — runs on every cargo test -p rtp_mux; deterministic counts):
+cargo test -p rtp_mux
+
+# M1, median-of-3 tail-latency floor (opt-in full tier):
+cargo test --release -p rtp_mux --test rtp_mux_jitter -- \
+    --ignored jitter_duallane_constitution_gate_p99 --nocapture --test-threads=1
+
+# M3, bulk-goodput capacity fraction (opt-in full tier):
+cargo test --release -p rtp_mux --test dual_lane_mandates -- \
+    --ignored bulk_lane_goodput_stays_above_capacity_fraction --nocapture --test-threads=1
+```
+
+Proxy owns no performance oracle yet: its layer's per-stream/per-byte
+allocation and relay freedoms are pinned by its own default-tier tests, and
+any future proxy perf lane that asserts a mandate must land in `proxy` and be
+recorded here; until then the constitution's three gates live with their
+topology owner.
+
 ## Residual limitations
 
 The checker is regex-and-brace-counting, the same tool level as the netem_test
