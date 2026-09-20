@@ -931,6 +931,170 @@ mod tests {
         }
     }
 
+    /// A handler that loops on length-prefixed blobs and echoes each one
+    /// back byte-exactly, so one substream can carry many transfers and an
+    /// in-flight read can be interrupted by a handler reload.
+    #[derive(Debug)]
+    struct BlobEchoHandler {
+        served: Arc<AtomicUsize>,
+    }
+    impl BlobEchoHandler {
+        fn new() -> Self {
+            Self {
+                served: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+    }
+    impl loading::HandleConn for BlobEchoHandler {}
+    impl StreamServerHandleConn for BlobEchoHandler {
+        async fn handle_stream<Stream>(&self, mut stream: Stream)
+        where
+            Stream: IoConnection + std::fmt::Debug,
+        {
+            self.served.fetch_add(1, Ordering::SeqCst);
+            loop {
+                let mut len_buf = [0u8; 4];
+                if stream.read_exact(&mut len_buf).await.is_err() {
+                    return;
+                }
+                let len = u32::from_be_bytes(len_buf) as usize;
+                let len = std::cmp::min(len, 4 * 1024 * 1024);
+                let mut blob = vec![0u8; len];
+                if stream.read_exact(&mut blob).await.is_err() {
+                    return;
+                }
+                if stream.write_all(&len_buf).await.is_err() {
+                    return;
+                }
+                if stream.write_all(&blob).await.is_err() {
+                    return;
+                }
+            }
+        }
+    }
+    impl MuxProxyConnHandler for BlobEchoHandler {
+        fn udp_proxy(&self) -> Option<&UdpProxyConnHandler> {
+            None
+        }
+    }
+
+    /// A handler reload must not disturb an in-flight relay: a substream
+    /// whose handler task is parked mid-read keeps receiving its remaining
+    /// bytes and its echoed reply stays byte-exact across the middle of the
+    /// transfer. This is the fixture the smaller
+    /// `tcp_mux_reload_reaches_existing_session_substreams` cannot see —
+    /// there the substream round-trips only before or after the reload.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tcp_mux_reload_does_not_disturb_an_in_flight_relay() {
+        let mut scope = TestRuntimeScope::new();
+        let stream_context = stream_context(&mut scope);
+
+        let handler_old = BlobEchoHandler::new();
+        let handler_new = BlobEchoHandler::new();
+        let served_old = Arc::clone(&handler_old.served);
+        let served_new = Arc::clone(&handler_new.served);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+        let reloadable = ReloadableHandler::new(handler_old);
+        let mut generation = reloadable.generation();
+        let server = TcpMuxServer::with_reloadable(
+            listener,
+            reloadable,
+            stream_context.session_spawner.clone(),
+        );
+        let (set_conn_handler_tx, set_conn_handler_rx) = loading::replace_conn_handler_channel();
+        let set_conn_handler_tx_for_server = set_conn_handler_tx.clone();
+        scope.spawn_required(async move {
+            let _set_conn_handler_tx = set_conn_handler_tx_for_server;
+            server.serve(set_conn_handler_rx).await
+        });
+
+        let proxy_route = RouteAddr {
+            address: proxy_addr.into(),
+            protocol: "tcpmux".into(),
+        };
+        let dial = || async {
+            connect_with_pool(
+                &proxy_route,
+                None,
+                &stream_context,
+                true,
+                Duration::from_secs(10),
+            )
+            .await
+            .unwrap()
+            .0
+        };
+
+        const BLOB: usize = 3 * 1024 * 1024;
+        let blob: Vec<u8> = (0..BLOB).map(|i| (i % 251) as u8).collect();
+        let len_prefix = (BLOB as u32).to_be_bytes();
+        async fn read_echo(stream: &mut (dyn IoConnection + '_)) -> Vec<u8> {
+            let mut echoed_len = [0u8; 4];
+            tokio::time::timeout(Duration::from_secs(30), stream.read_exact(&mut echoed_len))
+                .await
+                .expect("timed out waiting for the length echo")
+                .unwrap();
+            assert_eq!(u32::from_be_bytes(echoed_len), BLOB as u32);
+            let mut echoed = vec![0u8; BLOB];
+            tokio::time::timeout(Duration::from_secs(30), stream.read_exact(&mut echoed))
+                .await
+                .expect("timed out waiting for the blob echo")
+                .unwrap();
+            echoed
+        }
+
+        scope
+            .run(async {
+                let mut stream = dial().await;
+
+                // First blob: send the full header + first third, which parks
+                // the handler task mid-read, then reload while it is parked.
+                stream.write_all(&len_prefix).await.unwrap();
+                stream.write_all(&blob[..BLOB / 3]).await.unwrap();
+                tokio::task::yield_now().await;
+
+                set_conn_handler_tx.send(handler_new).unwrap();
+                tokio::time::timeout(Duration::from_secs(10), generation.changed())
+                    .await
+                    .expect("timed out waiting for the handler reload")
+                    .expect("reload generation watch closed");
+
+                // The reload is installed; the parked handler task keeps
+                // running and receives the rest of the blob.
+                stream.write_all(&blob[BLOB / 3..]).await.unwrap();
+                assert_eq!(
+                    read_echo(&mut *stream).await,
+                    blob,
+                    "the in-flight relay must deliver the whole blob byte-exactly across the reload"
+                );
+
+                // A fresh substream is served by the new generation and must
+                // still round-trip blobs.
+                let mut second = dial().await;
+                stream.as_mut().shutdown().await.ok();
+                second.write_all(&len_prefix).await.unwrap();
+                second.write_all(&blob).await.unwrap();
+                assert_eq!(
+                    read_echo(&mut *second).await,
+                    blob,
+                    "the post-reload generation must keep relaying byte-exactly"
+                );
+                assert_eq!(
+                    served_old.load(Ordering::SeqCst),
+                    1,
+                    "the pre-reload handler must serve exactly the in-flight substream"
+                );
+                assert_eq!(
+                    served_new.load(Ordering::SeqCst),
+                    1,
+                    "the reloaded handler must serve the post-reload substream"
+                );
+            })
+            .await;
+    }
+
     /// A handler reload must reach substreams opened on TCP-mux sessions
     /// that predate the reload: each TCP connection's mux accepter serves
     /// every substream with the *current* handler, not the one captured at
