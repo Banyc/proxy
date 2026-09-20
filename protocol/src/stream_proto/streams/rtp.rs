@@ -295,10 +295,15 @@ pub async fn build_rtp_proxy_server(
     // matches. The key is fixed at bind: the listener decrypts each datagram
     // once at the dispatch and routes decrypted bytes to connections.
     let obfuscation_key = Some(*stream_proxy.header_crypto().key());
-    let listener =
-        rtp::udp::Listener::bind(listen_addr, rtp::udp::ListenerConfig { obfuscation_key, ..rtp::udp::ListenerConfig::default() })
-            .await
-            .map_err(ListenerBindError)?;
+    let listener = rtp::udp::Listener::bind(
+        listen_addr,
+        rtp::udp::ListenerConfig {
+            obfuscation_key,
+            ..rtp::udp::ListenerConfig::default()
+        },
+    )
+    .await
+    .map_err(ListenerBindError)?;
     let server = RtpServer::new(listener, stream_proxy, fec, session_spawner);
     Ok(server)
 }
