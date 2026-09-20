@@ -560,3 +560,339 @@ async fn an_upgrade_response_is_tunnelled_after_the_101() {
         .unwrap();
     assert_eq!(&buf, b"pong");
 }
+
+/// A minimal `tracing::Subscriber` that renders every event's fields to an
+/// in-memory buffer, so a test can assert the *content* of the HTTP proxy's
+/// failure reports (which upstream-error arm a peer actually drove). Testing
+/// runs on a current-thread runtime share the thread-local default with
+/// every spawned task.
+#[derive(Default)]
+struct CaptureVisitor {
+    parts: Vec<String>,
+}
+impl tracing::field::Visit for CaptureVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.parts.push(format!("{}={value:?}", field.name()));
+    }
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.parts.push(format!("{}={value}", field.name()));
+    }
+    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+        self.parts.push(format!("{}={value}", field.name()));
+    }
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        self.parts.push(format!("{}={value}", field.name()));
+    }
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.parts.push(format!("{}={value}", field.name()));
+    }
+    fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
+        self.parts.push(format!("{}={value}", field.name()));
+    }
+}
+#[derive(Debug)]
+struct CaptureSubscriber {
+    buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+impl tracing::Subscriber for CaptureSubscriber {
+    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut visitor = CaptureVisitor::default();
+        event.record(&mut visitor);
+        let mut buf = self.buf.lock().unwrap();
+        buf.extend_from_slice(
+            format!(
+                "[{}] {}\n",
+                event.metadata().target(),
+                visitor.parts.join(" ")
+            )
+            .as_bytes(),
+        );
+    }
+    fn enter(&self, _span: &tracing::span::Id) {}
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+static HTTP_LOG_BUF: std::sync::LazyLock<std::sync::Arc<std::sync::Mutex<Vec<u8>>>> =
+    std::sync::LazyLock::new(std::sync::Arc::default);
+
+/// Install the process-global capture subscriber (idempotent: the first test
+/// in the binary wins; concurrent tests share the same buffer, and the
+/// assertion needles below are unique to the test that produced them).
+fn capture_http_logs() {
+    let _ = tracing::subscriber::set_global_default(CaptureSubscriber {
+        buf: std::sync::Arc::clone(&HTTP_LOG_BUF),
+    });
+}
+
+fn rendered_http() -> String {
+    String::from_utf8(HTTP_LOG_BUF.lock().unwrap().clone()).unwrap()
+}
+
+/// Bounded wait for a fragment of the captured log; the failure report is
+/// emitted by the request-processing task, whose scheduling is not
+/// synchronized with the client's reading of the connection close.
+async fn wait_for_log(needle: &str) -> bool {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if rendered_http().contains(needle) {
+                return true;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// A non-CONNECT GET whose upstream connect is refused must report the
+/// failure through the per-request reporter: the captured log carries the
+/// `http_tunnel_proxy_failed` event with the attempted upstream, and the
+/// client is not left hanging on a half-open tunnel.
+#[tokio::test(flavor = "current_thread")]
+async fn non_connect_get_to_a_refused_upstream_reports_the_failure() {
+    let mut tasks = Tasks::new();
+    capture_http_logs();
+    let server_addr = spawn_http_access(&mut tasks, direct_route_table()).await;
+
+    let mut stream = TcpStream::connect(server_addr).await.unwrap();
+    let request = "GET http://127.0.0.1:1/ HTTP/1.1\r\nHost: 127.0.0.1:1\r\n\r\n";
+    stream.write_all(request.as_bytes()).await.unwrap();
+    // The upstream connect fails; the request must terminate rather than
+    // hang, and the failure must be reported with the refused destination.
+    let ended = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut byte = [0u8; 1];
+        loop {
+            let n = stream.read(&mut byte).await.unwrap_or(0);
+            if n == 0 {
+                return;
+            }
+        }
+    });
+    ended
+        .await
+        .expect("a refused upstream must end the request, not hang");
+    assert!(
+        wait_for_log("http_tunnel_proxy_failed").await,
+        "the failure must be reported:\n{}",
+        rendered_http()
+    );
+    assert!(
+        rendered_http().contains("up=\"127.0.0.1:1\""),
+        "the report must carry the refused upstream as the attempted hop \
+         (`up=`), which only the relay's connect-failure path provides:\n{}",
+        rendered_http()
+    );
+}
+
+/// A TCP peer that accepts the connection and closes it without answering
+/// is an upstream that fails while the request is in flight: hyper's http1
+/// client surfaces both an immediate close and a garbage response at the
+/// request-send stage, so the request reports an `UpstreamRequestSend`
+/// error (with the failure one-shot, so exactly one event is emitted).
+#[tokio::test(flavor = "current_thread")]
+async fn an_origin_that_gives_up_is_a_request_send_failure() {
+    let mut tasks = Tasks::new();
+    capture_http_logs();
+    let server_addr = spawn_http_access(&mut tasks, direct_route_table()).await;
+    for closing in [0u8, 1] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin_addr = listener.local_addr().unwrap();
+        if closing == 0 {
+            // Close immediately after accepting.
+            tasks.spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                drop(stream);
+            });
+        } else {
+            // Read the request head, then close without answering.
+            tasks.spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                loop {
+                    let n = stream.read(&mut byte).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    head.push(byte[0]);
+                    if head.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                drop(stream);
+            });
+        }
+        let mut stream = TcpStream::connect(server_addr).await.unwrap();
+        let request = format!("GET http://{origin_addr}/ HTTP/1.1\r\nHost: {origin_addr}\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        // The client ends when the proxy closes the failed request; the
+        // failure must be reported with the dead upstream address.
+        let _ = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut byte = [0u8; 1];
+            loop {
+                let n = stream.read(&mut byte).await.unwrap_or(0);
+                if n == 0 {
+                    return;
+                }
+            }
+        })
+        .await;
+        let reported = wait_for_log("Upstream HTTP request send failed").await;
+        assert!(
+            reported,
+            "the dead-connection send must be reported as an upstream \
+             request-send failure:\n{}",
+            rendered_http()
+        );
+        assert!(
+            rendered_http().contains(&origin_addr.to_string()),
+            "the report must carry the dropped origin address:\n{}",
+            rendered_http()
+        );
+    }
+}
+
+/// A TCP peer that reads the request head and then closes without answering
+/// fails at the request-send stage: the error is reported as
+/// `UpstreamRequestSend`, proving the handshake succeeded and the request
+/// itself hit a dead connection.
+#[tokio::test(flavor = "current_thread")]
+async fn an_origin_that_reads_then_gives_up_is_a_request_send_failure() {
+    let mut tasks = Tasks::new();
+    capture_http_logs();
+    let server_addr = spawn_http_access(&mut tasks, direct_route_table()).await;
+    // An origin that reads the full request head, then drops the connection
+    // without answering.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin_addr = listener.local_addr().unwrap();
+    tasks.spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            let n = stream.read(&mut byte).await.unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            head.push(byte[0]);
+            if head.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+        drop(stream);
+    });
+
+    let mut stream = TcpStream::connect(server_addr).await.unwrap();
+    let request = format!("GET http://{origin_addr}/ HTTP/1.1\r\nHost: {origin_addr}\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut byte = [0u8; 1];
+        loop {
+            let n = stream.read(&mut byte).await.unwrap_or(0);
+            if n == 0 {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(
+        wait_for_log("Upstream HTTP request send failed").await,
+        "the dead-connection request send must be reported as an upstream \
+         request-send failure:\n{}",
+        rendered_http()
+    );
+}
+
+/// A successful non-CONNECT response must record the stream session in the
+/// session table (destination and start/end stamped) through the session
+/// guard the access server owns.
+#[tokio::test(flavor = "current_thread")]
+async fn a_non_connect_response_records_the_stream_session() {
+    use common::proxy_runtime::metrics::stream::StreamSessionTable;
+
+    let mut tasks = Tasks::new();
+    let (session_spawner, retention) = spawn_process_actors(&mut tasks);
+    let session_table = StreamSessionTable::new();
+    let mut connector_drivers = tokio::task::JoinSet::new();
+    let connector_config = connector_config_cell(ConnectorConfig::default()).0;
+    let udp_connector = UdpConnector::new(connector_config.clone());
+    let connector_table = Arc::new(build_concrete_stream_connector_table(
+        connector_config,
+        ConnectorResetSignal(Notify::new()),
+        &mut connector_drivers,
+        &udp_connector,
+    ));
+    tasks.spawn(async move {
+        while let Some(result) = connector_drivers.join_next().await {
+            result
+                .expect("connector driver panicked")
+                .expect("connector driver failed");
+        }
+    });
+    let stream_context = StreamRuntime {
+        session_table: Some(session_table.clone()),
+        pool: Swap::new(StreamConnPool::empty()),
+        connector_table,
+        replay_validator: Arc::new(ReplayValidator::new(
+            VALIDATOR_TIME_FRAME,
+            VALIDATOR_CAPACITY,
+        )),
+        session_spawner,
+        retention,
+    };
+    let listen_addr: Arc<str> = Arc::from("127.0.0.1:0");
+    let handler = HttpAccessConnHandler::new(
+        direct_route_table(),
+        f64::INFINITY,
+        stream_context.clone(),
+        Arc::clone(&listen_addr),
+    );
+    let listener = TcpListener::bind(listen_addr.as_ref()).await.unwrap();
+    let server_addr = listener.local_addr().unwrap();
+    let server = TcpServer::new(listener, handler, stream_context.session_spawner.clone());
+    let (set_conn_handler_tx, set_conn_handler_rx) = loading::replace_conn_handler_channel();
+    tasks.spawn(async move {
+        let _set_conn_handler_tx = set_conn_handler_tx;
+        server.serve(set_conn_handler_rx).await.unwrap();
+    });
+
+    let body = b"session-recorded body";
+    let origin = spawn_http_origin(&mut tasks, "GET ", body, 1).await;
+    let mut stream = TcpStream::connect(server_addr).await.unwrap();
+    let request = format!("GET http://{origin}/some/path HTTP/1.1\r\nHost: {origin}\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let head = read_http_head(&mut stream).await;
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "an absolute-form GET must be proxied: {head:?}"
+    );
+    let mut got = vec![0u8; body.len()];
+    tokio::time::timeout(Duration::from_secs(10), stream.read_exact(&mut got))
+        .await
+        .expect("timed out reading the proxied body")
+        .unwrap();
+    assert_eq!(&got, body);
+
+    // The response's session guard must be live in the table before the
+    // retention deadline drops it; render the table and check the session
+    // carrying this origin's address and the destination.
+    let view = session_table
+        .to_view("sort start_ms")
+        .expect("the session table must render")
+        .to_string();
+    let origin_port = origin.port().to_string();
+    let tokens: Vec<&str> = view.split_whitespace().collect();
+    assert!(
+        tokens.contains(&"tcp") && tokens.contains(&origin_port.as_str()),
+        "the session must record the upstream/destination with this origin's \
+         address:\n{view}"
+    );
+}

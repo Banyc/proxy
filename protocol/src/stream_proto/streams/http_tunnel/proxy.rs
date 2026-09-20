@@ -379,6 +379,61 @@ mod address_tests {
         );
         assert_eq!(uri.to_string(), "/pub/WWW/TheProject.html");
     }
+
+    /// An origin-form request (no scheme, no authority) must be left
+    /// untouched: without an authority there is no Host to rewrite and no
+    /// path to re-form.
+    #[test]
+    fn test_transform_leaves_origin_form_alone() {
+        let origin_form: hyper::http::Uri = "/some/path".parse().unwrap();
+        let mut uri = origin_form.clone();
+        let mut headers = hyper::http::HeaderMap::new();
+        let method = hyper::http::Method::GET;
+
+        super::transform_absolute_form_req(&mut uri, &mut headers, &method);
+        assert_eq!(uri, origin_form, "an origin-form uri must stay untouched");
+        assert!(!headers.contains_key(hyper::http::header::HOST));
+    }
+
+    /// A network-path reference (`//host/path`) carries an authority but no
+    /// scheme: the rewrite must leave it untouched rather than inventing a
+    /// Host to insert.
+    #[test]
+    fn test_transform_leaves_a_scheme_less_authority_alone() {
+        let network_path: hyper::http::Uri = "//www.example.org/some/path".parse().unwrap();
+        let mut uri = network_path.clone();
+        let mut headers = hyper::http::HeaderMap::new();
+        let method = hyper::http::Method::GET;
+        super::transform_absolute_form_req(&mut uri, &mut headers, &method);
+        assert_eq!(uri, network_path, "a scheme-less uri must stay untouched");
+        assert!(!headers.contains_key(hyper::http::header::HOST));
+    }
+
+    /// An OPTIONS request keeps its rewritten path and the Host header; a
+    /// host without an explicit port stays bare on the wire.
+    #[test]
+    fn test_transform_keeps_the_host_for_options_and_bare_hosts() {
+        let options: hyper::http::Uri = "http://www.example.org/opt".parse().unwrap();
+        let mut uri = options;
+        let mut headers = hyper::http::HeaderMap::new();
+        let method = hyper::http::Method::OPTIONS;
+        super::transform_absolute_form_req(&mut uri, &mut headers, &method);
+        assert_eq!(uri.to_string(), "/opt", "an OPTIONS target keeps its path");
+        assert_eq!(
+            headers.get(hyper::http::header::HOST).unwrap(),
+            "www.example.org"
+        );
+
+        let no_port: hyper::http::Uri = "http://www.example.org/some/path".parse().unwrap();
+        let mut uri = no_port;
+        let mut headers = hyper::http::HeaderMap::new();
+        super::transform_absolute_form_req(&mut uri, &mut headers, &method);
+        assert_eq!(
+            headers.get(hyper::http::header::HOST).unwrap(),
+            "www.example.org",
+            "a host without an explicit port must stay bare"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -420,6 +475,26 @@ mod log_tests {
         assert_eq!(
             minimal.to_string(),
             "2.0s,up{tcp://10.0.0.1:9000},method:GET,uri:/x"
+        );
+    }
+
+    /// The HTTP proxy log renders a named upstream with its resolved ip
+    /// appended, matching the stream-log convention.
+    #[test]
+    fn the_http_proxy_log_renders_a_named_upstream_with_its_resolved_ip() {
+        let named = HttpProxyLog {
+            timing: timing_2s(),
+            upstream_addr: "tcp://example.com:9000".parse().unwrap(),
+            upstream_sock_addr: "10.0.0.1:9000".parse().unwrap(),
+            downstream_addr: None,
+            destination: None,
+            method: "GET".into(),
+            uri: "/x".into(),
+        };
+        let rendered = named.to_string();
+        assert!(
+            rendered.starts_with("2.0s,up{tcp://example.com:9000,10.0.0.1}"),
+            "a named upstream must render host and resolved ip: {rendered}"
         );
     }
 }
