@@ -559,6 +559,7 @@ fn send_dyn<'buf>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proxy_runtime::conn::udp::{DownstreamAddr, UpstreamAddr};
     use tokio_chacha20::X_NONCE_BYTES;
     fn config() -> tokio_chacha20::config::Config {
         tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into())
@@ -666,6 +667,154 @@ mod tests {
                 base
             ),
             "one nanosecond past the warning interval is due"
+        );
+    }
+
+    /// A downstream datagram source: yields its queued packets then signals
+    /// EOF (as a closed flow's read half does).
+    struct QueuedPackets {
+        packets: std::collections::VecDeque<Vec<u8>>,
+    }
+    impl UdpRecv for QueuedPackets {
+        async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
+            match self.packets.pop_front() {
+                Some(pkt) => {
+                    let n = pkt.len();
+                    buf[..n].copy_from_slice(&pkt);
+                    Ok(n)
+                }
+                None => Err(io::Error::new(io::ErrorKind::UnexpectedEof, "flow closed").into()),
+            }
+        }
+    }
+
+    /// A fixed-capacity datagram sink: counts packets/bytes and echoes the
+    /// shutdown outcome. `sink` is pre-sized so receiving the stream does not
+    /// grow it (a measurement of the relay must not count the double's own
+    /// Vec growth).
+    struct Sink {
+        bytes: u64,
+        packets: u64,
+        sink: Vec<u8>,
+    }
+    impl Sink {
+        fn with_capacity(capacity: usize) -> Self {
+            Self {
+                bytes: 0,
+                packets: 0,
+                sink: Vec::with_capacity(capacity),
+            }
+        }
+    }
+    impl UdpSend for Sink {
+        async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
+            self.sink.extend_from_slice(buf);
+            self.bytes += buf.len() as u64;
+            self.packets += 1;
+            Ok(buf.len())
+        }
+        async fn trait_shutdown(&mut self) -> Result<ShutdownOutcome, AnyError> {
+            Ok(ShutdownOutcome::Unsupported)
+        }
+    }
+
+    fn flow() -> Flow {
+        use crate::proxy_runtime::addr::RouteAddr;
+        Flow {
+            upstream: Some(UpstreamAddr(RouteAddr {
+                address: "127.0.0.1:1"
+                    .parse::<std::net::SocketAddr>()
+                    .unwrap()
+                    .into(),
+                protocol: "udp".into(),
+            })),
+            downstream: DownstreamAddr("127.0.0.1:2".parse().unwrap()),
+        }
+    }
+
+    fn unlimited_policy() -> CopyPolicy {
+        CopyPolicy {
+            speed_limiter: Limiter::new(f64::INFINITY),
+            payload_crypto: None,
+            response_header: None,
+            en_dir: EncryptionDirection::Encrypt,
+            gauges: None,
+            clock: Arc::new(crate::clock::SystemClock),
+        }
+    }
+
+    /// The relay copies `K` datagrams of `packet_len` bytes down→up and
+    /// reports the exact traffic log, with an allocation budget that does not
+    /// grow with `K`: the per-packet path is fixed stack/atomic work with no
+    /// per-packet heap traffic. A regression that allocates once per packet
+    /// makes the 4096-packet run cost thousands of additional allocations
+    /// over the 64-packet run.
+    async fn relay_allocations(packets: usize, packet_len: usize) -> (FlowLog, usize, usize) {
+        let downstream = QueuedPackets {
+            packets: (0..packets)
+                .map(|i| vec![(i % 251) as u8; packet_len])
+                .collect(),
+        };
+        let upstream = UpstreamParts {
+            read: QueuedPackets {
+                packets: std::collections::VecDeque::new(),
+            },
+            write: Sink::with_capacity(packets * packet_len),
+        };
+        let downstream = DownstreamParts {
+            read: downstream,
+            write: Sink::with_capacity(0),
+        };
+        let guard = crate::test_alloc::Count::begin();
+        let log = copy_bidirectional(flow(), (upstream, downstream), unlimited_policy()).await;
+        let measured = (guard.allocs(), guard.bytes());
+        drop(guard);
+        (
+            log.expect("the relay must complete cleanly when both directions EOF"),
+            measured.0,
+            measured.1,
+        )
+    }
+
+    #[tokio::test]
+    async fn the_udp_relay_relays_packets_with_a_constant_allocation_budget() {
+        // A thread-local no-op subscriber so every concurrent/global tracing
+        // subscription cannot make the relay's `trace!` calls allocate and
+        // pollute the measurement; the relay tasks run on this test thread
+        // (current-thread runtime), so the thread-local default applies.
+        let _subscriber =
+            tracing::subscriber::set_default(tracing::subscriber::NoSubscriber::new());
+
+        const PACKET_LEN: usize = 1024;
+        let (small_log, small_allocs, small_bytes) = relay_allocations(64, PACKET_LEN).await;
+        let (large_log, large_allocs, large_bytes) = relay_allocations(4096, PACKET_LEN).await;
+
+        // Byte accounting stays exact at every packet count.
+        for (log, packets) in [(small_log, 64usize), (large_log, 4096)] {
+            assert_eq!(
+                log.up.packets, packets as u64,
+                "all {packets} packets must be relayed"
+            );
+            assert_eq!(log.up.bytes, (packets * PACKET_LEN) as u64);
+            assert_eq!(log.dn.packets, 0, "the upstream side sent nothing");
+            assert_eq!(log.dn.bytes, 0);
+        }
+        // The allocation budget is constant: the 4096-packet relay allocates
+        // exactly as much as the 64-packet one, so a per-packet (or
+        // per-chunk) allocation pushes the large run far above the small one.
+        assert_eq!(
+            small_allocs, large_allocs,
+            "the relay allocation budget must not grow with packet count: 64 packets {small_allocs} allocs / {small_bytes} bytes vs 4096 packets {large_allocs} allocs / {large_bytes} bytes"
+        );
+        assert_eq!(
+            small_bytes, large_bytes,
+            "the relay allocation bytes must not grow with packet count"
+        );
+        // And the constant budget itself is small: a handful of task frames
+        // and the two fixed 64-KiB packet buffers, not one buffer per packet.
+        assert!(
+            small_allocs <= 40 && small_bytes <= 5 * PACKET_BUFFER_LENGTH,
+            "the fixed relay budget must stay small, observed {small_allocs} allocs / {small_bytes} bytes"
         );
     }
 }
