@@ -392,6 +392,26 @@ mod tests {
         );
     }
 
+    /// `IoCopyFinished` through a named upstream appends the resolved ip to
+    /// the upstream, exactly like the live stream logs.
+    #[test]
+    fn io_copy_finished_renders_a_named_upstream_with_its_resolved_ip() {
+        let rendered = IoCopyFinished {
+            timing: timing_2s(),
+            bytes_uplink: 100,
+            bytes_downlink: 200,
+            upstream_addr: named_addr("example.com", 9000),
+            upstream_sock_addr: "10.0.0.1:9000".parse().unwrap(),
+            downstream_addr: None,
+            destination: None,
+        }
+        .to_string();
+        assert!(
+            rendered.contains("up{tcp://example.com:9000,10.0.0.1}"),
+            "a named upstream must render host and resolved ip: {rendered}"
+        );
+    }
+
     /// The Hdv conversion distinguishes a measured log (byte counts present)
     /// from an unmeasured one (both counts absent), and attaches the
     /// destination only for the proxy log shapes.
