@@ -49,3 +49,9 @@ pub mod session;
 pub mod stream_runtime;
 pub mod ttl_cell;
 pub mod udp_runtime;
+
+#[cfg(test)]
+mod test_alloc;
+#[cfg(test)]
+#[global_allocator]
+static TEST_ALLOCATOR: test_alloc::CountingAllocator = test_alloc::CountingAllocator;

@@ -387,4 +387,98 @@ mod tests {
             assert_eq!(amounts.b_to_a, 7, "{kind:?}");
         }
     }
+
+    /// An in-memory `AsyncRead + AsyncWrite` peer with a fixed send payload
+    /// and a received-bytes sink, for deterministic whole-copy measurements.
+    struct MemStream {
+        send: Vec<u8>,
+        pos: usize,
+        recv: Vec<u8>,
+    }
+    impl MemStream {
+        fn new(payload: Vec<u8>) -> Self {
+            Self {
+                send: payload,
+                pos: 0,
+                recv: Vec::with_capacity(0),
+            }
+        }
+    }
+    impl AsyncRead for MemStream {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            let remaining = &self.send[self.pos..];
+            let n = remaining.len().min(buf.remaining());
+            buf.put_slice(&remaining[..n]);
+            self.pos += n;
+            Poll::Ready(Ok(()))
+        }
+    }
+    impl AsyncWrite for MemStream {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.recv.extend_from_slice(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// The relay copies through exactly two fixed buffers, one per direction,
+    /// allocated once per connection: the allocation count of a whole
+    /// bidirectional copy is constant regardless of how many chunks the
+    /// payload splits into. A regression that allocates per chunk (or adds a
+    /// third per-connection buffer) makes a large payload cost more than a
+    /// small one.
+    #[tokio::test]
+    async fn the_relay_copy_allocates_a_constant_budget_regardless_of_payload() {
+        for payload_len in [1024usize, 256 * 1024] {
+            let payload = vec![0xabu8; payload_len];
+            let mut a = MemStream::new(payload.clone());
+            let mut b = MemStream::new(payload.clone());
+            // Pre-size the receive sinks so the measurement covers only the
+            // relay's own allocations, not the double's Vec growth.
+            a.recv.reserve(payload_len);
+            b.recv.reserve(payload_len);
+            let guard = crate::test_alloc::Count::begin();
+            let (result, amounts) = copy_bidirectional(&mut a, &mut b).await;
+            let allocs = guard.allocs();
+            let bytes = guard.bytes();
+            drop(guard);
+            result.unwrap();
+            assert_eq!(amounts.a_to_b, payload_len as u64);
+            assert_eq!(amounts.b_to_a, payload_len as u64);
+            assert_eq!(
+                allocs, 2,
+                "a {payload_len}-byte bidirectional copy must allocate exactly the two per-direction CopyBuffers, observed {allocs} allocations"
+            );
+            assert_eq!(
+                bytes,
+                2 * super::super::DEFAULT_BUF_SIZE,
+                "the two buffers must be the relay buffer size each, observed {bytes} bytes"
+            );
+        }
+    }
+
+    /// The relay's per-direction buffer size is a perf knob: it caps the
+    /// bytes moved per read/write syscall pair. Pin it so a resizing does not
+    /// slip by unnoticed.
+    #[test]
+    fn the_relay_buffer_is_configured_at_64kib_per_direction() {
+        assert_eq!(
+            super::super::DEFAULT_BUF_SIZE,
+            64 * 1024,
+            "the relay buffer size is a perf knob and must stay pinned"
+        );
+    }
 }
