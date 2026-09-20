@@ -999,3 +999,296 @@ async fn prepare_reports_duplicate_keys_and_binds_both_responder_transports() {
         })
         .await;
 }
+
+/// A minimal `tracing::Subscriber` that renders every event's fields to an
+/// in-memory buffer, so a test can assert the *content* of the responder's
+/// `warn!` output (which path a failed session took) instead of only
+/// counting outcomes. Installed as the thread-local default; a current-thread
+/// test runtime shares it with every spawned task.
+#[derive(Default)]
+struct CaptureVisitor {
+    parts: Vec<String>,
+}
+impl tracing::field::Visit for CaptureVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.parts.push(format!("{}={value:?}", field.name()));
+    }
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.parts.push(format!("{}={value}", field.name()));
+    }
+    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+        self.parts.push(format!("{}={value}", field.name()));
+    }
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        self.parts.push(format!("{}={value}", field.name()));
+    }
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.parts.push(format!("{}={value}", field.name()));
+    }
+    fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
+        self.parts.push(format!("{}={value}", field.name()));
+    }
+}
+#[derive(Debug)]
+struct CaptureSubscriber {
+    buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+impl tracing::Subscriber for CaptureSubscriber {
+    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut visitor = CaptureVisitor::default();
+        event.record(&mut visitor);
+        let mut buf = self.buf.lock().unwrap();
+        buf.extend_from_slice(
+            format!(
+                "[{}] {}\n",
+                event.metadata().target(),
+                visitor.parts.join(" ")
+            )
+            .as_bytes(),
+        );
+    }
+    fn enter(&self, _span: &tracing::span::Id) {}
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+static REVTUN_LOG_BUF: std::sync::LazyLock<std::sync::Arc<std::sync::Mutex<Vec<u8>>>> =
+    std::sync::LazyLock::new(std::sync::Arc::default);
+
+/// Install the process-global capture subscriber (idempotent across tests in
+/// this binary; the assertion needles are unique to the emitting test).
+fn capture_revtun_logs() {
+    let _ = tracing::subscriber::set_global_default(CaptureSubscriber {
+        buf: std::sync::Arc::clone(&REVTUN_LOG_BUF),
+    });
+}
+
+fn rendered_revtun() -> String {
+    String::from_utf8(REVTUN_LOG_BUF.lock().unwrap().clone()).unwrap()
+}
+
+/// The reconnect loop replaces its handler when a replacement arrives while a
+/// session is running or while the backoff is being waited out, and returns
+/// `Ok` when the replacement channel closes mid-session. Each step is
+/// observed through the *next* session's reported handler name.
+#[tokio::test(start_paused = true)]
+async fn the_reconnect_loop_swaps_the_handler_mid_session_and_mid_backoff() {
+    use super::initiator::serve_initiator_session_loop;
+
+    let mut scope = TestScope::new();
+    let (runtime, _spawner) = test_runtime(&mut scope).await;
+    let crypto = tokio_chacha20::config::Config::new([7; 32].into());
+    let session_log: Arc<std::sync::Mutex<Vec<Arc<str>>>> = Arc::default();
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel::<Arc<str>>();
+    let (release_tx, release_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    // Sessions run sequentially; the single release receiver is shared under
+    // a mutex so each session can await its own release signal.
+    let release_rx = std::sync::Arc::new(tokio::sync::Mutex::new(Some(release_rx)));
+    let clock = Arc::new(VirtualClock::new());
+    let (tx, rx) = loading::replace_conn_handler_channel();
+    let session_log2 = Arc::clone(&session_log);
+    let started_tx2 = started_tx.clone();
+    let mut tasks = tokio::task::JoinSet::new();
+    let run = tx.clone();
+    let loop_crypto = crypto.clone();
+    let loop_runtime = runtime.clone();
+    tasks.spawn(async move {
+        serve_initiator_session_loop(
+            initiator_handler(
+                "private-a",
+                "tcp://127.0.0.1:7000".parse().unwrap(),
+                ReverseTunnelTransport::Tcp,
+                loop_crypto,
+                loop_runtime,
+            ),
+            Arc::clone(&clock) as Arc<dyn common::clock::Clock>,
+            rx,
+            move |handler| {
+                session_log2.lock().unwrap().push(handler.name.clone());
+                let _ = started_tx2.send(handler.name.clone());
+                let release_rx2 = Arc::clone(&release_rx);
+                Box::pin(async move {
+                    let mut release = release_rx2.lock().await;
+                    let rx = release.as_mut().expect("release receiver");
+                    let _ = rx.recv().await;
+                    Err(super::wire::ReverseTunnelSessionError::Closed)
+                })
+            },
+        )
+        .await
+        .unwrap();
+    });
+    // Session 0 (handler a) starts; a replacement arrives while the session
+    // is still running -> the select's replacement arm swaps the handler.
+    let first = started_rx.recv().await.expect("session 0 must start");
+    assert_eq!(&*first, "private-a");
+    let handler_b = initiator_handler(
+        "private-b",
+        "tcp://127.0.0.1:7000".parse().unwrap(),
+        ReverseTunnelTransport::Tcp,
+        crypto.clone(),
+        runtime.clone(),
+    );
+    run.send(handler_b).unwrap();
+    let second = started_rx
+        .recv()
+        .await
+        .expect("session 1 must start with handler b");
+    assert_eq!(
+        &*second, "private-b",
+        "the mid-session replacement must swap the handler"
+    );
+    // End session 1: the loop enters its backoff wait, where a second
+    // replacement is consumed by the backoff select's replacement arm.
+    release_tx.send(()).unwrap();
+    let handler_c = initiator_handler(
+        "private-c",
+        "tcp://127.0.0.1:7000".parse().unwrap(),
+        ReverseTunnelTransport::Tcp,
+        crypto.clone(),
+        runtime,
+    );
+    run.send(handler_c).unwrap();
+    let third = started_rx
+        .recv()
+        .await
+        .expect("session 2 must start with handler c");
+    assert_eq!(
+        &*third, "private-c",
+        "the backoff-period replacement must swap the handler"
+    );
+    // Closing the channel while a session runs makes the loop's session
+    // select return `Ok` through its replacement-error arm.
+    drop(run);
+    drop(tx);
+    timeout_join(&mut tasks).await;
+    let names: Vec<String> = session_log
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_ref().to_string())
+        .collect();
+    assert_eq!(names, ["private-a", "private-b", "private-c"]);
+}
+
+async fn timeout_join(tasks: &mut tokio::task::JoinSet<()>) {
+    let done = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(res) = tasks.join_next().await {
+            res.unwrap();
+        }
+    });
+    done.await.expect("the reconnect loop must terminate");
+}
+
+/// Committing a prepared reverse-tunnel config through the loader pipeline
+/// spawns every serve task, and a second prepare+commit on the live loaders
+/// produces *replacements* rather than new tasks: the existing TCP/RTP
+/// responders swap their handlers through the serve loop's replacement
+/// select, the initiator's reconnect loop accepts its replacement,
+/// and dropping the loader closes the channels so every serve task returns.
+#[tokio::test(flavor = "current_thread")]
+async fn loader_commit_spawns_then_replaces_servers_and_shuts_down() {
+    let mut scope = TestScope::new();
+    let (runtime, _session_spawner) = test_runtime(&mut scope).await;
+    capture_revtun_logs();
+    let config = ReverseTunnelConfig {
+        initiator: vec![initiator_config(
+            "private-a",
+            "tcp://127.0.0.1:1".parse().unwrap(),
+            ConfigBuilder("aGVsbG8".into()),
+            None,
+        )],
+        responder: vec![
+            ReverseTunnelResponderConfig {
+                listen_addr: RouteAddrStr("tcp://127.0.0.1:0".parse().unwrap()),
+                header_key: ConfigBuilder("aGVsbG8".into()),
+            },
+            ReverseTunnelResponderConfig {
+                listen_addr: RouteAddrStr("rtpmux://127.0.0.1:0".parse().unwrap()),
+                header_key: ConfigBuilder("aGVsbG8".into()),
+            },
+        ],
+    };
+    let mut loader = ReverseTunnelLoader::default();
+    let mut tasks = tokio::task::JoinSet::new();
+    // First commit spawns one task per configured tunnel.
+    let prepared = prepare(config.clone(), &loader.snapshot(), runtime.clone())
+        .await
+        .unwrap();
+    loader.commit(&mut tasks, prepared).unwrap();
+    assert_eq!(
+        tasks.len(),
+        3,
+        "one serve task per initiator/responder config"
+    );
+    // Let the serve loops observe the spawned listeners before replacing.
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    // Second prepare+commit produces replacements (no new spawns): every
+    // live listener swaps its handler through its own replacement select.
+    let prepared2 = prepare(config, &loader.snapshot(), runtime).await.unwrap();
+    loader.commit(&mut tasks, prepared2).unwrap();
+    assert_eq!(tasks.len(), 3, "replacements must not spawn new tasks");
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    let rendered = rendered_revtun();
+    assert!(
+        rendered.contains("Connection handler set"),
+        "the serve loops must apply the replacement handler:\n{rendered}"
+    );
+    // Dropping the loader closes every replacement channel; each serve task
+    // then returns `Ok` through its shutdown path.
+    drop(loader);
+    let mut completed = 0;
+    let done = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(res) = tasks.join_next().await {
+            let _ = res.unwrap_or_else(|e| panic!("serve task failed: {e}"));
+            completed += 1;
+        }
+    });
+    done.await
+        .expect("all serve tasks must terminate after the channels close");
+    assert_eq!(completed, 3);
+}
+
+/// A responder bound to an address that is already taken is reported as a
+/// `BuildError::Bind` by the prepare pipeline, not silently swallowed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_responder_bind_failure_is_reported_by_prepare() {
+    let mut scope = TestScope::new();
+    let (runtime, _session_spawner) = test_runtime(&mut scope).await;
+    // Occupy a loopback port deterministically (the rtpmux transport binds a
+    // UDP socket), then try to prepare a responder on exactly that address.
+    let occupant = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let occupied = occupant.local_addr().unwrap();
+    let config = ReverseTunnelConfig {
+        initiator: vec![],
+        responder: vec![ReverseTunnelResponderConfig {
+            listen_addr: RouteAddrStr(format!("rtpmux://{occupied}").parse().unwrap()),
+            header_key: ConfigBuilder("aGVsbG8".into()),
+        }],
+    };
+    let loader = ReverseTunnelLoader::default();
+    scope
+        .run(async {
+            let error = match prepare(config, &loader.snapshot(), runtime).await {
+                Ok(_) => panic!("a bind onto an occupied address must fail"),
+                Err(error) => error,
+            };
+            let text = format!("{error}");
+            assert!(
+                text.contains("already in use"),
+                "the bind failure must be surfaced as an address-in-use error: {error}"
+            );
+        })
+        .await;
+}
