@@ -399,4 +399,74 @@ mod tests {
             RouteAction::RouteSelector(_)
         ));
     }
+
+    /// The route lookup is the per-connection destination decision: it must
+    /// not touch the heap when every entry carries an inline matcher (no
+    /// named references, so the per-call cycle guard stays empty and the
+    /// entries vec is only iterated). A regression that allocates per lookup
+    /// (or per entry) turns every session handshake into a heap event.
+    #[test]
+    fn a_route_lookup_on_inline_matchers_allocates_nothing() {
+        let table = RouteTable::new(
+            (0..32)
+                .map(|_| entry(matcher("{}"), RouteAction::Block))
+                .collect(),
+            Arc::new(HashMap::new()),
+        );
+        let target = addr("1.2.3.4:80");
+        // Warm every lazy-once initialisation outside the measurement.
+        assert!(matches!(table.action(&target), RouteAction::Block));
+        let guard = crate::test_alloc::Count::begin();
+        let mut seen = RouteAction::Block;
+        for _ in 0..100 {
+            let action = table.action(&target);
+            seen = action.clone();
+        }
+        let (allocs, bytes) = (guard.allocs(), guard.bytes());
+        drop(guard);
+        assert!(matches!(seen, RouteAction::Block));
+        assert_eq!(
+            allocs, 0,
+            "an inline-matcher route lookup must be allocation-free, observed {allocs} allocations / {bytes} bytes over 100 lookups"
+        );
+    }
+
+    /// A lookup that consults a named matcher stops at the first match, so it
+    /// pays for at most one cycle-guard entry regardless of how many entries
+    /// precede the match. A regression that consults every entry's name
+    /// (linearising the scan) allocates a cycle-guard entry per consulted
+    /// name and blows through the budget.
+    #[test]
+    fn a_named_route_lookup_allocates_only_the_first_match() {
+        let matchers = Arc::new(HashMap::from([
+            (Arc::from("m0"), matcher("{}")),
+            (Arc::from("m1"), matcher(r#"{"addr": "10.0.0.5"}"#)),
+        ]));
+        // Distinct names, so every entry needs its own cycle-guard insert if
+        // consulted; entry 0 matches, so only name m0 is ever inserted.
+        let table = RouteTable::new(
+            (0..32)
+                .map(|i| {
+                    let name: Arc<str> = if i == 0 {
+                        "m0".into()
+                    } else {
+                        format!("m1-{i}").into()
+                    };
+                    RouteTableEntry::new(Some(name), matcher("{}"), RouteAction::Block)
+                })
+                .collect(),
+            matchers,
+        );
+        let target = addr("1.2.3.4:80");
+        assert!(matches!(table.action(&target), RouteAction::Block));
+        let guard = crate::test_alloc::Count::begin();
+        let action = table.action(&target);
+        let (allocs, bytes) = (guard.allocs(), guard.bytes());
+        drop(guard);
+        assert!(matches!(action, RouteAction::Block));
+        assert!(
+            allocs <= 2,
+            "a named lookup must stop at the first matching entry (one cycle-guard enter), observed {allocs} allocations / {bytes} bytes for a 32-entry table"
+        );
+    }
 }
