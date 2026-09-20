@@ -276,6 +276,370 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    /// A minimal `tracing::Subscriber` that renders every event's fields to
+    /// an in-memory buffer (`?` fields through their `Debug` impl, which is
+    /// what `RttLog`/`LossLog` implement), so a test can assert the *content*
+    /// of the prober's logs — the observable record of which path a
+    /// degraded chain took — instead of only counting tracer calls.
+    /// Installed as the thread-local default (tests run on a current-thread
+    /// runtime, so every spawned prober task shares it).
+    #[derive(Default)]
+    struct CaptureVisitor {
+        parts: Vec<String>,
+    }
+    impl tracing::field::Visit for CaptureVisitor {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.parts.push(format!("{}={value:?}", field.name()));
+        }
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.parts.push(format!("{}={value}", field.name()));
+        }
+        fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+            self.parts.push(format!("{}={value}", field.name()));
+        }
+        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+            self.parts.push(format!("{}={value}", field.name()));
+        }
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            self.parts.push(format!("{}={value}", field.name()));
+        }
+        fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
+            self.parts.push(format!("{}={value}", field.name()));
+        }
+    }
+    #[derive(Debug)]
+    struct CaptureSubscriber {
+        buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+    impl tracing::Subscriber for CaptureSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut visitor = CaptureVisitor::default();
+            event.record(&mut visitor);
+            let mut buf = self.buf.lock().unwrap();
+            buf.extend_from_slice(
+                format!(
+                    "[{}] {}\n",
+                    event.metadata().target(),
+                    visitor.parts.join(" ")
+                )
+                .as_bytes(),
+            );
+        }
+        fn enter(&self, _span: &tracing::span::Id) {}
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    fn capture_logs() -> std::sync::Arc<std::sync::Mutex<Vec<u8>>> {
+        // Process-global, not thread-local, so a *concurrent* test sharing
+        // the harness worker thread cannot displace the subscriber while
+        // this test's prober task is still logging mid-run.
+        let buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = std::sync::Arc::default();
+        let _ = tracing::subscriber::set_global_default(CaptureSubscriber {
+            buf: std::sync::Arc::clone(&buf),
+        });
+        buf
+    }
+
+    fn rendered(buf: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> String {
+        String::from_utf8(buf.lock().unwrap().clone()).unwrap()
+    }
+
+    /// How often a rendered log line appears.
+    fn occurrences(haystack: &str, needle: &str) -> usize {
+        haystack.matches(needle).count()
+    }
+
+    /// The process-global capture is shared with concurrent tests; keep only
+    /// the events of the scripted prober (identified by its probe kind),
+    /// which is what the assertions read.
+    fn scripted_lines(buf: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> String {
+        rendered(buf)
+            .lines()
+            .filter(|l| l.contains("kind=scripted-chain"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// A tracer that scripts a long RTT degradation curve and advances the
+    /// injected clock past the 600s pacer interval exactly once, between the
+    /// second and third regression. All `ProbeRtt` methods except
+    /// `probe_rtt` are left at their trait defaults, so the default
+    /// no-op `recycle`/`reoptimize`/`session_stats` implementations are the
+    /// ones driven.
+    struct ScriptedChain {
+        calls: AtomicUsize,
+        clock: std::sync::Arc<crate::clock::test_support::ManualClock>,
+    }
+    impl ScriptedChain {
+        /// The sample for the scripted round. The RTT store smooths samples
+        /// through an EWMA of a rolling median, so the scripted *values* are
+        /// the raw probes; the degradation fires on the smoothed value.
+        /// Round 1..=7 (1.2s) degrades on the smoothed value while the
+        /// injected clock is still at its start — suppressed by the 600s
+        /// pacer. Calls 8..=13 (4.8s) re-degrade after the clock has been
+        /// advanced by 600s — allowed to recycle. The rest exercise the
+        /// second/second/micro/nano rendering units and the failure tail.
+        fn sample(&self) -> Option<Duration> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 6 {
+                // Cross the 600s RecyclePacer exactly once, mid-script.
+                self.clock.advance(Duration::from_secs(600));
+            }
+            match call {
+                0 => Some(Duration::from_millis(10)),
+                1..=7 => Some(Duration::from_millis(1200)),
+                8..=13 => Some(Duration::from_millis(4800)),
+                14..=19 => Some(Duration::from_millis(9600)),
+                20..=25 => Some(Duration::from_millis(19200)),
+                26..=29 => Some(Duration::from_millis(25) / 1000),
+                30..=34 => Some(Duration::from_nanos(500)),
+                // A sustained failure tail drives the rendered loss towards
+                // a full `1` and the dead-interval mean.
+                _ => None,
+            }
+        }
+    }
+    impl ProbeRtt for ScriptedChain {
+        fn probe_kind(&self) -> &'static str {
+            // A unique kind so the process-global capture can be filtered to
+            // this test's own prober events (other tests run concurrently
+            // and log to the same subscriber).
+            "scripted-chain"
+        }
+        fn probe_rtt(
+            &self,
+            _chain: &RouteChain,
+        ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>> {
+            let call = self.sample();
+            Box::pin(async move {
+                ProbeOutcome {
+                    rtt: call.ok_or_else(|| crate::error::AnyError::from("scripted probe failure")),
+                    epilog: None,
+                }
+            })
+        }
+    }
+
+    fn two_hop_chain() -> Arc<RouteChain> {
+        use crate::route::HopConfig;
+        let hop = |addr: &str, key: u8| HopConfig {
+            name: None,
+            address: addr.parse().unwrap(),
+            header_crypto: tokio_chacha20::config::Config::new([key; 32].into()),
+            payload_crypto: None,
+        };
+        Arc::from([hop("tcp://10.0.0.1:9000", 1), hop("tcp://10.0.0.2:9001", 2)])
+    }
+
+    /// The prober's recycle/reoptimize decision record, rendered through the
+    /// logging path: the first degradation fires while the injected clock is
+    /// still at its start, so the 600s `RecyclePacer` must suppress it; the
+    /// second fires after the clock crossed 600s and must recycle through the
+    /// *default* no-op implementation; the periodic probe log renders RTT
+    /// samples in every human unit and both loss states.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn degraded_chain_recycles_and_suppresses_under_log_rendering() {
+        use crate::clock::test_support::ManualClock;
+
+        let logs = capture_logs();
+        let clock = std::sync::Arc::new(ManualClock::new());
+        let tracer = std::sync::Arc::new(ScriptedChain {
+            calls: AtomicUsize::new(0),
+            clock: std::sync::Arc::clone(&clock),
+        });
+        let chain = two_hop_chain();
+        let rtt_stats = Arc::new(RwLock::new(RttStats::default()));
+        let loss = Arc::new(RwLock::new(None));
+        let cancellation = CancellationToken::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(probe_task(
+            std::sync::Arc::clone(&tracer) as Arc<dyn ProbeRtt + Send + Sync>,
+            chain,
+            rtt_stats,
+            loss,
+            std::sync::Arc::clone(&clock) as Arc<dyn Clock>,
+            cancellation.clone(),
+        ));
+        // Each round sleeps at most 60s, so a 61s advance runs at least one
+        // round; the script needs 35 rounds plus a ~25-round failure tail to
+        // push the rendered loss from its recovery value to a full `1`.
+        for _ in 0..70 {
+            tokio::time::advance(Duration::from_secs(61)).await;
+            tokio::task::yield_now().await;
+        }
+        cancellation.cancel();
+        while let Some(res) = tasks.join_next().await {
+            res.unwrap();
+        }
+
+        let logs = scripted_lines(&logs);
+        assert_eq!(
+            occurrences(&logs, "Chain RTT degraded; recycling first-hop session"),
+            1,
+            "the post-advance degradation must be the only one allowed to \
+             recycle:\n{logs}"
+        );
+        assert_eq!(
+            occurrences(
+                &logs,
+                "recycle suppressed (min interval), accepting as new baseline"
+            ),
+            2,
+            "the pre-advance degradation and the post-recycle re-degradation \
+             must both be suppressed by the pacer:\n{logs}"
+        );
+        assert_eq!(
+            occurrences(&logs, "Timer reoptimize: reoptimizing first-hop relay"),
+            1,
+            "reoptimize is polled every round but its own pacer allows exactly \
+             once, on the clock crossing:\n{logs}"
+        );
+        // The periodic probe log must render each RTT sample in its own unit.
+        for (needle, what) in [
+            ("sample=1.2s", "second unit"),
+            ("sample=25µs", "microsecond unit"),
+            ("sample=500ns", "nanosecond unit"),
+        ] {
+            assert!(
+                logs.contains(needle),
+                "the probe log must render the {what} sample: missing `{needle}` in:\n{logs}"
+            );
+        }
+        assert!(
+            logs.contains("srtt=") && logs.contains("ms"),
+            "the degraded/suppressed logs render the smoothed srtt in a \
+             millisecond value:\n{logs}"
+        );
+        // The loss store renders 0 after a clean run and 1 after the
+        // sustained failure tail.
+        assert!(
+            logs.contains("loss=0"),
+            "clean rounds render zero loss:\n{logs}"
+        );
+        assert!(
+            logs.contains("loss=1"),
+            "the failure tail renders full loss:\n{logs}"
+        );
+    }
+
+    /// A probe that never resolves must be reaped by the round's 5s timeout
+    /// as a failure: the timeout arm produces no sample, which drives the
+    /// loss store to 1.0 and keeps the loop probing.
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_that_hangs_times_out_into_a_failure() {
+        struct HangingTracer;
+        impl ProbeRtt for HangingTracer {
+            fn probe_rtt(
+                &self,
+                _chain: &RouteChain,
+            ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>> {
+                Box::pin(std::future::pending())
+            }
+        }
+
+        let chain: Arc<RouteChain> = Arc::from(Vec::<crate::route::HopConfig>::new());
+        let rtt_stats = Arc::new(RwLock::new(RttStats::default()));
+        let loss = Arc::new(RwLock::new(None));
+        let cancellation = CancellationToken::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(probe_task(
+            Arc::new(HangingTracer),
+            chain,
+            rtt_stats,
+            Arc::clone(&loss),
+            Arc::new(crate::clock::SystemClock),
+            cancellation.clone(),
+        ));
+        // Three rounds; each round's 5s probe timeout fires within a 6s
+        // advance, so every round is a timed-out failure.
+        for _ in 0..3 {
+            tokio::time::advance(Duration::from_secs(6)).await;
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            *loss.read().unwrap(),
+            Some(1.0),
+            "every timed-out probe must count as a failure in the loss store"
+        );
+        cancellation.cancel();
+        while let Some(res) = tasks.join_next().await {
+            res.unwrap();
+        }
+    }
+
+    /// A panicking teardown epilog must be reaped by the round's
+    /// `try_join_next` loop and its panic re-raised through the `.unwrap()`:
+    /// if the reap or the unwrap were removed, the panic would be swallowed
+    /// and `probe_task` would keep probing instead of surfacing it.
+    #[tokio::test(start_paused = true)]
+    async fn a_panicking_epilog_propagates_through_the_reap() {
+        struct PanicEpilogTracer {
+            calls: AtomicUsize,
+        }
+        impl ProbeRtt for PanicEpilogTracer {
+            fn probe_rtt(
+                &self,
+                _chain: &RouteChain,
+            ) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + '_>> {
+                let index = self.calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    ProbeOutcome {
+                        rtt: Ok(Duration::from_millis(10)),
+                        epilog: if index == 0 {
+                            Some(Box::pin(async {
+                                panic!("scripted epilog panic");
+                            }))
+                        } else {
+                            None
+                        },
+                    }
+                })
+            }
+        }
+
+        let chain: Arc<RouteChain> = Arc::from(Vec::<crate::route::HopConfig>::new());
+        let rtt_stats = Arc::new(RwLock::new(RttStats::default()));
+        let loss = Arc::new(RwLock::new(None));
+        let cancellation = CancellationToken::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(probe_task(
+            Arc::new(PanicEpilogTracer {
+                calls: AtomicUsize::new(0),
+            }),
+            chain,
+            rtt_stats,
+            loss,
+            Arc::new(crate::clock::SystemClock),
+            cancellation,
+        ));
+        let mut outcome = None;
+        // Under paused time the sleep between rounds resolves only when the
+        // executor idles, so advance a little and then reap the round-2
+        // panic.
+        for _ in 0..5 {
+            tokio::time::advance(Duration::from_secs(61)).await;
+            tokio::task::yield_now().await;
+            if let Some(res) = tasks.try_join_next() {
+                outcome = Some(res);
+                break;
+            }
+        }
+        let outcome = outcome.expect("probe_task must terminate after the panicking epilog");
+        assert!(
+            outcome.is_err(),
+            "the epilog panic must re-raise through the reap unwrap, not be \
+             swallowed: {outcome:?}"
+        );
+    }
+
     #[test]
     fn poisson_interval_respects_clamp_bounds() {
         for _ in 0..1000 {
