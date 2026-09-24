@@ -83,6 +83,45 @@ mod tests {
         }
         assert!(d.observe(ms(200)));
     }
+
+    /// The degradation threshold is `srtt >= DEGRADED_RTT_RATIO * best`: a
+    /// sample *exactly* at the ratio already counts toward the streak (only a
+    /// strictly smaller one resets it), and a sample just below it does not.
+    /// `1s` and `3s` are exact in `as_secs_f64` and `1.0 * 3.0` is exact, so
+    /// the boundary is the same expression the code evaluates rather than an
+    /// f64 approximation — and because the ratio is the literal `3.0` here, a
+    /// retune (e.g. to `3.1`) drops `3s` strictly below the threshold and
+    /// resets the streak instead. The tests in this module only ever use a 4x
+    /// regression (200ms against a 50ms best), which stays degraded for any
+    /// ratio from 3.0 up to 4.0, so none of them observes the boundary.
+    #[test]
+    fn the_degradation_ratio_boundary_counts_a_sample_exactly_at_the_ratio() {
+        let mut d = RttDegradation::default();
+        assert!(!d.observe(Duration::from_secs(1)));
+        for _ in 0..DEGRADED_PROBE_STREAK - 1 {
+            assert!(!d.observe(Duration::from_secs(3)));
+        }
+        assert!(
+            d.observe(Duration::from_secs(3)),
+            "a 3x regression must fire after DEGRADED_PROBE_STREAK observations"
+        );
+
+        // A sample strictly below the ratio resets the streak.
+        let mut d = RttDegradation::default();
+        assert!(!d.observe(Duration::from_secs(1)));
+        for _ in 0..DEGRADED_PROBE_STREAK - 1 {
+            assert!(!d.observe(Duration::from_secs(3)));
+        }
+        assert!(
+            !d.observe(Duration::from_secs(2)),
+            "2x is below the ratio and must reset the streak"
+        );
+        assert!(
+            !d.observe(Duration::from_secs(3)),
+            "the streak restarted at one, so it must not fire yet"
+        );
+    }
+
     #[test]
     fn degradation_streak_resets_when_rtt_recovers() {
         let mut d = RttDegradation::default();

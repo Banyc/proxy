@@ -343,6 +343,33 @@ mod tests {
         assert!(InternetAddr::from_host_and_port("http://evil", 80).is_err());
     }
 
+    /// `from_str` accepts exactly two shapes: a `SocketAddr`, or a
+    /// `host:port` whose host is a domain. A string with a third colon is
+    /// neither — the `SocketAddr` parse has already failed, and accepting it
+    /// as a domain would silently discard everything after the port and turn
+    /// a malformed address into a plausible-looking one. This is the same
+    /// rejection `from_host_and_port` pins for a colon-bearing host, on the
+    /// `from_str` path that config-file addresses use.
+    #[test]
+    fn a_string_with_a_third_colon_that_is_not_a_socket_addr_is_rejected() {
+        for s in [
+            "1.2.3.4:80:90",
+            "example.website:80:443",
+            "example.website:80:x",
+        ] {
+            assert!(
+                s.parse::<InternetAddr>().is_err(),
+                "`{s}` is neither a socket address nor a `host:port` pair and must be rejected"
+            );
+        }
+        // The two accepted shapes stay accepted (and keep their port).
+        assert_eq!("1.2.3.4:80".parse::<InternetAddr>().unwrap().port(), 80);
+        assert_eq!(
+            "example.website:80".parse::<InternetAddr>().unwrap().port(),
+            80
+        );
+    }
+
     #[test]
     fn serde_domain_name() {
         let s = "\"example.website:1\"";

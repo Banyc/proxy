@@ -110,6 +110,75 @@ mod tests {
             Some("192.0.2.1".parse().unwrap())
         );
     }
+
+    /// `Merge` adds keys, it never overrides them: a later config file may
+    /// supply the bind family an earlier file left unset, but the family the
+    /// earlier file already set must survive untouched. No other test in the
+    /// workspace merges a `ConnectorConfig`, so without this the merge
+    /// precedence of the dial bind is entirely unexercised.
+    #[test]
+    fn merging_connector_binds_adopts_only_the_family_the_earlier_file_left_unset() {
+        let earlier = ConnectorConfig {
+            bind: DualStackBind {
+                v4: Some("192.0.2.1".parse().unwrap()),
+                v6: None,
+            },
+        };
+        let later = ConnectorConfig {
+            bind: DualStackBind {
+                v4: None,
+                v6: Some("2001:db8::1".parse().unwrap()),
+            },
+        };
+        let merged = earlier.merge(later).unwrap();
+        assert_eq!(
+            merged.bind.v4,
+            Some("192.0.2.1".parse().unwrap()),
+            "the earlier file's family must survive a later file that leaves it unset"
+        );
+        assert_eq!(
+            merged.bind.v6,
+            Some("2001:db8::1".parse().unwrap()),
+            "the family the earlier file left unset is adopted from the later file"
+        );
+        let neither = ConnectorConfig {
+            bind: DualStackBind { v4: None, v6: None },
+        };
+        let merged = neither.merge(ConnectorConfig::default()).unwrap();
+        assert_eq!((merged.bind.v4, merged.bind.v6), (None, None));
+    }
+
+    /// A later file that re-binds a family an earlier file already bound is an
+    /// attempted override and must be rejected, naming the family that
+    /// clashed. `merge_map`'s equivalent rejection is pinned in `server`, but
+    /// the connector bind's own rejection has no sibling pin anywhere.
+    #[test]
+    fn merging_connector_binds_rejects_a_family_bound_in_both_files() {
+        let both = |v4: &str, v6: &str| ConnectorConfig {
+            bind: DualStackBind {
+                v4: Some(v4.parse().unwrap()),
+                v6: Some(v6.parse().unwrap()),
+            },
+        };
+        let err = both("192.0.2.1", "2001:db8::1")
+            .merge(both("198.51.100.1", "2001:db8::2"))
+            .unwrap_err();
+        assert_eq!(err, "repeated bind.v4", "the IPv4 clash is named");
+
+        let v6_only = |v6: &str| ConnectorConfig {
+            bind: DualStackBind {
+                v4: None,
+                v6: Some(v6.parse().unwrap()),
+            },
+        };
+        let err = v6_only("2001:db8::1")
+            .merge(v6_only("2001:db8::2"))
+            .unwrap_err();
+        assert_eq!(
+            err, "repeated bind.v6",
+            "an IPv6-only clash names the v6 bind"
+        );
+    }
 }
 
 #[derive(Debug, Clone)]

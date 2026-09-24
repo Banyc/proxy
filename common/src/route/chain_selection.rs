@@ -136,6 +136,29 @@ mod tests {
     fn unknown_metrics_are_neutral() {
         assert!((chain_score(1., None, RttSlot::Unmeasured) - 0.5).abs() < 1e-9);
     }
+
+    /// The loss penalty is exactly `(1 - loss)^3`, the only scoring factor
+    /// whose exponent is not pinned: `0.5^3` is dyadic, so a 50%-loss chain at
+    /// the reference RTT scores exactly `1/16` and a doubled weight exactly
+    /// `1/8`. The sibling `a_lossy_chain_is_de_preferred_but_never_excluded`
+    /// only requires the lossy score to beat half the lossless one, which every
+    /// exponent from 1 to 6 satisfies, so a retune of the exponent — a real
+    /// change to how strongly lossy chains are de-preferred — is invisible to
+    /// it.
+    #[test]
+    fn the_loss_penalty_is_cubed() {
+        assert_eq!(
+            chain_score(1., Some(0.5), RttSlot::Measured(RTT_REF)),
+            (1. - 0.5_f64).powi(3) * 0.5,
+            "a 50% loss chain at the reference RTT scores (1 - loss)^3 * 0.5"
+        );
+        assert_eq!(
+            chain_score(2., Some(0.5), RttSlot::Measured(RTT_REF)),
+            2. * (1. - 0.5_f64).powi(3) * 0.5,
+            "a doubled weight doubles the score"
+        );
+    }
+
     #[test]
     fn unreachable_scores_zero() {
         assert_eq!(chain_score(1., None, RttSlot::Unreachable), 0.);
