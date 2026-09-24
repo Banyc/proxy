@@ -192,6 +192,31 @@ mod tests {
     }
 
     #[test]
+    fn absolute_form_https_defaults_to_port_443() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("https://example.com/path")
+            .body(())
+            .unwrap();
+        assert_eq!(
+            get_authority_from_req(&req).unwrap().to_string(),
+            "example.com:443",
+            "an https request with no explicit port must default to 443"
+        );
+
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("https://example.com:8443/path")
+            .body(())
+            .unwrap();
+        assert_eq!(
+            get_authority_from_req(&req).unwrap().to_string(),
+            "example.com:8443",
+            "an explicit https port must be kept"
+        );
+    }
+
+    #[test]
     fn host_port_out_of_range_is_rejected() {
         let req = Request::builder()
             .method(Method::GET)
