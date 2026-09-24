@@ -589,4 +589,53 @@ header_key = "aGVsbG8"
         assert_eq!(pool_names.next().as_deref(), Some("pool_a"));
         assert_eq!(pool_names.next().as_deref(), Some("pool_b"));
     }
+
+    /// The multi-file reader applies each file to the config accumulated from
+    /// the earlier ones, in the order the paths were given — the direction
+    /// every `Merge` impl is written for, which the test above pins for
+    /// [`ServerConfig::merge`] directly. The reader is the production input
+    /// path (`MultiFileConfigReader` is what `main` hands to `serve`), and it
+    /// decides the direction; the reader's own integration tests drive it
+    /// with a `Fragment` whose only field is a `BTreeMap`, which has no order
+    /// to lose. The stream pool is an ordered concatenation, so a merge taken
+    /// in the wrong direction comes out reversed here.
+    #[tokio::test]
+    async fn the_multi_file_reader_applies_the_files_in_order() {
+        let dir = std::env::temp_dir().join(format!(
+            "proxy-reader-order-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("the system clock is after the Unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first: Arc<str> = Arc::from(dir.join("a.toml").to_str().unwrap());
+        let second: Arc<str> = Arc::from(dir.join("b.toml").to_str().unwrap());
+        std::fs::write(first.as_ref(), "[stream]\npool = [\"pool_a\"]\n").unwrap();
+        std::fs::write(second.as_ref(), "[stream]\npool = [\"pool_b\"]\n").unwrap();
+
+        let reader = config::multi_file_config::MultiFileConfigReader::<ServerConfig>::new(
+            vec![first, second].into(),
+        );
+        let merged = reader.read_config().await.unwrap();
+        let pool_names = merged
+            .stream
+            .pool
+            .0
+            .iter()
+            .map(|entry| match entry {
+                common::config::SharableConfig::SharingKey(key) => key.to_string(),
+                common::config::SharableConfig::Private(hop) => format!("{hop}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            pool_names,
+            vec!["pool_a".to_string(), "pool_b".to_string()],
+            "the reader must apply each file to the accumulated config in the order the paths \
+             were given: a merge taken in the wrong direction reverses an ordered field"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
