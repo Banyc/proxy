@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use access_server::{AccessServerConfig, AccessServerLoader, AccessServerLoaderSnapshot};
 use ae::anti_replay::{ReplayValidator, TimeValidator};
 use common::{
-    anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
+    anti_replay::{VALIDATOR_CAPACITY, VALIDATOR_TIME_FRAME, VALIDATOR_UDP_WINDOW},
     config::{Merge, merge_map},
     connect::{ConnectorConfig, ConnectorResetSignal, connector_config_cell},
     error::AnyError,
@@ -48,6 +48,14 @@ pub struct ServeContext {
     pub retention: RetentionActorSender,
 }
 
+/// The validator `serve` judges UDP route headers with. The window is the one
+/// `common::anti_replay` derives for every UDP-path validator, so the client's
+/// own validator cannot end up judging the same header against a different
+/// window.
+fn udp_time_validator() -> TimeValidator {
+    TimeValidator::new(VALIDATOR_UDP_WINDOW)
+}
+
 pub async fn serve<CR>(
     config_reader: CR,
     serve_context: ServeContext,
@@ -76,9 +84,7 @@ where
         VALIDATOR_TIME_FRAME,
         VALIDATOR_CAPACITY,
     ));
-    let udp_validator = Arc::new(TimeValidator::new(
-        VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
-    ));
+    let udp_validator = Arc::new(udp_time_validator());
     let connector_reset = ConnectorResetSignal(serve_context.system_resume.0);
     // One connector-configuration cell shared by the stream connector table,
     // the UDP connector, and every mux UDP dialer: a reload replaces it in a
@@ -356,9 +362,41 @@ impl Merge for ServerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::anti_replay::VALIDATOR_UDP_HDR_TTL;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn server_config(src: &str) -> ServerConfig {
         toml::from_str(src).unwrap()
+    }
+
+    /// `serve` judges UDP route headers with `udp_time_validator()`; the peer
+    /// client judges the same headers with its own constructor in `common`.
+    /// The two must derive the same window, or one end refuses a header the
+    /// other serves, so both are probed at the same instants: a stamp one
+    /// header TTL of cached lifetime old is inside the window, and a stamp at
+    /// the window's own horizon is outside it.
+    ///
+    /// The probes sit `VALIDATOR_TIME_FRAME` inside the horizon and exactly on
+    /// it, so a window that stops covering the header TTL, or that reaches
+    /// past the horizon, shows up here as a disagreement; a window landing
+    /// strictly between the two probe ages does not. That inside probe also
+    /// absorbs the clock advancing between the two `validates` calls, so the
+    /// test does not depend on how the runner schedules it.
+    #[test]
+    fn the_server_udp_validator_agrees_with_the_shared_acceptance_window() {
+        let server = udp_time_validator();
+        let shared = TimeValidator::new(VALIDATOR_UDP_WINDOW);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("the system clock is after the Unix epoch");
+        for age in [Duration::ZERO, VALIDATOR_UDP_HDR_TTL, VALIDATOR_UDP_WINDOW] {
+            let stamp = now - age;
+            assert_eq!(
+                server.validates(stamp),
+                shared.validates(stamp),
+                "the server's UDP validator and the shared window disagree about a stamp {age:?} old"
+            );
+        }
     }
 
     #[test]

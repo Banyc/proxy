@@ -686,7 +686,7 @@ mod tests {
     use super::*;
     use crate::proxy_runtime::conn_handler::SpeedLimit;
     use crate::{
-        anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
+        anti_replay::VALIDATOR_UDP_WINDOW,
         connect::{ConnectorConfig, connector_config_cell},
         header::route::RouteRequest,
         proxy_runtime::{
@@ -762,9 +762,7 @@ mod tests {
             connector: Arc::new(UdpConnector::new(
                 connector_config_cell(ConnectorConfig::default()).0,
             )),
-            time_validator: Arc::new(TimeValidator::new(
-                VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL,
-            )),
+            time_validator: Arc::new(TimeValidator::new(VALIDATOR_UDP_WINDOW)),
             session_spawner,
             retention,
         };

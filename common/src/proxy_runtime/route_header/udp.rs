@@ -89,8 +89,7 @@ pub fn decode_request_route(
 mod tests {
     use super::*;
     use crate::{
-        anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
-        header::route::RouteRequest,
+        anti_replay::VALIDATOR_UDP_WINDOW, header::route::RouteRequest,
         proxy_runtime::addr::RouteAddr,
     };
 
@@ -98,7 +97,7 @@ mod tests {
     fn routed_and_compact_requests_share_the_same_flow_id() {
         let id = UdpFlowId::from_bytes([9; UDP_FLOW_ID_LEN]);
         let crypto = tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into());
-        let validator = TimeValidator::new(VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL);
+        let validator = TimeValidator::new(VALIDATOR_UDP_WINDOW);
 
         let mut buf = Vec::new();
         id.write_routed(&mut buf);
@@ -144,7 +143,7 @@ mod tests {
     #[test]
     fn unknown_request_kind_is_rejected() {
         let crypto = tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into());
-        let validator = TimeValidator::new(VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL);
+        let validator = TimeValidator::new(VALIDATOR_UDP_WINDOW);
         let mut buf = vec![0x7f];
         buf.extend_from_slice(&[0; UDP_FLOW_ID_LEN]);
         let mut cursor = io::Cursor::new(&buf[..]);

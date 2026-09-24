@@ -1,6 +1,6 @@
 use crate::{
     addr::InternetAddr,
-    anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
+    anti_replay::{VALIDATOR_UDP_HDR_TTL, VALIDATOR_UDP_WINDOW},
     clock::{Clock, SystemClock},
     error::AnyError,
     header::{
@@ -353,7 +353,7 @@ impl fmt::Display for SendError {
 }
 
 fn time_validator() -> TimeValidator {
-    TimeValidator::new(VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL)
+    TimeValidator::new(VALIDATOR_UDP_WINDOW)
 }
 
 #[derive(Debug)]

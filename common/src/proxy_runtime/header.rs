@@ -13,7 +13,7 @@ mod tests {
     use tracing::trace;
 
     use crate::{
-        anti_replay::{VALIDATOR_TIME_FRAME, VALIDATOR_UDP_HDR_TTL},
+        anti_replay::VALIDATOR_UDP_WINDOW,
         header::codec::{MAX_HEADER_LEN, read_header_async, write_header_async},
     };
 
@@ -29,7 +29,7 @@ mod tests {
         let mut buf = [0; 4 + MAX_HEADER_LEN];
         let mut stream = io::Cursor::new(&mut buf[..]);
         let crypto = create_random_crypto();
-        let time_validator = TimeValidator::new(VALIDATOR_TIME_FRAME + VALIDATOR_UDP_HDR_TTL);
+        let time_validator = TimeValidator::new(VALIDATOR_UDP_WINDOW);
         let original_header: UdpRequestHeader = RouteRequest {
             upstream: Some(RouteAddr::udp(
                 "1.1.1.1:8080".parse::<SocketAddr>().unwrap().into(),
