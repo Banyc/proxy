@@ -143,6 +143,26 @@ mod tests {
         assert!(!pending(&mut w));
     }
 
+    /// A subscription is independent of the notifier that created it: the
+    /// last `Notify` clone may be dropped while a subscriber is still alive
+    /// (the connector reset signal and the config-change signal are both owned
+    /// by values a consumer does not hold), and `notified()` must then stay
+    /// pending rather than observe a closed channel — which `notified`'s
+    /// `unwrap` would turn into a panic in whichever task holds the
+    /// subscription, killing a connector that should have kept serving.
+    #[tokio::test(start_paused = true)]
+    async fn a_subscription_outlives_the_notifier_that_created_it() {
+        let n = Notify::new();
+        let mut w = n.subscription();
+        drop(n);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(3600), w.notified())
+                .await
+                .is_err(),
+            "a subscription whose notifier is gone must stay pending, not resolve"
+        );
+    }
+
     #[tokio::test]
     async fn dropping_a_subscriber_does_not_break_the_notifier() {
         let n = Notify::new();
