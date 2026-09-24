@@ -191,6 +191,208 @@ mod tests {
             RootTaskExit::Completed { .. } => panic!("a missing file must be fatal"),
         }
     }
+
+    /// Every configured config file must get its own watcher. The serve loop
+    /// merges all of them, so a file whose edits are not watched is edited
+    /// with no reload and no error — the operator's change is silently not
+    /// applied. Each watcher's own failure names the file it was pointed at,
+    /// so the details asserted below prove the tasks are attached to their own
+    /// path, not merely that three tasks exist.
+    #[tokio::test]
+    async fn every_configured_config_file_gets_its_own_watcher() {
+        let dir = std::env::temp_dir().join(format!(
+            "proxy-watch-paths-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths: Vec<Arc<str>> = ["a.toml", "b.toml", "c.toml"]
+            .iter()
+            .map(|name| Arc::<str>::from(dir.join(name).to_str().unwrap()))
+            .collect();
+
+        let mut process_tasks: tokio::task::JoinSet<RootTaskExit> = tokio::task::JoinSet::new();
+        let _signal = spawn_watch_tasks(&mut process_tasks, &paths);
+        assert_eq!(
+            process_tasks.len(),
+            paths.len(),
+            "every configured config file must have its own watcher"
+        );
+
+        let mut details = Vec::new();
+        while let Some(exit) = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            process_tasks.join_next(),
+        )
+        .await
+        .expect("a watcher that cannot watch its file must report an exit instead of parking")
+        {
+            match exit.expect("the watcher coordinator must not be cancelled") {
+                RootTaskExit::Failed { task, detail } => {
+                    assert_eq!(task, "config_watcher");
+                    details.push(detail);
+                }
+                RootTaskExit::Completed { .. } => panic!("a missing config file must be fatal"),
+            }
+        }
+        assert_eq!(
+            details.len(),
+            paths.len(),
+            "every configured config file must report its own watcher exit: {details:?}"
+        );
+        for path in &paths {
+            assert!(
+                details.iter().any(|detail| detail.contains(path.as_ref())),
+                "the watcher for {path} must report a failure naming that file: {details:?}"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Every event kind that can edit a config file's contents must signal a
+    /// reload: the classification in [`ConfigWatcher::handle_event`] is the
+    /// only thing that turns a filesystem change into the reload the operator
+    /// asked for, and the negative half of that classification is pinned by
+    /// `an_event_that_is_not_create_modify_or_remove_does_not_signal`.
+    ///
+    /// The events are captured from the platform's own watcher rather than
+    /// constructed, because constructing a `notify::EventKind` would need a
+    /// `notify` dependency this crate does not declare. Each captured kind is
+    /// replayed through `handle_event` against a fresh subscription, so each
+    /// assertion is about that kind's own classification rather than about a
+    /// signal some other kind produced — which matters, because on this
+    /// platform a single write is reported as several kinds at once and an
+    /// end-to-end test through `spawn_watch_tasks` therefore cannot tell them
+    /// apart.
+    #[test]
+    fn every_change_kind_that_can_edit_a_config_file_signals_a_reload() {
+        use file_watcher_tokio::HandleEvent;
+
+        let captured = capture_change_events();
+        /// One event kind to replay, under the label an assertion failure names.
+        type JudgedKind = (&'static str, fn(&file_watcher_tokio::Event) -> bool);
+        let kinds: [JudgedKind; 3] = [
+            ("a create", |event| event.kind.is_create()),
+            ("a modify", |event| event.kind.is_modify()),
+            ("a remove", |event| event.kind.is_remove()),
+        ];
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("the replay runtime builds");
+        runtime.block_on(async {
+            let mut watcher = ConfigWatcher::new();
+            for (label, is_kind) in kinds {
+                let event = captured
+                    .iter()
+                    .find(|event| is_kind(event))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "the platform's watcher delivered no {label} for edits to a watched \
+                         file, so its classification cannot be probed; captured kinds: {:?}",
+                            captured
+                                .iter()
+                                .map(|event| format!("{:?}", event.kind))
+                                .collect::<Vec<_>>()
+                        )
+                    });
+                let mut subscription = watcher.signal().subscription();
+                watcher.handle_event(event.clone()).await;
+                assert!(
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        subscription.notified()
+                    )
+                    .await
+                    .is_ok(),
+                    "{label} of a config file must signal a reload: a kind the watcher discards \
+                     is an edit the server never applies"
+                );
+            }
+        });
+    }
+
+    /// Capture real events from the platform's watcher for the changes that
+    /// can edit a config file: a write over the file (which this platform
+    /// reports as a create and a modify) and a removal (a remove). Bounded, so
+    /// a host whose watcher delivers none of them fails instead of hanging.
+    fn capture_change_events() -> Vec<file_watcher_tokio::Event> {
+        struct Recorder(Arc<std::sync::Mutex<Vec<file_watcher_tokio::Event>>>);
+        impl file_watcher_tokio::HandleEvent for Recorder {
+            async fn handle_event(&mut self, event: file_watcher_tokio::Event) {
+                self.0.lock().unwrap().push(event);
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!(
+            "proxy-watch-kinds-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "initial = 1\n").unwrap();
+        let watched: Arc<str> = Arc::from(path.to_str().unwrap());
+        let seen: Arc<std::sync::Mutex<Vec<file_watcher_tokio::Event>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        // The watcher future owns the receiver the platform's callback writes
+        // to, and dropping it while a delivery is in flight aborts the process
+        // (see `run_watch_thread`), so this one lives on a detached thread for
+        // the rest of the test binary's life.
+        std::thread::Builder::new()
+            .name("config_kinds_probe".to_owned())
+            .spawn({
+                let seen = Arc::clone(&seen);
+                move || {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("the probe runtime builds");
+                    let _ = runtime.block_on(file_watcher_tokio::watch_file(
+                        watched.as_ref(),
+                        Recorder(seen),
+                    ));
+                }
+            })
+            .expect("the probe thread spawns");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            std::fs::write(&path, "edited = 1\n").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::fs::remove_file(&path).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+
+            let captured = seen.lock().unwrap();
+            if captured.iter().any(|event| event.kind.is_create())
+                && captured.iter().any(|event| event.kind.is_modify())
+                && captured.iter().any(|event| event.kind.is_remove())
+            {
+                let events: Vec<file_watcher_tokio::Event> = captured.clone();
+                drop(captured);
+                std::fs::remove_dir_all(&dir).ok();
+                return events;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the platform's watcher delivered no create, modify, and remove for edits to a \
+                 watched file within the budget, so the classification cannot be probed; \
+                 captured kinds: {:?}",
+                captured
+                    .iter()
+                    .map(|event| format!("{:?}", event.kind))
+                    .collect::<Vec<_>>()
+            );
+            drop(captured);
+        }
+    }
 }
 
 /// The broadcast the serve loop reloads on.
