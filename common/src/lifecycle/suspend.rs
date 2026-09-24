@@ -103,6 +103,54 @@ mod tests {
         system_suspend.notified().await;
     }
 
+    /// A run of checks that are each exactly one interval apart is ordinary
+    /// scheduler jitter: no single gap exceeds the tolerance, so the watcher
+    /// must never signal a suspend no matter how long the process has been up.
+    /// That holds only because the watcher publishes a fresh baseline on every
+    /// check — a watcher whose baseline never advances measures every gap from
+    /// the instant it started, so after `suspend_toleration()` of uptime it
+    /// signals a resume on *every* tick and wakes every resume subscriber (which
+    /// tears down live sessions) forever. The sibling gap test only ever takes
+    /// one check, so the baseline re-publication is invisible to it.
+    #[tokio::test(start_paused = true)]
+    async fn a_steady_clock_never_notifies_the_resume_signal() {
+        use crate::clock::test_support::VirtualClock;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let clock = Arc::new(VirtualClock::new());
+        let mut process_tasks = tokio::task::JoinSet::new();
+        let system_suspend = spawn_suspend_watcher_with_clock(
+            &mut process_tasks,
+            Arc::clone(&clock) as Arc<dyn Clock>,
+        );
+        let mut subscription = system_suspend.0.subscription();
+        let notified = Arc::new(AtomicBool::new(false));
+        let mut waiter = tokio::task::JoinSet::new();
+        waiter.spawn({
+            let notified = Arc::clone(&notified);
+            async move {
+                subscription.notified().await;
+                notified.store(true, Ordering::SeqCst);
+            }
+        });
+        // Let the watcher take its baseline and arm its first check.
+        tokio::task::yield_now().await;
+        // Ten checks, each one interval after the previous, so the total
+        // elapsed time is well past the tolerance while no single gap is.
+        for _ in 0..10 {
+            tokio::time::advance(SUSPEND_CHECK_INTERVAL).await;
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !notified.load(Ordering::SeqCst),
+            "a steady clock is jitter, not a suspend: the watcher must re-publish its baseline on \
+             every check"
+        );
+        waiter.abort_all();
+        process_tasks.abort_all();
+    }
+
     /// A gap longer than the tolerance between two checks must signal a
     /// system suspend, and the `VirtualClock` follows tokio's virtual time,
     /// so the gap is produced without a real suspend (and without waiting
