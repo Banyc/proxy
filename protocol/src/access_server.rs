@@ -537,4 +537,17 @@ mod tests {
             .to_string();
         assert!(err.contains("default, lan"), "{err}");
     }
+
+    /// A `conn_selector` key that collides with the `direct`/`block` route
+    /// actions is refused when the selector set is resolved; no other name is
+    /// restricted. Without the check the offending key silently resolves as
+    /// a selector and the operator's `direct`/`block` intent is lost.
+    #[test]
+    fn a_conn_selector_key_may_not_shadow_the_direct_or_block_actions() {
+        for reserved in ["direct", "block"] {
+            let err = forbid_reserved_selector_name(Arc::from(reserved)).unwrap_err();
+            assert!(err.to_string().contains(reserved), "{err}");
+        }
+        forbid_reserved_selector_name(Arc::from("my-chain")).unwrap();
+    }
 }
