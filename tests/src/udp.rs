@@ -471,6 +471,58 @@ mod tests {
             .await;
     }
 
+    /// Every hop of a chain is on the path, and each hop enforces its own
+    /// egress policy: here the first two hops permit loopback and only the
+    /// last one refuses it, so the refusal can only have been produced by the
+    /// third hop — which the reported address also names. A client that
+    /// silently used the first hop alone, dropping the rest of the chain,
+    /// would reach the loopback service and read its reply instead.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn every_hop_of_a_udp_chain_is_on_the_path() {
+        let mut scope = TestRuntimeScope::new();
+        let context = udp_context(&mut scope);
+        let hop_1 = spawn_proxy(&mut scope, "127.0.0.1:0").await;
+        let hop_2 = spawn_proxy(&mut scope, "127.0.0.1:0").await;
+        let hop_3 = spawn_guarded_proxy(&mut scope, "127.0.0.1:0").await;
+        let req_msg = b"hello world";
+        let resp_msg = b"goodbye world";
+        let greet_addr = spawn_greet(&mut scope, "127.0.0.1:0", req_msg, resp_msg, 1).await;
+        let last_hop_addr = hop_3.address.address.clone();
+        scope
+            .run(async {
+                let client = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    UdpProxyClient::establish(
+                        vec![hop_1, hop_2, hop_3].into(),
+                        greet_addr,
+                        &context,
+                    ),
+                )
+                .await
+                .expect("timed out establishing the UDP proxy session")
+                .unwrap();
+                let (mut client_read, mut client_write) = client.into_split();
+                client_write.send(req_msg).await.unwrap();
+                let err = read_response(&mut client_read, resp_msg)
+                    .await
+                    .expect_err("the last hop must refuse the loopback destination");
+                match err {
+                    client::udp::RecvError::Response { err, addr } => {
+                        assert!(
+                            matches!(err.kind, RouteErrorKind::Loopback),
+                            "unexpected error: {err:?}"
+                        );
+                        assert_eq!(
+                            addr, last_hop_addr,
+                            "the refusal must come from the last hop of the chain"
+                        );
+                    }
+                    _ => panic!("unexpected error: {err:?}"),
+                }
+            })
+            .await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_no_proxies() {
         let mut scope = TestRuntimeScope::new();

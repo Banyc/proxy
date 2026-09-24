@@ -652,6 +652,45 @@ mod tests {
             .await;
     }
 
+    /// Every hop of a chain is on the path, and each hop enforces its own
+    /// egress policy: here the first two hops permit loopback and only the
+    /// last one refuses it, so the refusal can only have come from the third
+    /// hop. A client that silently used the first hop alone — dropping the
+    /// rest of the chain — would reach the loopback destination and read its
+    /// echoed reply instead.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn every_hop_of_a_stream_chain_is_on_the_path() {
+        let mut scope = TestRuntimeScope::new();
+        let stream_context = stream_context(&mut scope);
+        let addr = Arc::from("0.0.0.0:0");
+        let hop_1 = spawn_proxy(&mut scope, &addr, ConcreteStreamType::Tcp).await;
+        let hop_2 = spawn_proxy(&mut scope, &addr, ConcreteStreamType::Tcp).await;
+        let hop_3 = spawn_guarded_proxy(&mut scope, &addr, ConcreteStreamType::Tcp).await;
+        let req_msg = b"hello world";
+        let resp_msg = b"goodbye world";
+        let greet_addr = spawn_greet(&mut scope, "[::]:0", req_msg, resp_msg, 1).await;
+        // The greet server listens on the unspecified address; its port on
+        // loopback is the destination the last hop must refuse.
+        let loopback: RouteAddr = RouteAddr {
+            address: std::net::SocketAddr::new(
+                std::net::Ipv4Addr::LOCALHOST.into(),
+                greet_addr.address.port(),
+            )
+            .into(),
+            protocol: ConcreteStreamType::Tcp.to_string().into(),
+        };
+        scope
+            .run(async {
+                tokio::time::timeout(
+                    Duration::from_secs(10),
+                    assert_refused(&stream_context, &[hop_1, hop_2, hop_3], loopback),
+                )
+                .await
+                .expect("timed out waiting for the last hop to refuse the loopback destination");
+            })
+            .await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_no_proxies() {
         let mut scope = TestRuntimeScope::new();
