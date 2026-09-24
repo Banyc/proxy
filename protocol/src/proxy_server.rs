@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 
 use crate::{
+    loading_commit::commit_failures,
     stream_proto::streams::{
         kcp::KcpProxyServerConfig, mptcp::MptcpProxyServerConfig, mux::MuxProxyHandler,
         rtp::RtpProxyServerConfig, rtp_mux::RtpMuxProxyServerConfig,
@@ -103,21 +104,46 @@ impl ProxyServerLoader {
     /// on existing listeners, spawn new listener tasks, and drop handles for
     /// removed listeners. Returns an error if a listener died between
     /// prepare and commit (a handler update would be silently lost).
+    ///
+    /// Every kind is attempted even when an earlier one fails: the kinds are
+    /// independent loaders, so a listener lost in one must not suppress a
+    /// kind whose listeners are healthy and whose commit cannot fail. Each
+    /// failure is reported by kind, so the returned error means "these kinds
+    /// lost a handler update", not "the reload stopped here".
     pub fn commit(
         &mut self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         prepared: PreparedProxyServer,
     ) -> AnyResult {
-        self.tcp_server.commit(join_set, prepared.tcp_server)?;
-        self.tcp_mux_server
-            .commit(join_set, prepared.tcp_mux_server)?;
-        self.udp_server.commit(join_set, prepared.udp_server)?;
-        self.kcp_server.commit(join_set, prepared.kcp_server)?;
-        self.mptcp_server.commit(join_set, prepared.mptcp_server)?;
-        self.rtp_server.commit(join_set, prepared.rtp_server)?;
-        self.rtp_mux_server
-            .commit(join_set, prepared.rtp_mux_server)?;
-        Ok(())
+        let mut failures: Vec<(&'static str, AnyError)> = Vec::new();
+        if let Err(error) = self.tcp_server.commit(join_set, prepared.tcp_server) {
+            failures.push(("tcp_server", error));
+        }
+        if let Err(error) = self
+            .tcp_mux_server
+            .commit(join_set, prepared.tcp_mux_server)
+        {
+            failures.push(("tcp_mux_server", error));
+        }
+        if let Err(error) = self.udp_server.commit(join_set, prepared.udp_server) {
+            failures.push(("udp_server", error));
+        }
+        if let Err(error) = self.kcp_server.commit(join_set, prepared.kcp_server) {
+            failures.push(("kcp_server", error));
+        }
+        if let Err(error) = self.mptcp_server.commit(join_set, prepared.mptcp_server) {
+            failures.push(("mptcp_server", error));
+        }
+        if let Err(error) = self.rtp_server.commit(join_set, prepared.rtp_server) {
+            failures.push(("rtp_server", error));
+        }
+        if let Err(error) = self
+            .rtp_mux_server
+            .commit(join_set, prepared.rtp_mux_server)
+        {
+            failures.push(("rtp_mux_server", error));
+        }
+        commit_failures(failures)
     }
 
     /// A read-only snapshot of the live loaders, for preparation. The

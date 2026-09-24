@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
+    loading_commit::commit_failures,
     socks5::server::{
         tcp::{
             Socks5ServerTcpAccessConnHandler, Socks5ServerTcpAccessServerBuilder,
@@ -204,6 +205,12 @@ impl AccessServerLoader {
     /// on existing listeners, spawn new listener tasks, and drop handles for
     /// removed listeners. Returns an error if a listener died between
     /// prepare and commit (a handler update would be silently lost).
+    ///
+    /// Every kind is attempted even when an earlier one fails: the kinds are
+    /// independent loaders, so a listener lost in one must not suppress a
+    /// kind whose listeners are healthy and whose commit cannot fail. Each
+    /// failure is reported by kind, so the returned error means "these kinds
+    /// lost a handler update", not "the reload stopped here".
     pub fn commit(
         &mut self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
@@ -220,14 +227,29 @@ impl AccessServerLoader {
                 Ok(())
             });
         }
-        self.tcp_server.commit(join_set, prepared.tcp_server)?;
-        self.udp_server.commit(join_set, prepared.udp_server)?;
-        self.http_server.commit(join_set, prepared.http_server)?;
-        self.socks5_tcp_server
-            .commit(join_set, prepared.socks5_tcp_server)?;
-        self.socks5_udp_server
-            .commit(join_set, prepared.socks5_udp_server)?;
-        Ok(())
+        let mut failures: Vec<(&'static str, AnyError)> = Vec::new();
+        if let Err(error) = self.tcp_server.commit(join_set, prepared.tcp_server) {
+            failures.push(("tcp_server", error));
+        }
+        if let Err(error) = self.udp_server.commit(join_set, prepared.udp_server) {
+            failures.push(("udp_server", error));
+        }
+        if let Err(error) = self.http_server.commit(join_set, prepared.http_server) {
+            failures.push(("http_server", error));
+        }
+        if let Err(error) = self
+            .socks5_tcp_server
+            .commit(join_set, prepared.socks5_tcp_server)
+        {
+            failures.push(("socks5_tcp_server", error));
+        }
+        if let Err(error) = self
+            .socks5_udp_server
+            .commit(join_set, prepared.socks5_udp_server)
+        {
+            failures.push(("socks5_udp_server", error));
+        }
+        commit_failures(failures)
     }
 }
 

@@ -3,6 +3,7 @@
 
 use std::{collections::HashSet, convert::Infallible, io, sync::Arc};
 
+use crate::loading_commit::commit_failures;
 use common::{
     config::Merge,
     error::{AnyError, AnyResult},
@@ -94,15 +95,32 @@ impl ReverseTunnelLoader {
             rtp_responder: loading::Loader::new(),
         }
     }
+    /// Commit a previously-prepared reverse-tunnel reload: hot-swap handlers
+    /// on existing listeners, spawn new listener tasks, and drop handles for
+    /// removed listeners. Returns an error if a listener died between
+    /// prepare and commit (a handler update would be silently lost).
+    ///
+    /// Every kind is attempted even when an earlier one fails: the kinds are
+    /// independent loaders, so a listener lost in one must not suppress a
+    /// kind whose listeners are healthy and whose commit cannot fail. Each
+    /// failure is reported by kind, so the returned error means "these kinds
+    /// lost a handler update", not "the reload stopped here".
     pub fn commit(
         &mut self,
         tasks: &mut JoinSet<AnyResult>,
         prepared: PreparedReverseTunnel,
     ) -> AnyResult {
-        self.initiator.commit(tasks, prepared.initiator)?;
-        self.tcp_responder.commit(tasks, prepared.tcp_responder)?;
-        self.rtp_responder.commit(tasks, prepared.rtp_responder)?;
-        Ok(())
+        let mut failures: Vec<(&'static str, AnyError)> = Vec::new();
+        if let Err(error) = self.initiator.commit(tasks, prepared.initiator) {
+            failures.push(("initiator", error));
+        }
+        if let Err(error) = self.tcp_responder.commit(tasks, prepared.tcp_responder) {
+            failures.push(("tcp_responder", error));
+        }
+        if let Err(error) = self.rtp_responder.commit(tasks, prepared.rtp_responder) {
+            failures.push(("rtp_responder", error));
+        }
+        commit_failures(failures)
     }
 
     /// A read-only snapshot of the live loaders, for preparation. The
