@@ -5,29 +5,28 @@
 //! configuration first and then commits all three listener loaders, in order
 //! (`access_server`, `proxy_server`, `reverse_tunnel`), collecting each
 //! loader's failure instead of short-circuiting. A listener that died since
-//! preparation fails its own loader's commit: the ops after it in that
-//! loader's preparation order are forfeited, but every other loader is still
-//! committed and every loader's retirement still runs. The design accepts the
-//! resulting state deliberately — `common/src/loading.rs`'s doc on
-//! `Loader::commit` says the caller must surface a lost handler update even
-//! though "the global state may already have been swapped", and the serve loop
-//! reports rather than rolls back and never retries — so the point of this
-//! test is to fix *which* pieces of the new configuration are live in that
-//! state and which are not:
+//! preparation fails its own op, and the loader keeps going: the ops of one
+//! preparation are independent, so the later ops of that loader still apply,
+//! every other loader is still committed, and every loader's retirement still
+//! runs. The design accepts the resulting state deliberately —
+//! `common/src/loading.rs`'s doc on `Loader::commit` says the caller must
+//! surface a lost handler update even though "the global state may already
+//! have been swapped", and the serve loop reports rather than rolls back and
+//! never retries — so the point of this test is to fix *which* pieces of the
+//! new configuration are live in that state and which are not:
 //!
 //! - the globals (stream pool, connector configuration) are the new
 //!   generation's;
-//! - the loader that failed keeps the handlers of every listener the failed op
-//!   preceded: a listener whose handler replacement was forfeited keeps
-//!   relaying to the destination its *old* generation named until a later
-//!   commit applies the new one;
+//! - a listener whose handler replacement can be delivered adopts it even when
+//!   an earlier listener of the same loader died, and relays to the destination
+//!   the new generation named;
+//! - a listener the new configuration added is spawned even when the failed op
+//!   precedes it in its loader's preparation order;
 //! - a listener the new configuration removed is retired, because the loader
 //!   that names it is still committed and retirement runs even inside a loader
 //!   whose own commit failed;
-//! - a listener the new configuration added is not spawned when the failed op
-//!   precedes it in its loader's preparation order;
 //! - the listener that died is gone, and the next commit of the same
-//!   configuration applies everything the failed one left behind.
+//!   configuration re-spawns it.
 //!
 //! Reaching that state needs a listener to die in the window between
 //! preparation and commit, which no configuration can express: a listener
@@ -594,11 +593,10 @@ fn commit(
 // -- the pin --------------------------------------------------------------------------
 
 /// A commit that loses a listener installs the new generation's globals,
-/// reports the lost update, and still commits every other loader — so a
-/// listener the new configuration removed is retired — while what the failed
-/// loader would have applied after the failed op is left as it was: the
-/// listener whose replacement was forfeited keeps serving its old destination,
-/// and one the configuration added after it never starts.
+/// reports the lost update, and still applies every other op of the failed
+/// loader and every other loader — so the listener after the failed op adopts
+/// the new generation's destination, one the configuration added after it
+/// starts, and one the new configuration removed is retired.
 ///
 /// Four commits of a scripted configuration:
 ///
@@ -613,7 +611,7 @@ fn commit(
 /// 4. the same configuration again, which must apply everything the failed
 ///    commit left behind.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_commit_that_loses_a_listener_installs_the_globals_and_commits_every_other_loader() {
+async fn a_commit_that_loses_a_listener_installs_the_globals_and_commits_every_other_listener() {
     let events = capture_events();
 
     let mut tasks: Tasks = JoinSet::new();
@@ -771,19 +769,28 @@ async fn a_commit_that_loses_a_listener_installs_the_globals_and_commits_every_o
          configuration: the shared cell is written before the listener commit"
     );
 
-    // Nothing the failed loader would have applied after the failed op was
-    // applied: no listener started, because access_server's commit failed
-    // before the added listener's spawn in the same loader.
-    assert_eq!(
-        listen_addrs(&events).len(),
-        listeners_before,
-        "the failed commit must not have started a listener"
-    );
+    // What the failed loader would have applied after the failed op is
+    // applied: the ops of one preparation are independent, so the failed
+    // replacement of the listener that died neither forfeits the replacement
+    // of the survivor that follows it nor the spawn of the listener the
+    // configuration added after both. The survivor comes first, because it is
+    // the content the failed op's own loader still had to deliver: it relays
+    // to the destination this generation named, and never to the one the
+    // previous generation named — the token, and the two separate
+    // destinations, are what say so.
+    relay_reaches(&surviving_addr, &surviving_new, token(3, 0)).await;
 
-    // The surviving listener keeps the handler of the generation it was
-    // committed with: it relays to the destination that generation named, and
-    // never to the one the failed commit named.
-    relay_reaches(&surviving_addr, &surviving_old, token(3, 0)).await;
+    // Exactly one listener starts here, so its position in the log is
+    // unambiguous, and its server was bound during preparation and carries its
+    // destination itself, so it relays as soon as it is spawned.
+    let addrs = await_listen_addrs(&events, listeners_before + 1, "g3: the added listener").await;
+    assert_eq!(
+        addrs.len(),
+        listeners_before + 1,
+        "the failed commit must still have started the listener the configuration added"
+    );
+    let added_addr = addrs[listeners_before].clone();
+    relay_reaches(&added_addr, &added, token(3, 1)).await;
 
     // The dying listener is gone: its socket is closed.
     await_refused(&dying_addr, "g3: the listener that died").await;
@@ -797,13 +804,13 @@ async fn a_commit_that_loses_a_listener_installs_the_globals_and_commits_every_o
     )
     .await;
 
-    // No session reached any destination the failed loader would have
-    // installed: the surviving listener stayed on its old handler, and the
-    // added listener never started.
+    // Exactly the destinations this generation named were reached: the
+    // survivor's replacement and the added listener's spawn took their
+    // sessions, and the listener that died took none.
     assert!(
-        !surviving_new.saw(&token(3, 0)),
-        "the surviving listener relayed to the destination the failed commit named, so its \
-         handler replacement was applied after all"
+        !surviving_old.saw(&token(3, 0)),
+        "the surviving listener stayed on the previous generation's handler instead of adopting \
+         the one the failed commit could deliver"
     );
     assert_eq!(
         (
@@ -811,9 +818,9 @@ async fn a_commit_that_loses_a_listener_installs_the_globals_and_commits_every_o
             dying_new.accepts(),
             added.accepts()
         ),
-        (0, 0, 0),
-        "a destination the failed commit named accepted a session, so a listener it could not \
-         commit is nonetheless routing to the new generation's destination"
+        (1, 0, 1),
+        "a destination this generation named accepted a session other than the one routed to \
+         it, or the listener that died relayed to one of them"
     );
 
     // -- generation 4: the same configuration again, committed ----------------------
@@ -846,40 +853,20 @@ async fn a_commit_that_loses_a_listener_installs_the_globals_and_commits_every_o
     assert_eq!(
         addrs.len(),
         listeners_before + 2,
-        "generation 4 starts two listeners: the dying one re-spawned, and the added one"
+        "generation 4 starts exactly one listener: it re-spawns the one that died, while the \
+         listener the failed commit added is already serving"
     );
 
-    // Both new addresses relay, each to one of the two destinations generation
-    // 3 named. Which new address is which is not assumed: the token says it,
-    // and the second address must reach the other one.
-    let first_new = addrs[listeners_before].clone();
-    let second_new = addrs[listeners_before + 1].clone();
-    let first = token(4, 0);
-    let second = token(4, 1);
-    open_session(&first_new, first)
-        .await
-        .unwrap_or_else(|e| panic!("a session through {first_new} must relay: {e}"));
-    let first_reached_dying = dying_new.saw(&first);
-    let first_reached_added = added.saw(&first);
-    assert!(
-        first_reached_dying ^ first_reached_added,
-        "the session through {first_new} reached neither of the two destinations generation 3 \
-         named, or both of them"
-    );
-    assert!(
-        !dying_old.saw(&first) && !surviving_old.saw(&first) && !surviving_new.saw(&first),
-        "a listener the failed commit never started relayed to a destination of an earlier \
-         generation"
-    );
-    let second_destination = if first_reached_dying {
-        &added
-    } else {
-        &dying_new
-    };
-    relay_reaches(&second_new, second_destination, second).await;
+    // The one address generation 4 starts is the re-spawned listener, and it
+    // relays to the destination this configuration names for its key — never to
+    // the one the listener that died was serving. The address the failed commit
+    // started still serves the destination it was bound with.
+    let respawned_addr = addrs[listeners_before + 1].clone();
+    relay_reaches(&respawned_addr, &dying_new, token(4, 0)).await;
+    relay_reaches(&added_addr, &added, token(4, 1)).await;
 
-    // The surviving listener now adopts the destination the failed commit
-    // named: the next commit applies what the failed one left behind.
+    // The survivor's handler is re-applied to the destination it adopted in
+    // generation 3, and it still relays there.
     relay_reaches(&surviving_addr, &surviving_new, token(4, 2)).await;
 
     // ...and the listener the previous configuration had asked to remove is
@@ -892,23 +879,17 @@ async fn a_commit_that_loses_a_listener_installs_the_globals_and_commits_every_o
 
     // The ledger, exactly: every destination accepted the sessions that were
     // routed to it and no others, so no session was diverted to a destination
-    // its generation did not name. The re-spawned listener and the added one
-    // are told apart by which destination their token reached, not by the
-    // order their tasks happened to poll in.
-    let (dying_new_tokens, added_tokens) = if first_reached_dying {
-        (vec![first], vec![second])
-    } else {
-        (vec![second], vec![first])
-    };
+    // its generation did not name, and no listener kept a handler its
+    // generation did not name.
     let expected: HashMap<String, (usize, Vec<[u8; TOKEN_LEN]>)> = HashMap::from([
         ("dying_old".to_owned(), (1, vec![token(1, 0)])),
-        ("dying_new".to_owned(), (1, dying_new_tokens)),
+        ("dying_new".to_owned(), (1, vec![token(4, 0)])),
+        ("surviving_old".to_owned(), (1, vec![token(2, 0)])),
         (
-            "surviving_old".to_owned(),
-            (2, vec![token(2, 0), token(3, 0)]),
+            "surviving_new".to_owned(),
+            (2, vec![token(3, 0), token(4, 2)]),
         ),
-        ("surviving_new".to_owned(), (1, vec![token(4, 2)])),
-        ("added".to_owned(), (1, added_tokens)),
+        ("added".to_owned(), (2, vec![token(3, 1), token(4, 1)])),
     ]);
     assert_eq!(
         ledger(&[

@@ -65,36 +65,42 @@ where
     /// spawn new listener tasks, install new handles, and drop handles for
     /// listeners that are no longer in the config.
     ///
-    /// Returns an error if a listener died between preparation and commit,
-    /// so the handler update is *never silently lost*. The caller is
-    /// responsible for surfacing the failure (the global state may already
-    /// have been swapped, but the lost update is reported rather than
-    /// swallowed).
+    /// Every op is attempted even when an earlier one fails. The ops of one
+    /// preparation are independent — each carries the bound server or the
+    /// replacement channel it was prepared with, and touches only its own key —
+    /// so a listener that died since preparation must not forfeit the handler
+    /// updates of the listeners that follow it in the preparation order. The
+    /// failures are collected, each listener named, so the returned error means
+    /// "these listeners lost a handler update" rather than "the reload stopped
+    /// here". The caller is responsible for surfacing the failure (the global
+    /// state may already have been swapped, but the lost update is reported
+    /// rather than swallowed).
     ///
-    /// A listener that died forfeits the updates of the ops that follow it in
-    /// this loader's preparation order — its own update is the one that
-    /// cannot be delivered — and nothing else: the retirement below still
-    /// runs, so a listener the new configuration removed stops serving even
-    /// when a sibling op failed. A key the new configuration still names
-    /// keeps its handle even when its update could not be delivered; that
-    /// handle is closed, so the next preparation sees a dead listener and
-    /// re-spawns it.
+    /// The retirement below still runs, so a listener the new configuration
+    /// removed stops serving even when a sibling op failed. A key the new
+    /// configuration still names keeps its handle even when its update could
+    /// not be delivered; that handle is closed, so the next preparation sees a
+    /// dead listener and re-spawns it.
     pub fn commit(
         &mut self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         prepared: PreparedOps<ConnHandler>,
     ) -> Result<(), AnyError> {
         let PreparedOps { ops, keys } = prepared;
-        let mut failure: Option<AnyError> = None;
+        let mut failures: Vec<(Arc<str>, AnyError)> = Vec::new();
         for op in ops {
             match op {
-                PreparedOp::Replace { tx, conn_handler } => {
+                PreparedOp::Replace {
+                    key,
+                    tx,
+                    conn_handler,
+                } => {
                     // A closed receiver means the listener died since prepare.
                     // The handler update cannot be delivered — fail loudly
-                    // rather than silently dropping it.
+                    // rather than silently dropping it, and keep going: the
+                    // listeners after this one can still take theirs.
                     if tx.send(conn_handler).is_err() {
-                        failure = Some(AnyError::from("listener died before reload commit"));
-                        break;
+                        failures.push((key, AnyError::from("listener died before reload commit")));
                     }
                 }
                 PreparedOp::Spawn { key, tx, spawn } => {
@@ -103,15 +109,32 @@ where
                 }
             }
         }
-        // Retirement is not part of the failed step: a listener the new
+        // Retirement is not part of any failed step: a listener the new
         // configuration removed must stop serving whether or not a sibling
         // op failed in this commit.
         self.handles.retain(|cur_key, _| keys.contains(cur_key));
-        match failure {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
+        commit_failure(failures)
     }
+}
+
+/// The error a commit reports when one or more listeners lost their handler
+/// update. The message names every listener that did and preserves each
+/// listener's own cause, so both the count and the cause are on the line an
+/// operator reads.
+fn commit_failure(failures: Vec<(Arc<str>, AnyError)>) -> Result<(), AnyError> {
+    if failures.is_empty() {
+        return Ok(());
+    }
+    let detail = failures
+        .iter()
+        .map(|(key, error)| format!("{key}: {error}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(format!(
+        "reload commit lost handler updates for {} listener(s): {detail}",
+        failures.len()
+    )
+    .into())
 }
 
 impl<ConnHandler> LoaderSnapshot<ConnHandler>
@@ -122,7 +145,9 @@ where
     /// live handles without mutating live state.
     ///
     /// For an existing live listener a [`PreparedOp::Replace`] is produced
-    /// carrying the freshly-built handler to send over the existing channel.
+    /// carrying the freshly-built handler to send over the existing channel,
+    /// together with the listener's key so a commit that cannot deliver the
+    /// handler can name the listener it lost.
     /// For a new listener a [`PreparedOp::Spawn`] is produced carrying the
     /// bound `Server` and a fresh `ReplaceConnHandlerTx`; the server task is
     /// *not* spawned yet.
@@ -149,6 +174,7 @@ where
             } else if let Some(handle) = live {
                 let conn_handler = builder.build_conn_handler()?;
                 ops.push(PreparedOp::Replace {
+                    key: key.clone(),
                     tx: handle.clone(),
                     conn_handler,
                 });
@@ -191,8 +217,11 @@ pub struct PreparedOps<ConnHandler> {
 }
 
 pub enum PreparedOp<ConnHandler> {
-    /// Hot-swap the handler of an existing live listener.
+    /// Hot-swap the handler of an existing live listener. `key` is the
+    /// listener's loader key, so a commit that cannot deliver the handler can
+    /// name the listener whose update it lost.
     Replace {
+        key: Arc<str>,
         tx: ReplaceConnHandlerTx<ConnHandler>,
         conn_handler: ConnHandler,
     },
@@ -650,6 +679,206 @@ mod tests {
             loader.handles.contains_key("watched"),
             "the failed key must keep its handle so the next prepare re-spawns it"
         );
+    }
+
+    /// A conn handler carrying the token of the generation that built it, so
+    /// which generation a listener is serving is read off the token rather
+    /// than off the listener still being alive.
+    struct TokenConnHandler(u8);
+    impl std::fmt::Debug for TokenConnHandler {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "TokenConnHandler({})", self.0)
+        }
+    }
+    impl HandleConn for TokenConnHandler {}
+
+    /// A listener that records the token of every handler it is given, and
+    /// runs until it is signalled to stop or its handle is dropped (its
+    /// receiver closes) — the two ways a listener goes away in production.
+    struct Recording {
+        stop: tokio::sync::oneshot::Receiver<()>,
+        delivered: tokio::sync::mpsc::Sender<u8>,
+    }
+    impl Serve for Recording {
+        type ConnHandler = TokenConnHandler;
+        async fn serve(mut self, mut rx: ReplaceConnHandlerRx<Self::ConnHandler>) -> AnyResult {
+            loop {
+                tokio::select! {
+                    _ = &mut self.stop => break,
+                    received = rx.recv() => match received {
+                        Err(()) => break,
+                        Ok(Some(handler)) => {
+                            self.delivered.send(handler.0).await.ok();
+                        }
+                        Ok(None) => {}
+                    },
+                }
+            }
+            Ok(())
+        }
+    }
+    struct RecordingBuilder {
+        key: Arc<str>,
+        token: u8,
+        stop: tokio::sync::oneshot::Receiver<()>,
+        delivered: tokio::sync::mpsc::Sender<u8>,
+    }
+    impl Build for RecordingBuilder {
+        type ConnHandler = TokenConnHandler;
+        type Server = Recording;
+        type Err = std::io::Error;
+        async fn build_server(self) -> Result<Self::Server, Self::Err> {
+            Ok(Recording {
+                stop: self.stop,
+                delivered: self.delivered,
+            })
+        }
+        fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
+            Ok(TokenConnHandler(self.token))
+        }
+        fn key(&self) -> &Arc<str> {
+            &self.key
+        }
+    }
+
+    #[tokio::test]
+    async fn a_commit_applies_the_ops_that_follow_the_listeners_that_died() {
+        // Three listeners of one loader, each recording the token of the
+        // handler it is serving on its own channel, so which generation a
+        // listener adopted is content rather than liveness.
+        let (alpha_delivered, mut alpha_tokens) = tokio::sync::mpsc::channel::<u8>(8);
+        let (beta_delivered, mut beta_tokens) = tokio::sync::mpsc::channel::<u8>(8);
+        let (gamma_delivered, mut gamma_tokens) = tokio::sync::mpsc::channel::<u8>(8);
+        let (alpha_stop, alpha_stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let (_alpha_stop2, alpha_stop2_rx) = tokio::sync::oneshot::channel::<()>();
+        let (beta_stop, beta_stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let (_beta_stop2, beta_stop2_rx) = tokio::sync::oneshot::channel::<()>();
+        let (_gamma_stop, gamma_stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let (_gamma_stop2, gamma_stop2_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut loader = Loader::new();
+        let mut join_set = tokio::task::JoinSet::new();
+
+        // Generation 1: three listeners, all built on token 1. A spawn carries
+        // its handler inside the bound server, so nothing is delivered yet.
+        let prepared = loader
+            .snapshot()
+            .prepare::<Recording, RecordingBuilder>(vec![
+                RecordingBuilder {
+                    key: "alpha".into(),
+                    token: 1,
+                    stop: alpha_stop_rx,
+                    delivered: alpha_delivered.clone(),
+                },
+                RecordingBuilder {
+                    key: "beta".into(),
+                    token: 1,
+                    stop: beta_stop_rx,
+                    delivered: beta_delivered.clone(),
+                },
+                RecordingBuilder {
+                    key: "gamma".into(),
+                    token: 1,
+                    stop: gamma_stop_rx,
+                    delivered: gamma_delivered.clone(),
+                },
+            ])
+            .await
+            .unwrap();
+        loader.commit(&mut join_set, prepared).unwrap();
+        assert_eq!(loader.handles.len(), 3);
+
+        // Generation 2: the same three listeners re-pointed at token 2. All
+        // three are alive, so preparation builds a replacement for each, in
+        // this order. The replacement path consumes only the handler, so the
+        // delivered senders it drops end here too — once the originals are
+        // dropped as well, nothing can reach a channel again.
+        let prepared = loader
+            .snapshot()
+            .prepare::<Recording, RecordingBuilder>(vec![
+                RecordingBuilder {
+                    key: "alpha".into(),
+                    token: 2,
+                    stop: alpha_stop2_rx,
+                    delivered: alpha_delivered.clone(),
+                },
+                RecordingBuilder {
+                    key: "beta".into(),
+                    token: 2,
+                    stop: beta_stop2_rx,
+                    delivered: beta_delivered.clone(),
+                },
+                RecordingBuilder {
+                    key: "gamma".into(),
+                    token: 2,
+                    stop: gamma_stop2_rx,
+                    delivered: gamma_delivered.clone(),
+                },
+            ])
+            .await
+            .unwrap();
+        drop(alpha_delivered);
+        drop(beta_delivered);
+        drop(gamma_delivered);
+
+        // Kill the first two between preparation and commit — they drop their
+        // handler receivers, the state a listener that died on its own leaves
+        // behind — and reap them, leaving `gamma` serving.
+        drop(alpha_stop);
+        drop(beta_stop);
+        join_set.join_next().await.unwrap().unwrap().unwrap();
+        join_set.join_next().await.unwrap().unwrap().unwrap();
+
+        let err = loader
+            .commit(&mut join_set, prepared)
+            .expect_err("a handler update that cannot be delivered must be reported");
+        // Both failures are on the error, in preparation order, and the
+        // listener that did take its handler is absent from it.
+        assert!(
+            err.to_string().contains(
+                "lost handler updates for 2 listener(s): alpha: listener died before reload \
+                 commit; beta: listener died before reload commit"
+            ),
+            "the reported failure must name every listener whose update was lost; got: {err}"
+        );
+        assert!(
+            !err.to_string().contains("gamma"),
+            "a listener that took its handler must not be reported as having lost it; got: {err}"
+        );
+
+        // The op that followed the failed ones is applied: `gamma` serves the
+        // handler generation 2 built for it, and its token is what says so — a
+        // stale handler would deliver token 1, and each listener has a channel
+        // of its own, so none can answer for another.
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), gamma_tokens.recv())
+                .await
+                .expect("gamma must be delivered the new handler"),
+            Some(2),
+            "the listener after the ones that died must adopt the new handler"
+        );
+
+        // Nothing reached the listeners that died: every sender for their
+        // channels is gone, so no stale handler can masquerade as a fresh one
+        // there.
+        for (name, tokens) in [("alpha", &mut alpha_tokens), ("beta", &mut beta_tokens)] {
+            assert_eq!(
+                tokens.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected),
+                "a handler was delivered to {name}, which had already died"
+            );
+        }
+
+        // Every key of the new configuration keeps its handle: the two closed
+        // ones so the next preparation re-spawns them, the live one because it
+        // is serving.
+        for key in ["alpha", "beta", "gamma"] {
+            assert!(
+                loader.handles.contains_key(key),
+                "{key} must keep its handle so a failed commit can be followed by a re-spawn"
+            );
+        }
+
+        join_set.shutdown().await;
     }
 
     #[tokio::test]
