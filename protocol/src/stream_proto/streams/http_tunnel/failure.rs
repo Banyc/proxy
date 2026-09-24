@@ -106,4 +106,59 @@ mod tests {
         reporter.report(&TunnelError::HttpNoPort, None);
         assert!(failure.reported.load(Ordering::Relaxed));
     }
+
+    /// Counts every event the reporting thread emits, so the test below
+    /// observes the emission itself rather than only the `reported` flag
+    /// that the reporter sets before it logs. The flag alone cannot tell one
+    /// emission from two.
+    struct CountEvents(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+    impl tracing::Subscriber for CountEvents {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+        fn event(&self, _event: &tracing::Event<'_>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+        fn enter(&self, _span: &tracing::span::Id) {}
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    /// The reporter must emit exactly one failure event however many times it
+    /// is called for the same request: the second call is not a new failure.
+    #[test]
+    fn failure_reporter_emits_exactly_one_event() {
+        let failure = Arc::new(HttpRequestFailure {
+            request: HttpRequestContext {
+                method: Method::GET,
+                uri: "/".parse().unwrap(),
+                host: None,
+                authority: None,
+            },
+            destination: OnceLock::new(),
+            reported: AtomicBool::new(false),
+        });
+        let reporter = HttpFailureReporter {
+            failure: Arc::clone(&failure),
+            downstream: HttpDownstreamContext {
+                remote: None,
+                local: None,
+            },
+            listener: Arc::from("test"),
+        };
+        let events = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let subscriber = CountEvents(std::sync::Arc::clone(&events));
+        let _guard = tracing::subscriber::set_default(subscriber);
+        reporter.report(&TunnelError::HttpNoHost, None);
+        reporter.report(&TunnelError::HttpNoPort, None);
+        assert_eq!(
+            events.load(Ordering::Relaxed),
+            1,
+            "the reporter must emit one failure event per request"
+        );
+    }
 }
