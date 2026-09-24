@@ -803,6 +803,7 @@ pub enum TraceError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::header::codec::{AsHeader, MAX_HEADER_LEN};
     use tokio::net::UdpSocket;
 
     #[tokio::test]
@@ -985,5 +986,218 @@ mod tests {
             !confirmation.is_fresh(),
             "at exactly the flow timeout the monotonic freshness term is stale"
         );
+    }
+
+    /// The acceptance horizon for a timestamped UDP route header: one minute
+    /// of header cache lifetime (`VALIDATOR_UDP_HDR_TTL`) plus the five
+    /// seconds the time frame absorbs (`VALIDATOR_TIME_FRAME`) for clock skew
+    /// and second truncation.
+    ///
+    /// The number is the contract, not the constant. Every peer derives the
+    /// same sum to judge the timestamp, and on the UDP paths the validator is
+    /// a `ValidatorRef::Time` -- no nonce cache -- so this window alone bounds
+    /// how long a captured header stays replayable. Raising either constant
+    /// therefore widens that window for this build *and* pushes the headers
+    /// this build keeps serving past a fixed window a not-yet-upgraded peer
+    /// still applies. The production code keeps deriving the window from the
+    /// constants; the tests below assert the resulting boundary as a literal
+    /// so that tuning either constant past it has to be a deliberate change
+    /// here as well.
+    const UDP_HEADER_ACCEPTANCE_HORIZON: Duration = Duration::from_secs(65);
+
+    fn unix_now_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    /// Encode `header` as it appears on the wire, with the timestamp inside the
+    /// AE envelope set to `timestamp_secs` since the Unix epoch.
+    ///
+    /// `write_header` always stamps the current instant, so an age boundary is
+    /// unreachable through it; `encode_message(timestamped = false)` leaves the
+    /// timestamp bytes to `write_message`, reproducing byte for byte the layout
+    /// a timestamped `write_header` produces (the timestamp is the first field
+    /// of the message body, an unsigned 64-bit big-endian second count).
+    fn header_with_timestamp<Header>(
+        header: &Header,
+        key: [u8; tokio_chacha20::KEY_BYTES],
+        timestamp_secs: u64,
+    ) -> Vec<u8>
+    where
+        Header: AsHeader + serde::Serialize + std::fmt::Debug,
+    {
+        let mut body = [0u8; MAX_HEADER_LEN];
+        let body = postcard::to_slice(header, &mut body).unwrap();
+        let mut buf = [0u8; MAX_HEADER_LEN * 2];
+        let mut packet = Vec::new();
+        ae::message::encode_message(&mut packet, key, false, &mut buf, |wtr| {
+            wtr.write_all(&timestamp_secs.to_be_bytes())?;
+            wtr.write_all(body)?;
+            Ok(())
+        })
+        .unwrap();
+        packet
+    }
+
+    /// A routed request header older than the acceptance horizon must be
+    /// refused, not decoded and routed. `decode_request_route` judges it
+    /// against the production `time_validator()`, the same window the client's
+    /// own response validation uses, and reports the refusal as a codec
+    /// integrity error -- the timestamp check, not a parse failure.
+    #[test]
+    fn a_request_header_past_the_acceptance_horizon_is_refused() {
+        use crate::proxy_runtime::{
+            conn::udp::UDP_FLOW_ID_LEN, route_header::udp::decode_request_route,
+        };
+
+        let crypto = tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into());
+        let flow_id = UdpFlowId::from_bytes([5; UDP_FLOW_ID_LEN]);
+        let request = RouteRequest {
+            upstream: Some(RouteAddr::udp(
+                "127.0.0.1:9".parse::<SocketAddr>().unwrap().into(),
+            )),
+        };
+        let mut packet = Vec::new();
+        flow_id.write_routed(&mut packet);
+        packet.extend_from_slice(&header_with_timestamp(
+            &request,
+            *crypto.key(),
+            unix_now_secs() - UDP_HEADER_ACCEPTANCE_HORIZON.as_secs(),
+        ));
+
+        let mut cursor = io::Cursor::new(&packet[..]);
+        let error = decode_request_route(&mut cursor, &crypto, &time_validator())
+            .expect_err("a header at the acceptance horizon must be refused");
+        assert!(
+            matches!(error, CodecError::Integrity),
+            "the refusal must come from the timestamp check, got {error:?}"
+        );
+    }
+
+    /// The client caches its routed header for exactly `VALIDATOR_UDP_HDR_TTL`
+    /// (`RegeneratingHeader::new(regenerate, VALIDATOR_UDP_HDR_TTL)`) and
+    /// re-sends those cached bytes unchanged when a confirmed route goes stale
+    /// after `UDP_FLOW_TIMEOUT` of silence, so a header one TTL old can still
+    /// be in flight. The window has to cover the whole regeneration horizon,
+    /// leaving `VALIDATOR_TIME_FRAME` as slack; the age asserted here is
+    /// derived from the cache lifetime rather than spelled out, so shortening
+    /// the lifetime stays a tuning decision while a window that fails to cover
+    /// it is caught.
+    #[test]
+    fn a_request_header_at_the_regeneration_horizon_is_accepted() {
+        use crate::proxy_runtime::{
+            conn::udp::{UDP_FLOW_ID_LEN, UpstreamAddr},
+            route_header::udp::{UdpRequestRoute, decode_request_route},
+        };
+
+        let crypto = tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into());
+        let flow_id = UdpFlowId::from_bytes([5; UDP_FLOW_ID_LEN]);
+        let upstream = RouteAddr::udp("127.0.0.1:9".parse::<SocketAddr>().unwrap().into());
+        let request = RouteRequest {
+            upstream: Some(upstream.clone()),
+        };
+        let mut packet = Vec::new();
+        flow_id.write_routed(&mut packet);
+        packet.extend_from_slice(&header_with_timestamp(
+            &request,
+            *crypto.key(),
+            unix_now_secs() - VALIDATOR_UDP_HDR_TTL.as_secs(),
+        ));
+
+        let mut cursor = io::Cursor::new(&packet[..]);
+        match decode_request_route(&mut cursor, &crypto, &time_validator())
+            .expect("a header at the regeneration horizon must still be accepted")
+        {
+            UdpRequestRoute::Routed {
+                flow_id: id,
+                upstream: decoded,
+            } => {
+                assert_eq!(id, flow_id);
+                assert_eq!(decoded, Some(UpstreamAddr(upstream)));
+            }
+            other => panic!("expected a routed request, got {other:?}"),
+        }
+    }
+
+    /// A connected client/peer socket pair and a client read half whose
+    /// response validator is the production one: `UdpProxyClientReadHalf::new`
+    /// builds it through `time_validator()`.
+    async fn read_half_with_peer(
+        crypto: tokio_chacha20::config::Config,
+    ) -> (UdpSocket, UdpProxyClientReadHalf) {
+        let peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client.connect(peer.local_addr().unwrap()).await.unwrap();
+        peer.connect(client.local_addr().unwrap()).await.unwrap();
+        let connection = crate::proxy_runtime::connect::udp::UdpConnection::socket(client);
+        let local_addr = connection.local_addr();
+        let peer_addr = connection.peer_addr();
+        let (upstream_read, _upstream_write) = connection.into_split();
+        let node = crate::route::HopConfig {
+            name: None,
+            address: RouteAddr::udp("127.0.0.1:9".parse::<SocketAddr>().unwrap().into()),
+            header_crypto: crypto,
+            payload_crypto: None,
+        };
+        let proxies: Arc<RouteChain> = Arc::new([node]);
+        let read = UdpProxyClientReadHalf::new(
+            upstream_read,
+            local_addr,
+            peer_addr,
+            proxies,
+            Arc::new(RouteConfirmation::default()),
+        );
+        (peer, read)
+    }
+
+    /// The response path judges the timestamp with a validator this module
+    /// constructs in production, so an enlargement of that expression alone --
+    /// the constants untouched -- is caught here.
+    #[tokio::test]
+    async fn a_response_header_past_the_acceptance_horizon_is_refused() {
+        let crypto = tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into());
+        let (peer, mut read) = read_half_with_peer(crypto.clone()).await;
+        let mut stale = header_with_timestamp(
+            &RouteResponse { result: Ok(()) },
+            *crypto.key(),
+            unix_now_secs() - UDP_HEADER_ACCEPTANCE_HORIZON.as_secs(),
+        );
+        stale.extend_from_slice(b"pong");
+        peer.send(&stale).await.unwrap();
+
+        let mut out = [0u8; 64];
+        let received = tokio::time::timeout(Duration::from_secs(5), read.recv(&mut out))
+            .await
+            .expect("the staged datagram must arrive on loopback");
+        assert!(
+            matches!(&received, Err(RecvError::Header(CodecError::Integrity))),
+            "a response header past the acceptance horizon must be refused, got {received:?}"
+        );
+    }
+
+    /// The counterpart to the refusal above: the same envelope shape, stamped
+    /// now, decodes and delivers its payload. Without this the refusal test
+    /// would also pass on a malformed envelope, which is exactly the failure a
+    /// hand-built packet invites.
+    #[tokio::test]
+    async fn a_response_header_within_the_acceptance_horizon_is_accepted() {
+        let crypto = tokio_chacha20::config::Config::new([7; tokio_chacha20::KEY_BYTES].into());
+        let (peer, mut read) = read_half_with_peer(crypto.clone()).await;
+        let mut fresh = header_with_timestamp(
+            &RouteResponse { result: Ok(()) },
+            *crypto.key(),
+            unix_now_secs(),
+        );
+        fresh.extend_from_slice(b"pong");
+        peer.send(&fresh).await.unwrap();
+
+        let mut out = [0u8; 64];
+        let n = tokio::time::timeout(Duration::from_secs(5), read.recv(&mut out))
+            .await
+            .expect("the staged datagram must arrive on loopback")
+            .expect("a fresh response header must be accepted");
+        assert_eq!(&out[..n], b"pong");
     }
 }
