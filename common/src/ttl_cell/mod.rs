@@ -122,6 +122,43 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
+    /// `set` restarts the lifetime: the item reads as fresh for `lifetime`
+    /// measured from the set, not from construction. A `set` that leaves
+    /// `last_update` alone stops refreshing the cell as soon as the lifetime
+    /// elapses once — the selector's cached scores would then be recomputed (and
+    /// re-logged) on every single chain choice for the rest of the process's
+    /// life. This is the transition `get_or_set_with` also performs, and the
+    /// only caller of `set` is the route selector's score cache.
+    #[test]
+    fn setting_an_item_restarts_its_lifetime() {
+        let clock = Arc::new(crate::clock::test_support::ManualClock::new());
+        let mut cell = TtlCell::with_clock(
+            None,
+            Duration::from_secs(10),
+            Arc::clone(&clock) as Arc<dyn Clock>,
+        );
+        cell.set(1u8);
+        clock.advance(Duration::from_secs(9));
+        assert_eq!(cell.get(), Some(&1), "an item inside its lifetime is fresh");
+        cell.set(2u8);
+        // Nine more seconds: eighteen since construction, but only nine since
+        // this set, so the item must still be fresh.
+        clock.advance(Duration::from_secs(9));
+        assert_eq!(cell.get(), Some(&2), "a set must restart the lifetime");
+        clock.advance(Duration::from_secs(1));
+        assert_eq!(
+            cell.get(),
+            Some(&2),
+            "the restarted lifetime is exclusive at exactly ten seconds, like the original"
+        );
+        clock.advance(Duration::from_nanos(1));
+        assert_eq!(
+            cell.get(),
+            None,
+            "one nanosecond past the restarted lifetime expires the item"
+        );
+    }
+
     /// The expiry guard is strictly exclusive: an item whose age is exactly
     /// `lifetime` is still fresh, and only a strictly larger age expires it.
     /// A `>`→`>=` mutation (or an inclusive rewrite) differs only at the
