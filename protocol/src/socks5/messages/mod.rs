@@ -445,6 +445,111 @@ fn map_version_error(version: u8) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    /// Every SOCKS5 wire code is a contract with any SOCKS5 peer (RFC 1928
+    /// and RFC 1929), not just with this crate's own encoder/decoder. Each
+    /// code is asserted against a literal, never against the production
+    /// constant or its `Into`/`From` conversion: a self-consistent change
+    /// of an encoder and its decoder together round-trips green through
+    /// every other test here and through `tests/fuzz_socks5.rs`, and only a
+    /// literal pin notices it. Do not "deduplicate" these by reading the
+    /// expected bytes back out of `VERSION`, `AddressType::into`,
+    /// `MethodIdentifier::into`, `Command::into`, or `Reply::into` — that is
+    /// exactly the hole these pins close.
+    #[test]
+    fn socks5_wire_codes_are_the_rfc_values() {
+        assert_eq!(VERSION, 5);
+        assert_eq!(NO_ACCEPTABLE_METHODS, 0xff);
+
+        assert_eq!(u8::from(MethodIdentifier::NoAuth), 0x00);
+        assert_eq!(u8::from(MethodIdentifier::UsernamePassword), 0x02);
+        assert_eq!(MethodIdentifier::from(0x00), MethodIdentifier::NoAuth);
+        assert_eq!(
+            MethodIdentifier::from(0x02),
+            MethodIdentifier::UsernamePassword
+        );
+        assert_eq!(MethodIdentifier::from(0x01), MethodIdentifier::Other(0x01));
+
+        assert_eq!(u8::from(Command::Connect), 0x01);
+        assert_eq!(u8::from(Command::Bind), 0x02);
+        assert_eq!(u8::from(Command::UdpAssociate), 0x03);
+        assert_eq!(Command::try_from(0x01), Ok(Command::Connect));
+        assert_eq!(Command::try_from(0x02), Ok(Command::Bind));
+        assert_eq!(Command::try_from(0x03), Ok(Command::UdpAssociate));
+        assert_eq!(Command::try_from(0x00), Err(()));
+
+        assert_eq!(u8::from(AddressType::Ipv4), 0x01);
+        assert_eq!(u8::from(AddressType::DomainName), 0x03);
+        assert_eq!(u8::from(AddressType::Ipv6), 0x04);
+        assert_eq!(AddressType::try_from(0x01), Ok(AddressType::Ipv4));
+        assert_eq!(AddressType::try_from(0x03), Ok(AddressType::DomainName));
+        assert_eq!(AddressType::try_from(0x04), Ok(AddressType::Ipv6));
+        assert_eq!(AddressType::try_from(0x00), Err(()));
+
+        assert_eq!(u8::from(Reply::Succeeded), 0x00);
+        assert_eq!(u8::from(Reply::GeneralSocksServerFailure), 0x01);
+        assert_eq!(u8::from(Reply::ConnectionNotAllowedByRuleset), 0x02);
+        assert_eq!(u8::from(Reply::CommandNotSupported), 0x07);
+        assert_eq!(Reply::from(0x00), Reply::Succeeded);
+        assert_eq!(Reply::from(0x01), Reply::GeneralSocksServerFailure);
+        assert_eq!(Reply::from(0x02), Reply::ConnectionNotAllowedByRuleset);
+        assert_eq!(Reply::from(0x07), Reply::CommandNotSupported);
+        assert_eq!(Reply::from(0x03), Reply::Other(0x03));
+    }
+
+    /// The full byte sequence of a CONNECT request and of a success reply,
+    /// as literals: field order, the RSV byte, the address-type tag, and the
+    /// big-endian port all in one place. The expectations are deliberately
+    /// not built from any production constant.
+    #[tokio::test]
+    async fn the_connect_request_and_success_reply_byte_sequences_are_stable() {
+        let request = RelayRequest {
+            command: Command::Connect,
+            destination: "1.2.3.4:5".parse().unwrap(),
+        };
+        let mut wtr = io::Cursor::new(Vec::new());
+        request.encode(&mut wtr).await.unwrap();
+        assert_eq!(
+            wtr.get_ref(),
+            &[0x05, 0x01, 0x00, 0x01, 1, 2, 3, 4, 0x00, 0x05]
+        );
+
+        let response = RelayResponse {
+            reply: Reply::Succeeded,
+            bind: "1.2.3.4:5".parse().unwrap(),
+        };
+        let mut wtr = io::Cursor::new(Vec::new());
+        response.encode(&mut wtr).await.unwrap();
+        assert_eq!(
+            wtr.get_ref(),
+            &[0x05, 0x00, 0x00, 0x01, 1, 2, 3, 4, 0x00, 0x05]
+        );
+    }
+
+    /// The METHOD count is a single byte. A 256-method list must be refused
+    /// outright rather than truncated to a count of 0, and the 255-method
+    /// boundary must still encode.
+    #[tokio::test]
+    async fn negotiation_request_refuses_a_method_count_that_does_not_fit_a_byte() {
+        let max = NegotiationRequest {
+            methods: vec![MethodIdentifier::NoAuth; 0xff],
+        };
+        let mut wtr = io::Cursor::new(Vec::new());
+        max.encode(&mut wtr).await.unwrap();
+        assert_eq!(wtr.get_ref()[1], 0xff);
+
+        let overflow = NegotiationRequest {
+            methods: vec![MethodIdentifier::NoAuth; 0x100],
+        };
+        let mut wtr = io::Cursor::new(Vec::new());
+        let error = overflow.encode(&mut wtr).await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(
+            wtr.get_ref().is_empty(),
+            "an over-long method list must not write a truncated count: {:02x?}",
+            wtr.get_ref()
+        );
+    }
+
     #[tokio::test]
     async fn negotiation_request() {
         let expected = NegotiationRequest {
