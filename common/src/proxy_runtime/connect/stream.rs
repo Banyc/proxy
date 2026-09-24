@@ -328,6 +328,7 @@ mod tests {
     struct FallbackConnector {
         attempted: std::sync::Mutex<Vec<SocketAddr>>,
         successful: SocketAddr,
+        error_kind: io::ErrorKind,
     }
 
     #[derive(Debug)]
@@ -361,7 +362,7 @@ mod tests {
         ) -> io::Result<Box<dyn IoConnection>> {
             self.attempted.lock().unwrap().push(addr);
             if addr != self.successful {
-                return Err(io::Error::from(io::ErrorKind::NetworkUnreachable));
+                return Err(io::Error::from(self.error_kind));
             }
             let (io, _peer) = tokio::io::duplex(1);
             Ok(Box::new(TestConn { io, addr }))
@@ -375,6 +376,7 @@ mod tests {
         let connector = Arc::new(FallbackConnector {
             attempted: std::sync::Mutex::new(Vec::new()),
             successful,
+            error_kind: io::ErrorKind::NetworkUnreachable,
         });
         let table = StreamConnectorTable::new(
             crate::connect::connector_config_cell(ConnectorConfig::default()).0,
@@ -397,6 +399,43 @@ mod tests {
             *connector.attempted.lock().unwrap(),
             [unreachable, successful]
         );
+    }
+
+    /// A refusal is a failure of *that address*, not of the host: the resolver
+    /// may return a dead A/AAAA record ahead of a live one, so a refused first
+    /// address must not stop the walk. `timed_connect_any` is this crate's only
+    /// multi-address walk (it backs the stream relay, the HTTP tunnel, SOCKS5,
+    /// and the mux connectors), so a "stop on refusal" reintroduced here turns
+    /// every working destination whose first resolved address refuses into a
+    /// failed dial. The sibling test only drives a non-refused error, which
+    /// both rules survive, so the refusal case is what pins the difference.
+    #[tokio::test]
+    async fn tries_next_resolved_address_after_a_refused_error() {
+        let refused = "[2001:db8::2]:443".parse().unwrap();
+        let successful = "192.0.2.2:443".parse().unwrap();
+        let connector = Arc::new(FallbackConnector {
+            attempted: std::sync::Mutex::new(Vec::new()),
+            successful,
+            error_kind: io::ErrorKind::ConnectionRefused,
+        });
+        let table = StreamConnectorTable::new(
+            crate::connect::connector_config_cell(ConnectorConfig::default()).0,
+            HashMap::from([(
+                Arc::from(STREAM_TYPE),
+                connector.clone() as Arc<dyn StreamConnect>,
+            )]),
+        );
+        let (_, connected_addr) = table
+            .timed_connect_any(
+                STREAM_TYPE,
+                [refused, successful],
+                None,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(connected_addr, successful);
+        assert_eq!(*connector.attempted.lock().unwrap(), [refused, successful]);
     }
 
     #[tokio::test]
