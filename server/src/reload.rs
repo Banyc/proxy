@@ -643,4 +643,46 @@ mod tests {
         );
         assert_eq!(RELOAD_DEBOUNCE, Duration::from_secs(1));
     }
+
+    /// The commit error is the only line an operator sees from a partial
+    /// commit: `serve` logs it verbatim and carries on. It must therefore name
+    /// every loader whose handler updates were lost — the operator reads the
+    /// name to know which listener set to look at — and report how many
+    /// loaders lost one, preserving each loader's own error text. A message
+    /// that drops the loader names, or that reports a fixed count, sends the
+    /// operator to the wrong place in exactly the state this error exists to
+    /// describe.
+    #[test]
+    fn a_commit_failure_names_and_counts_every_loader_that_lost_an_update() {
+        let error = commit_failure(vec![
+            (
+                "access_server",
+                AnyError::from("listener died: 127.0.0.1:1"),
+            ),
+            ("reverse_tunnel", AnyError::from("listener died: [::1]:2")),
+        ])
+        .expect("a commit with failures must report them");
+        let text = error.to_string();
+        assert!(
+            text.contains("in 2 loader(s)"),
+            "the report must count the loaders that lost an update: {text}"
+        );
+        assert!(
+            text.contains("access_server: "),
+            "the report must name the access server as a loader that lost an update: {text}"
+        );
+        assert!(
+            text.contains("reverse_tunnel: "),
+            "the report must name the reverse tunnel as a loader that lost an update: {text}"
+        );
+        assert!(
+            text.contains("127.0.0.1:1") && text.contains("[::1]:2"),
+            "the report must preserve each loader's own error text: {text}"
+        );
+
+        // The control: a commit that lost nothing reports nothing, so the
+        // assertions above are about the report's content, not about a
+        // message that is produced unconditionally.
+        assert!(commit_failure(Vec::new()).is_none());
+    }
 }
