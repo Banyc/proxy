@@ -245,6 +245,7 @@ mod tests {
         pin::Pin,
         task::{Context, Poll},
     };
+    use swap::Swap;
 
     use super::*;
     use crate::{
@@ -457,6 +458,83 @@ mod tests {
         let pool = ConnPool::new([entry(&key)].into_iter());
         let other = stream_addr("127.0.0.1:2", STREAM_TYPE);
         assert!(pool.pull(&other).is_none());
+    }
+
+    /// The loopback refusal is a two-term guard: it fires only for a target
+    /// that actually resolves into loopback *and* only when the caller has not
+    /// opted into loopback. Pin both terms, because each is a distinct hole —
+    /// dropping the address term refuses every dial when loopback is off,
+    /// dropping the `allow_loopback` term lets a reverse-tunnel or
+    /// access-server flow reach the process's own listeners. The refusal
+    /// happens before any connector is consulted, so no socket is dialed and
+    /// the case is offline and deterministic.
+    #[tokio::test]
+    async fn only_a_loopback_target_with_loopback_disallowed_is_refused() {
+        let runtime = StreamRuntime {
+            session_table: None,
+            pool: Swap::new(ConnPool::new(std::iter::empty())),
+            connector_table: Arc::new(StreamConnectorTable::new(
+                connector_config_cell(ConnectorConfig::default()).0,
+                HashMap::new(),
+            )),
+            replay_validator: Arc::new(ae::anti_replay::ReplayValidator::new(
+                crate::anti_replay::VALIDATOR_TIME_FRAME,
+                crate::anti_replay::VALIDATOR_CAPACITY,
+            )),
+            session_spawner: crate::session::SessionSpawner::channel().0,
+            retention: crate::lifecycle::retention::RetentionActor::new().1,
+        };
+        let route = |addr: &str| RouteAddr {
+            address: addr.parse::<SocketAddr>().unwrap().into(),
+            protocol: "tcp".into(),
+        };
+        let refused = connect_with_pool(
+            &route("127.0.0.1:1"),
+            None,
+            &runtime,
+            false,
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(refused, ConnectError::Loopback { .. }),
+            "a loopback target with loopback disallowed must be refused, got {refused}"
+        );
+
+        // The same target with loopback allowed must get past the guard and
+        // fail at the (unregistered) connector instead. No connector of type
+        // `tcp` is installed, so this is an offline failure, not a dial.
+        let allowed = connect_with_pool(
+            &route("127.0.0.1:1"),
+            None,
+            &runtime,
+            true,
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            !matches!(allowed, ConnectError::Loopback { .. }),
+            "an opted-in loopback target must not be refused as loopback, got {allowed}"
+        );
+
+        // A non-loopback target must never be refused as loopback, whether or
+        // not loopback is allowed: 192.0.2.1 is TEST-NET-1 and is never dialed
+        // because the stream type is unregistered.
+        let public = connect_with_pool(
+            &route("192.0.2.1:1"),
+            None,
+            &runtime,
+            false,
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            !matches!(public, ConnectError::Loopback { .. }),
+            "a non-loopback target must not be refused as loopback, got {public}"
+        );
     }
 
     #[tokio::test]
