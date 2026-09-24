@@ -165,9 +165,10 @@ where
                 sessions.spawn(fut);
             }
             Some(res) = sessions.join_next() => {
-                if let Err(error) = res.unwrap() {
-                    error!(?error, "Session task returned an error");
-                }
+                // Every session future ends `Ok(())`, whether its flow
+                // succeeded or its handler reported a failure; `unwrap`
+                // re-raises one that panicked.
+                let _ = res.unwrap();
             }
             step = drive_reload(&mut reload, &mut server_tasks, &mut config_changed) => {
                 match step {
@@ -220,18 +221,14 @@ where
         }
     };
     // Fatal-outcome epilog: stop admitting sessions, adopt every future that
-    // is still queued, then abort and reap the session and server task sets
-    // with logging so a completed panic is not hidden by a JoinSet drop.
+    // is still queued, then abort and reap the session and server task sets,
+    // re-raising a completed panic rather than hiding it behind a JoinSet
+    // drop.
     session_rx.close();
     while let Some(fut) = session_rx.recv().await {
         sessions.spawn(fut);
     }
-    common::lifecycle::task_scope::abort_and_reap_with(&mut sessions, |res| {
-        if let Err(error) = res {
-            error!(?error, "Session task returned an error during shutdown");
-        }
-    })
-    .await;
+    common::lifecycle::task_scope::abort_and_reap(&mut sessions).await;
     common::lifecycle::task_scope::abort_and_reap_with(&mut server_tasks, |res| {
         if let Err(error) = res {
             error!(?error, "Server task returned an error during shutdown");
