@@ -47,6 +47,19 @@ pub struct ServeContext {
     pub system_resume: SystemResumeSignal,
     pub retention: RetentionActorSender,
 }
+impl ServeContext {
+    /// The connector-reset authority.
+    ///
+    /// Firing it tears down every pooled mux session, because a system resume
+    /// invalidates the connections underneath them. A configuration change
+    /// must not: `commit_reload` replaces the connector configuration in place
+    /// and live sessions keep serving. The two authorities are separate
+    /// broadcasts, and this is the single place the reset signal is derived,
+    /// so the connector table can only ever be handed the resume signal.
+    fn connector_reset(&self) -> ConnectorResetSignal {
+        ConnectorResetSignal(self.system_resume.0.clone())
+    }
+}
 
 /// The validator `serve` judges UDP route headers with. The window is the one
 /// `common::anti_replay` derives for every UDP-path validator, so the client's
@@ -85,7 +98,7 @@ where
         VALIDATOR_CAPACITY,
     ));
     let udp_validator = Arc::new(udp_time_validator());
-    let connector_reset = ConnectorResetSignal(serve_context.system_resume.0);
+    let connector_reset = serve_context.connector_reset();
     // One connector-configuration cell shared by the stream connector table,
     // the UDP connector, and every mux UDP dialer: a reload replaces it in a
     // single write, so stream and UDP connectors can never observe different
@@ -154,7 +167,7 @@ where
         return Err(ServerServeError::Commit(e));
     }
     let mut _cancellation_guard = guard;
-    let mut config_changed = serve_context.config_changed.0.subscription();
+    let mut config_changed = serve_context.config_changed.subscription();
     let mut reload = ServerReloadMachine::new();
 
     let outcome = loop {
@@ -363,7 +376,57 @@ impl Merge for ServerConfig {
 mod tests {
     use super::*;
     use common::anti_replay::VALIDATOR_UDP_HDR_TTL;
+    use common::{
+        lifecycle::{retention::RetentionActor, suspend::SystemResumeSignal},
+        notify::{Notify, Subscription},
+    };
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    /// Whether `subscription` has an unconsumed broadcast pending. The probe is
+    /// synchronous: `notify_waiters` bumps a generation counter, so the answer
+    /// depends on which channel broadcast, never on scheduling.
+    async fn woken(subscription: &mut Subscription) -> bool {
+        tokio::time::timeout(Duration::ZERO, subscription.notified())
+            .await
+            .is_ok()
+    }
+
+    /// `serve` hands the connector table the system-resume signal as its reset
+    /// authority, not the config-change signal. The two are separate
+    /// broadcasts with different jobs: a resume invalidates every pooled mux
+    /// session, while a config change replaces the connector configuration in
+    /// place (`commit_reload`) and leaves live sessions serving.
+    ///
+    /// The probe is the primitive the connector itself consumes —
+    /// `run_mux_connector` subscribes to the reset signal and awaits it — so a
+    /// reset signal woken by a config change, or one a resume leaves asleep, is
+    /// red here.
+    #[tokio::test]
+    async fn the_connector_reset_signal_is_the_resume_signal_not_the_config_change_signal() {
+        let config_changed = ConfigChangeSignal::new();
+        let system_resume = SystemResumeSignal(Notify::new());
+        let (_retention_actor, retention) = RetentionActor::new();
+        let serve_context = ServeContext {
+            stream_session_table: None,
+            udp_session_table: None,
+            config_changed: config_changed.clone(),
+            system_resume: system_resume.clone(),
+            retention,
+        };
+        let mut reset = serve_context.connector_reset().0.subscription();
+
+        config_changed.notify_waiters();
+        assert!(
+            !woken(&mut reset).await,
+            "a config change must not reset the connectors: it leaves live mux sessions serving"
+        );
+
+        system_resume.0.notify_waiters();
+        assert!(
+            woken(&mut reset).await,
+            "a system resume must reset the connectors: every pooled mux session it holds is stale"
+        );
+    }
 
     fn server_config(src: &str) -> ServerConfig {
         toml::from_str(src).unwrap()

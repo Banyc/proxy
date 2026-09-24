@@ -205,7 +205,7 @@ async fn await_next_read(
     expected: usize,
 ) {
     for _ in 0..10 {
-        config_changed.0.notify_waiters();
+        config_changed.notify_waiters();
         match tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await {
             Ok(Some(index)) => {
                 assert_eq!(index, expected, "unexpected config read index");
@@ -243,7 +243,7 @@ async fn a_reload_installs_a_live_generation_and_retires_the_one_it_replaces() {
         ],
         reads_tx,
     );
-    let config_changed = ConfigChangeSignal(Notify::new());
+    let config_changed = ConfigChangeSignal::new();
     let (retention_actor, retention) = RetentionActor::new();
     let context = ServeContext {
         stream_session_table: None,

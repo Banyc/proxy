@@ -152,7 +152,7 @@ async fn a_reload_is_applied_and_a_failed_prepare_does_not_kill_the_server() {
         ],
         reads_tx,
     );
-    let config_changed = ConfigChangeSignal(Notify::new());
+    let config_changed = ConfigChangeSignal::new();
     let (retention_actor, retention) = RetentionActor::new();
     let context = ServeContext {
         stream_session_table: None,
@@ -188,7 +188,7 @@ async fn a_reload_is_applied_and_a_failed_prepare_does_not_kill_the_server() {
         expected: usize,
     ) {
         for _ in 0..10 {
-            config_changed.0.notify_waiters();
+            config_changed.notify_waiters();
             match tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await {
                 Ok(Some(index)) => {
                     assert_eq!(index, expected, "unexpected config read index");

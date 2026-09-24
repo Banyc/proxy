@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
-use common::{error::AnyError, lifecycle::process::RootTaskExit, notify::Notify};
+use common::{
+    error::AnyError,
+    lifecycle::process::RootTaskExit,
+    notify::{Notify, Subscription},
+};
 
 pub mod multi_file_config;
 pub mod toml;
@@ -16,7 +20,7 @@ pub struct ConfigWatcher {
 }
 impl ConfigWatcher {
     pub fn new() -> Self {
-        let signal = ConfigChangeSignal(Notify::new());
+        let signal = ConfigChangeSignal::new();
         Self { signal }
     }
 
@@ -36,7 +40,7 @@ impl file_watcher_tokio::HandleEvent for ConfigWatcher {
         if !may_changed {
             return;
         }
-        self.signal.0.notify_waiters();
+        self.signal.notify_waiters();
     }
 }
 
@@ -126,7 +130,7 @@ mod tests {
         use file_watcher_tokio::{Event, HandleEvent};
 
         let mut watcher = ConfigWatcher::new();
-        let mut subscription = watcher.signal().0.subscription();
+        let mut subscription = watcher.signal().subscription();
 
         // `notify::Event::default()` carries the catch-all `EventKind::Any`.
         watcher.handle_event(Event::default()).await;
@@ -143,7 +147,7 @@ mod tests {
 
         // Control: the probe above does observe a real broadcast, so the
         // assertion is about the classification, not about a dead channel.
-        watcher.signal().0.notify_waiters();
+        watcher.signal().notify_waiters();
         tokio::time::timeout(
             std::time::Duration::from_secs(3600),
             subscription.notified(),
@@ -189,5 +193,35 @@ mod tests {
     }
 }
 
+/// The broadcast the serve loop reloads on.
+///
+/// The signal hands out the two capabilities its consumers need — a
+/// [`Subscription`] to await a change, and a broadcast — and keeps its
+/// [`Notify`] private. Every signal in this workspace wraps the same `Notify`
+/// type, so a public payload would let the config-change channel be fed
+/// anywhere a `Notify` is wanted, including the constructors of signals that
+/// carry a different authority (the connector reset, which belongs to a
+/// system resume). Keeping the payload private makes that wiring fail to
+/// compile instead of silently binding the wrong channel.
 #[derive(Debug, Clone)]
-pub struct ConfigChangeSignal(pub Notify);
+pub struct ConfigChangeSignal(Notify);
+impl ConfigChangeSignal {
+    pub fn new() -> Self {
+        Self(Notify::new())
+    }
+
+    /// A subscriber that observes every broadcast made after this call.
+    pub fn subscription(&self) -> Subscription {
+        self.0.subscription()
+    }
+
+    /// Broadcast a change to every current subscriber.
+    pub fn notify_waiters(&self) {
+        self.0.notify_waiters();
+    }
+}
+impl Default for ConfigChangeSignal {
+    fn default() -> Self {
+        Self::new()
+    }
+}

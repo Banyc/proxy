@@ -68,7 +68,7 @@ fn attempt_teardown() {
     runtime.block_on(async {
         let mut process_tasks: tokio::task::JoinSet<RootTaskExit> = tokio::task::JoinSet::new();
         let signal = spawn_watch_tasks(&mut process_tasks, std::slice::from_ref(&watched));
-        let mut subscription = signal.0.subscription();
+        let mut subscription = signal.subscription();
 
         // The OS watcher registers asynchronously; retry the write until the
         // signal fires. The signal is the success condition, the timeout only
