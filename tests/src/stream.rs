@@ -691,6 +691,148 @@ mod tests {
             .await;
     }
 
+    /// A relay request header is authenticated once. The proxy validates every
+    /// connection's header against the runtime's one replay validator, so the
+    /// nonce of a header that has already been served is spent: replaying the
+    /// captured header verbatim on a second connection must be refused, not
+    /// relayed to the destination. A proxy that built a fresh validator per
+    /// connection (or skipped validation) would serve the replay and this test
+    /// would read the destination's echo.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_replayed_stream_request_header_is_refused() {
+        let mut scope = TestRuntimeScope::new();
+        let proxy_config = spawn_proxy(
+            &mut scope,
+            &Arc::from("127.0.0.1:0"),
+            ConcreteStreamType::Tcp,
+        )
+        .await;
+        let proxy_sock_addr = match *proxy_config.address.address {
+            common::addr::InternetAddrKind::SocketAddr(addr) => addr,
+            ref other => panic!("unexpected proxy address {other:?}"),
+        };
+
+        // A destination that counts every connection it serves and echoes what
+        // it is sent, so a relayed replay shows up both as a second connection
+        // and as echoed bytes.
+        let served = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let destination = RouteAddr {
+            address: listener.local_addr().unwrap().into(),
+            protocol: ConcreteStreamType::Tcp.to_string().into(),
+        };
+        let serving = Arc::clone(&served);
+        scope.spawn_session(async move {
+            // Serve connections concurrently: a relayed replay must be able to
+            // reach the destination while the control connection is still up.
+            let mut handlers = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let Ok((mut sock, _)) = accepted else {
+                            break;
+                        };
+                        serving.fetch_add(1, Ordering::SeqCst);
+                        handlers.spawn(async move {
+                            let mut buf = [0u8; 64];
+                            loop {
+                                match sock.read(&mut buf).await {
+                                    Ok(0) | Err(_) => break,
+                                    Ok(n) => {
+                                        if sock.write_all(&buf[..n]).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    Some(result) = handlers.join_next() => {
+                        result.unwrap();
+                    }
+                }
+            }
+            while let Some(result) = handlers.join_next().await {
+                result.unwrap();
+            }
+        });
+
+        // The relay request header, encoded exactly once by the production
+        // encoder: its nonce is the token that must be spent after one use.
+        let header_bytes = {
+            let mut pairs = common::route::convert_proxies_to_header_crypto_pairs(
+                std::slice::from_ref(&proxy_config),
+                Some(destination),
+            );
+            let (header, _) = pairs.pop().unwrap();
+            let mut encoded = Vec::new();
+            common::header::codec::timed_write_header_async(
+                &mut encoded,
+                &header,
+                *proxy_config.header_crypto.key(),
+                Duration::from_secs(10),
+            )
+            .await
+            .unwrap();
+            encoded
+        };
+        // A fresh preamble (a new nonce) on every connection, followed by the
+        // one captured header.
+        let dial = || async {
+            let mut conn = tokio::net::TcpStream::connect(proxy_sock_addr)
+                .await
+                .unwrap();
+            let mut preamble_bytes = Vec::new();
+            common::header::preamble::send_upgrade(
+                &mut preamble_bytes,
+                Duration::from_secs(10),
+                &proxy_config.header_crypto,
+            )
+            .await
+            .unwrap();
+            conn.write_all(&preamble_bytes).await.unwrap();
+            conn.write_all(&header_bytes).await.unwrap();
+            conn
+        };
+
+        scope
+            .run(async {
+                // Positive control: the header relays to the destination once.
+                let mut first = dial().await;
+                first.write_all(b"ping").await.unwrap();
+                let mut echoed = [0u8; 4];
+                tokio::time::timeout(Duration::from_secs(10), first.read_exact(&mut echoed))
+                    .await
+                    .expect("timed out waiting for the first header to relay")
+                    .unwrap();
+                assert_eq!(&echoed, b"ping");
+                assert_eq!(served.load(Ordering::SeqCst), 1);
+                drop(first);
+
+                // Replaying the same header on a new connection must be
+                // refused: the proxy must not reach the destination again.
+                let mut replay = dial().await;
+                replay.write_all(b"ping").await.unwrap();
+                let mut buf = [0u8; 4];
+                let read = tokio::time::timeout(Duration::from_secs(10), replay.read(&mut buf))
+                    .await
+                    .expect("timed out waiting for the proxy to refuse the replayed header");
+                match read {
+                    Ok(0) | Err(_) => {}
+                    Ok(n) => panic!(
+                        "the proxy relayed a replayed request header: {:?}",
+                        &buf[..n]
+                    ),
+                }
+                assert_eq!(
+                    served.load(Ordering::SeqCst),
+                    1,
+                    "a replayed request header must not reach the destination"
+                );
+            })
+            .await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_no_proxies() {
         let mut scope = TestRuntimeScope::new();
