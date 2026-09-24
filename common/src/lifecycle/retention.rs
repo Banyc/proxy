@@ -180,6 +180,53 @@ mod tests {
         }
     }
 
+    /// Guards are scheduled by their *own* deadline, not by the latest one in
+    /// the actor: with two guards outstanding the actor must wake for the
+    /// earlier deadline, drop only that guard, and keep the later one. Waking
+    /// for the latest deadline instead silently retains every guard until the
+    /// longest outstanding retention elapses — today every caller uses the
+    /// same 5s duration, so the extra retention is the spread of submission
+    /// instants (up to ~5s, doubling how long a dead session's retained
+    /// resources are held) and a future caller with a shorter deadline would
+    /// be held for the whole of someone else's retention.
+    #[tokio::test(start_paused = true)]
+    async fn an_earlier_guard_is_dropped_at_its_own_deadline_while_a_later_one_is_kept() {
+        let clock = Arc::new(crate::clock::test_support::VirtualClock::new());
+        let early = Arc::new(AtomicBool::new(false));
+        let late = Arc::new(AtomicBool::new(false));
+        let (actor, sender) = RetentionActor::with_clock(Arc::clone(&clock) as Arc<dyn Clock>);
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(actor.run());
+        sender
+            .retain(
+                Box::new(DropGuard(Arc::clone(&early))),
+                clock.now() + Duration::from_millis(100),
+            )
+            .await;
+        sender
+            .retain(
+                Box::new(DropGuard(Arc::clone(&late))),
+                clock.now() + Duration::from_secs(10),
+            )
+            .await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(100)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        assert!(
+            early.load(Ordering::SeqCst),
+            "the guard at the earlier deadline must be dropped when that deadline arrives"
+        );
+        assert!(
+            !late.load(Ordering::SeqCst),
+            "a guard whose deadline is still ahead must be kept"
+        );
+        drop(sender);
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap();
+        }
+    }
+
     /// The expiry guard is exclusive of the deadline: a guard whose `until`
     /// equals `now` is dropped, not kept. A `>`→`>=` mutation differs only at
     /// that exact instant; the injected clock places the actor's wakeup
