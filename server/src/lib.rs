@@ -133,29 +133,18 @@ where
     };
 
     let cancellation = CancellationToken::new();
-    // Initial configuration preparation: race the first preparation against
-    // the connector drivers already spawned into `server_tasks`, so a
-    // connector-driver panic or failure during startup surfaces immediately
-    // instead of parking until the serve loop begins.
-    let prepared = {
-        let prepare = prepare_reload(
-            Arc::clone(&config_reader),
-            server_loader.snapshot(),
-            cancellation.clone(),
-            runtime.clone(),
-        );
-        tokio::pin!(prepare);
-        loop {
-            tokio::select! {
-                res = &mut prepare => break res?,
-                Some(res) = server_tasks.join_next() => {
-                    // Surface connector-driver failures and panics during
-                    // startup instead of parking them.
-                    res.unwrap().map_err(ServerServeError::ServerTask)?;
-                }
-            }
-        }
-    };
+    // Initial configuration preparation. Nothing races it: the connector
+    // drivers already in `server_tasks` cannot complete — each runs until the
+    // connector handles held by `runtime` drop — and every arm of theirs that
+    // could panic is driven by a connect request, of which there is none
+    // before a listener accepts.
+    let prepared = prepare_reload(
+        Arc::clone(&config_reader),
+        server_loader.snapshot(),
+        cancellation.clone(),
+        runtime.clone(),
+    )
+    .await?;
     let (guard, commit_error) = commit_reload(
         &mut server_tasks,
         &mut server_loader,
