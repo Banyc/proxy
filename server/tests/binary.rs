@@ -1,17 +1,18 @@
 //! Exercise the `proxy` binary as a process: the CLI surface (`--help`, the
-//! no-config error), and the running server with its monitoring HTTP server
-//! and CSV record directory. The binary is located through cargo's
-//! `CARGO_BIN_EXE_proxy`, so the test drives the real production entry point.
+//! no-config error), the running server with its monitoring HTTP server and
+//! CSV record directory, and the session tables that server's `/sessions`
+//! view reads. The binary is located through cargo's `CARGO_BIN_EXE_proxy`,
+//! so the test drives the real production entry point.
 //!
-//! The monitor listener binds `127.0.0.1:0`; the test reads the actual port
-//! from the process's own startup log, so it never races a fixed port. Every
+//! Every listener binds `127.0.0.1:0`; the test reads the actual ports from
+//! the process's own startup log, so it never races a fixed port. Every
 //! spawned process is `kill_on_drop`, so a failed assertion does not leak it.
 
 use std::{process::Stdio, time::Duration};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::TcpStream,
+    net::{TcpListener, TcpStream, UdpSocket},
 };
 
 fn proxy_bin() -> &'static str {
@@ -146,6 +147,92 @@ async fn the_process_serves_the_monitor_routes_and_writes_records() {
 
     child.kill().await.ok();
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Strip the ANSI escape sequences the fmt subscriber writes around field
+/// names and values, so a log line can be matched on its text alone.
+fn strip_ansi(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        // An escape sequence is CSI: ESC '[' then parameter bytes then a
+        // final byte in `@`..=`~`; skip through the final byte.
+        if chars.next() != Some('[') {
+            continue;
+        }
+        for c in chars.by_ref() {
+            if ('\u{40}'..='\u{7e}').contains(&c) {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Spawn the binary on `config_path` with an ephemeral monitor listener and
+/// return the child plus the monitor and access-server addresses it logged.
+/// The access-server address is the one its listener actually bound, so both
+/// ports come from the OS and neither can be taken by another process.
+///
+/// Both reads are bounded: a process that never logs its addresses fails
+/// instead of hanging, and one that exits is named as such.
+async fn spawn_and_learn_addrs(
+    config_path: &std::path::Path,
+) -> (tokio::process::Child, String, String) {
+    let mut child = tokio::process::Command::new(proxy_bin())
+        .arg(config_path.to_str().unwrap())
+        .args(["--monitor-listen-addr", "127.0.0.1:0"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut lines = BufReader::new(stdout).lines();
+    let mut monitor = None;
+    let mut access = None;
+    while monitor.is_none() || access.is_none() {
+        let line = tokio::time::timeout(Duration::from_secs(30), lines.next_line())
+            .await
+            .expect("timed out waiting for the process to log its listener addresses")
+            .expect("failed to read the process stdout")
+            .unwrap_or_else(|| {
+                panic!("the process exited before logging its monitor and access-server addresses")
+            });
+        let line = strip_ansi(&line);
+        if let Some(rest) = line.split("listening addr: ").nth(1) {
+            monitor = Some(rest.trim().to_string());
+        }
+        if let Some(rest) = line.split("Listening addr=").nth(1) {
+            access = Some(rest.trim().to_string());
+        }
+    }
+    (child, monitor.unwrap(), access.unwrap())
+}
+
+/// The two session blocks a `/sessions` response renders, each block's
+/// non-blank lines with its header row first. This is the operator's view, so
+/// the assertions below read exactly what an operator reads.
+fn session_blocks(response: &str) -> (Vec<&str>, Vec<&str>) {
+    let body = response
+        .split("\r\n\r\n")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the /sessions response must have a body: {response}"));
+    let after_stream = body
+        .split_once("Stream:")
+        .unwrap_or_else(|| panic!("the /sessions body must render the stream block: {body}"))
+        .1;
+    let (stream, udp) = after_stream
+        .split_once("UDP:")
+        .unwrap_or_else(|| panic!("the /sessions body must render the udp block: {body}"));
+    fn lines(block: &str) -> Vec<&str> {
+        block.lines().filter(|l| !l.trim().is_empty()).collect()
+    }
+    (lines(stream), lines(udp))
 }
 
 /// A config path that does not exist makes the watcher root task fail, which
@@ -288,5 +375,184 @@ async fn an_unreadable_config_exits_the_process_normally() {
         text.contains("Config"),
         "the failure must be classified as a config error: {text}"
     );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The monitor branch of `main` hands the runtime the stream session table
+/// the `/sessions` view reads, so a stream session established through the
+/// serve path is recorded and rendered with the session's own destination. A
+/// runtime handed `None` instead serves the connection identically — the
+/// accept, the upstream dial and the io copy all happen — and leaves no
+/// record anywhere, which is what this pins.
+///
+/// The destination is a listener the test owns on an ephemeral port, and the
+/// access server's own port is read from the address its listener logs. Both
+/// ports are therefore chosen by the OS: nothing binds a fixed port and
+/// nothing has to retry a taken one. The trigger is the accept on the
+/// test-owned listener — the access server dials its destination before it
+/// starts the recorded copy — so the only wait is a bounded poll for the row
+/// that follows it, never a sleep for an expected latency.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stream_session_established_by_the_serve_path_is_recorded() {
+    let responder = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("binding an ephemeral loopback listener must succeed");
+    let responder_port = responder
+        .local_addr()
+        .expect("a bound listener has a local address")
+        .port();
+
+    let dir = unique_temp_dir("stream-session");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config_path = dir.join("session.toml");
+    // An empty chain dials the destination directly, so the session exists as
+    // soon as the responder accepts the connection.
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[access_server.stream.conn_selector]
+"default" = {{ chains = [] }}
+
+[[access_server.tcp_server]]
+listen_addr = "127.0.0.1:0"
+destination = "tcp://127.0.0.1:{responder_port}"
+conn_selector = "default"
+"#
+        ),
+    )
+    .unwrap();
+
+    let (mut child, monitor, access) = spawn_and_learn_addrs(&config_path).await;
+
+    let client = TcpStream::connect(&access)
+        .await
+        .expect("the access-server listener must accept a connection");
+    let (upstream, _peer) = tokio::time::timeout(Duration::from_secs(30), responder.accept())
+        .await
+        .expect("the access server must dial the configured destination")
+        .expect("the responder must accept the access server's dial");
+
+    // The recorded row follows the dial above on loopback; this budget bounds
+    // how long a runtime that never records it can look like one that has not
+    // got there yet.
+    const ROW_BUDGET: Duration = Duration::from_secs(15);
+    let deadline = tokio::time::Instant::now() + ROW_BUDGET;
+    let sessions = loop {
+        let response = http_get(&monitor, "/sessions").await;
+        if session_blocks(&response).0.len() >= 2 {
+            break response;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the serve path accepted the connection and dialed the destination, but no stream \
+             session was recorded in {ROW_BUDGET:?}. The metrics of the run: {}",
+            http_get(&monitor, "/metrics").await,
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+
+    let (stream_rows, _) = session_blocks(&sessions);
+    assert_eq!(
+        stream_rows.len(),
+        2,
+        "the stream session view must be its header plus exactly the one session this test \
+         established, and nothing else: {sessions}"
+    );
+    let port = responder_port.to_string();
+    assert!(
+        stream_rows[1].split_whitespace().any(|token| token == port),
+        "the recorded row must be the session this test established, whose destination is \
+         127.0.0.1:{port}: {}",
+        stream_rows[1]
+    );
+
+    drop(client);
+    drop(upstream);
+    child.kill().await.ok();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The same wiring for the udp session table: a udp session established
+/// through the serve path is recorded with the flow's own destination. The
+/// stream and udp tables are separate columns of the same serve context, so
+/// neither may be handed the other's table, dropped, or left unset.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_udp_session_established_by_the_serve_path_is_recorded() {
+    let responder = UdpSocket::bind("127.0.0.1:0")
+        .await
+        .expect("binding an ephemeral loopback socket must succeed");
+    let responder_port = responder
+        .local_addr()
+        .expect("a bound socket has a local address")
+        .port();
+
+    let dir = unique_temp_dir("udp-session");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config_path = dir.join("session.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[access_server.udp.conn_selector]
+"default" = {{ chains = [] }}
+
+[[access_server.udp_server]]
+listen_addr = "127.0.0.1:0"
+destination = "127.0.0.1:{responder_port}"
+conn_selector = "default"
+"#
+        ),
+    )
+    .unwrap();
+
+    let (mut child, monitor, access) = spawn_and_learn_addrs(&config_path).await;
+
+    let payload = b"session-wiring-probe";
+    let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    client
+        .send_to(payload, &access)
+        .await
+        .expect("the access-server socket must accept a datagram");
+    let mut buf = [0u8; 64];
+    let (n, _from) = tokio::time::timeout(Duration::from_secs(30), responder.recv_from(&mut buf))
+        .await
+        .expect("the access server must forward the datagram to the configured destination")
+        .unwrap();
+    assert_eq!(&buf[..n], payload, "the datagram must arrive unaltered");
+
+    const ROW_BUDGET: Duration = Duration::from_secs(15);
+    let deadline = tokio::time::Instant::now() + ROW_BUDGET;
+    let sessions = loop {
+        let response = http_get(&monitor, "/sessions").await;
+        if session_blocks(&response).1.len() >= 2 {
+            break response;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the serve path forwarded the datagram to the destination, but no udp session was \
+             recorded in {ROW_BUDGET:?}. The metrics of the run: {}",
+            http_get(&monitor, "/metrics").await,
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+
+    let (_, udp_rows) = session_blocks(&sessions);
+    assert_eq!(
+        udp_rows.len(),
+        2,
+        "the udp session view must be its header plus exactly the one session this test \
+         established, and nothing else: {sessions}"
+    );
+    let port = responder_port.to_string();
+    assert!(
+        udp_rows[1].split_whitespace().any(|token| token == port),
+        "the recorded row must be the flow this test established, whose destination is \
+         127.0.0.1:{port}: {}",
+        udp_rows[1]
+    );
+
+    drop(client);
+    child.kill().await.ok();
     std::fs::remove_dir_all(&dir).ok();
 }
