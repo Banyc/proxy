@@ -46,12 +46,26 @@ use crate::stream_proto::connect::build_concrete_stream_connector_table;
 /// tasks still running when the body completes.
 struct TestScope {
     tasks: JoinSet<()>,
+    /// Handles the scope's required actors depend on, held for the scope's
+    /// whole life. The mux connector drivers, the retention actor and the
+    /// session spawner all end when the runtime's last handle drops, and a test
+    /// body owns a handle of its own (it moves the runtime into the builder or
+    /// prepare it is testing). Without a handle here, a body that drops its own
+    /// ends those actors, and whether `run` observes the end before the body
+    /// returns is a scheduling race. Holding one here keeps the required-actor
+    /// check a property of the actors alone.
+    kept: Vec<Box<dyn std::any::Any>>,
 }
 impl TestScope {
     fn new() -> Self {
         Self {
             tasks: JoinSet::new(),
+            kept: Vec::new(),
         }
+    }
+    /// Keep `value` alive until the scope ends.
+    fn keep(&mut self, value: impl std::any::Any) {
+        self.kept.push(Box::new(value));
     }
     fn spawn(&mut self, task: impl std::future::Future<Output = ()> + Send + 'static) {
         self.tasks.spawn(task);
@@ -196,20 +210,20 @@ async fn test_stream_runtime(
     tasks.spawn_required("retention actor", async move {
         retention_actor.run().await;
     });
-    (
-        StreamRuntime {
-            session_table: None,
-            pool: Swap::new(StreamConnPool::empty()),
-            connector_table,
-            replay_validator: Arc::new(ReplayValidator::new(
-                VALIDATOR_TIME_FRAME,
-                VALIDATOR_CAPACITY,
-            )),
-            session_spawner: session_spawner.clone(),
-            retention,
-        },
-        session_spawner,
-    )
+    let stream = StreamRuntime {
+        session_table: None,
+        pool: Swap::new(StreamConnPool::empty()),
+        connector_table,
+        replay_validator: Arc::new(ReplayValidator::new(
+            VALIDATOR_TIME_FRAME,
+            VALIDATOR_CAPACITY,
+        )),
+        session_spawner: session_spawner.clone(),
+        retention,
+    };
+    // Keep the runtime the required actors above watch alive for the scope.
+    tasks.keep(stream.clone());
+    (stream, session_spawner)
 }
 
 async fn test_runtime(tasks: &mut TestScope) -> (Runtime, common::session::SessionSpawner) {
@@ -1289,6 +1303,31 @@ async fn a_responder_bind_failure_is_reported_by_prepare() {
                 text.contains("already in use"),
                 "the bind failure must be surfaced as an address-in-use error: {error}"
             );
+        })
+        .await;
+}
+
+/// The scope holds a handle to the runtime the required actors watch — the mux
+/// connector drivers, the retention actor and the session spawner all end when
+/// the last runtime handle drops — so a body that drops the runtime it was
+/// handed releases only its own handle and no required actor is released.
+///
+/// The stage after the drop is what makes this decisive: a released actor is
+/// given time to reach the scope, so a runtime the scope fails to hold would
+/// fail here on every run — the drivers as `ConnectorExited`, the retention
+/// actor as an early exit — instead of on the runs where the scheduler beats
+/// the body's return.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_scope_holds_the_runtime_its_required_actors_watch() {
+    let mut scope = TestScope::new();
+    let (runtime, _session_spawner) = test_runtime(&mut scope).await;
+    scope
+        .run(async move {
+            drop(runtime);
+            for _ in 0..64 {
+                tokio::task::yield_now().await;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         })
         .await;
 }
