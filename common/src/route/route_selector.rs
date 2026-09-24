@@ -393,6 +393,52 @@ mod tests {
         ));
     }
 
+    /// `active_chains` truncates the ranked list to the *best* chains: the
+    /// ranking is by descending score, so a smaller `active_chains` must
+    /// narrow the candidate set to the fastest/lowest-loss chains, never to
+    /// the slowest. The shipped configs set `active_chains` (8 and 3) on
+    /// multi-chain selectors, so an inverted comparison silently routes every
+    /// connection over the worst chains in the set. The sibling gate tests only
+    /// exercise a gate that has already dropped the slow chain, so neither the
+    /// sort order nor the truncation is visible to them.
+    #[test]
+    fn the_ranking_keeps_the_best_chains_not_the_worst() {
+        let mut probes = ProbeFutures::new();
+        let selector = NonEmptyRouteSelector::new(
+            vec![chain(1), chain(2), chain(3)],
+            None::<Arc<dyn ProbeRtt + Send + Sync>>,
+            NonZeroUsize::new(1),
+            None,
+            CancellationToken::new(),
+            &mut probes,
+        )
+        .unwrap();
+        // Equal weights, so the RTT factor alone orders the scores: chain 0 is
+        // the fastest and chain 2 the slowest. `set_gauges_for_test` seeds the
+        // RFC-6298 estimate, so the effective RTT is twice the sample; the
+        // order is what matters and it is preserved.
+        selector.chains[0].set_gauges_for_test(Some(Duration::from_millis(10)), Some(0.));
+        selector.chains[1].set_gauges_for_test(Some(Duration::from_millis(100)), Some(0.));
+        selector.chains[2].set_gauges_for_test(Some(Duration::from_millis(5000)), Some(0.));
+        let ranked: Vec<usize> = selector
+            .scores()
+            .into_iter()
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(
+            ranked,
+            vec![0],
+            "active_chains = 1 must keep the highest-scoring chain"
+        );
+        for _ in 0..200 {
+            assert_eq!(
+                selector.choose_chain().weight,
+                1,
+                "only the fastest chain may be selected while active_chains is 1"
+            );
+        }
+    }
+
     #[test]
     fn a_zero_sum_falls_back_within_the_eligible_set() {
         let mut probes = ProbeFutures::new();
