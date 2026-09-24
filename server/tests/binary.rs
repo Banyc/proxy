@@ -128,10 +128,20 @@ async fn the_process_serves_the_monitor_routes_and_writes_records() {
     );
     let sessions = http_get(&addr, "/sessions").await;
     assert!(
-        sessions.starts_with("HTTP/1.1 200")
-            && sessions.contains("Stream:")
-            && sessions.contains("UDP:"),
-        "the monitor must render both session tables: {sessions}"
+        sessions.starts_with("HTTP/1.1 200"),
+        "the monitor must serve /sessions: {sessions}"
+    );
+    // Both tables must be rendered, stream before udp: swapping the two
+    // blocks in `sessions` would query each table with the other's SQL.
+    let stream_at = sessions
+        .find("Stream:")
+        .unwrap_or_else(|| panic!("the monitor must render both session tables: {sessions}"));
+    let udp_at = sessions
+        .find("UDP:")
+        .unwrap_or_else(|| panic!("the monitor must render both session tables: {sessions}"));
+    assert!(
+        stream_at < udp_at,
+        "the stream table must be rendered before the udp table: {sessions}"
     );
 
     child.kill().await.ok();
@@ -186,6 +196,56 @@ async fn a_missing_config_file_is_fatal_after_the_monitor_starts() {
         "the udp record logger must be installed"
     );
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The CLI's short flags and documented aliases are part of the operator's
+/// interface: `-m`/`--monitor` and `-r`/`--csv-log-path` must be accepted
+/// exactly like the long names. A rejected flag is clap's usage error (exit
+/// code 2), so a run that reaches the fatal missing-config exit (code 1)
+/// after starting the monitor and installing both record loggers is what
+/// proves the flag was accepted.
+#[tokio::test]
+async fn the_cli_short_flags_and_aliases_are_accepted() {
+    for (monitor_flag, record_flag) in [("-m", "-r"), ("--monitor", "--csv-log-path")] {
+        let dir = unique_temp_dir("cli-alias");
+        std::fs::create_dir_all(&dir).unwrap();
+        let missing = dir.join("does-not-exist.toml");
+        let record_dir = dir.join("records");
+        std::fs::create_dir_all(&record_dir).unwrap();
+        let output = tokio::process::Command::new(proxy_bin())
+            .arg(missing.to_str().unwrap())
+            .arg(monitor_flag)
+            .arg("127.0.0.1:0")
+            .arg(record_flag)
+            .arg(record_dir.to_str().unwrap())
+            .output()
+            .await
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "`{monitor_flag}`/`{record_flag}` must be accepted (clap rejects an unknown \
+             flag with exit code 2): {text}"
+        );
+        assert!(
+            text.contains("Monitoring HTTP server listening addr:"),
+            "`{monitor_flag}` must select the monitor listener: {text}"
+        );
+        assert!(
+            record_dir.join("stream_record").join("0.csv").exists(),
+            "`{record_flag}` must install the stream record logger"
+        );
+        assert!(
+            record_dir.join("udp_record").join("0.csv").exists(),
+            "`{record_flag}` must install the udp record logger"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
 
 /// A config file that exists but cannot be read as TOML fails the initial

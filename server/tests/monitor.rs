@@ -57,7 +57,19 @@ async fn the_monitor_router_serves_health_metrics_and_both_session_tables() {
     );
     assert!(
         sessions.contains("Stream:") && sessions.contains("UDP:"),
-        "the session view must render both tables in order: {sessions}"
+        "the session view must render both tables: {sessions}"
+    );
+    // ...and in the order `sessions` writes them: a swap of the two blocks
+    // would query each table with the other's SQL.
+    let stream_at = sessions
+        .find("Stream:")
+        .unwrap_or_else(|| panic!("the session view must render the stream table: {sessions}"));
+    let udp_at = sessions
+        .find("UDP:")
+        .unwrap_or_else(|| panic!("the session view must render the udp table: {sessions}"));
+    assert!(
+        stream_at < udp_at,
+        "the stream table must be rendered before the udp table: {sessions}"
     );
 
     // The alias query parameters select the caller's SQL rather than the

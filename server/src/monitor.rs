@@ -114,4 +114,23 @@ mod tests {
         assert_eq!(params.stream_query, "select 1");
         assert_eq!(params.udp_query, "select 2");
     }
+
+    /// The rest of the defaults is a rendering contract too: without a
+    /// query the session view is read for the sessions' start order and
+    /// their durations, so those must not silently drop out of either
+    /// default.
+    #[test]
+    fn the_default_queries_select_the_ordering_and_duration_columns() {
+        let params: SessionsParams = toml::from_str("").unwrap();
+        for (table, query) in [("stream", &params.stream_query), ("udp", &params.udp_query)] {
+            assert!(
+                query.contains("sort start_ms"),
+                "the {table} default query must order by the session start: {query}"
+            );
+            assert!(
+                query.contains("duration"),
+                "the {table} default query must select the session duration: {query}"
+            );
+        }
+    }
 }
