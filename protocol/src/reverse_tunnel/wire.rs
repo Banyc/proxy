@@ -52,3 +52,19 @@ pub(crate) fn mux_result(result: Option<Result<MuxError, tokio::task::JoinError>
         None => MuxError::TaskStopped { task: "revtun" },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::REGISTER_VERSION;
+
+    /// The registration version travels in every reverse-tunnel registration
+    /// header, and the responder compares it against this same constant, so
+    /// an initiator and responder built from this tree always agree and every
+    /// test stays green however the constant moves. Pin the literal: a
+    /// version bump is a wire change that needs a peer on the other side,
+    /// not an internal refactor.
+    #[test]
+    fn the_registration_wire_version_is_two() {
+        assert_eq!(REGISTER_VERSION, 2);
+    }
+}
