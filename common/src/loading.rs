@@ -61,29 +61,41 @@ where
         }
     }
 
-    /// Atomically apply a prepared reload: send new handlers to existing
-    /// listeners, spawn new listener tasks, install new handles, and drop
-    /// handles for listeners that are no longer in the config.
+    /// Apply a prepared reload: send new handlers to existing listeners,
+    /// spawn new listener tasks, install new handles, and drop handles for
+    /// listeners that are no longer in the config.
     ///
     /// Returns an error if a listener died between preparation and commit,
     /// so the handler update is *never silently lost*. The caller is
     /// responsible for surfacing the failure (the global state may already
     /// have been swapped, but the lost update is reported rather than
     /// swallowed).
+    ///
+    /// A listener that died forfeits the updates of the ops that follow it in
+    /// this loader's preparation order — its own update is the one that
+    /// cannot be delivered — and nothing else: the retirement below still
+    /// runs, so a listener the new configuration removed stops serving even
+    /// when a sibling op failed. A key the new configuration still names
+    /// keeps its handle even when its update could not be delivered; that
+    /// handle is closed, so the next preparation sees a dead listener and
+    /// re-spawns it.
     pub fn commit(
         &mut self,
         join_set: &mut tokio::task::JoinSet<AnyResult>,
         prepared: PreparedOps<ConnHandler>,
     ) -> Result<(), AnyError> {
         let PreparedOps { ops, keys } = prepared;
+        let mut failure: Option<AnyError> = None;
         for op in ops {
             match op {
                 PreparedOp::Replace { tx, conn_handler } => {
                     // A closed receiver means the listener died since prepare.
                     // The handler update cannot be delivered — fail loudly
                     // rather than silently dropping it.
-                    tx.send(conn_handler)
-                        .map_err(|_| AnyError::from("listener died before reload commit"))?;
+                    if tx.send(conn_handler).is_err() {
+                        failure = Some(AnyError::from("listener died before reload commit"));
+                        break;
+                    }
                 }
                 PreparedOp::Spawn { key, tx, spawn } => {
                     self.handles.insert(key, tx);
@@ -91,8 +103,14 @@ where
                 }
             }
         }
+        // Retirement is not part of the failed step: a listener the new
+        // configuration removed must stop serving whether or not a sibling
+        // op failed in this commit.
         self.handles.retain(|cur_key, _| keys.contains(cur_key));
-        Ok(())
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 
@@ -517,6 +535,120 @@ mod tests {
         assert!(
             err.to_string().contains("listener died"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_commit_still_retires_a_listener_the_config_removed() {
+        // A listener that runs until signalled, or until its handle is
+        // dropped (its receiver closes). The signal lets the test kill this
+        // one listener between prepare and commit without touching its peers.
+        struct UntilSignalled {
+            stop: tokio::sync::oneshot::Receiver<()>,
+        }
+        impl Serve for UntilSignalled {
+            type ConnHandler = NoopConnHandler;
+            async fn serve(mut self, mut rx: ReplaceConnHandlerRx<Self::ConnHandler>) -> AnyResult {
+                loop {
+                    tokio::select! {
+                        _ = &mut self.stop => break,
+                        result = rx.recv() => if result.is_err() {
+                            break;
+                        },
+                    }
+                }
+                Ok(())
+            }
+        }
+        struct UntilSignalledBuilder {
+            key: Arc<str>,
+            stop: tokio::sync::oneshot::Receiver<()>,
+        }
+        impl Build for UntilSignalledBuilder {
+            type ConnHandler = NoopConnHandler;
+            type Server = UntilSignalled;
+            type Err = std::io::Error;
+            async fn build_server(self) -> Result<Self::Server, Self::Err> {
+                Ok(UntilSignalled { stop: self.stop })
+            }
+            fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
+                Ok(NoopConnHandler)
+            }
+            fn key(&self) -> &Arc<str> {
+                &self.key
+            }
+        }
+        // Two live listeners: `watched` is still in the next configuration,
+        // `removed` is dropped from it.
+        let (watched_stop_tx, watched_stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let (_removed_stop_tx, removed_stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut loader = Loader::new();
+        let mut join_set = tokio::task::JoinSet::new();
+        loader
+            .commit(
+                &mut join_set,
+                loader
+                    .snapshot()
+                    .prepare::<UntilSignalled, UntilSignalledBuilder>(vec![
+                        UntilSignalledBuilder {
+                            key: "watched".into(),
+                            stop: watched_stop_rx,
+                        },
+                        UntilSignalledBuilder {
+                            key: "removed".into(),
+                            stop: removed_stop_rx,
+                        },
+                    ])
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(loader.handles.len(), 2);
+
+        // A configuration that keeps only `watched`, so this commit must
+        // retire `removed`. `watched` is still alive here, which is what
+        // makes prepare build a Replace op for it.
+        let (_unused_stop_tx, unused_stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let prepared = loader
+            .snapshot()
+            .prepare::<UntilSignalled, UntilSignalledBuilder>(vec![UntilSignalledBuilder {
+                key: "watched".into(),
+                stop: unused_stop_rx,
+            }])
+            .await
+            .unwrap();
+        // Kill `watched` between prepare and commit, so its handler
+        // replacement fails and the op loop stops before retirement.
+        drop(watched_stop_tx);
+        join_set.join_next().await.unwrap().unwrap().unwrap();
+
+        let err = loader
+            .commit(&mut join_set, prepared)
+            .expect_err("commit must fail when the listener died");
+        assert!(
+            err.to_string().contains("listener died"),
+            "unexpected error: {err}"
+        );
+
+        // The listener the new configuration removed is retired even though
+        // the commit failed: its handle is dropped, so its receiver closes
+        // and its task completes.
+        assert!(
+            !loader.handles.contains_key("removed"),
+            "the removed listener's handle must not survive a failed commit"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), join_set.join_next())
+            .await
+            .expect("the removed listener must despawn once its handle is dropped")
+            .unwrap()
+            .unwrap()
+            .unwrap();
+
+        // ...and the listener whose update failed keeps its handle, so the
+        // next preparation sees a dead listener and re-spawns it.
+        assert!(
+            loader.handles.contains_key("watched"),
+            "the failed key must keep its handle so the next prepare re-spawns it"
         );
     }
 

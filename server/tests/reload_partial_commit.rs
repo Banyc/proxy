@@ -2,11 +2,13 @@
 //! preparation and commit, and what it leaves serving.
 //!
 //! `commit_reload` swaps the stream pool and the shared connector
-//! configuration first and only then commits the three listener loaders, in
-//! order (`access_server`, `proxy_server`, `reverse_tunnel`), through a
-//! closure whose every step uses `?`. A listener that died since preparation
-//! makes one step fail, and the `?` then skips every later step. The design
-//! accepts the resulting state deliberately — `common/src/loading.rs`'s doc on
+//! configuration first and then commits all three listener loaders, in order
+//! (`access_server`, `proxy_server`, `reverse_tunnel`), collecting each
+//! loader's failure instead of short-circuiting. A listener that died since
+//! preparation fails its own loader's commit: the ops after it in that
+//! loader's preparation order are forfeited, but every other loader is still
+//! committed and every loader's retirement still runs. The design accepts the
+//! resulting state deliberately — `common/src/loading.rs`'s doc on
 //! `Loader::commit` says the caller must surface a lost handler update even
 //! though "the global state may already have been swapped", and the serve loop
 //! reports rather than rolls back and never retries — so the point of this
@@ -15,10 +17,15 @@
 //!
 //! - the globals (stream pool, connector configuration) are the new
 //!   generation's;
-//! - a listener whose handler replacement was skipped keeps relaying to the
-//!   destination its *old* generation named;
-//! - a listener the new configuration removed is not retired;
-//! - a listener the new configuration added is not spawned;
+//! - the loader that failed keeps the handlers of every listener the failed op
+//!   preceded: a listener whose handler replacement was forfeited keeps
+//!   relaying to the destination its *old* generation named until a later
+//!   commit applies the new one;
+//! - a listener the new configuration removed is retired, because the loader
+//!   that names it is still committed and retirement runs even inside a loader
+//!   whose own commit failed;
+//! - a listener the new configuration added is not spawned when the failed op
+//!   precedes it in its loader's preparation order;
 //! - the listener that died is gone, and the next commit of the same
 //!   configuration applies everything the failed one left behind.
 //!
@@ -586,10 +593,12 @@ fn commit(
 
 // -- the pin --------------------------------------------------------------------------
 
-/// A commit that loses a listener installs the new generation's globals and
-/// reports the lost update, while everything the failed commit would have
-/// applied is left as it was — including a listener the new configuration
-/// removed, which keeps serving, and one it added, which never starts.
+/// A commit that loses a listener installs the new generation's globals,
+/// reports the lost update, and still commits every other loader — so a
+/// listener the new configuration removed is retired — while what the failed
+/// loader would have applied after the failed op is left as it was: the
+/// listener whose replacement was forfeited keeps serving its old destination,
+/// and one the configuration added after it never starts.
 ///
 /// Four commits of a scripted configuration:
 ///
@@ -599,12 +608,12 @@ fn commit(
 /// 3. a generation that re-points both access listeners, adds a third
 ///    (`ADDED_KEY`), removes the responder, and changes the connector
 ///    configuration's bind address — prepared while the dying listener is
-///    alive, committed after it is killed, so the commit fails at its first
-///    step;
+///    alive, committed after it is killed, so the access-server commit fails at
+///    its first step while the other loaders still commit;
 /// 4. the same configuration again, which must apply everything the failed
 ///    commit left behind.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_commit_that_loses_a_listener_installs_the_globals_and_leaves_the_rest_behind() {
+async fn a_commit_that_loses_a_listener_installs_the_globals_and_commits_every_other_loader() {
     let events = capture_events();
 
     let mut tasks: Tasks = JoinSet::new();
@@ -762,9 +771,9 @@ async fn a_commit_that_loses_a_listener_installs_the_globals_and_leaves_the_rest
          configuration: the shared cell is written before the listener commit"
     );
 
-    // Nothing the failed commit would have applied was applied: no listener
-    // started, because its first step failed before the added listener's
-    // spawn and before any later step.
+    // Nothing the failed loader would have applied after the failed op was
+    // applied: no listener started, because access_server's commit failed
+    // before the added listener's spawn in the same loader.
     assert_eq!(
         listen_addrs(&events).len(),
         listeners_before,
@@ -779,15 +788,16 @@ async fn a_commit_that_loses_a_listener_installs_the_globals_and_leaves_the_rest
     // The dying listener is gone: its socket is closed.
     await_refused(&dying_addr, "g3: the listener that died").await;
 
-    // The listener the failed configuration removed is not retired: the
-    // responder's loader was never committed, so the responder still serves.
-    await_accepted(
+    // The listener the new configuration removed is retired: the responder's
+    // loader is committed even though access_server's failed, and retirement
+    // runs even inside a loader whose own commit failed.
+    await_refused(
         &responder_addr,
         "g3: the responder the configuration removed",
     )
     .await;
 
-    // No session reached any destination the failed commit would have
+    // No session reached any destination the failed loader would have
     // installed: the surviving listener stayed on its old handler, and the
     // added listener never started.
     assert!(
@@ -873,7 +883,7 @@ async fn a_commit_that_loses_a_listener_installs_the_globals_and_leaves_the_rest
     relay_reaches(&surviving_addr, &surviving_new, token(4, 2)).await;
 
     // ...and the listener the previous configuration had asked to remove is
-    // now retired.
+    // still retired, not resurrected by the commit that applies the rest.
     await_refused(
         &responder_addr,
         "g4: the responder the configuration removed",

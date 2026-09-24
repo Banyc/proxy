@@ -312,20 +312,50 @@ pub fn commit_reload(
     // One replacement: the updater is shared by the stream connector table,
     // the UDP connector, and every mux UDP dialer.
     connector_config_updater.replace(connector_config);
-    let commit_error: Option<AnyError> = (|| {
-        server_loader
-            .access_server
-            .commit(server_tasks, access_server)?;
-        server_loader
-            .proxy_server
-            .commit(server_tasks, proxy_server)?;
-        server_loader
-            .reverse_tunnel
-            .commit(server_tasks, reverse_tunnel)?;
-        Ok::<(), AnyError>(())
-    })()
-    .err();
-    (cancellation.drop_guard(), commit_error)
+    // Every loader is committed even when an earlier one fails: a listener
+    // dying in one loader must not forfeit the handler updates of loaders
+    // whose listeners are healthy. Each failure is reported by name, so the
+    // returned error means "these loaders lost a handler update", not "the
+    // reload stopped here".
+    let mut failures: Vec<(&'static str, AnyError)> = Vec::new();
+    if let Err(error) = server_loader
+        .access_server
+        .commit(server_tasks, access_server)
+    {
+        failures.push(("access_server", error));
+    }
+    if let Err(error) = server_loader
+        .proxy_server
+        .commit(server_tasks, proxy_server)
+    {
+        failures.push(("proxy_server", error));
+    }
+    if let Err(error) = server_loader
+        .reverse_tunnel
+        .commit(server_tasks, reverse_tunnel)
+    {
+        failures.push(("reverse_tunnel", error));
+    }
+    (cancellation.drop_guard(), commit_failure(failures))
+}
+
+/// The error a commit reports when one or more loaders could not deliver a
+/// handler update. The message names every loader that failed and preserves
+/// each loader's own error text, so both the count and the cause are on the
+/// line an operator reads.
+fn commit_failure(failures: Vec<(&'static str, AnyError)>) -> Option<AnyError> {
+    if failures.is_empty() {
+        return None;
+    }
+    let detail = failures
+        .iter()
+        .map(|(loader, error)| format!("{loader}: {error}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Some(AnyError::from(format!(
+        "reload commit lost handler updates in {} loader(s): {detail}",
+        failures.len()
+    )))
 }
 
 #[cfg(test)]

@@ -215,8 +215,9 @@ where
                             if let Some(e) = commit_error {
                                 error!(
                                     ?e,
-                                    "Reload commit partially failed: a listener died; \
-                                     its handler update was lost; new generation installed"
+                                    "Reload commit partially failed: a listener died; the \
+                                     error names the loaders whose handler updates were lost; \
+                                     the rest of the new generation is installed"
                                 );
                             }
                         }
