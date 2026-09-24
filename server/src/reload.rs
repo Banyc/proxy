@@ -376,11 +376,18 @@ mod tests {
         machine.on_config_changed();
         assert!(machine.is_debouncing());
 
-        // The original deadline has passed by now, but the reset one has not.
+        // The original deadline has passed by now; the reset window has not.
+        // The state alone cannot tell the two apart — a second
+        // `on_config_changed` that left the first window alone would still be
+        // `Debouncing` — so poll the machine at the original deadline: the
+        // reset window must still be running and the poll must not resolve.
         tokio::time::advance(RELOAD_DEBOUNCE / 2).await;
+        assert!(machine.is_debouncing());
         assert!(
-            machine.is_debouncing(),
-            "the reset window must still be running"
+            tokio::time::timeout(Duration::ZERO, reload_step(&mut machine))
+                .await
+                .is_err(),
+            "the reset window must still be running after the original deadline"
         );
 
         // The reset window has now elapsed: the debounce sleep resolves.
@@ -390,36 +397,69 @@ mod tests {
     }
 
     /// A config change arriving while a reload is being prepared is not
-    /// lost: it stays pending and starts a fresh debounce window once the
-    /// machine returns to idle.
+    /// lost: it is not consumed (nor the in-flight preparation aborted) by
+    /// the call site, it stays pending, and it starts a fresh debounce window
+    /// once the machine returns to idle. Driving the change through
+    /// `drive_reload` is what pins the select guard: if the guard also
+    /// admitted changes while preparing, the pending change would be
+    /// consumed here and the preparation dropped.
     #[tokio::test(start_paused = true)]
     async fn a_change_during_preparation_is_not_lost() {
         let (signal, mut config_changed) = test_signal();
         let (tx, rx) = tokio::sync::oneshot::channel();
         let mut machine = test_machine();
+        let mut server_tasks = tokio::task::JoinSet::new();
 
         machine.begin_preparing(controlled_prepare(rx));
         assert!(machine.is_preparing());
 
         // A change arrives while preparing: the change branch is disabled
-        // until the machine returns to idle, so the notification stays
-        // pending.
+        // until the machine returns to idle, so `drive_reload` neither
+        // consumes the notification nor returns a step.
         signal.notify_waiters();
-        assert!(machine.is_preparing());
+        assert!(
+            tokio::time::timeout(
+                Duration::ZERO,
+                drive_reload(&mut machine, &mut server_tasks, &mut config_changed)
+            )
+            .await
+            .is_err(),
+            "a change during preparation must not be consumed by the call site"
+        );
+        assert!(
+            machine.is_preparing(),
+            "the in-flight preparation must survive the change"
+        );
 
-        // Preparation completes; the machine returns to idle, handing the
-        // result out exactly once...
+        // Preparation completes, handing the result out exactly once. Both
+        // the completed preparation and the queued change can be ready in the
+        // same poll, and `select!` may pick either: the change winning only
+        // delays the reload, it is not lost.
         tx.send(Ok(())).unwrap();
-        let step = reload_step(&mut machine).await;
-        let ReloadStep::Prepared(result) = step else {
-            panic!("expected a Prepared step");
-        };
-        assert!(result.is_ok());
+        match drive_reload(&mut machine, &mut server_tasks, &mut config_changed)
+            .await
+            .unwrap()
+        {
+            ReloadStep::Prepared(result) => assert!(result.is_ok()),
+            ReloadStep::ConfigChanged => {
+                assert!(
+                    machine.is_debouncing(),
+                    "the change must start a fresh debounce window"
+                );
+                return;
+            }
+            ReloadStep::DebounceElapsed => panic!("expected a Prepared step"),
+        }
         assert!(machine.is_idle());
 
         // ...and the queued change starts a fresh debounce window.
-        config_changed.notified().await;
-        machine.on_config_changed();
+        let step = drive_reload(&mut machine, &mut server_tasks, &mut config_changed)
+            .await
+            .unwrap();
+        assert!(
+            matches!(step, ReloadStep::ConfigChanged),
+            "the change queued during preparation must not be lost"
+        );
         assert!(machine.is_debouncing());
     }
 
