@@ -398,6 +398,96 @@ mod tests {
             .await;
     }
 
+    /// The payload key is part of the hop's relay contract: a client that
+    /// encrypts each hop's payload with a key the hop does not hold must not
+    /// get its bytes relayed byte-exactly. `multiple_payload_keys_layer_each_stream_hop`
+    /// pins that a correctly keyed encrypted chain relays; this pins that the
+    /// key participates at all — with payload encryption disabled on both
+    /// sides the round trip would succeed and this test would fail.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mismatched_payload_key_does_not_relay_byte_exactly() {
+        let mut scope = TestRuntimeScope::new();
+        let stream_context = stream_context(&mut scope);
+        // The hop's payload key is random; the client is handed a different
+        // one, so the two sides cannot agree on the payload cipher.
+        let hop = spawn_encrypted_proxy(
+            &mut scope,
+            &Arc::from("127.0.0.1:0"),
+            ConcreteStreamType::Tcp,
+        )
+        .await;
+        let mismatched = HopConfig {
+            payload_crypto: Some(create_random_crypto()),
+            ..hop
+        };
+        // A destination that echoes whatever it receives, asserting nothing:
+        // a mismatched key delivers garbage, not the request.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let destination = RouteAddr {
+            address: listener.local_addr().unwrap().into(),
+            protocol: ConcreteStreamType::Tcp.to_string().into(),
+        };
+        scope.spawn_session(async move {
+            let mut handlers = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let Ok((mut sock, _)) = accepted else {
+                            break;
+                        };
+                        handlers.spawn(async move {
+                            let mut buf = [0u8; 64];
+                            loop {
+                                match sock.read(&mut buf).await {
+                                    Ok(0) | Err(_) => break,
+                                    Ok(n) => {
+                                        if sock.write_all(&buf[..n]).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    Some(result) = handlers.join_next() => {
+                        result.unwrap();
+                    }
+                }
+            }
+            while let Some(result) = handlers.join_next().await {
+                result.unwrap();
+            }
+        });
+        let request = b"payload-key-probe";
+        scope
+            .run(async {
+                let ConnAndAddr { mut stream, .. } = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    establish(&[mismatched], destination, &stream_context),
+                )
+                .await
+                .expect("timed out establishing the mismatched-key session")
+                .unwrap();
+                stream.write_all(request).await.unwrap();
+                // Every outcome except a byte-exact echo is a pass: the
+                // mismatch may close the relay, corrupt the bytes, or surface
+                // nothing at all. Only a faithful echo means the payload key
+                // was ignored.
+                let mut echoed = vec![0u8; request.len()];
+                match tokio::time::timeout(Duration::from_secs(10), stream.read_exact(&mut echoed))
+                    .await
+                {
+                    Err(_) | Ok(Err(_)) => {}
+                    Ok(Ok(_)) => assert_ne!(
+                        echoed.as_slice(),
+                        request.as_slice(),
+                        "a mismatched payload key must not relay the request byte-exactly"
+                    ),
+                }
+            })
+            .await;
+    }
+
     /// A plain TCP access server (no mux, no protocol handshake) relays the
     /// downstream bytes to its configured destination, byte-exactly. This is
     /// the `tcp://` ingress, distinct from the mux and SOCKS5 access servers.

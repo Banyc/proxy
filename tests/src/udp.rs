@@ -523,6 +523,68 @@ mod tests {
             .await;
     }
 
+    /// The UDP payload key is part of each hop's relay contract: a client
+    /// whose datagram payload key differs from the hop's must not get its
+    /// datagrams relayed. `multiple_payload_keys_layer_each_udp_hop` pins that
+    /// a correctly keyed encrypted chain relays; this pins that the key
+    /// participates at all — with datagram payload encryption disabled on both
+    /// sides the reply would arrive and this test would fail.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mismatched_udp_payload_key_does_not_relay_byte_exactly() {
+        let mut scope = TestRuntimeScope::new();
+        let context = udp_context(&mut scope);
+        // The hop's payload key is random; the client is handed a different
+        // one, so the two sides cannot agree on the payload cipher.
+        let hop = spawn_encrypted_proxy(&mut scope, "127.0.0.1:0").await;
+        let mismatched = HopConfig {
+            payload_crypto: Some(create_random_crypto()),
+            ..hop
+        };
+        // A destination that echoes whatever it receives, asserting nothing:
+        // a mismatched key delivers garbage, not the request.
+        let listener = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let destination = listener.local_addr().unwrap().into();
+        scope.spawn_session(async move {
+            let mut buf = [0; 1024];
+            loop {
+                let Ok((n, addr)) = listener.recv_from(&mut buf).await else {
+                    break;
+                };
+                if listener.send_to(&buf[..n], addr).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let request = b"payload-key-probe";
+        scope
+            .run(async {
+                let client = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    UdpProxyClient::establish(vec![mismatched].into(), destination, &context),
+                )
+                .await
+                .expect("timed out establishing the mismatched-key UDP session")
+                .unwrap();
+                let (mut client_read, mut client_write) = client.into_split();
+                client_write.send(request).await.unwrap();
+                // Every outcome except a byte-exact echo is a pass: the
+                // mismatch may drop the datagram, refuse the flow, or surface
+                // garbage. Only a faithful echo means the payload key was
+                // ignored.
+                let mut buf = [0u8; 1024];
+                match tokio::time::timeout(Duration::from_secs(10), client_read.recv(&mut buf))
+                    .await
+                {
+                    Err(_) | Ok(Err(_)) => {}
+                    Ok(Ok(n)) => assert!(
+                        n != request.len() || buf[..n] != *request,
+                        "a mismatched payload key must not relay the request byte-exactly"
+                    ),
+                }
+            })
+            .await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_no_proxies() {
         let mut scope = TestRuntimeScope::new();
