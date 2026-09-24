@@ -235,3 +235,70 @@ async fn a_malformed_config_surfaces_as_a_read_error() {
         "a malformed config must fail to read, got {result:?}"
     );
 }
+
+/// A config that names one `listen_addr` twice in one kind. The key is the
+/// address, so the two entries cannot both serve: accepting them binds two
+/// sockets, spawns two listeners and drops one of them, leaving an address the
+/// startup log reports and nothing accepts on.
+const DUPLICATE_LISTEN_ADDR: &str = r#"
+[[proxy_server.tcp_server]]
+listen_addr = "127.0.0.1:0"
+header_key = "cHJveHktZXhhbXBsZS1rZXk"
+allow_loopback = true
+
+[[proxy_server.tcp_server]]
+listen_addr = "127.0.0.1:0"
+header_key = "cHJveHktZXhhbXBsZS1rZXk"
+allow_loopback = true
+"#;
+
+/// The startup path refuses such a config with the address to drop on the
+/// error line, instead of starting a server that serves one address twice over.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_config_naming_one_listen_addr_twice_in_one_kind_is_refused() {
+    let (reads_tx, _reads_rx) = tokio::sync::mpsc::channel(1);
+    let reader = ScriptedReader::new(vec![DUPLICATE_LISTEN_ADDR.to_string()], reads_tx);
+    let (retention_actor, retention) = RetentionActor::new();
+    let context = ServeContext {
+        stream_session_table: None,
+        udp_session_table: None,
+        config_changed: ConfigChangeSignal::new(),
+        system_resume: SystemResumeSignal(Notify::new()),
+        retention,
+    };
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(async move {
+        let _exit = retention_actor.run().await;
+    });
+    let mut serve_task: tokio::task::JoinSet<Result<(), server::ServerServeError>> =
+        tokio::task::JoinSet::new();
+    serve_task.spawn(async move { serve(reader, context).await });
+
+    // Bounded, so a server that starts instead of refusing is reported as a
+    // failure of the refusal rather than as a hang.
+    let exit = match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        serve_task.join_next(),
+    )
+    .await
+    {
+        Ok(Some(result)) => result.expect("the serve task must not panic"),
+        Ok(None) => panic!("the serve task set ended without a result"),
+        Err(_) => panic!(
+            "a config naming one listen_addr twice must be refused at startup: the server kept \
+             serving instead of reporting it"
+        ),
+    };
+    let error = match exit {
+        Ok(()) => panic!("the server must refuse a config that names one listen_addr twice"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate listener configuration key `127.0.0.1:0`"),
+        "the refusal an operator reads must name the duplicated address; got: {error}"
+    );
+
+    tasks.shutdown().await;
+}

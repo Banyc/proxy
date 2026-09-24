@@ -137,6 +137,14 @@ fn commit_failure(failures: Vec<(Arc<str>, AnyError)>) -> Result<(), AnyError> {
     .into())
 }
 
+/// The error a preparation reports when the configuration names one listener
+/// twice. The key is the listener's identity — for every config-driven
+/// listener it is the `listen_addr` string — so two entries for one key cannot
+/// both serve, and the message names the key that has to be dropped.
+fn duplicate_key_error(key: &str) -> AnyError {
+    format!("duplicate listener configuration key `{key}`").into()
+}
+
 impl<ConnHandler> LoaderSnapshot<ConnHandler>
 where
     ConnHandler: HandleConn + std::fmt::Debug + Send + Sync + 'static,
@@ -152,6 +160,11 @@ where
     /// bound `Server` and a fresh `ReplaceConnHandlerTx`; the server task is
     /// *not* spawned yet.
     ///
+    /// A configuration that names one key twice is rejected before anything
+    /// is bound: the key is the listener's identity, so two entries for one
+    /// key cannot both serve — the later entry would only shadow the earlier
+    /// one, leaving a socket this preparation bound and nobody accepts on.
+    ///
     /// Dropping the returned [`PreparedOps`] without a commit simply drops
     /// the bound servers and handlers — no live state is touched and no task
     /// is spawned.
@@ -163,11 +176,15 @@ where
         Server: Serve<ConnHandler = ConnHandler> + Send + 'static,
         Builder: Build<ConnHandler = ConnHandler, Server = Server>,
     {
-        let mut keys = HashSet::new();
+        let mut keys = HashSet::with_capacity(builders.len());
+        for builder in &builders {
+            if !keys.insert(builder.key().to_owned()) {
+                return Err(duplicate_key_error(builder.key()));
+            }
+        }
         let mut ops = Vec::with_capacity(builders.len());
         for builder in builders {
             let key = builder.key().to_owned();
-            keys.insert(key.clone());
             let live = self.handles.get(&key);
             if live.is_some_and(|h| h.is_closed()) {
                 // dead listener — treat as new so it is re-spawned below
@@ -878,6 +895,170 @@ mod tests {
             );
         }
 
+        join_set.shutdown().await;
+    }
+
+    // -- listeners that bind a real socket and serve a token ----------------
+
+    /// Binds the builder's key as a real listener and answers every accepted
+    /// connection with `token`, so which address serves which token is content
+    /// rather than liveness. It ends when its handler channel closes — the way
+    /// a listener a preparation dropped goes away.
+    struct BindingServer {
+        listener: tokio::net::TcpListener,
+        token: u8,
+    }
+    impl Serve for BindingServer {
+        type ConnHandler = TokenConnHandler;
+        async fn serve(self, mut rx: ReplaceConnHandlerRx<Self::ConnHandler>) -> AnyResult {
+            use tokio::io::AsyncWriteExt;
+            loop {
+                tokio::select! {
+                    accepted = self.listener.accept() => {
+                        let (mut stream, _peer) = accepted?;
+                        let _ = stream.write_all(&[self.token]).await;
+                    }
+                    received = rx.recv() => {
+                        if received.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// Records every address it binds, so a preparation that binds a listener
+    /// it then drops is read as an address rather than inferred.
+    struct BindingBuilder {
+        key: Arc<str>,
+        token: u8,
+        binds: Arc<std::sync::Mutex<Vec<std::net::SocketAddr>>>,
+    }
+    impl Build for BindingBuilder {
+        type ConnHandler = TokenConnHandler;
+        type Server = BindingServer;
+        type Err = std::io::Error;
+        async fn build_server(self) -> Result<Self::Server, Self::Err> {
+            let listener = tokio::net::TcpListener::bind(self.key.as_ref()).await?;
+            self.binds.lock().unwrap().push(listener.local_addr()?);
+            Ok(BindingServer {
+                listener,
+                token: self.token,
+            })
+        }
+        fn build_conn_handler(self) -> Result<Self::ConnHandler, Self::Err> {
+            Ok(TokenConnHandler(self.token))
+        }
+        fn key(&self) -> &Arc<str> {
+            &self.key
+        }
+    }
+
+    /// The token `addr` serves, or `None` if nothing answers there. Every wait
+    /// is bounded, so a listener that is bound but not served is read as no
+    /// answer instead of hanging the test.
+    async fn served_token(addr: std::net::SocketAddr) -> Option<u8> {
+        use tokio::io::AsyncReadExt;
+        let wait = std::time::Duration::from_secs(2);
+        let mut stream = tokio::time::timeout(wait, tokio::net::TcpStream::connect(addr))
+            .await
+            .ok()?
+            .ok()?;
+        let mut token = [0u8; 1];
+        tokio::time::timeout(wait, stream.read_exact(&mut token))
+            .await
+            .ok()?
+            .ok()?;
+        Some(token[0])
+    }
+
+    /// The address a client reaches a wildcard bind on.
+    fn reachable(addr: std::net::SocketAddr) -> std::net::SocketAddr {
+        match addr {
+            std::net::SocketAddr::V4(v4) if v4.ip().is_unspecified() => {
+                std::net::SocketAddr::from(([127, 0, 0, 1], v4.port()))
+            }
+            other => other,
+        }
+    }
+
+    /// A configuration that names one listener twice is refused before
+    /// anything is bound. The key is the listener's identity, so the second
+    /// entry can only shadow the first, and the first's socket would be bound
+    /// and dropped while the log says it is listening.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_configuration_that_names_one_key_twice_is_refused_before_binding() {
+        let binds = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let loader = Loader::new();
+        let builder = |token: u8| BindingBuilder {
+            key: "127.0.0.1:0".into(),
+            token,
+            binds: Arc::clone(&binds),
+        };
+        let error = match loader
+            .snapshot()
+            .prepare::<BindingServer, BindingBuilder>(vec![builder(1), builder(2)])
+            .await
+        {
+            Ok(_) => panic!("a configuration that names one key twice must be refused"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate listener configuration key `127.0.0.1:0`"),
+            "the refusal must name the key to drop; got: {error}"
+        );
+        let bound = binds.lock().unwrap().clone();
+        assert!(
+            bound.is_empty(),
+            "a refused configuration must bind nothing: {bound:?}"
+        );
+        assert!(
+            loader.handles.is_empty(),
+            "a refused configuration must install no listener handle"
+        );
+    }
+
+    /// Distinct keys are distinct listeners even when one of them is a
+    /// wildcard: each binds and serves its own token, so the refusal above is
+    /// keyed on the identity and not on the number of listeners.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn distinct_keys_each_bind_and_serve_their_own_token() {
+        let binds = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut loader = Loader::new();
+        let mut join_set = tokio::task::JoinSet::new();
+        let builder = |key: &str, token: u8| BindingBuilder {
+            key: key.into(),
+            token,
+            binds: Arc::clone(&binds),
+        };
+        let prepared = loader
+            .snapshot()
+            .prepare::<BindingServer, BindingBuilder>(vec![
+                builder("127.0.0.1:0", 1),
+                builder("0.0.0.0:0", 2),
+            ])
+            .await
+            .expect("distinct keys are two listeners");
+        loader.commit(&mut join_set, prepared).unwrap();
+        assert_eq!(loader.handles.len(), 2);
+        let bound = binds.lock().unwrap().clone();
+        assert_eq!(bound.len(), 2, "both listeners bound: {bound:?}");
+        assert_eq!(
+            served_token(reachable(bound[0])).await,
+            Some(1),
+            "the first address serves the first listener's token at {}",
+            bound[0]
+        );
+        assert_eq!(
+            served_token(reachable(bound[1])).await,
+            Some(2),
+            "the second address serves the second listener's token at {}",
+            bound[1]
+        );
         join_set.shutdown().await;
     }
 
