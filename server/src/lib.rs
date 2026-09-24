@@ -425,4 +425,104 @@ mod tests {
         assert!(merged.stream.upstream.contains_key("a"));
         assert!(merged.stream.upstream.contains_key("b"));
     }
+
+    /// Every top-level section of [`ServerConfig`] must be forwarded to that
+    /// section's own `Merge` and the merged value returned: a section whose
+    /// merge result is replaced (or taken from the wrong file) silently
+    /// discards the later file's contribution. Each file below contributes
+    /// only keys the other file does not, so only a per-section union of both
+    /// files satisfies the assertions.
+    #[test]
+    fn merging_config_files_unions_every_top_level_section() {
+        let first = server_config(
+            r#"
+[connector.bind]
+v4 = "127.0.0.1"
+
+[stream.upstream.stream_a]
+address = "tcp://127.0.0.1:1"
+header_key = "aGVsbG8"
+
+[udp.upstream.udp_a]
+address = "127.0.0.1:1"
+header_key = "aGVsbG8"
+
+[stream]
+pool = ["pool_a"]
+
+[[access_server.tcp_server]]
+listen_addr = "127.0.0.1:1"
+destination = "tcp://127.0.0.1:9"
+conn_selector = "default"
+
+[[proxy_server.tcp_server]]
+listen_addr = "127.0.0.1:1"
+header_key = "aGVsbG8"
+allow_loopback = true
+
+[[reverse_tunnel.responder]]
+listen_addr = "tcp://127.0.0.1:1"
+header_key = "aGVsbG8"
+"#,
+        );
+        let second = server_config(
+            r#"
+[connector.bind]
+v6 = "::1"
+
+[stream.upstream.stream_b]
+address = "tcp://127.0.0.1:2"
+header_key = "aGVsbG8"
+
+[udp.upstream.udp_b]
+address = "127.0.0.1:2"
+header_key = "aGVsbG8"
+
+[stream]
+pool = ["pool_b"]
+
+[[access_server.tcp_server]]
+listen_addr = "127.0.0.1:2"
+destination = "tcp://127.0.0.1:9"
+conn_selector = "default"
+
+[[proxy_server.tcp_server]]
+listen_addr = "127.0.0.1:2"
+header_key = "aGVsbG8"
+allow_loopback = true
+
+[[reverse_tunnel.responder]]
+listen_addr = "tcp://127.0.0.1:2"
+header_key = "aGVsbG8"
+"#,
+        );
+        let merged = first.merge(second).unwrap();
+
+        assert!(
+            merged.connector.bind.v4.is_some() && merged.connector.bind.v6.is_some(),
+            "connector: {:?}",
+            merged.connector.bind
+        );
+        assert_eq!(
+            merged.stream.upstream.len(),
+            2,
+            "stream.upstream: {:?}",
+            merged.stream.upstream
+        );
+        assert_eq!(merged.udp.upstream.len(), 2, "udp.upstream");
+        assert_eq!(merged.access_server.tcp_server.len(), 2, "access_server");
+        assert_eq!(merged.proxy_server.tcp_server.len(), 2, "proxy_server");
+        assert_eq!(merged.reverse_tunnel.responder.len(), 2, "reverse_tunnel");
+
+        // The pool is an ordered concatenation of the files' entries; a
+        // merge taken in the wrong direction would reverse them.
+        let pool = &merged.stream.pool.0;
+        assert_eq!(pool.len(), 2, "stream.pool: {pool:?}");
+        let mut pool_names = pool.iter().map(|entry| match entry {
+            common::config::SharableConfig::SharingKey(key) => key.to_string(),
+            common::config::SharableConfig::Private(hop) => format!("{hop}"),
+        });
+        assert_eq!(pool_names.next().as_deref(), Some("pool_a"));
+        assert_eq!(pool_names.next().as_deref(), Some("pool_b"));
+    }
 }

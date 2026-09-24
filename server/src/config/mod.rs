@@ -117,6 +117,41 @@ fn watcher_failure(path: &str, error: impl std::fmt::Display) -> RootTaskExit {
 mod tests {
     use super::*;
 
+    /// A filesystem event that is neither a create, a modify, nor a remove
+    /// must not signal a reload: the watcher's classification is what keeps
+    /// unrelated events (notify's catch-all `Any` kind, access events) from
+    /// rebuilding a config generation.
+    #[tokio::test(start_paused = true)]
+    async fn an_event_that_is_not_create_modify_or_remove_does_not_signal() {
+        use file_watcher_tokio::{Event, HandleEvent};
+
+        let mut watcher = ConfigWatcher::new();
+        let mut subscription = watcher.signal().0.subscription();
+
+        // `notify::Event::default()` carries the catch-all `EventKind::Any`.
+        watcher.handle_event(Event::default()).await;
+
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(3600),
+                subscription.notified()
+            )
+            .await
+            .is_err(),
+            "an event that is not a create, modify, or remove must not signal a reload"
+        );
+
+        // Control: the probe above does observe a real broadcast, so the
+        // assertion is about the classification, not about a dead channel.
+        watcher.signal().0.notify_waiters();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3600),
+            subscription.notified(),
+        )
+        .await
+        .expect("the probe must observe a broadcast");
+    }
+
     #[test]
     fn watcher_failure_reports_the_path_and_the_error() {
         let exit = watcher_failure(
