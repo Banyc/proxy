@@ -18,16 +18,13 @@ pub(crate) enum RttSlot {
     /// The probe has died without an intentional cancel, so its gauges are
     /// frozen and stale.  The chain is excluded from weighted selection and
     /// dropped by the eligibility gate.
+    ///
+    /// Compiled only for the test build. No non-test build can produce a
+    /// dead-probe state — a probe that dies panics out of the generation
+    /// `JoinSet` reap — so production routing never sees this variant. It
+    /// exists so the scoring and gate rules for a dead probe stay pinned.
+    #[cfg(test)]
     Unreachable,
-}
-
-impl RttSlot {
-    fn as_secs_f64_or(self, default: f64) -> f64 {
-        match self {
-            Self::Measured(d) => d.as_secs_f64(),
-            _ => default,
-        }
-    }
 }
 
 pub(crate) struct ScoredChain {
@@ -51,7 +48,9 @@ impl EligibilityGate {
             .iter()
             .filter_map(|c| match c.rtt {
                 RttSlot::Measured(d) => Some(d),
-                RttSlot::Unmeasured | RttSlot::Unreachable => None,
+                RttSlot::Unmeasured => None,
+                #[cfg(test)]
+                RttSlot::Unreachable => None,
             })
             .min()
         else {
@@ -63,6 +62,7 @@ impl EligibilityGate {
         chains.retain(|c| match c.rtt {
             RttSlot::Measured(d) => d <= cutoff,
             RttSlot::Unmeasured => true,
+            #[cfg(test)]
             RttSlot::Unreachable => false,
         });
         before - chains.len()
@@ -84,12 +84,10 @@ pub(crate) fn chain_score(weight: f64, loss: Option<f64>, rtt: RttSlot) -> f64 {
     let r0 = RTT_REF.as_secs_f64();
     let loss = loss.unwrap_or(0.).clamp(0., 1.);
     let rtt_factor = match rtt {
+        #[cfg(test)]
         RttSlot::Unreachable => 0.,
         RttSlot::Unmeasured => (0.5_f64).powi(RTT_EXP),
-        RttSlot::Measured(_) => {
-            let rtt = rtt.as_secs_f64_or(r0);
-            (1. / (1. + rtt / r0)).powi(RTT_EXP)
-        }
+        RttSlot::Measured(d) => (1. / (1. + d.as_secs_f64() / r0)).powi(RTT_EXP),
     };
     let loss_factor = (1. - loss).powi(LOSS_EXP);
     weight * loss_factor * rtt_factor

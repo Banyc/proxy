@@ -5,6 +5,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+#[cfg(test)]
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
@@ -92,8 +93,16 @@ pub struct WeightedRouteChain {
     pub chain: Arc<RouteChain>,
 }
 
+/// A chain's probe-generation state.
+///
+/// Only the test build can inject every variant. A non-test build can only
+/// ever observe `Disabled`, `Running`, and `Cancelled`: a probe that dies
+/// panics out of the generation `JoinSet` reap (see [`GaugedRouteChain::new`])
+/// instead of degrading into an observable state, so no non-test code writes a
+/// terminal-failure variant. Those variants exist so the scoring and gate
+/// rules for a dead probe stay pinned by tests.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum ProbeTaskState {
     Disabled,
     Running,
@@ -103,6 +112,7 @@ pub(crate) enum ProbeTaskState {
     JoinFailed,
 }
 
+#[cfg(test)]
 impl ProbeTaskState {
     /// Whether the probe is alive or was never started / intentionally stopped.
     ///
@@ -122,6 +132,7 @@ pub struct GaugedRouteChain {
     weighted: WeightedRouteChain,
     rtt_stats: Arc<RwLock<RttStats>>,
     loss: Arc<RwLock<Option<f64>>>,
+    #[cfg(test)]
     probe_state: watch::Receiver<ProbeTaskState>,
     #[cfg(test)]
     probe_state_tx: watch::Sender<ProbeTaskState>,
@@ -134,8 +145,9 @@ impl GaugedRouteChain {
     /// commit boundary, when the collected futures are spawned into the
     /// server-owned `JoinSet`, which is drained with `result.unwrap()` so
     /// panics propagate instead of being downgraded to a watch state. A
-    /// failed or abandoned prepare drops only unspawned futures. The chain
-    /// retains only the `probe_state` watch receiver for state observation.
+    /// failed or abandoned prepare drops only unspawned futures. The test
+    /// build additionally keeps a `probe_state` watch receiver so a test can
+    /// inject a generation state; no non-test build observes one.
     pub fn new(
         weighted: WeightedRouteChain,
         tracer: Option<Arc<dyn ProbeRtt + Send + Sync>>,
@@ -144,10 +156,13 @@ impl GaugedRouteChain {
     ) -> Self {
         let rtt_stats = Arc::new(RwLock::new(RttStats::default()));
         let loss = Arc::new(RwLock::new(None));
+        #[cfg(test)]
         let (probe_state_tx, probe_state) = watch::channel(ProbeTaskState::Disabled);
         if let Some(tracer) = tracer {
+            #[cfg(test)]
             probe_state_tx.send(ProbeTaskState::Running).ok();
             let probe_cancellation = cancellation.clone();
+            #[cfg(test)]
             let probe_state_tx = probe_state_tx.clone();
             let chain = weighted.chain.clone();
             let rtt_stats = rtt_stats.clone();
@@ -167,6 +182,7 @@ impl GaugedRouteChain {
                 // Any panic inside `probe_task` propagates out of this future
                 // and surfaces at the commit-time `JoinSet` reap (which
                 // unwraps), rather than being downgraded to a watch state.
+                #[cfg(test)]
                 probe_state_tx.send(ProbeTaskState::Cancelled).ok();
             });
         }
@@ -174,6 +190,7 @@ impl GaugedRouteChain {
             weighted,
             rtt_stats,
             loss,
+            #[cfg(test)]
             probe_state,
             #[cfg(test)]
             probe_state_tx,
@@ -197,13 +214,17 @@ impl GaugedRouteChain {
         self.rtt_stats.read().unwrap().effective()
     }
 
-    /// The RTT knowledge state for chain scoring.
+    /// The RTT knowledge state for chain scoring: `Measured` once the probe
+    /// has produced a sample, `Unmeasured` until it has.
     ///
-    /// Returns [`RttSlot::Unreachable`] when the probe has died without an
-    /// intentional cancel, so the frozen gauges are not used for routing.
-    /// Otherwise returns `Measured` or `Unmeasured` depending on whether
-    /// the probe has produced a sample.
+    /// The test build can additionally return `RttSlot::Unreachable` for a
+    /// chain whose injected probe state is a terminal failure, so the gate and
+    /// scoring rules for a dead probe stay pinned. No non-test build can reach
+    /// that: a probe that dies panics out of the generation `JoinSet` reap
+    /// rather than degrading into an observable state, so its gauges are never
+    /// left frozen behind a routing decision.
     pub(crate) fn rtt_slot(&self) -> super::chain_selection::RttSlot {
+        #[cfg(test)]
         if !self.probe_healthy() {
             return super::chain_selection::RttSlot::Unreachable;
         }
@@ -217,14 +238,19 @@ impl GaugedRouteChain {
         *self.loss.read().unwrap()
     }
 
+    #[cfg(test)]
     pub(crate) fn probe_state(&self) -> ProbeTaskState {
         *self.probe_state.borrow()
     }
 
-    /// Whether the probe is alive (or was never started / intentionally
-    /// stopped).  When this returns `false` the RTT/loss gauges are frozen
-    /// at whatever the probe last wrote and should not drive routing
+    /// Whether the chain's injected probe state is alive (or was never started
+    /// / intentionally stopped). When this returns `false` the RTT/loss gauges
+    /// are frozen at whatever the probe last wrote and must not drive routing
     /// decisions.
+    ///
+    /// Test-build only: a non-test build holds no probe state, and its
+    /// [`rtt_slot`](Self::rtt_slot) maps the gauges directly.
+    #[cfg(test)]
     pub(crate) fn probe_healthy(&self) -> bool {
         self.probe_state().is_healthy()
     }
