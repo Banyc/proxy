@@ -201,14 +201,6 @@ impl GaugedRouteChain {
         &self.weighted
     }
 
-    pub fn rtt(&self) -> Option<Duration> {
-        self.rtt_stats.read().unwrap().srtt
-    }
-
-    pub fn rttvar(&self) -> Option<Duration> {
-        self.rtt_stats.read().unwrap().rttvar
-    }
-
     /// `srtt + 2*rttvar` (the RFC 6298-style effective RTT used for chain scoring).
     pub fn rtt_eff(&self) -> Option<Duration> {
         self.rtt_stats.read().unwrap().effective()
