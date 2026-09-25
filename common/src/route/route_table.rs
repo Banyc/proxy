@@ -205,8 +205,6 @@ pub enum RouteTableBuildError {
     RouteSelectorKeyNotFound(Arc<str>),
     #[error("Matcher key not found: `{0}`")]
     MatcherKeyNotFound(Arc<str>),
-    #[error("Matcher: {0}")]
-    Matcher(#[source] regex::Error),
     #[error("{0}")]
     RouteSelector(#[from] RouteSelectorBuildError),
     #[error("Conn selector name `{0}` is reserved (use the `direct`/`block` action instead)")]
