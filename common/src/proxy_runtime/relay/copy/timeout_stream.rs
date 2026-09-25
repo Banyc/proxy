@@ -34,20 +34,9 @@ impl TimeoutState {
     }
 
     #[inline]
-    fn timeout(&self) -> Option<Duration> {
-        self.timeout
-    }
-
-    #[inline]
     fn set_timeout(&mut self, timeout: Option<Duration>) {
         // since this takes &mut self, we can't yet be active
         self.timeout = timeout;
-    }
-
-    #[inline]
-    fn set_timeout_pinned(mut self: Pin<&mut Self>, timeout: Option<Duration>) {
-        *self.as_mut().project().timeout = timeout;
-        self.reset();
     }
 
     #[inline]
@@ -106,40 +95,11 @@ where
         }
     }
 
-    /// Returns the current read and write timeout.
-    pub fn timeout(&self) -> Option<Duration> {
-        self.state.timeout()
-    }
-
     /// Sets the read and write timeout.
     ///
-    /// This can only be used before the stream is pinned; use [`set_timeout_pinned`](Self::set_timeout_pinned)
-    /// otherwise.
+    /// This can only be used before the stream is pinned.
     pub fn set_timeout(&mut self, timeout: Option<Duration>) {
         self.state.set_timeout(timeout);
-    }
-
-    /// Sets the read and write timeout.
-    ///
-    /// This will reset any pending timeout. Use [`set_timeout`](Self::set_timeout) instead if the stream is not yet
-    /// pinned.
-    pub fn set_timeout_pinned(self: Pin<&mut Self>, timeout: Option<Duration>) {
-        self.project().state.set_timeout_pinned(timeout);
-    }
-
-    /// Returns a shared reference to the inner stream.
-    pub fn get_ref(&self) -> &Stream {
-        &self.stream
-    }
-
-    /// Returns a mutable reference to the inner stream.
-    pub fn get_mut(&mut self) -> &mut Stream {
-        &mut self.stream
-    }
-
-    /// Consumes the `TimeoutStreamShared`, returning the inner stream.
-    pub fn into_inner(self) -> Stream {
-        self.stream
     }
 }
 
