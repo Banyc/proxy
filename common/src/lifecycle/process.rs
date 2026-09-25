@@ -1,7 +1,5 @@
 use thiserror::Error;
 
-use crate::error::AnyError;
-
 /// Exit status of a process-lifetime root task.
 ///
 /// Panics surface through the `JoinError` yielded by the supervising
@@ -31,13 +29,6 @@ pub enum RootTaskSupervisionError {
     /// A root task returned `RootTaskExit::Failed`.
     #[error("Root process task `{task}` failed: {detail}")]
     Failed { task: &'static str, detail: String },
-    /// A root task was cancelled without the `JoinSet` being dropped, which
-    /// is unexpected for a process-lifetime actor.
-    #[error("Root process task was cancelled unexpectedly")]
-    Cancelled,
-    /// Joining the root task failed for a reason other than panic/cancel.
-    #[error("Root process task failed to join: {source}")]
-    JoinFailed { source: AnyError },
 }
 
 /// Supervise the join result of a single root-process task.
@@ -157,8 +148,8 @@ mod tests {
     }
 
     /// A cancelled root task is fatal: the handler unwraps the join result
-    /// first, so a cancelled join aborts (panics) rather than returning
-    /// `RootTaskSupervisionError::Cancelled`.
+    /// first, so a cancelled join aborts (panics) rather than being
+    /// reported as a supervision error.
     #[tokio::test]
     #[should_panic(expected = "JoinError::Cancelled")]
     async fn root_task_cancelled_is_fatal() {
