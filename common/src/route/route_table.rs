@@ -9,8 +9,7 @@ use thiserror::Error;
 use crate::{addr::InternetAddr, config::SharableConfig, matcher::Matcher};
 
 use super::{
-    HopConfigBuildError, ProbeFutures, Registries, RouteSelector, RouteSelectorBuildError,
-    RouteSelectorBuilder,
+    ProbeFutures, Registries, RouteSelector, RouteSelectorBuildError, RouteSelectorBuilder,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,8 +207,6 @@ pub enum RouteTableBuildError {
     MatcherKeyNotFound(Arc<str>),
     #[error("Matcher: {0}")]
     Matcher(#[source] regex::Error),
-    #[error("Chain config is invalid: {0}")]
-    ChainConfig(#[source] HopConfigBuildError),
     #[error("{0}")]
     RouteSelector(#[from] RouteSelectorBuildError),
     #[error("Conn selector name `{0}` is reserved (use the `direct`/`block` action instead)")]
