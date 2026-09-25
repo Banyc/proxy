@@ -138,7 +138,7 @@ impl TcpAccessConnHandler {
         }
     }
 
-    async fn proxy<Downstream>(&self, downstream: Downstream) -> Result<(), TcpAccessProxyError>
+    async fn proxy<Downstream>(&self, downstream: Downstream) -> Result<(), StreamEstablishError>
     where
         Downstream: OwnedIoStream + HasIoAddr,
     {
@@ -178,13 +178,6 @@ impl TcpAccessConnHandler {
         }
         Ok(())
     }
-}
-#[derive(Debug, Error)]
-pub enum TcpAccessProxyError {
-    #[error("Failed to get downstream address: {0}")]
-    DownstreamAddr(#[source] io::Error),
-    #[error("Failed to establish proxy chain: {0}")]
-    EstablishProxyChain(#[from] StreamEstablishError),
 }
 impl loading::HandleConn for TcpAccessConnHandler {}
 impl StreamServerHandleConn for TcpAccessConnHandler {

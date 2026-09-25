@@ -91,8 +91,6 @@ impl Socks5ServerTcpAccessServerConfig {
 pub enum Socks5TcpBuildError {
     #[error("Proxy table key not found: {0}")]
     ProxyTableKeyNotFound(Arc<str>),
-    #[error("Filter key not found: {0}")]
-    FilterKeyNotFound(Arc<str>),
     #[error("{0}")]
     ProxyTable(#[from] RouteTableBuildError),
 }
@@ -186,10 +184,7 @@ impl Socks5ServerTcpAccessConnHandler {
         }
     }
 
-    async fn proxy<Downstream>(
-        &self,
-        downstream: Downstream,
-    ) -> Result<ProxyResult, Socks5ProxyError>
+    async fn proxy<Downstream>(&self, downstream: Downstream) -> Result<ProxyResult, EstablishError>
     where
         Downstream: OwnedIoStream + HasIoAddr + std::fmt::Debug,
     {
@@ -533,13 +528,6 @@ pub enum ProxyResult {
     Blocked,
     Udp,
     IoCopy,
-}
-#[derive(Debug, Error)]
-pub enum Socks5ProxyError {
-    #[error("Failed to establish connection: {0}")]
-    Establish(#[from] EstablishError),
-    #[error("Failed to get downstream address: {0}")]
-    DownstreamAddr(#[source] io::Error),
 }
 #[derive(Debug, Error)]
 pub enum EstablishError {
