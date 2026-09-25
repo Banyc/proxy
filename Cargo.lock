@@ -2021,7 +2021,7 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.92#bb13147fbd92135c66ca733d9c3c194dc36045d7"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.93#aaf6e5f61a6de689dcff56550e734a238cc1d50f"
 dependencies = [
  "async-trait",
  "async_async_io",
@@ -2046,7 +2046,7 @@ dependencies = [
 [[package]]
 name = "rtp_mux"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp_mux.git?tag=v0.0.17#c5e47fc8470c03ce67a2d85e683237079656cc63"
+source = "git+https://github.com/Banyc/rtp_mux.git?tag=v0.0.18#5d96111fdd30266df8486e3461f6803ad648186b"
 dependencies = [
  "futures",
  "metrics",
