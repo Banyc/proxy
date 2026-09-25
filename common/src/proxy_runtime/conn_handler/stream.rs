@@ -1,4 +1,4 @@
-use std::{fmt, io, net::SocketAddr, sync::Arc};
+use std::{fmt, net::SocketAddr, sync::Arc};
 
 use crate::{
     addr::ParseInternetAddrError,
@@ -152,7 +152,7 @@ impl StreamProxyConnHandler {
     async fn proxy<Downstream>(
         &self,
         mut downstream: Downstream,
-    ) -> Result<ProxyResult, StreamProxyServerError>
+    ) -> Result<ProxyResult, StreamProxyAcceptorError>
     where
         Downstream: IoConnection + std::fmt::Debug,
     {
@@ -162,7 +162,7 @@ impl StreamProxyConnHandler {
             Ok(None) => return Ok(ProxyResult::Echo),
             Err(e) => {
                 // self.handle_proxy_error(&mut downstream, e).await;
-                return Err(StreamProxyServerError::EstablishProxyChain(e));
+                return Err(e);
             }
         };
 
@@ -297,22 +297,6 @@ impl StreamProxyAcceptor {
             addr,
             sock_addr,
         }))
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum StreamProxyServerError {
-    #[error("Failed to get downstream address: {0}")]
-    DownstreamAddr(#[source] io::Error),
-    #[error("Failed to establish proxy chain: {0}")]
-    EstablishProxyChain(#[from] StreamProxyAcceptorError),
-}
-impl StreamProxyServerError {
-    fn upstream_addr(&self) -> Option<&RouteAddr> {
-        match self {
-            Self::EstablishProxyChain(error) => error.upstream_addr(),
-            Self::DownstreamAddr(_) => None,
-        }
     }
 }
 
