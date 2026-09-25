@@ -53,10 +53,6 @@ impl<ConnHandler> KcpServer<ConnHandler> {
     pub fn listener(&self) -> &KcpListener {
         &self.listener
     }
-
-    pub fn listener_mut(&mut self) -> &mut KcpListener {
-        &mut self.listener
-    }
 }
 impl<ConnHandler> loading::Serve for KcpServer<ConnHandler>
 where

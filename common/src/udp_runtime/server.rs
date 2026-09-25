@@ -81,10 +81,6 @@ impl<ConnHandler> UdpServer<ConnHandler> {
     pub fn listener(&self) -> &UdpSocket {
         &self.listener
     }
-
-    pub fn listener_mut(&mut self) -> &mut UdpSocket {
-        &mut self.listener
-    }
 }
 impl<ConnHandler> loading::Serve for UdpServer<ConnHandler>
 where

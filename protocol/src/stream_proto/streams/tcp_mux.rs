@@ -77,9 +77,6 @@ impl<ConnHandler> TcpMuxServer<ConnHandler> {
             session_spawner,
         }
     }
-    pub fn reloadable(&self) -> &ReloadableHandler<ConnHandler> {
-        &self.reloadable
-    }
     pub fn listener(&self) -> &TcpListener {
         &self.listener
     }

@@ -55,10 +55,6 @@ impl<ConnHandler> RtpServer<ConnHandler> {
     pub fn listener(&self) -> &rtp::udp::Listener {
         &self.listener
     }
-
-    pub fn listener_mut(&mut self) -> &mut rtp::udp::Listener {
-        &mut self.listener
-    }
 }
 impl<ConnHandler> loading::Serve for RtpServer<ConnHandler>
 where

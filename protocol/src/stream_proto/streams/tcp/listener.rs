@@ -36,10 +36,6 @@ impl<ConnHandler> TcpServer<ConnHandler> {
     pub fn listener(&self) -> &TcpListener {
         &self.listener
     }
-
-    pub fn listener_mut(&mut self) -> &mut TcpListener {
-        &mut self.listener
-    }
 }
 impl<ConnHandler> loading::Serve for TcpServer<ConnHandler>
 where

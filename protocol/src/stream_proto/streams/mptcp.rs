@@ -53,10 +53,6 @@ impl<ConnHandler> MptcpServer<ConnHandler> {
     pub fn listener(&self) -> &MptcpListener {
         &self.listener
     }
-
-    pub fn listener_mut(&mut self) -> &mut MptcpListener {
-        &mut self.listener
-    }
 }
 impl<ConnHandler> loading::Serve for MptcpServer<ConnHandler>
 where
