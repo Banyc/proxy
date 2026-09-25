@@ -44,10 +44,6 @@ impl Packet {
     pub fn slice(&self) -> &[u8] {
         &self.buf[self.pos..]
     }
-
-    pub fn slice_mut(&mut self) -> &mut [u8] {
-        &mut self.buf[self.pos..]
-    }
 }
 
 #[derive(Debug, Error)]

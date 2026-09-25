@@ -137,11 +137,6 @@ where
         &mut self.stream
     }
 
-    /// Returns a pinned mutable reference to the inner stream.
-    pub fn get_pin_mut(self: Pin<&mut Self>) -> Pin<&mut Stream> {
-        self.project().stream
-    }
-
     /// Consumes the `TimeoutStreamShared`, returning the inner stream.
     pub fn into_inner(self) -> Stream {
         self.stream
