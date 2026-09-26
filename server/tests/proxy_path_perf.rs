@@ -218,9 +218,13 @@ impl Regime {
 
     /// [`Self::clean25`] with **no loss** — one dimension varied, so a tail
     /// that appears here cannot be a loss-realization artifact of the seeded
-    /// drop pattern.
+    /// drop pattern. It names itself: reporting the lossy and the lossless arm
+    /// under one label (`clean25`) made the per-arm table's two rows
+    /// indistinguishable, while `GATE.md`'s coverage table already called this
+    /// arm `jitter25`.
     const fn jitter25() -> Self {
         Self {
+            name: "jitter25",
             loss: 0,
             ..Self::clean25()
         }
@@ -679,10 +683,55 @@ impl Shape {
 trait DynStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> DynStream for T {}
 
-/// A dialable client: the chain's access listener or the direct transport.
+fn elapsed_ms(since: Instant) -> f64 {
+    since.elapsed().as_secs_f64() * 1000.0
+}
+
+/// What one [`Target::connect`] actually did, and how long each part took.
+///
+/// The deployed chain's client-side `connect()` is only a TCP accept at the
+/// access server: every establishment step after it — the `rtp_mux` lane
+/// pairing, the protocol preamble and header, the upstream connect — happens
+/// inside the binary, so the arm's measured window has already opened by the
+/// time those steps run and they are charged to the arm's first message. The
+/// direct arms do their lane pairing inside `connect()`, before the window. One
+/// arm's first-message latency therefore cannot be compared to the other's on
+/// its own; recording the parts of `connect()` makes the comparison explicit.
+/// `connect_ms + the first sample` is the *same* clock on every topology: from
+/// the client's first act of connecting to its first echo.
+#[derive(Clone, Copy, Debug)]
+struct Dial {
+    /// Wall time inside `connect()`.
+    connect_ms: f64,
+    /// The part of it spent in the `rtp_mux` lane pairing
+    /// (`connect_stream_with_lane[_and_key]`). `None` when this topology does
+    /// not pair a mux session itself.
+    mux_dial_ms: Option<f64>,
+    /// The part spent speaking the proxy protocol (flow kind, preamble, relay
+    /// header). `None` when this topology does not speak it itself.
+    protocol_ms: Option<f64>,
+    /// Whether a mux session for the peer was already live when the dial
+    /// started, i.e. the connector reused a session instead of pairing one. A
+    /// reused dial is not a cold-connection measurement.
+    mux_session_reused: bool,
+}
+
+/// A dialable client: the chain's access listener, the direct transport, or the
+/// proxy protocol spoken by the harness itself against a bare `proxy_server`.
 #[derive(Clone)]
-enum Target {
+struct Target {
+    kind: TargetKind,
+    /// One [`Dial`] per `connect()` this target has served, in call order.
+    /// [`run_shape`] takes them when an arm starts, so each arm reports its own
+    /// establishment rather than a predecessor's.
+    dials: Arc<std::sync::Mutex<Vec<Dial>>>,
+}
+
+#[derive(Clone)]
+enum TargetKind {
+    /// The chain arm: a TCP accept at the access server's listener.
     Access(SocketAddr),
+    /// The direct arm: an `rtp_mux` stream on the direct transport.
     Direct {
         connector: Arc<RtpMuxConnector>,
         addr: SocketAddr,
@@ -690,20 +739,63 @@ enum Target {
 }
 
 impl Target {
+    fn new(kind: TargetKind) -> Self {
+        Self {
+            kind,
+            dials: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    fn access(addr: SocketAddr) -> Self {
+        Self::new(TargetKind::Access(addr))
+    }
+
+    fn direct(connector: Arc<RtpMuxConnector>, addr: SocketAddr) -> Self {
+        Self::new(TargetKind::Direct { connector, addr })
+    }
+
+    /// Take this target's dial records, leaving it empty.
+    fn take_dials(&self) -> Vec<Dial> {
+        std::mem::take(&mut *self.dials.lock().unwrap())
+    }
+
     async fn connect(&self) -> Box<dyn DynStream> {
-        match self {
-            Target::Access(addr) => Box::new(
-                TcpStream::connect(addr)
-                    .await
-                    .expect("connect the access listener"),
+        let started = Instant::now();
+        let (stream, mut dial): (Box<dyn DynStream>, Dial) = match &self.kind {
+            TargetKind::Access(addr) => (
+                Box::new(
+                    TcpStream::connect(addr)
+                        .await
+                        .expect("connect the access listener"),
+                ),
+                Dial {
+                    connect_ms: 0.0,
+                    mux_dial_ms: None,
+                    protocol_ms: None,
+                    mux_session_reused: false,
+                },
             ),
-            Target::Direct { connector, addr } => Box::new(
-                connector
+            TargetKind::Direct { connector, addr } => {
+                let reused = connector.probe_session(*addr).is_some();
+                let paired = Instant::now();
+                let stream = connector
                     .connect_stream_with_lane(*addr, LaneClass::Interactive)
                     .await
-                    .expect("connect the direct rtp_mux stream"),
-            ),
-        }
+                    .expect("connect the direct rtp_mux stream");
+                (
+                    Box::new(stream),
+                    Dial {
+                        connect_ms: 0.0,
+                        mux_dial_ms: Some(elapsed_ms(paired)),
+                        protocol_ms: None,
+                        mux_session_reused: reused,
+                    },
+                )
+            }
+        };
+        dial.connect_ms = elapsed_ms(started);
+        self.dials.lock().unwrap().push(dial);
+        stream
     }
 }
 
@@ -743,6 +835,24 @@ struct ArmOutcome {
     netem_forwarded: u64,
     goodput_mib_s: Option<f64>,
     echo_elapsed_s: Option<f64>,
+    /// How many `connect()` calls this arm made. Zero means the arm never
+    /// dialed, which is how an instrument loses its cold-connection reading
+    /// without failing anything else.
+    dials: usize,
+    /// Wall time inside the arm's first `connect()`, and the two parts of it
+    /// this topology performs itself: the `rtp_mux` lane pairing and the proxy
+    /// protocol. `None` where the topology does not perform that part.
+    connect_ms: Option<f64>,
+    mux_dial_ms: Option<f64>,
+    protocol_ms: Option<f64>,
+    /// Whether the arm's first connect reused a live mux session, i.e. was not
+    /// a cold connection.
+    mux_session_reused: bool,
+    /// The arm's first measured message, and `connect_ms + first` — the same
+    /// clock on every topology: from the client's first act of connecting to
+    /// its first echo.
+    first_ms: Option<f64>,
+    cold_total_ms: Option<f64>,
 }
 
 impl ArmOutcome {
@@ -764,6 +874,25 @@ impl ArmOutcome {
         } else {
             self.wire_interactive_c2s_bytes as f64 / self.offered_bytes as f64
         }
+    }
+
+    /// Record the arm's establishment from its dial log: the first `connect()`,
+    /// its two parts this topology performs itself, and the cold-connection
+    /// total (`connect` + first echo). The first connect is the cold one on
+    /// every arm whose target is fresh, which is every arm that starts its own
+    /// process or its own connector; `dials` counts them so a `flows4` arm is
+    /// visible as four connections rather than one.
+    fn record_dials(&mut self, dials: &[Dial]) {
+        self.dials += dials.len();
+        let Some(dial) = dials.first() else {
+            return;
+        };
+        self.connect_ms = Some(dial.connect_ms);
+        self.mux_dial_ms = dial.mux_dial_ms;
+        self.protocol_ms = dial.protocol_ms;
+        self.mux_session_reused = dial.mux_session_reused;
+        self.first_ms = self.latencies_ms.first().copied();
+        self.cold_total_ms = self.first_ms.map(|first| dial.connect_ms + first);
     }
 
     /// The shared instrument-sanity guard. It fails when nothing was measured,
@@ -802,6 +931,11 @@ impl ArmOutcome {
             self.label(),
             self.delivered_bytes,
             self.offered_bytes
+        );
+        assert!(
+            self.dials > 0,
+            "INSTRUMENT: arm {} never dialed, so it measured no connection",
+            self.label()
         );
     }
 }
@@ -903,6 +1037,9 @@ async fn run_shape(
     let hop_before = hop.interactive.snapshot_c2s();
     let hop_before_s2c = hop.interactive.snapshot_s2c();
     let hop_before_bulk = hop.bulk.snapshot_c2s();
+    // Clear the dial log before the shape runs, so what this arm reports is
+    // the shape's own connects and never a predecessor arm's.
+    let _ = target.take_dials();
 
     let latencies = match shape {
         Shape::RoundTrip { window } => {
@@ -984,6 +1121,7 @@ async fn run_shape(
     if !outcome.base_rtt_ms.is_finite() {
         outcome.base_rtt_ms = 0.0;
     }
+    outcome.record_dials(&target.take_dials());
     outcome
 }
 
@@ -1395,7 +1533,7 @@ async fn run_pair(
     let proxy = run_shape(
         "proxy_chain",
         regime,
-        &Target::Access(chain.access_addr),
+        &Target::access(chain.access_addr),
         shape,
         &chain.hop,
         fault,
@@ -1404,10 +1542,10 @@ async fn run_pair(
     chain.shutdown().await;
 
     let direct_handle = start_direct(regime, calibration, echo).await;
-    let direct_target = Target::Direct {
-        connector: Arc::clone(&direct_handle.connector),
-        addr: direct_handle.addr,
-    };
+    let direct_target = Target::direct(
+        Arc::clone(&direct_handle.connector),
+        direct_handle.addr,
+    );
     let direct = run_shape(
         "direct_transport",
         regime,
@@ -1427,7 +1565,7 @@ async fn run_pair(
         let outcome = run_shape(
             "direct_tcp_front",
             regime,
-            &Target::Access(front_addr),
+            &Target::access(front_addr),
             shape,
             &direct_handle.hop,
             fault,
@@ -1473,7 +1611,7 @@ async fn run_pair(
         let outcome = run_shape(
             "direct_front_relay",
             regime,
-            &Target::Access(front_addr),
+            &Target::access(front_addr),
             shape,
             &direct_handle.hop,
             fault,
@@ -1559,7 +1697,7 @@ async fn run_relay_stack_arm(
     let outcome = run_shape(
         topology,
         regime,
-        &Target::Access(front_addr),
+        &Target::access(front_addr),
         shape,
         &direct_handle.hop,
         fault,
@@ -1612,6 +1750,66 @@ fn out_path() -> PathBuf {
     base.join("proxy_path_perf").join("report.json")
 }
 
+/// One arm's JSON record. Shared by the pair matrix and the protocol-only
+/// arms, so a field added for one is never missing from the other.
+fn arm_json(arm: &ArmOutcome) -> serde_json::Value {
+    let slow = slow_shape(&arm.latencies_ms);
+    json!({
+        "topology": arm.topology,
+        "regime": arm.regime,
+        "shape": arm.shape,
+        "owd_ms": arm.owd_ms,
+        "samples": arm.latencies_ms.len(),
+        "unanswered": arm.unanswered,
+        "mismatches": arm.mismatches,
+        "base_rtt_ms": arm.base_rtt_ms,
+        "p50_ms": arm.percentile(0.50),
+        "p90_ms": arm.percentile(0.90),
+        "p99_ms": arm.percentile(0.99),
+        "p999_ms": arm.percentile(0.999),
+        "max_ms": arm.percentile(1.0),
+        "over_250ms": arm.over_ceiling(),
+        "slow_first_index": slow.first,
+        "slow_last_index": slow.last,
+        "slow_episodes": slow.episodes,
+        "slow_max_run": slow.max_run,
+        "p75_ms": arm.percentile(0.75),
+        "p95_ms": arm.percentile(0.95),
+        "offered_bytes": arm.offered_bytes,
+        "delivered_bytes": arm.delivered_bytes,
+        "wire_segment": "rtpmux lanes, client->server",
+        "wire_dominant_segment": if arm.wire_interactive_c2s_bytes
+            >= arm.wire_bulk_c2s_bytes
+        {
+            "interactive"
+        } else {
+            "bulk"
+        },
+        "wire_interactive_c2s_bytes": arm.wire_interactive_c2s_bytes,
+        "wire_interactive_s2c_bytes": arm.wire_interactive_s2c_bytes,
+        "wire_bulk_lane_c2s_bytes": arm.wire_bulk_c2s_bytes,
+        "wire_multiple_interactive": arm.wire_multiple(),
+        "wire_multiple_dominant_lane": if arm.offered_bytes == 0 {
+            f64::NAN
+        } else {
+            arm.wire_interactive_c2s_bytes.max(arm.wire_bulk_c2s_bytes) as f64
+                / arm.offered_bytes as f64
+        },
+        "netem_interactive_forwarded_events": arm.netem_forwarded,
+        "netem_interactive_dropped_events": arm.netem_dropped,
+        "netem_interactive_delayed_events": arm.netem_delayed,
+        "goodput_mib_s": arm.goodput_mib_s,
+        "echo_elapsed_s": arm.echo_elapsed_s,
+        "dials": arm.dials,
+        "connect_ms": arm.connect_ms,
+        "mux_dial_ms": arm.mux_dial_ms,
+        "protocol_ms": arm.protocol_ms,
+        "mux_session_reused": arm.mux_session_reused,
+        "first_ms": arm.first_ms,
+        "cold_total_ms": arm.cold_total_ms,
+    })
+}
+
 fn record_json(results: &[PairResult]) -> serde_json::Value {
     let arms: Vec<serde_json::Value> = results
         .iter()
@@ -1628,56 +1826,7 @@ fn record_json(results: &[PairResult]) -> serde_json::Value {
             .into_iter()
             .flatten()
         })
-        .map(|arm| {
-            let slow = slow_shape(&arm.latencies_ms);
-            json!({
-                "topology": arm.topology,
-                "regime": arm.regime,
-                "shape": arm.shape,
-                "owd_ms": arm.owd_ms,
-                "samples": arm.latencies_ms.len(),
-                "unanswered": arm.unanswered,
-                "mismatches": arm.mismatches,
-                "base_rtt_ms": arm.base_rtt_ms,
-                "p50_ms": arm.percentile(0.50),
-                "p90_ms": arm.percentile(0.90),
-                "p99_ms": arm.percentile(0.99),
-                "p999_ms": arm.percentile(0.999),
-                "max_ms": arm.percentile(1.0),
-                "over_250ms": arm.over_ceiling(),
-                "slow_first_index": slow.first,
-                "slow_last_index": slow.last,
-                "slow_episodes": slow.episodes,
-                "slow_max_run": slow.max_run,
-                "p75_ms": arm.percentile(0.75),
-                "p95_ms": arm.percentile(0.95),
-                "offered_bytes": arm.offered_bytes,
-                "delivered_bytes": arm.delivered_bytes,
-                "wire_segment": "rtpmux lanes, client->server",
-                "wire_dominant_segment": if arm.wire_interactive_c2s_bytes
-                    >= arm.wire_bulk_c2s_bytes
-                {
-                    "interactive"
-                } else {
-                    "bulk"
-                },
-                "wire_interactive_c2s_bytes": arm.wire_interactive_c2s_bytes,
-                "wire_interactive_s2c_bytes": arm.wire_interactive_s2c_bytes,
-                "wire_bulk_lane_c2s_bytes": arm.wire_bulk_c2s_bytes,
-                "wire_multiple_interactive": arm.wire_multiple(),
-                "wire_multiple_dominant_lane": if arm.offered_bytes == 0 {
-                    f64::NAN
-                } else {
-                    arm.wire_interactive_c2s_bytes.max(arm.wire_bulk_c2s_bytes) as f64
-                        / arm.offered_bytes as f64
-                },
-                "netem_interactive_forwarded_events": arm.netem_forwarded,
-                "netem_interactive_dropped_events": arm.netem_dropped,
-                "netem_interactive_delayed_events": arm.netem_delayed,
-                "goodput_mib_s": arm.goodput_mib_s,
-                "echo_elapsed_s": arm.echo_elapsed_s,
-            })
-        })
+        .map(arm_json)
         .collect();
 
     let deltas: Vec<serde_json::Value> = results
@@ -1761,9 +1910,106 @@ fn record_json(results: &[PairResult]) -> serde_json::Value {
             capacity; no fraction is computed against the shaped rate because neither arm \
             reaches it",
         "rtt_match_tolerance_ms": RTT_MATCH_TOL.as_millis() as u64,
+        "cold_connection_note": "connect_ms + first_ms is the same clock on every topology: \
+            the client's first act of connecting (a TCP accept for the chain, the rtp_mux lane \
+            pairing for the direct arms, the pairing plus the proxy protocol for direct_proto) \
+            to its first echo. mux_dial_ms and protocol_ms are the parts of connect_ms the arm's \
+            own topology performs; the chain's parts run inside the binary, after its window \
+            opened, and so appear in its first sample instead.",
         "arms": arms,
         "deltas": deltas,
     })
+}
+
+/// One arm's row in the per-arm table, plus its slow-sample shape line when it
+/// has a tail.
+fn print_arm(arm: &ArmOutcome) {
+    // Report the wire against the lane that actually carried the arm: the
+    // interactive lane for the interactive shapes, the bulk lane once a bulk
+    // flow has migrated onto it.
+    let dominant = arm.wire_interactive_c2s_bytes.max(arm.wire_bulk_c2s_bytes);
+    let multiple = if arm.offered_bytes == 0 {
+        f64::NAN
+    } else {
+        dominant as f64 / arm.offered_bytes as f64
+    };
+    println!(
+        "{:<16} {:<10} {:<8} {:>7.1} {:>7.1} {:>8.1} {:>8.1} {:>8.1} {:>9} {:>8} {:>7} {:>6.2} {:>6}",
+        arm.topology,
+        arm.regime,
+        arm.shape,
+        arm.base_rtt_ms,
+        arm.percentile(0.50),
+        arm.percentile(0.99),
+        arm.percentile(0.999),
+        arm.percentile(1.0),
+        arm.over_ceiling(),
+        arm.latencies_ms.len(),
+        arm.unanswered,
+        multiple,
+        arm.netem_dropped,
+    );
+    let slow = slow_shape(&arm.latencies_ms);
+    if slow.count > 0 {
+        println!(
+            "  slow {}: n={} first_idx={} last_idx={} episodes={} max_run={} \
+             (250 ms ceiling, emission order)",
+            arm.label(),
+            slow.count,
+            slow.first.unwrap_or(0),
+            slow.last.unwrap_or(0),
+            slow.episodes,
+            slow.max_run,
+        );
+    }
+}
+
+/// The cold-connection measurement, one row per topology per regime: what
+/// `connect()` cost, which parts the arm's own topology performed, how long the
+/// first echo then took, and the sum — the same clock on every topology.
+///
+/// `mux_dial_ms` is the `rtp_mux` lane pairing and `protocol_ms` the proxy
+/// protocol (flow kind, preamble, relay header); a topology that performs a
+/// part inside its own process shows it in `connect`, while the chain's parts
+/// run inside the binary after its window opened and so appear in `first`.
+/// `reused` marks a dial that found a live mux session, which is not a
+/// cold-connection reading.
+fn print_cold_table(results: &[PairResult]) {
+    println!("\n=== cold connection: connect() + first echo, request/response shape (ms) ===");
+    println!(
+        "{:<10} {:<17} {:>9} {:>10} {:>9} {:>8} {:>11} {:>7} {:>9}",
+        "regime", "topology", "connect", "mux_dial", "protocol", "first", "cold_total", "reused", "dials"
+    );
+    let cell = |arm: &ArmOutcome| {
+        let ms = |v: Option<f64>| match v {
+            Some(v) => format!("{v:.1}"),
+            None => "-".to_string(),
+        };
+        println!(
+            "{:<10} {:<17} {:>9} {:>10} {:>9} {:>8} {:>11} {:>7} {:>9}",
+            arm.regime,
+            arm.topology,
+            ms(arm.connect_ms),
+            ms(arm.mux_dial_ms),
+            ms(arm.protocol_ms),
+            ms(arm.first_ms),
+            ms(arm.cold_total_ms),
+            if arm.mux_session_reused { "reused" } else { "no" },
+            arm.dials,
+        );
+    };
+    // Only the request/response arms: the pipelined shapes write several
+    // requests into the window before the first reply returns, so their first
+    // sample carries a standing queue as well as the establishment, and the
+    // calibration pair's round-trip arms are the cold reading of the other two
+    // topologies.
+    for pair in results {
+        if pair.proxy.shape != "rr" {
+            continue;
+        }
+        cell(&pair.proxy);
+        cell(&pair.direct);
+    }
 }
 
 fn print_table(results: &[PairResult]) {
@@ -1797,44 +2043,7 @@ fn print_table(results: &[PairResult]) {
         .into_iter()
         .flatten()
         {
-            // Report the wire against the lane that actually carried the arm:
-            // the interactive lane for the interactive shapes, the bulk lane
-            // once a bulk flow has migrated onto it.
-            let dominant = arm.wire_interactive_c2s_bytes.max(arm.wire_bulk_c2s_bytes);
-            let multiple = if arm.offered_bytes == 0 {
-                f64::NAN
-            } else {
-                dominant as f64 / arm.offered_bytes as f64
-            };
-            println!(
-                "{:<16} {:<10} {:<8} {:>7.1} {:>7.1} {:>8.1} {:>8.1} {:>8.1} {:>9} {:>8} {:>7} {:>6.2} {:>6}",
-                arm.topology,
-                arm.regime,
-                arm.shape,
-                arm.base_rtt_ms,
-                arm.percentile(0.50),
-                arm.percentile(0.99),
-                arm.percentile(0.999),
-                arm.percentile(1.0),
-                arm.over_ceiling(),
-                arm.latencies_ms.len(),
-                arm.unanswered,
-                multiple,
-                arm.netem_dropped,
-            );
-            let slow = slow_shape(&arm.latencies_ms);
-            if slow.count > 0 {
-                println!(
-                    "  slow {}: n={} first_idx={} last_idx={} episodes={} max_run={} \
-                     (250 ms ceiling, emission order)",
-                    arm.label(),
-                    slow.count,
-                    slow.first.unwrap_or(0),
-                    slow.last.unwrap_or(0),
-                    slow.episodes,
-                    slow.max_run,
-                );
-            }
+            print_arm(arm);
         }
         if let Some(goodput) = pair.proxy.goodput_mib_s {
             let direct = pair.direct.goodput_mib_s.unwrap_or(f64::NAN);
@@ -2118,6 +2327,7 @@ async fn proxy_path_matched_rtt_delta() {
     }
 
     print_table(&results);
+    print_cold_table(&results);
     echo_scope.reap_ready();
     let report = record_json(&results);
     let path = out_path();
