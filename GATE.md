@@ -114,11 +114,13 @@ integrity, matched base RTT, bulk traffic actually carried) and it restates no
 mandate bound: those live in `rtp_mux/GATE.md` §Performance and the mandate
 metrics are reported, never gated here.
 
-**Cost.** Measured 144–173 s wall-clock on a warm release build (the final run:
-164 s). It starts the real binary once per proxy arm (5–9 per run), one
-in-process `rtp_mux` server + two `NetemPair` instances per direct arm, and
-spends 4 s of interactive load (plus a 2 s drain) or a 3 s + 5 s bulk window
-per arm over 16 arms.
+**Cost.** Measured 234 s wall-clock on a warm release build over 34 arms. It starts
+the real binary once per proxy arm (5–9 per run), one in-process `rtp_mux`
+server + two `NetemPair` instances per direct arm, and spends 4 s of interactive
+load (plus a 2 s drain) or a 3 s + 5 s bulk window per arm. The controls added
+alongside the client-fronting and byte-relay pair cost 3 cadence arms at 25 ms
+OWD (`direct_front_relay` twice, at 25 ms and 100 ms, and its two relay-stack
+siblings once each) plus one warm-cadence arm at each 25 ms-OWD scale.
 
 **Coverage.** Baseline: the tri-mandate `clean` impairment shape, the 256 B
 interactive message, the `rtpmux` hop. Arms vary one dimension from it:
@@ -132,7 +134,10 @@ interactive message, the `rtpmux` hop. Arms vary one dimension from it:
 | lane: interactive lane under a bulk flow (the flow migrates to the bulk lane) | `shape=bulk` on `clean25_shaped` |
 | layer: proxy chain vs direct transport | every pair, both topologies |
 | attribution: client-side TCP fronting, server-side byte relay | `direct_tcp_front`, `direct_relay` (cadence, 25 ms OWD) |
-| metric: p50/p90/p99/p99.9/max, over-250 ms count, per-segment wire multiple, delivery | every arm |
+| attribution: those two stages stacked — the chain minus the proxy protocol, its stream wrappers and its chain plumbing | `direct_front_relay` (cadence, 25 ms and 100 ms OWD) |
+| attribution: the proxy's own relay implementation, one wrapper layer per arm — `TimeoutStreamShared` plus the proxy's `copy_bidirectional` fork, then that plus `async_speed_limit::Limiter::new(f64::INFINITY)` | `direct_front_relay_tout`, `direct_front_relay_timed` (cadence, 25 ms OWD) |
+| window: the measured window opening on the client's first write vs after one warm round trip | `cadence` vs `cadence_steady` (25 ms OWD) |
+| metric: p50/p75/p90/p95/p99/p99.9/max, over-250 ms count, the slow samples' index span / episode count / longest run, per-segment wire multiple, delivery | every arm |
 
 **Deliberately empty cells.** Burst (Gilbert-Elliot) impairment: the
 tri-mandate `hostile` arm's model is measured at the `rtp_mux` layer, and this
@@ -143,6 +148,12 @@ arm is a **composite** (rate shaping plus flow migration) and is reported as a
 range because it varied 0.28–0.99× of the direct arm across three runs; it is
 not attributed. Cross-host RTT asymmetry and real NIC/scheduler paths: every
 arm is loopback, so host-local CPU and loopback TCP are inside the measurement.
+The relay-stack arms (`direct_front_relay_tout`, `direct_front_relay_timed`) and
+the warm arm (`cadence_steady`) are not run at 100 ms OWD: they exist to
+separate the relay implementation and the window's start from the delta the
+25 ms-OWD cadence carries, and the 100 ms-OWD direct arm is itself a queueing
+artifact of the harness (its in-process-echo arm carries the largest tail of any
+arm in that regime), so a further control there would not attribute.
 
 **Matched RTT.** Because the chain has more hops than the direct arm, the
 delta is only interpretable at matched end-to-end client-to-echo base RTT, and
@@ -154,6 +165,27 @@ regime (chain 41.2 ms vs direct 41.1 ms at 25 ms OWD; 191.5 ms vs 193.1 ms at
 per-arm `base` column is the shape's own minimum and is **not** the matched
 baseline — a queued pipelined arm has none; the delta table prints the
 calibration pair's `cal_P`/`cal_D` instead.
+
+**What the delta is.** Matching the base RTT does not by itself make the two
+windows comparable, because they open at different points in their connection's
+lifecycle: `Target::connect()` establishes the direct arm's `rtp_mux` stream
+before its window opens, while the chain arm's `connect()` is a TCP accept at
+the access server, so the chain's window opens while the mux session, the proxy
+protocol preamble and header, the flow-kind dispatch and the upstream TCP
+connect are still being made. Two arms carry that reading rather than assuming
+it: the plain `cadence` arm's samples above 250 ms form **one contiguous run
+starting at index 0** (104–111 of ~800 at 25 ms OWD, 99 at 0 % loss, 596–716 at
+100 ms OWD), and the `flows4` arm shows exactly four such samples — one per
+concurrent flow — with the round-trip arm showing exactly one, at index 0. A
+steady-state cost cannot have that shape: it would be spread across the arm and
+would scale with the sample count rather than with the number of connections.
+`cadence_steady` — the same cadence with one warm round trip taken before the
+window opens, on both topologies — measures that established path: its
+proxy-minus-direct p99 is −5.6 ms at 2 % loss and +25.1 ms at 0 % loss, with
+zero samples above 250 ms in either topology, against +289 ms and +374 ms for
+the unwarmed arms in the same run. So the delta the unwarmed arms report is the
+chain's **connection establishment**, charged to the first messages of a window
+that was opened before the chain was up.
 
 **Vacuity.** `PROXY_PATH_PERF_FAULT=zero_samples` empties an arm and
 `PROXY_PATH_PERF_FAULT=unanswered` issues a request that is never answered;

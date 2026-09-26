@@ -38,6 +38,12 @@ netem-test = { path = "../../netem_test/netem-test" }
 # can be built without a proxy in the path.
 rtp_mux = { workspace = true }
 serde_json = { workspace = true }
+# The relay-stack attribution arms configure the proxy's own relay
+# (`common::proxy_runtime::relay::copy::timed_copy_bidirectional`) with the
+# same unlimited limiter both proxy services configure, so they can measure
+# that production relay's contribution on the direct transport without a proxy
+# in the path.
+async-speed-limit = { workspace = true }
 
 [features]
 default = []

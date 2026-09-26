@@ -2257,6 +2257,7 @@ version = "0.1.0"
 dependencies = [
  "ae",
  "anyhow",
+ "async-speed-limit",
  "axum",
  "clap",
  "common",

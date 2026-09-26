@@ -28,6 +28,28 @@
 //! `netem_test` instrument, applied to the hop's *two* lanes (interactive and
 //! its adjacent bulk port) through one `NetemPair` each.
 //!
+//! # Controls
+//!
+//! A chain-versus-direct delta is only attributable with controls that add one
+//! stage at a time to the direct arm: `direct_tcp_front` (the client-side
+//! kernel-TCP front the access server interposes), `direct_relay` (the
+//! server-side byte relay the proxy server interposes, without the protocol)
+//! and `direct_front_relay` (both stages stacked — the chain minus the proxy
+//! protocol, the access-server chain plumbing and the proxy's stream wrappers).
+//! The last one varies two dimensions from the baseline at once and is labelled
+//! a composite. Its two relay-stack siblings — `direct_front_relay_tout` and
+//! `direct_front_relay_timed` — keep that topology and vary exactly one
+//! dimension from it: the relay implementation, from the harness's plain
+//! `tokio::io::copy_bidirectional` to the proxy's production stack one wrapper
+//! layer at a time.
+//!
+//! `cadence_steady` opens the measured window only after one whole
+//! request/response round trip has completed, so both topologies are measured
+//! on an established path. It is the reading that separates a slow path from a
+//! path whose connection setup is charged to the first messages of the window —
+//! the direct arms establish their mux stream inside `connect()`, the chain
+//! arm's `connect()` is a TCP accept at the access server.
+//!
 //! # Matched RTT
 //!
 //! The chain's extra hops are loopback TCP, but "loopback is negligible" is an
@@ -454,15 +476,82 @@ fn unique_temp_dir(tag: &str) -> PathBuf {
 
 // ───────────────────────── the direct transport arm ───────────────────────
 
+/// How one relay leg moves bytes between its two sockets.
+///
+/// `Tokio` is the harness's own plain `tokio::io::copy_bidirectional`.
+/// `ProxyTimeout` and `ProxyTimed` add the production relay stack the proxy's
+/// two services run, one wrapper layer at a time: `ProxyTimeout` is the
+/// proxy's `TimeoutStreamShared` around each end plus the proxy's own
+/// `copy_bidirectional` fork, and `ProxyTimed` is that plus the
+/// `async_speed_limit::Limiter` the services wrap their relay in —
+/// `Limiter::new(f64::INFINITY)`, the unlimited value both services configure
+/// when no `speed_limit` is set. So each relay-stack arm varies exactly one
+/// dimension from the plain composite control: the relay implementation, with
+/// topology, impairment, cadence and matched RTT held.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RelayImpl {
+    Tokio,
+    ProxyTimeout,
+    ProxyTimed,
+}
+
+/// The direct arm's server-side handler mode for an accepted mux stream.
+const IN_PROCESS_ECHO: u8 = 0;
+const RELAY_TOKIO: u8 = 1;
+const RELAY_PROXY_TIMEOUT: u8 = 2;
+const RELAY_PROXY_TIMED: u8 = 3;
+
+/// The relay implementation a non-echo handler mode selects.
+fn relay_impl_of(mode: u8) -> RelayImpl {
+    match mode {
+        RELAY_PROXY_TIMEOUT => RelayImpl::ProxyTimeout,
+        RELAY_PROXY_TIMED => RelayImpl::ProxyTimed,
+        _ => RelayImpl::Tokio,
+    }
+}
+
+/// Move bytes both ways with `impl_`'s relay implementation.
+async fn relay_leg<A, B>(a: A, b: B, impl_: RelayImpl)
+where
+    A: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    B: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    use common::proxy_runtime::relay::copy as proxy_copy;
+    match impl_ {
+        RelayImpl::Tokio => {
+            let (mut a, mut b) = (a, b);
+            let _ = tokio::io::copy_bidirectional(&mut a, &mut b).await;
+        }
+        RelayImpl::ProxyTimeout => {
+            let mut a = proxy_copy::TimeoutStreamShared::new(a);
+            let mut b = proxy_copy::TimeoutStreamShared::new(b);
+            a.set_timeout(Some(common::STREAM_IO_TIMEOUT));
+            b.set_timeout(Some(common::STREAM_IO_TIMEOUT));
+            let mut a = Box::pin(a);
+            let mut b = Box::pin(b);
+            let _ = proxy_copy::copy_bidirectional(&mut a, &mut b).await;
+        }
+        RelayImpl::ProxyTimed => {
+            let _ = proxy_copy::timed_copy_bidirectional(
+                a,
+                b,
+                async_speed_limit::Limiter::new(f64::INFINITY),
+            )
+            .await;
+        }
+    }
+}
+
 struct DirectHandle {
     scope: TaskScope,
     hop: ImpairedHop,
     connector: Arc<RtpMuxConnector>,
     addr: SocketAddr,
-    /// When set, the accepted mux stream is relayed to the TCP echo server
-    /// instead of being echoed in-process: a faithful byte relay with no proxy
-    /// protocol in it. Flipped between arms so one server can serve both.
-    relay_mode: Arc<std::sync::atomic::AtomicBool>,
+    /// Which handler the accepted mux stream gets: the in-process echo, or a
+    /// byte relay to the TCP echo server under one of the [`RelayImpl`]
+    /// implementations. Flipped between arms so one server can serve all of
+    /// them.
+    relay_mode: Arc<std::sync::atomic::AtomicU8>,
 }
 
 /// Start a bare `rtp_mux` server whose accepted streams are echoed (or, with
@@ -480,21 +569,22 @@ async fn start_direct(regime: &Regime, extra_owd: Duration, echo: SocketAddr) ->
     .await
     .expect("bind the direct rtp_mux server");
     let server_addr = server.listener().local_addr();
-    let relay_mode = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let relay_mode = Arc::new(std::sync::atomic::AtomicU8::new(IN_PROCESS_ECHO));
     let server_relay_mode = Arc::clone(&relay_mode);
     let handler_scope = scope.clone();
     scope.spawn(async move {
         let _ = server
-            .serve(spawner, move |mut stream| {
-                let relay = server_relay_mode.load(Ordering::Relaxed);
+            .serve(spawner, move |stream| {
+                let mode = server_relay_mode.load(Ordering::Relaxed);
                 handler_scope.spawn(async move {
-                    if relay {
-                        let Ok(mut tcp) = TcpStream::connect(echo).await else {
+                    if mode != IN_PROCESS_ECHO {
+                        let Ok(tcp) = TcpStream::connect(echo).await else {
                             return;
                         };
-                        let _ = tokio::io::copy_bidirectional(&mut stream, &mut tcp).await;
+                        relay_leg(stream, tcp, relay_impl_of(mode)).await;
                         return;
                     }
+                    let mut stream = stream;
                     let mut buf = vec![0u8; 64 * 1024];
                     loop {
                         match stream.read(&mut buf).await {
@@ -546,6 +636,21 @@ enum Shape {
         window: Duration,
         interval: Duration,
     },
+    /// The same pipelined cadence, but with one complete request/response
+    /// round trip taken **before** the measured window opens.
+    ///
+    /// This is the steady-state reading of the plain cadence, and the one
+    /// dimension that separates "the path is slow once it is up" from "the
+    /// path's connection establishment is charged to the first messages of the
+    /// window". The direct arms establish their mux stream inside
+    /// `Target::connect()`, i.e. before their window opens; the chain arm's
+    /// `connect()` is a TCP accept at the access server, so its window opens
+    /// while the chain is still being built. Warming both topologies removes
+    /// that asymmetry.
+    CadenceSteady {
+        window: Duration,
+        interval: Duration,
+    },
     /// `flows` concurrent round-trip flows — the multiplexed access-flow shape.
     Flows { flows: usize, window: Duration },
     /// A saturating bulk upload with the echo drained concurrently, measured
@@ -560,6 +665,7 @@ impl Shape {
         match self {
             Shape::RoundTrip { .. } => "rr".into(),
             Shape::Cadence { .. } => "cadence".into(),
+            Shape::CadenceSteady { .. } => "cadence_steady".into(),
             Shape::Flows { flows, .. } => format!("flows{flows}"),
             Shape::Bulk { .. } => "bulk".into(),
         }
@@ -648,7 +754,7 @@ impl ArmOutcome {
     }
 
     fn over_ceiling(&self) -> usize {
-        self.latencies_ms.iter().filter(|&&v| v > 250.0).count()
+        self.latencies_ms.iter().filter(|&&v| v > SLOW_MS).count()
     }
 
     fn wire_multiple(&self) -> f64 {
@@ -697,6 +803,57 @@ impl ArmOutcome {
             self.offered_bytes
         );
     }
+}
+
+/// The ceiling above which a sample is reported as slow. The same 250 ms the
+/// over-250 ms columns use.
+const SLOW_MS: f64 = 250.0;
+
+/// How the slow samples sit in emission order.
+///
+/// A tail that is an arm's **first** N samples is a start-of-window effect: the
+/// connection was still being established while those messages were written,
+/// so the measured window — not the steady state — carries the setup cost. A
+/// tail **scattered** through the arm is a steady-state stall. Percentiles
+/// alone cannot tell the two apart, and the two need opposite responses (fix
+/// the instrument versus fix the path), so the diagnosis reports this shape.
+struct SlowShape {
+    count: usize,
+    /// Index of the earliest and latest slow sample, in emission order.
+    first: Option<usize>,
+    last: Option<usize>,
+    /// Maximal runs of consecutive slow samples, and the longest such run.
+    episodes: usize,
+    max_run: usize,
+}
+
+fn slow_shape(latencies: &[f64]) -> SlowShape {
+    let mut shape = SlowShape {
+        count: 0,
+        first: None,
+        last: None,
+        episodes: 0,
+        max_run: 0,
+    };
+    let mut run = 0usize;
+    for (index, value) in latencies.iter().enumerate() {
+        if *value > SLOW_MS {
+            shape.count += 1;
+            shape.first.get_or_insert(index);
+            shape.last = Some(index);
+            run += 1;
+            shape.max_run = shape.max_run.max(run);
+        } else {
+            if run > 0 {
+                shape.episodes += 1;
+            }
+            run = 0;
+        }
+    }
+    if run > 0 {
+        shape.episodes += 1;
+    }
+    shape
 }
 
 fn percentile(sorted: &[f64], q: f64) -> f64 {
@@ -753,7 +910,12 @@ async fn run_shape(
             latencies
         }
         Shape::Cadence { window, interval } => {
-            let (latencies, unanswered) = cadence_arm(target, window, interval).await;
+            let (latencies, unanswered) = cadence_arm(target, window, interval, false).await;
+            outcome.unanswered = unanswered;
+            latencies
+        }
+        Shape::CadenceSteady { window, interval } => {
+            let (latencies, unanswered) = cadence_arm(target, window, interval, true).await;
             outcome.unanswered = unanswered;
             latencies
         }
@@ -874,9 +1036,38 @@ async fn round_trip_arm(
 /// A pipelined cadence: writes are paced at `interval` regardless of replies,
 /// so several requests are in flight, and each reply's latency is measured from
 /// its own write. Returns one latency per completed exchange and the number of
-/// requests whose reply never arrived.
-async fn cadence_arm(target: &Target, window: Duration, interval: Duration) -> (Vec<f64>, u64) {
-    let stream = target.connect().await;
+/// requests whose reply never arrived. With `warm`, one whole request/response
+/// round trip is taken on the connection before the window opens, so the reading
+/// is the established path rather than the connection setup.
+async fn cadence_arm(
+    target: &Target,
+    window: Duration,
+    interval: Duration,
+    warm: bool,
+) -> (Vec<f64>, u64) {
+    let mut stream = target.connect().await;
+    if warm {
+        // The echo of `MESSAGE_BYTES` proves the whole path is up. A distinct
+        // payload keeps the warm-up from being confused with a measured
+        // sample; the measured sequence still starts at 0 below.
+        let sent = payload_for(u64::MAX);
+        let mut buf = [0u8; MESSAGE_BYTES];
+        let answered = stream.write_all(&sent).await.is_ok()
+            && matches!(
+                tokio::time::timeout(Duration::from_secs(30), stream.read_exact(&mut buf)).await,
+                Ok(Ok(_))
+            );
+        if !answered {
+            // An unanswered warm-up is an instrument failure: report it as an
+            // unanswered request so the shared guard fails the arm.
+            return (Vec::new(), 1);
+        }
+        assert_eq!(
+            &buf[..],
+            &sent[..],
+            "INSTRUMENT: warm-up payload mismatch before the cadence window"
+        );
+    }
     let (mut reader, mut writer) = tokio::io::split(stream);
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Instant>(65536);
     let send_deadline = Instant::now() + window;
@@ -1082,10 +1273,12 @@ fn fault_from_env() -> Option<Fault> {
 /// deployed chain interposes and the plain direct arm does not — the
 /// application writing into a kernel TCP socket that a relay drains into the
 /// mux stream — so a tail that needs this stage can be told apart from a tail
-/// the proxy protocol or the transport itself causes.
+/// the proxy protocol or the transport itself causes. The relay implementation
+/// is a separate dimension ([`RelayImpl`]).
 async fn spawn_tcp_front(
     connector: Arc<RtpMuxConnector>,
     upstream: SocketAddr,
+    relay_impl: RelayImpl,
 ) -> (SocketAddr, TaskScope) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -1093,18 +1286,18 @@ async fn spawn_tcp_front(
     let accepted = scope.clone();
     scope.spawn(async move {
         loop {
-            let Ok((mut tcp, _)) = listener.accept().await else {
+            let Ok((tcp, _)) = listener.accept().await else {
                 return;
             };
             let connector = Arc::clone(&connector);
             accepted.spawn(async move {
-                let Ok(mut stream) = connector
+                let Ok(stream) = connector
                     .connect_stream_with_lane(upstream, LaneClass::Interactive)
                     .await
                 else {
                     return;
                 };
-                let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
+                relay_leg(tcp, stream, relay_impl).await;
             });
         }
     });
@@ -1122,6 +1315,24 @@ struct PairResult {
     /// handler is a plain byte relay to the TCP echo server — the chain's
     /// server stage without the proxy protocol or the access server.
     relayed: Option<ArmOutcome>,
+    /// The same shape and impairment on the direct transport with **both**
+    /// stages stacked: a TCP front feeding the mux stream and a server-side
+    /// handler byte-relaying that stream to the TCP echo. This is the chain
+    /// minus the proxy protocol's own per-connection handling, and minus the
+    /// relay wrappers the proxy's copy carries — it varies two dimensions from
+    /// the direct baseline at once, so it is a **composite** and attributes
+    /// only as "the stacked-relay shape as a whole, with none of the proxy's
+    /// own code in it".
+    front_relayed: Option<ArmOutcome>,
+    /// The same stacked arm with the proxy's own relay implementation on both
+    /// legs, one wrapper layer per arm: `direct_front_relay_tout` is the
+    /// proxy's `TimeoutStreamShared` plus its `copy_bidirectional` fork,
+    /// `direct_front_relay_timed` adds the `async_speed_limit::Limiter`. Each
+    /// varies exactly one dimension from `front_relayed` (the clean control at
+    /// the same topology, impairment, cadence and matched RTT): the relay
+    /// implementation.
+    front_relay_tout: Option<ArmOutcome>,
+    front_relay_timed: Option<ArmOutcome>,
     applied_correction: Duration,
     /// The regime's calibration base RTTs (from the round-trip arm), which are
     /// what the matched-RTT check is about. A pipelined arm's own minimum is
@@ -1129,6 +1340,23 @@ struct PairResult {
     /// claim the two links are matched.
     matched_base_proxy_ms: f64,
     matched_base_direct_ms: f64,
+}
+
+/// Which extra direct-transport controls an arm pair runs. One field per
+/// stage or implementation under attribution, so a result attributes to the
+/// control it names rather than to a bundled set.
+#[derive(Clone, Copy, Debug, Default)]
+struct Controls {
+    /// The client-side kernel-TCP front alone.
+    front: bool,
+    /// The server-side byte relay alone.
+    relay: bool,
+    /// Both stages stacked: the chain minus the proxy protocol, its stream
+    /// wrappers and its chain plumbing.
+    front_relay: bool,
+    /// The stacked topology under the proxy's own relay implementation, one
+    /// wrapper layer per arm.
+    relay_stack: bool,
 }
 
 /// Run a shape on both topologies in a regime, with the direct arm's one-way
@@ -1141,8 +1369,7 @@ async fn run_pair(
     calibration: Duration,
     echo: SocketAddr,
     fault: Option<Fault>,
-    with_front: bool,
-    with_relay: bool,
+    controls: Controls,
 ) -> PairResult {
     let chain = start_chain(
         &format!("pair-{}", regime.name),
@@ -1176,9 +1403,13 @@ async fn run_pair(
         fault,
     )
     .await;
-    let fronted = if with_front {
-        let (front_addr, front_scope) =
-            spawn_tcp_front(Arc::clone(&direct_handle.connector), direct_handle.addr).await;
+    let fronted = if controls.front {
+        let (front_addr, front_scope) = spawn_tcp_front(
+            Arc::clone(&direct_handle.connector),
+            direct_handle.addr,
+            RelayImpl::Tokio,
+        )
+        .await;
         let outcome = run_shape(
             "direct_tcp_front",
             regime,
@@ -1193,8 +1424,10 @@ async fn run_pair(
     } else {
         None
     };
-    let relayed = if with_relay {
-        direct_handle.relay_mode.store(true, Ordering::Relaxed);
+    let relayed = if controls.relay {
+        direct_handle
+            .relay_mode
+            .store(RELAY_TOKIO, Ordering::Relaxed);
         Some(
             run_shape(
                 "direct_relay",
@@ -1209,6 +1442,67 @@ async fn run_pair(
     } else {
         None
     };
+    // The composite: the TCP front of `fronted` feeding the byte-relaying
+    // server of `relayed`. Both stages are the test's own plain tokio copies,
+    // so a delta here cannot be the proxy protocol, the proxy's stream
+    // wrappers, the access server's chain plumbing or its connection pool.
+    let front_relayed = if controls.front_relay {
+        direct_handle
+            .relay_mode
+            .store(RELAY_TOKIO, Ordering::Relaxed);
+        let (front_addr, front_scope) = spawn_tcp_front(
+            Arc::clone(&direct_handle.connector),
+            direct_handle.addr,
+            RelayImpl::Tokio,
+        )
+        .await;
+        let outcome = run_shape(
+            "direct_front_relay",
+            regime,
+            &Target::Access(front_addr),
+            shape,
+            &direct_handle.hop,
+            fault,
+        )
+        .await;
+        front_scope.reap_ready();
+        Some(outcome)
+    } else {
+        None
+    };
+    // The relay-stack arms: the same stacked topology as `front_relayed`, with
+    // the proxy's own relay implementation in place of the harness's plain
+    // copy. `front_relayed` above is the control they are read against.
+    let front_relay_tout = if controls.relay_stack {
+        Some(
+            run_relay_stack_arm(
+                &direct_handle,
+                regime,
+                shape,
+                fault,
+                RelayImpl::ProxyTimeout,
+                RELAY_PROXY_TIMEOUT,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+    let front_relay_timed = if controls.relay_stack {
+        Some(
+            run_relay_stack_arm(
+                &direct_handle,
+                regime,
+                shape,
+                fault,
+                RelayImpl::ProxyTimed,
+                RELAY_PROXY_TIMED,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
     direct_handle.scope.reap_ready();
     direct_handle.shutdown();
 
@@ -1217,10 +1511,48 @@ async fn run_pair(
         direct,
         fronted,
         relayed,
+        front_relayed,
+        front_relay_tout,
+        front_relay_timed,
         applied_correction: calibration,
         matched_base_proxy_ms: 0.0,
         matched_base_direct_ms: 0.0,
     }
+}
+
+/// Run one relay-stack arm: the stacked front-plus-relay topology with the
+/// proxy's relay implementation on both legs.
+async fn run_relay_stack_arm(
+    direct_handle: &DirectHandle,
+    regime: &Regime,
+    shape: Shape,
+    fault: Option<Fault>,
+    relay_impl: RelayImpl,
+    mode: u8,
+) -> ArmOutcome {
+    let topology = match relay_impl {
+        RelayImpl::ProxyTimeout => "direct_front_relay_tout",
+        RelayImpl::ProxyTimed => "direct_front_relay_timed",
+        RelayImpl::Tokio => "direct_front_relay",
+    };
+    direct_handle.relay_mode.store(mode, Ordering::Relaxed);
+    let (front_addr, front_scope) = spawn_tcp_front(
+        Arc::clone(&direct_handle.connector),
+        direct_handle.addr,
+        relay_impl,
+    )
+    .await;
+    let outcome = run_shape(
+        topology,
+        regime,
+        &Target::Access(front_addr),
+        shape,
+        &direct_handle.hop,
+        fault,
+    )
+    .await;
+    front_scope.reap_ready();
+    outcome
 }
 
 /// Measure the chain's and the direct transport's achieved base RTT, and return
@@ -1232,7 +1564,15 @@ async fn calibrate(regime: &Regime, echo: SocketAddr) -> (Duration, PairResult) 
     let shape = Shape::RoundTrip {
         window: Duration::from_secs(4),
     };
-    let first = run_pair(regime, shape, Duration::ZERO, echo, None, false, false).await;
+    let first = run_pair(
+        regime,
+        shape,
+        Duration::ZERO,
+        echo,
+        None,
+        Controls::default(),
+    )
+    .await;
     let correction_ms =
         ((first.proxy.base_rtt_ms - first.direct.base_rtt_ms) / 2.0).clamp(-150.0, 150.0);
     let correction = if correction_ms.abs() < 1.0 {
@@ -1243,7 +1583,7 @@ async fn calibrate(regime: &Regime, echo: SocketAddr) -> (Duration, PairResult) 
     if correction.is_zero() {
         (correction, first)
     } else {
-        let second = run_pair(regime, shape, correction, echo, None, false, false).await;
+        let second = run_pair(regime, shape, correction, echo, None, Controls::default()).await;
         (correction, second)
     }
 }
@@ -1267,11 +1607,15 @@ fn record_json(results: &[PairResult]) -> serde_json::Value {
                 Some(&pair.direct),
                 pair.fronted.as_ref(),
                 pair.relayed.as_ref(),
+                pair.front_relayed.as_ref(),
+                pair.front_relay_tout.as_ref(),
+                pair.front_relay_timed.as_ref(),
             ]
             .into_iter()
             .flatten()
         })
         .map(|arm| {
+            let slow = slow_shape(&arm.latencies_ms);
             json!({
                 "topology": arm.topology,
                 "regime": arm.regime,
@@ -1287,6 +1631,12 @@ fn record_json(results: &[PairResult]) -> serde_json::Value {
                 "p999_ms": arm.percentile(0.999),
                 "max_ms": arm.percentile(1.0),
                 "over_250ms": arm.over_ceiling(),
+                "slow_first_index": slow.first,
+                "slow_last_index": slow.last,
+                "slow_episodes": slow.episodes,
+                "slow_max_run": slow.max_run,
+                "p75_ms": arm.percentile(0.75),
+                "p95_ms": arm.percentile(0.95),
                 "offered_bytes": arm.offered_bytes,
                 "delivered_bytes": arm.delivered_bytes,
                 "wire_segment": "rtpmux lanes, client->server",
@@ -1353,6 +1703,36 @@ fn record_json(results: &[PairResult]) -> serde_json::Value {
                     .relayed
                     .as_ref()
                     .map(|r| pair.proxy.percentile(0.99) - r.percentile(0.99)),
+                "front_relayed_p99_ms": pair.front_relayed.as_ref().map(|f| f.percentile(0.99)),
+                "front_relayed_over_250ms": pair.front_relayed.as_ref().map(|f| f.over_ceiling()),
+                "front_relayed_minus_direct_p99_ms": pair
+                    .front_relayed
+                    .as_ref()
+                    .map(|f| f.percentile(0.99) - pair.direct.percentile(0.99)),
+                "front_relay_timed_over_250ms": pair
+                    .front_relay_timed
+                    .as_ref()
+                    .map(|f| f.over_ceiling()),
+                "front_relay_tout_p99_ms": pair
+                    .front_relay_tout
+                    .as_ref()
+                    .map(|f| f.percentile(0.99)),
+                "front_relay_tout_over_250ms": pair
+                    .front_relay_tout
+                    .as_ref()
+                    .map(|f| f.over_ceiling()),
+                "front_relay_timed_p99_ms": pair
+                    .front_relay_timed
+                    .as_ref()
+                    .map(|f| f.percentile(0.99)),
+                "proxy_minus_front_relay_tout_p99_ms": pair
+                    .front_relay_tout
+                    .as_ref()
+                    .map(|f| pair.proxy.percentile(0.99) - f.percentile(0.99)),
+                "proxy_minus_front_relay_timed_p99_ms": pair
+                    .front_relay_timed
+                    .as_ref()
+                    .map(|f| pair.proxy.percentile(0.99) - f.percentile(0.99)),
             })
         })
         .collect();
@@ -1396,6 +1776,9 @@ fn print_table(results: &[PairResult]) {
             Some(&pair.direct),
             pair.fronted.as_ref(),
             pair.relayed.as_ref(),
+            pair.front_relayed.as_ref(),
+            pair.front_relay_tout.as_ref(),
+            pair.front_relay_timed.as_ref(),
         ]
         .into_iter()
         .flatten()
@@ -1425,6 +1808,19 @@ fn print_table(results: &[PairResult]) {
                 multiple,
                 arm.netem_dropped,
             );
+            let slow = slow_shape(&arm.latencies_ms);
+            if slow.count > 0 {
+                println!(
+                    "  slow {}: n={} first_idx={} last_idx={} episodes={} max_run={} \
+                     (250 ms ceiling, emission order)",
+                    arm.label(),
+                    slow.count,
+                    slow.first.unwrap_or(0),
+                    slow.last.unwrap_or(0),
+                    slow.episodes,
+                    slow.max_run,
+                );
+            }
         }
         if let Some(goodput) = pair.proxy.goodput_mib_s {
             let direct = pair.direct.goodput_mib_s.unwrap_or(f64::NAN);
@@ -1440,7 +1836,7 @@ fn print_table(results: &[PairResult]) {
     }
     println!("\n=== matched-RTT delta: proxy - direct (ms) ===");
     println!(
-        "{:<10} {:<8} {:>9} {:>9} {:>8} {:>9} {:>9} {:>9} {:>9} {:>9}",
+        "{:<10} {:<8} {:>9} {:>9} {:>8} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9}",
         "regime",
         "shape",
         "cal_P",
@@ -1450,7 +1846,8 @@ fn print_table(results: &[PairResult]) {
         "d_p99",
         "d_p99.9",
         "p99vfront",
-        "p99vrelay"
+        "p99vrelay",
+        "p99vfr"
     );
     for pair in results {
         let fronted = match &pair.fronted {
@@ -1471,8 +1868,17 @@ fn print_table(results: &[PairResult]) {
             }
             None => "        -".to_string(),
         };
+        let front_relayed = match &pair.front_relayed {
+            Some(front_relayed) => {
+                format!(
+                    "{:>9.1}",
+                    pair.proxy.percentile(0.99) - front_relayed.percentile(0.99)
+                )
+            }
+            None => "        -".to_string(),
+        };
         println!(
-            "{:<10} {:<8} {:>9.1} {:>9.1} {:>8} {:>9.1} {:>9.1} {:>9.1} {:>9} {:>9}",
+            "{:<10} {:<8} {:>9.1} {:>9.1} {:>8} {:>9.1} {:>9.1} {:>9.1} {:>9} {:>9} {:>9}",
             pair.proxy.regime,
             pair.proxy.shape,
             pair.matched_base_proxy_ms,
@@ -1483,9 +1889,43 @@ fn print_table(results: &[PairResult]) {
             pair.proxy.percentile(0.999) - pair.direct.percentile(0.999),
             fronted,
             relayed,
+            front_relayed,
         );
     }
+    print_relay_stack(results);
     println!();
+}
+
+/// The relay-stack arms side by side: the chain, the clean stacked control, and
+/// the same stack under the proxy's own relay implementation one wrapper layer
+/// at a time. This is the table that attributes a delta to the relay, so it
+/// prints the control's own row from the same run rather than a remembered
+/// number.
+fn print_relay_stack(results: &[PairResult]) {
+    println!("\n=== relay-stack arms: p99 ms (over-250 ms count) ===");
+    println!(
+        "{:<10} {:<8} {:>18} {:>16} {:>16} {:>18} {:>18}",
+        "regime", "shape", "proxy_chain", "direct", "fr/tokio", "fr/proxy_tout", "fr/proxy_timed"
+    );
+    let cell = |arm: Option<&ArmOutcome>| match arm {
+        Some(arm) => format!("{:.1} ({})", arm.percentile(0.99), arm.over_ceiling()),
+        None => "-".to_string(),
+    };
+    for pair in results {
+        if pair.front_relay_tout.is_none() && pair.front_relay_timed.is_none() {
+            continue;
+        }
+        println!(
+            "{:<10} {:<8} {:>18} {:>16} {:>16} {:>18} {:>18}",
+            pair.proxy.regime,
+            pair.proxy.shape,
+            cell(Some(&pair.proxy)),
+            cell(Some(&pair.direct)),
+            cell(pair.front_relayed.as_ref()),
+            cell(pair.front_relay_tout.as_ref()),
+            cell(pair.front_relay_timed.as_ref()),
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1530,7 +1970,7 @@ async fn proxy_path_matched_rtt_delta() {
             results.push(cal_pair);
         }
 
-        for shape in [
+        let mut shapes = vec![
             Shape::RoundTrip {
                 window: interactive_window,
             },
@@ -1538,20 +1978,38 @@ async fn proxy_path_matched_rtt_delta() {
                 window: interactive_window,
                 interval: Duration::from_millis(5),
             },
-        ] {
+        ];
+        // The steady-state reading of the same cadence, at the two 25 ms-OWD
+        // scales: one warm round trip first, so the reading is the established
+        // path. The direct arms' `connect()` already establishes the mux
+        // stream, so without this the two topologies' windows start at
+        // different points in their connection lifecycle.
+        if fault.is_none() && regime.name != "field100" {
+            shapes.push(Shape::CadenceSteady {
+                window: interactive_window,
+                interval: Duration::from_millis(5),
+            });
+        }
+        for shape in shapes {
             if fault.is_none() && matches!(shape, Shape::RoundTrip { .. }) {
                 continue;
             }
-            // The two control arms run only on the pipelined cadence at the
+            // The control arms run only on the plain pipelined cadence at the
             // two 25 ms-OWD scales — the shape and the scale the main
             // comparison finds a delta at — so the attribution costs one run
-            // per control rather than one per arm of the matrix.
-            let with_front = fault.is_none() && matches!(shape, Shape::Cadence { .. });
-            let with_relay = with_front && regime.name != "field100";
-            let pair = run_pair(
-                regime, shape, correction, echo, fault, with_front, with_relay,
-            )
-            .await;
+            // per control rather than one per arm of the matrix. The steady
+            // arm carries the same already-established path in both
+            // topologies, so it needs no control: its proxy-minus-direct delta
+            // is the steady-state comparison by construction.
+            let cadence = fault.is_none() && matches!(shape, Shape::Cadence { .. });
+            let not_field_scale = regime.name != "field100";
+            let controls = Controls {
+                front: cadence,
+                relay: cadence && not_field_scale,
+                front_relay: cadence,
+                relay_stack: cadence && not_field_scale,
+            };
+            let pair = run_pair(regime, shape, correction, echo, fault, controls).await;
             pair.proxy.assert_sane();
             pair.direct.assert_sane();
             if let Some(fronted) = &pair.fronted {
@@ -1559,6 +2017,15 @@ async fn proxy_path_matched_rtt_delta() {
             }
             if let Some(relayed) = &pair.relayed {
                 relayed.assert_sane();
+            }
+            if let Some(front_relayed) = &pair.front_relayed {
+                front_relayed.assert_sane();
+            }
+            if let Some(front_relay_tout) = &pair.front_relay_tout {
+                front_relay_tout.assert_sane();
+            }
+            if let Some(front_relay_timed) = &pair.front_relay_timed {
+                front_relay_timed.assert_sane();
             }
             // The matched-RTT claim belongs to the regime's calibration, not to
             // this shape's own minimum: a queued pipelined arm has no clean
@@ -1582,8 +2049,7 @@ async fn proxy_path_matched_rtt_delta() {
                 correction,
                 echo,
                 None,
-                false,
-                false,
+                Controls::default(),
             )
             .await;
             pair.proxy.assert_sane();
@@ -1615,8 +2081,7 @@ async fn proxy_path_matched_rtt_delta() {
             Duration::ZERO,
             echo,
             None,
-            false,
-            false,
+            Controls::default(),
         )
         .await;
         pair.proxy.assert_sane();
