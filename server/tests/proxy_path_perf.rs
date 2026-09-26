@@ -6,14 +6,16 @@
 //! derivations live in `rtp_mux/GATE.md` §Performance and are never restated
 //! here. What this scenario asserts is only its own instrument sanity
 //! (something was measured, nothing was left unanswered, every echo matched,
-//! the two topologies' base RTTs really are matched, the emulated capacity is
-//! really achievable on the direct arm) and its own echo/delivery integrity.
+//! every arm dialed, the topologies' base RTTs really are matched — including
+//! the protocol-only arm's against its regime's calibration — and the emulated
+//! capacity is really achievable on the direct arm) and its own echo/delivery
+//! integrity.
 //! The mandate metrics are **reported**, and any tail this scenario finds is a
 //! finding *for `rtp_mux`*, reported as a target with evidence.
 //!
 //! # What it drives
 //!
-//! Two topologies, the same impaired hop, the same load shape:
+//! Three topologies, the same impaired hop, the same load shape:
 //!
 //! - **proxy chain** — the real `proxy` binary, run from a real config file
 //!   (`access_server.tcp_server` -> `stream.upstream` hop `rtpmux://…` ->
@@ -23,8 +25,13 @@
 //! - **direct transport** — an `rtp_mux` connection with no proxy in the path,
 //!   built from the same public `rtp_mux` server/connector the chain's hop uses,
 //!   with the same echo shape.
+//! - **direct protocol** — the same binary, run from a config that declares
+//!   only `proxy_server` listeners, entered by the harness writing the proxy
+//!   protocol itself (flow-kind byte, upgrade preamble, relay header). It is
+//!   the chain minus its access-server ingress, so a charge it carries is not
+//!   the ingress stage's.
 //!
-//! Both topologies' `rtp_mux` hop is impaired by the same seeded
+//! All topologies' `rtp_mux` hop is impaired by the same seeded
 //! `netem_test` instrument, applied to the hop's *two* lanes (interactive and
 //! its adjacent bulk port) through one `NetemPair` each.
 //!
@@ -49,6 +56,20 @@
 //! path whose connection setup is charged to the first messages of the window —
 //! the direct arms establish their mux stream inside `connect()`, the chain
 //! arm's `connect()` is a TCP accept at the access server.
+//!
+//! # The cold-connection reading
+//!
+//! That asymmetry is what the establishment charge is measured with. Each arm
+//! records what its `connect()` did — the `rtp_mux` lane pairing and the proxy
+//! protocol where the topology performs them itself, and whether the dial
+//! found a live session instead of pairing one — and `connect_ms + first echo`
+//! is then the same clock on every topology: the client's first act of
+//! connecting to its first echo. `direct_proto` and `direct_transport` show
+//! the parts on this side of the process boundary; the chain's parts run inside
+//! the binary and appear in its first sample instead. A dedicated table prints
+//! connect / lane pairing / protocol / first echo / total per regime, and every
+//! arm asserts it dialed at least once, so an arm whose establishment reading
+//! was lost cannot pass silently.
 //!
 //! # Matched RTT
 //!
@@ -82,9 +103,10 @@
 //!
 //! Fault injection for the vacuity demonstration:
 //! `PROXY_PATH_PERF_FAULT=zero_samples` empties one arm's samples,
-//! `PROXY_PATH_PERF_FAULT=unanswered` drops responses, and
+//! `PROXY_PATH_PERF_FAULT=unanswered` drops responses,
 //! `PROXY_PATH_PERF_FAULT=warm_unanswered` leaves the steady arm's warm-up round
-//! trip unanswered; each must fail the shared instrument-sanity guard.
+//! trip unanswered, and `PROXY_PATH_PERF_FAULT=undialed` discards the arm's dial
+//! record after it ran; each must fail the shared instrument-sanity guard.
 
 use std::{
     future::Future,
@@ -738,9 +760,8 @@ async fn start_proto_server(
     let scope = TaskScope::new();
     let bind: rtp_mux::BindSelector = Arc::new(|_addr: SocketAddr| localhost(0));
     let (connector, driver) = RtpMuxConnector::with_config(
-        RtpMuxConnectorConfig::standard(bind).with_obfuscation_key(Some(ObfuscationKey::from_bytes(
-            *proto.header_crypto.key(),
-        ))),
+        RtpMuxConnectorConfig::standard(bind)
+            .with_obfuscation_key(Some(ObfuscationKey::from_bytes(*proto.header_crypto.key()))),
     );
     let connector = Arc::new(connector);
     scope.spawn(driver);
@@ -1364,7 +1385,14 @@ async fn run_shape(
     if !outcome.base_rtt_ms.is_finite() {
         outcome.base_rtt_ms = 0.0;
     }
-    outcome.record_dials(&target.take_dials());
+    let mut dials = target.take_dials();
+    if fault == Some(Fault::Undialed) {
+        // The instrument's own failure mode for the establishment reading: the
+        // arm ran and measured, but its dial record is gone, so it has no
+        // cold-connection reading to report.
+        dials.clear();
+    }
+    outcome.record_dials(&dials);
     outcome
 }
 
@@ -1652,6 +1680,11 @@ enum Fault {
     /// rejects the arm (the zero-sample assertion fires first, because a warm-up
     /// that never completed produced no sample to report).
     WarmUnanswered,
+    /// The arm's dial record is discarded after it ran, so an arm that measured
+    /// samples reports no cold-connection reading at all. The establishment
+    /// reading is what this scenario adds, so losing it must fail the arm rather
+    /// than leave a table with a silent hole in it.
+    Undialed,
 }
 
 fn fault_from_env() -> Option<Fault> {
@@ -1659,6 +1692,7 @@ fn fault_from_env() -> Option<Fault> {
         Some("zero_samples") => Some(Fault::ZeroSamples),
         Some("unanswered") => Some(Fault::Unanswered),
         Some("warm_unanswered") => Some(Fault::WarmUnanswered),
+        Some("undialed") => Some(Fault::Undialed),
         _ => None,
     }
 }
@@ -1785,10 +1819,7 @@ async fn run_pair(
     chain.shutdown().await;
 
     let direct_handle = start_direct(regime, calibration, echo).await;
-    let direct_target = Target::direct(
-        Arc::clone(&direct_handle.connector),
-        direct_handle.addr,
-    );
+    let direct_target = Target::direct(Arc::clone(&direct_handle.connector), direct_handle.addr);
     let direct = run_shape(
         "direct_transport",
         regime,
@@ -2272,7 +2303,15 @@ fn print_cold_table(results: &[PairResult], proto_arms: &[ArmOutcome]) {
     println!("\n=== cold connection: connect() + first echo, request/response shape (ms) ===");
     println!(
         "{:<10} {:<17} {:>9} {:>10} {:>9} {:>8} {:>11} {:>7} {:>9}",
-        "regime", "topology", "connect", "mux_dial", "protocol", "first", "cold_total", "reused", "dials"
+        "regime",
+        "topology",
+        "connect",
+        "mux_dial",
+        "protocol",
+        "first",
+        "cold_total",
+        "reused",
+        "dials"
     );
     let cell = |arm: &ArmOutcome| {
         let ms = |v: Option<f64>| match v {
@@ -2288,7 +2327,11 @@ fn print_cold_table(results: &[PairResult], proto_arms: &[ArmOutcome]) {
             ms(arm.protocol_ms),
             ms(arm.first_ms),
             ms(arm.cold_total_ms),
-            if arm.mux_session_reused { "reused" } else { "no" },
+            if arm.mux_session_reused {
+                "reused"
+            } else {
+                "no"
+            },
             arm.dials,
         );
     };
