@@ -187,15 +187,19 @@ the unwarmed arms in the same run. So the delta the unwarmed arms report is the
 chain's **connection establishment**, charged to the first messages of a window
 that was opened before the chain was up.
 
-**Vacuity.** `PROXY_PATH_PERF_FAULT=zero_samples` empties an arm and
-`PROXY_PATH_PERF_FAULT=unanswered` issues a request that is never answered;
-both must fail the shared guard that every arm — including both control arms —
-goes through. Demonstrated on the committed revision: exit 101 with `INSTRUMENT:
-arm proxy_chain/rr measured zero samples` and `INSTRUMENT: arm proxy_chain/rr
-left 1 request(s) unanswered`. The guard that `unanswered` exercises is real in
-healthy runs too: it is what caught the cadence arm's own write-half teardown
-truncating in-flight echoes, which is now fixed by holding the write half open
-across the drain.
+**Vacuity.** `PROXY_PATH_PERF_FAULT=zero_samples` empties an arm,
+`PROXY_PATH_PERF_FAULT=unanswered` issues a request that is never answered, and
+`PROXY_PATH_PERF_FAULT=warm_unanswered` leaves the warm arm's pre-window round
+trip unanswered — the steady arm's own instrument path, rather than its load
+shape. All three must fail the shared guard that every arm — the two topologies,
+the control arms and the warm arm — goes through. Demonstrated on the committed
+revision: exit 101 with `INSTRUMENT: arm proxy_chain/rr measured zero samples`,
+`INSTRUMENT: arm proxy_chain/rr left 1 request(s) unanswered`, and `INSTRUMENT:
+arm proxy_chain/cadence_steady measured zero samples` (a warm-up that never
+completed produced no sample, so the zero-sample assertion is the one that
+fires). The guard that `unanswered` exercises is real in healthy runs too: it is
+what caught the cadence arm's own write-half teardown truncating in-flight
+echoes, which is now fixed by holding the write half open across the drain.
 
 ## Residual limitations
 

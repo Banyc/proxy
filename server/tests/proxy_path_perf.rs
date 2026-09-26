@@ -81,9 +81,10 @@
 //! and coverage are declared in `GATE.md`.
 //!
 //! Fault injection for the vacuity demonstration:
-//! `PROXY_PATH_PERF_FAULT=zero_samples` empties one arm's samples and
-//! `PROXY_PATH_PERF_FAULT=unanswered` drops responses; both must fail the
-//! shared instrument-sanity guard.
+//! `PROXY_PATH_PERF_FAULT=zero_samples` empties one arm's samples,
+//! `PROXY_PATH_PERF_FAULT=unanswered` drops responses, and
+//! `PROXY_PATH_PERF_FAULT=warm_unanswered` leaves the steady arm's warm-up round
+//! trip unanswered; each must fail the shared instrument-sanity guard.
 
 use std::{
     future::Future,
@@ -910,12 +911,12 @@ async fn run_shape(
             latencies
         }
         Shape::Cadence { window, interval } => {
-            let (latencies, unanswered) = cadence_arm(target, window, interval, false).await;
+            let (latencies, unanswered) = cadence_arm(target, window, interval, false, None).await;
             outcome.unanswered = unanswered;
             latencies
         }
         Shape::CadenceSteady { window, interval } => {
-            let (latencies, unanswered) = cadence_arm(target, window, interval, true).await;
+            let (latencies, unanswered) = cadence_arm(target, window, interval, true, fault).await;
             outcome.unanswered = unanswered;
             latencies
         }
@@ -1044,6 +1045,7 @@ async fn cadence_arm(
     window: Duration,
     interval: Duration,
     warm: bool,
+    fault: Option<Fault>,
 ) -> (Vec<f64>, u64) {
     let mut stream = target.connect().await;
     if warm {
@@ -1052,11 +1054,16 @@ async fn cadence_arm(
         // sample; the measured sequence still starts at 0 below.
         let sent = payload_for(u64::MAX);
         let mut buf = [0u8; MESSAGE_BYTES];
-        let answered = stream.write_all(&sent).await.is_ok()
-            && matches!(
-                tokio::time::timeout(Duration::from_secs(30), stream.read_exact(&mut buf)).await,
-                Ok(Ok(_))
-            );
+        let answered = if fault == Some(Fault::WarmUnanswered) {
+            false
+        } else {
+            stream.write_all(&sent).await.is_ok()
+                && matches!(
+                    tokio::time::timeout(Duration::from_secs(30), stream.read_exact(&mut buf))
+                        .await,
+                    Ok(Ok(_))
+                )
+        };
         if !answered {
             // An unanswered warm-up is an instrument failure: report it as an
             // unanswered request so the shared guard fails the arm.
@@ -1258,12 +1265,19 @@ enum Fault {
     ZeroSamples,
     /// A request is never answered.
     Unanswered,
+    /// The warm-up round trip taken before the window opens is never answered,
+    /// so the steady arm's own instrument path — not the load shape — is what
+    /// fails. The warm-up reports one unanswered request, and the shared guard
+    /// rejects the arm (the zero-sample assertion fires first, because a warm-up
+    /// that never completed produced no sample to report).
+    WarmUnanswered,
 }
 
 fn fault_from_env() -> Option<Fault> {
     match std::env::var("PROXY_PATH_PERF_FAULT").ok().as_deref() {
         Some("zero_samples") => Some(Fault::ZeroSamples),
         Some("unanswered") => Some(Fault::Unanswered),
+        Some("warm_unanswered") => Some(Fault::WarmUnanswered),
         _ => None,
     }
 }
@@ -1984,7 +1998,7 @@ async fn proxy_path_matched_rtt_delta() {
         // path. The direct arms' `connect()` already establishes the mux
         // stream, so without this the two topologies' windows start at
         // different points in their connection lifecycle.
-        if fault.is_none() && regime.name != "field100" {
+        if (fault.is_none() || fault == Some(Fault::WarmUnanswered)) && regime.name != "field100" {
             shapes.push(Shape::CadenceSteady {
                 window: interactive_window,
                 interval: Duration::from_millis(5),
