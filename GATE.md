@@ -332,6 +332,19 @@ and takes traffic immediately therefore pays the full charge for its first flow
 (or its first second), and the mitigation's value is realized only after that.
 The remaining empty cells name what is not attributed here.
 
+**Deployment decision (nightly): the pool stays empty.** The deployed access
+config ships `[stream] pool = []`, and this section's benefit does not apply to
+the traffic that deployment serves. The charge measured here is per **cold
+connection**, and a cold connection is created per *client connection* to the
+access server — so for a client that multiplexes its traffic over one
+long-lived mux session it is paid **once per session**, not once per request.
+Pre-pairing would save one establishment per session lifetime, in exchange for
+a resident population of warm connections on both relays (see the readiness
+gauge above), and steady state is unchanged either way. Revisit if the client
+shape changes to many short-lived connections — one per request or per page
+load — which is the pattern these arms model and the regime where the
+0.13–0.16× applies.
+
 **Run-to-run stability.** Both full runs are green on this revision's healthy
 path and are the two columns of the cold table. The lane pairing reproduces
 within 12 %; the chain's own unwarmed first sample does not (`clean25` 447 then
