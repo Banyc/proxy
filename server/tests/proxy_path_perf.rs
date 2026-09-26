@@ -71,6 +71,25 @@
 //! arm asserts it dialed at least once, so an arm whose establishment reading
 //! was lost cannot pass silently.
 //!
+//! # The stream-pool arm
+//!
+//! The cold-connection charge is what a deployment can try to move off the
+//! request path with `[stream.pool]`, whose entries connect in the background
+//! at start-up. Measuring that needs two things this scenario otherwise does
+//! not have: a way to observe from *outside* the process whether the pool is
+//! warm (it exports `stream.pool.ready{key}` on the monitor listener —
+//! established-and-unpulled connections per key, the only signal that
+//! distinguishes a banked pool from a cold one without consuming the entry
+//! being asked about), and a settle, because a pool that reports ready is not
+//! yet a pool whose session is usable: measured on this revision, an arm whose
+//! window opens the instant readiness is observed pays the whole charge again.
+//! So three arms run per replication — the unpooled control, the pooled chain
+//! with the window opened at readiness, and the pooled chain with a 3 s settle
+//! after readiness — and the settle between the last two is the arm's one
+//! varied dimension, with the pool between the control and the others the only
+//! other difference. All three record the same [`Dial`] reading as every other
+//! arm.
+//!
 //! # Matched RTT
 //!
 //! The chain's extra hops are loopback TCP, but "loopback is negligible" is an
@@ -105,8 +124,16 @@
 //! `PROXY_PATH_PERF_FAULT=zero_samples` empties one arm's samples,
 //! `PROXY_PATH_PERF_FAULT=unanswered` drops responses,
 //! `PROXY_PATH_PERF_FAULT=warm_unanswered` leaves the steady arm's warm-up round
-//! trip unanswered, and `PROXY_PATH_PERF_FAULT=undialed` discards the arm's dial
-//! record after it ran; each must fail the shared instrument-sanity guard.
+//! trip unanswered, `PROXY_PATH_PERF_FAULT=undialed` discards the arm's dial
+//! record after it ran, and `PROXY_PATH_PERF_FAULT=pool_unwarmed` runs the
+//! stream-pool arm against a config with no pool, so its readiness barrier must
+//! fail; each must fail the guard its own path shares with the healthy runs.
+
+// The per-arm JSON record is built with `serde_json::json!`, whose macro
+// recursion is one level per object entry; the record is deliberately one flat
+// object per arm (see `arm_json`), so the limit has to fit the number of
+// reported metrics rather than be met by splitting the record.
+#![recursion_limit = "256"]
 
 use std::{
     future::Future,
@@ -163,6 +190,50 @@ const BULK_WINDOW: Duration = Duration::from_secs(5);
 /// rate shaper to be a usable denominator. This is an assertion about the
 /// *instrument* (the emulated capacity is achievable), not about the product.
 const DIRECT_BULK_SATURATION: f64 = 0.5;
+
+/// The stream-pool arm: the number of **established and unpulled** pool
+/// connections that must be observed from *outside the process* before the
+/// arm's measured window opens.
+///
+/// `1` is the weakest claim that still separates a warm pool from a cold one:
+/// the pool banks `tokio_conn_pool`'s whole queue (16 entries) at start-up, so
+/// anything that is warm at all reports more than this, and an unwarmed pool
+/// reports nothing at all.
+const POOL_READY_MIN: f64 = 1.0;
+/// How long the arm will wait for that count. Generous rather than tight: a
+/// pooled entry whose first dial races the listener bind of the same commit
+/// waits out `tokio_conn_pool`'s 30 s retry interval before it succeeds, and
+/// the arm reports that wait rather than hiding it.
+const POOL_READY_DEADLINE: Duration = Duration::from_secs(120);
+/// The same wait under fault injection, where the pool is *expected* never to
+/// report readiness and the arm is only demonstrating that the barrier can
+/// fail. Shrunk for the same reason the fault runs shrink their window.
+const POOL_READY_DEADLINE_FAULT: Duration = Duration::from_secs(10);
+/// How many paired replications the pool arm runs at each scale. The quantity
+/// it measures is a single first-echo sample per run, which varies by hundreds
+/// of milliseconds run to run (see GATE.md on the chain's unwarmed first
+/// sample), so one replication could not tell a mitigation from host noise.
+/// Every replication is reported; nothing is averaged into invisibility.
+const POOL_REPLICATIONS: usize = 3;
+/// How long the pooled arm lets a freshly born mux session settle after the
+/// pool reports its queue ready, before its measured window opens.
+///
+/// This is not decoration: readiness as the pool can report it (established
+/// and unpulled) is **not** usability. Measured on this revision, an arm whose
+/// window opens the moment readiness is observed pays the whole cold charge
+/// again (369 ms at 25 ms OWD, 579 ms at 100 ms), while the same arm with one
+/// second of settle pays 65 ms and 205 ms — the probe's own settle curve was
+/// 0/1/3 s = 369/65/61 ms at 25 ms OWD and 579/205/212 ms at 100 ms OWD. Three
+/// seconds is that curve with margin at both scales.
+const POOL_SETTLE: Duration = Duration::from_secs(3);
+/// How often the monitor endpoint is polled while waiting for readiness. The
+/// wait is dominated by the pool's own dial, not by this interval.
+const POOL_READY_POLL: Duration = Duration::from_millis(50);
+/// The Prometheus gauge `common`'s stream pool exports for each configured pool
+/// key: established-and-unpulled connections, i.e. how much of the key's
+/// pre-pairing is banked right now. See `POOL_READY_GAUGE` in
+/// `common/src/stream_runtime/pool.rs`.
+const POOL_READY_METRIC: &str = "stream_pool_ready";
 
 // ───────────────────────────── port allocation ────────────────────────────
 
@@ -412,16 +483,23 @@ struct ChainHandle {
     dir: PathBuf,
 }
 
-fn write_chain_config(
-    dir: &Path,
+/// The chain config's body. `pool_key` prepends the `[stream.pool]` section
+/// that makes the named `[stream.upstream]` key be **pre-paired** in the
+/// background at start-up; `None` is byte-identical to the config every
+/// existing chain arm has always run.
+fn chain_config_text(
     hop_addr: SocketAddr,
     proxy_addr: SocketAddr,
     access_port: u16,
     echo: SocketAddr,
-) -> PathBuf {
-    std::fs::create_dir_all(dir).unwrap();
-    let config = format!(
-        r#"[stream.upstream]
+    pool_key: Option<&str>,
+) -> String {
+    let pool = match pool_key {
+        Some(key) => format!("[stream]\npool = [\"{key}\"]\n\n"),
+        None => String::new(),
+    };
+    format!(
+        r#"{pool}[stream.upstream]
 "hop" = {{ address = "rtpmux://{hop_addr}", header_key = "{HEADER_KEY}" }}
 
 [access_server.stream.conn_selector]
@@ -438,7 +516,39 @@ header_key = "{HEADER_KEY}"
 allow_loopback = true
 "#,
         proxy_port = proxy_addr.port(),
-    );
+    )
+}
+
+fn write_chain_config(
+    dir: &Path,
+    hop_addr: SocketAddr,
+    proxy_addr: SocketAddr,
+    access_port: u16,
+    echo: SocketAddr,
+) -> PathBuf {
+    write_config_text(
+        dir,
+        chain_config_text(hop_addr, proxy_addr, access_port, echo, None),
+    )
+}
+
+/// The same config with the hop pre-paired by `[stream.pool]` — the one
+/// dimension the pool arm varies.
+fn write_pooled_chain_config(
+    dir: &Path,
+    hop_addr: SocketAddr,
+    proxy_addr: SocketAddr,
+    access_port: u16,
+    echo: SocketAddr,
+) -> PathBuf {
+    write_config_text(
+        dir,
+        chain_config_text(hop_addr, proxy_addr, access_port, echo, Some("hop")),
+    )
+}
+
+fn write_config_text(dir: &Path, config: String) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
     let path = dir.join("config.toml");
     std::fs::write(&path, config).unwrap();
     path
@@ -453,15 +563,59 @@ async fn start_chain(
     extra_owd: Duration,
     echo: SocketAddr,
 ) -> ChainHandle {
+    start_chain_inner(tag, regime, extra_owd, echo, false, None)
+        .await
+        .0
+}
+
+/// The same process with a configured, pre-pairing `[stream.pool]` **and** a
+/// monitor listener, so the pool's warm-ness can be observed from outside the
+/// process. Returns the monitor address the arm waits on.
+async fn start_pooled_chain(
+    tag: &str,
+    regime: &Regime,
+    extra_owd: Duration,
+    echo: SocketAddr,
+) -> (ChainHandle, SocketAddr) {
+    let monitor_port = alloc_tcp_port();
+    let (chain, monitor) =
+        start_chain_inner(tag, regime, extra_owd, echo, true, Some(monitor_port)).await;
+    (
+        chain,
+        monitor.expect("a pooled chain always attaches its monitor listener"),
+    )
+}
+
+/// The one process-start path every chain arm shares: identical hop, identical
+/// access-listener probe, identical shutdown. `pool` selects the pooled config;
+/// `monitor_port` attaches the monitor listener, which only the arms that have
+/// a pool to observe (or to prove absent) need. So the pool-less arms spawn
+/// exactly the command line and run exactly the config they always have.
+async fn start_chain_inner(
+    tag: &str,
+    regime: &Regime,
+    extra_owd: Duration,
+    echo: SocketAddr,
+    pool: bool,
+    monitor_port: Option<u16>,
+) -> (ChainHandle, Option<SocketAddr>) {
     let (proxy_port, _proxy_bulk) = alloc_adjacent_udp_pair();
     let proxy_addr = localhost(proxy_port);
     let hop = ImpairedHop::spawn(proxy_addr, &regime.c2s(extra_owd), &regime.s2c(extra_owd));
     let access_port = alloc_tcp_port();
     let dir = unique_temp_dir(tag);
-    let path = write_chain_config(&dir, hop.client_addr, proxy_addr, access_port, echo);
+    let path = if pool {
+        write_pooled_chain_config(&dir, hop.client_addr, proxy_addr, access_port, echo)
+    } else {
+        write_chain_config(&dir, hop.client_addr, proxy_addr, access_port, echo)
+    };
 
-    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_proxy"))
-        .arg(&path)
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_proxy"));
+    command.arg(&path);
+    if let Some(port) = monitor_port {
+        command.arg("--monitor").arg(format!("127.0.0.1:{port}"));
+    }
+    let child = command
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
@@ -480,12 +634,15 @@ async fn start_chain(
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    ChainHandle {
-        child,
-        hop,
-        access_addr: localhost(access_port),
-        dir,
-    }
+    (
+        ChainHandle {
+            child,
+            hop,
+            access_addr: localhost(access_port),
+            dir,
+        },
+        monitor_port.map(localhost),
+    )
 }
 
 impl ChainHandle {
@@ -1117,6 +1274,20 @@ struct ArmOutcome {
     /// its first echo.
     first_ms: Option<f64>,
     cold_total_ms: Option<f64>,
+    /// The stream pool's key this arm observed, the pool's ready
+    /// (established-and-unpulled) connection count sampled immediately before
+    /// the measured window opened, and how long the arm waited for it: the
+    /// pool arm's readiness proof. `None` on every arm without a pool.
+    pool_key: Option<String>,
+    pool_ready: Option<f64>,
+    pool_wait_ms: Option<f64>,
+    /// How long this arm waited after the pool reported ready before opening
+    /// its window. `None` on arms without a pool.
+    pool_settle_ms: Option<f64>,
+    /// Which replication of a repeated arm this row is. `None` for the arms
+    /// that run once; the pool arms and their control run
+    /// [`POOL_REPLICATIONS`] times each, paired by this index.
+    pool_replicate: Option<usize>,
 }
 
 impl ArmOutcome {
@@ -1685,6 +1856,13 @@ enum Fault {
     /// reading is what this scenario adds, so losing it must fail the arm rather
     /// than leave a table with a silent hole in it.
     Undialed,
+    /// The stream-pool arm runs with **no** pool configured, so its readiness
+    /// barrier — the thing that makes a pooled arm different from a plain one —
+    /// must fail rather than let an unwarmed pool be reported as warm. The
+    /// failure is `wait_pool_ready`'s unconditional assertion, which every
+    /// pooled run also goes through, so the two paths differ only in whether a
+    /// pool exists.
+    PoolUnwarmed,
 }
 
 fn fault_from_env() -> Option<Fault> {
@@ -1693,6 +1871,7 @@ fn fault_from_env() -> Option<Fault> {
         Some("unanswered") => Some(Fault::Unanswered),
         Some("warm_unanswered") => Some(Fault::WarmUnanswered),
         Some("undialed") => Some(Fault::Undialed),
+        Some("pool_unwarmed") => Some(Fault::PoolUnwarmed),
         _ => None,
     }
 }
@@ -2010,6 +2189,229 @@ async fn run_proto_arm(
     outcome
 }
 
+/// One `GET` against the proxy's own monitor listener, as a whole response.
+/// The child is a real process, so its pool state is only observable through
+/// the interface it already exposes to operators; this is that interface.
+async fn http_get(addr: SocketAddr, path: &str) -> io::Result<String> {
+    let mut stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "monitor connect timed out"))??;
+    let request = format!("GET {path} HTTP/1.1\r\nHost: monitor\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await?;
+    let mut response = String::new();
+    tokio::time::timeout(Duration::from_secs(5), stream.read_to_string(&mut response))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "monitor read timed out"))??;
+    Ok(response)
+}
+
+/// The pool's ready-connection count for `key` in a Prometheus exposition, or
+/// `None` when the metric has not been registered for that key at all — which
+/// is exactly what an unwarmed pool looks like: no entries, so no sample.
+fn pool_ready_from_metrics(exposition: &str, key: &str) -> Option<f64> {
+    let needle = format!("{POOL_READY_METRIC}{{");
+    exposition.lines().find_map(|line| {
+        let line = line.trim();
+        let rest = line.strip_prefix(&needle)?;
+        let (labels, value) = rest.split_once('}')?;
+        // The key is matched as a whole label value, so a longer key that
+        // shares this key's prefix cannot be mistaken for it.
+        if !labels.contains(&format!("key=\"{key}\"")) {
+            return None;
+        }
+        value.trim().parse::<f64>().ok()
+    })
+}
+
+/// Wait until the pool reports at least `min` established-and-unpulled
+/// connections for `key`, and return `(ready, waited_ms)`.
+///
+/// This is the arm's readiness barrier: without it the arm would open its
+/// measured window while its own pool entries were still pairing and would
+/// then report one topology's connection setup as if it were the other's
+/// steady state. It panics rather than proceeding, so an unwarmed pool cannot
+/// be measured as if it were warm.
+async fn wait_pool_ready(
+    monitor: SocketAddr,
+    key: &str,
+    min: f64,
+    deadline: Duration,
+) -> (f64, f64) {
+    let started = Instant::now();
+    let give_up_at = started + deadline;
+    let mut last_exposition = String::new();
+    let mut last_error: Option<String>;
+    loop {
+        match http_get(monitor, "/metrics").await {
+            Ok(exposition) => {
+                last_exposition = exposition;
+                last_error = None;
+                if let Some(ready) = pool_ready_from_metrics(&last_exposition, key)
+                    && ready >= min
+                {
+                    return (ready, elapsed_ms(started));
+                }
+            }
+            Err(error) => last_error = Some(error.to_string()),
+        }
+        assert!(
+            Instant::now() < give_up_at,
+            "INSTRUMENT: the stream pool never banked {min} ready connection(s) for key {key} \
+             within {} s, so this arm cannot tell a warm pool from a cold one and must not claim \
+             to have measured one (last error: {:?}; pool samples seen: {:?})",
+            deadline.as_secs(),
+            last_error,
+            last_exposition
+                .lines()
+                .filter(|line| line.contains(POOL_READY_METRIC))
+                .collect::<Vec<_>>(),
+        );
+        tokio::time::sleep(POOL_READY_POLL).await;
+    }
+}
+
+/// One paired replication of the pool arm: the unpooled control, the same
+/// pooled config with the window opened the moment readiness is observed, and
+/// the same pooled config with a settle after readiness. All three run in one
+/// replication, so the difference between them is the pool and the settle and
+/// nothing else.
+struct PoolReplication {
+    control: ArmOutcome,
+    /// Window opened as soon as the pool reported a ready entry.
+    ready: ArmOutcome,
+    /// Window opened `settle` after the pool reported a ready entry.
+    settled: ArmOutcome,
+}
+
+/// Every replication's three arms, in replication order: `control[i]`,
+/// `ready[i]` and `settled[i]` are the same replication, so the three are
+/// comparable sample by sample rather than through a mean.
+#[derive(Default)]
+struct PoolArmSet {
+    control: Vec<ArmOutcome>,
+    ready: Vec<ArmOutcome>,
+    settled: Vec<ArmOutcome>,
+}
+
+impl PoolArmSet {
+    /// Every pool-arm row, for the flat per-arm and cold-connection tables.
+    fn all(&self) -> impl Iterator<Item = &ArmOutcome> {
+        self.control.iter().chain(&self.ready).chain(&self.settled)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.settled.is_empty()
+    }
+}
+
+/// Run one replication of the three pool arms.
+///
+/// The only dimension varied from the chain arm is the pool; between `ready`
+/// and `settled` it is the settle alone. The cold control runs first on its own
+/// fresh process, so all three see the same host conditions within about one
+/// window.
+///
+/// Under [`Fault::PoolUnwarmed`] the config declares **no** pool, so the
+/// readiness barrier the two pooled arms share must fail: that is the vacuity
+/// showing an unwarmed pool cannot claim to have been measured warm.
+async fn run_pool_replication(
+    regime: &Regime,
+    shape: Shape,
+    echo: SocketAddr,
+    replicate: usize,
+    fault: Option<Fault>,
+) -> PoolReplication {
+    let cold_chain = start_chain(
+        &format!("poolctl-{}", regime.name),
+        regime,
+        Duration::ZERO,
+        echo,
+    )
+    .await;
+    let mut control = run_shape(
+        "proxy_chain_nopool",
+        regime,
+        &Target::access(cold_chain.access_addr),
+        shape,
+        &cold_chain.hop,
+        None,
+    )
+    .await;
+    control.pool_replicate = Some(replicate);
+    cold_chain.shutdown().await;
+
+    // Under `pool_unwarmed` the first of these panics inside its readiness
+    // barrier before a window is ever opened, so an unwarmed pool cannot be
+    // reported as warm; the second call is then never reached.
+    let ready = run_pooled_chain_arm(regime, shape, echo, replicate, fault, Duration::ZERO).await;
+    let settled = run_pooled_chain_arm(regime, shape, echo, replicate, fault, POOL_SETTLE).await;
+    PoolReplication {
+        control,
+        ready,
+        settled,
+    }
+}
+
+/// One pooled chain arm at one settle: start the pooled process, wait for the
+/// pool's exported readiness, optionally let the freshly born session settle,
+/// then run the shape and record the cold-connection reading.
+async fn run_pooled_chain_arm(
+    regime: &Regime,
+    shape: Shape,
+    echo: SocketAddr,
+    replicate: usize,
+    fault: Option<Fault>,
+    settle: Duration,
+) -> ArmOutcome {
+    let tag = format!("pool-{}", regime.name);
+    // Under `pool_unwarmed` the arm runs the *unpooled* config but still
+    // attaches the monitor listener: the barrier then has a live endpoint and
+    // nothing to find, which is the failure this injection demonstrates.
+    let (chain, monitor) = if fault == Some(Fault::PoolUnwarmed) {
+        let (chain, monitor) = start_chain_inner(
+            &tag,
+            regime,
+            Duration::ZERO,
+            echo,
+            false,
+            Some(alloc_tcp_port()),
+        )
+        .await;
+        (chain, monitor.expect("the injection attaches a monitor"))
+    } else {
+        start_pooled_chain(&tag, regime, Duration::ZERO, echo).await
+    };
+
+    // The pool is keyed by the hop address exactly as the config words it, so
+    // the observed sample is this hop's own queue depth and not another key's.
+    let key = format!("rtpmux://{}", chain.hop.client_addr);
+    let ready_deadline = if fault.is_some() {
+        POOL_READY_DEADLINE_FAULT
+    } else {
+        POOL_READY_DEADLINE
+    };
+    let (pool_ready, pool_wait_ms) =
+        wait_pool_ready(monitor, &key, POOL_READY_MIN, ready_deadline).await;
+    if !settle.is_zero() {
+        tokio::time::sleep(settle).await;
+    }
+
+    let target = Target::access(chain.access_addr);
+    let topology = if settle.is_zero() {
+        "proxy_chain_pool_ready"
+    } else {
+        "proxy_chain_pool"
+    };
+    let mut pooled = run_shape(topology, regime, &target, shape, &chain.hop, None).await;
+    pooled.pool_key = Some(key);
+    pooled.pool_ready = Some(pool_ready);
+    pooled.pool_wait_ms = Some(pool_wait_ms);
+    pooled.pool_settle_ms = Some(settle.as_secs_f64() * 1000.0);
+    pooled.pool_replicate = Some(replicate);
+    chain.shutdown().await;
+    pooled
+}
+
 /// Assert the `direct_proto` arm's achieved base RTT matches the regime's
 /// calibrated direct base. The arm adds one loopback TCP hop the direct arm
 /// does not have (the `proxy_server`'s connect to the echo), but the chain has
@@ -2130,10 +2532,19 @@ fn arm_json(arm: &ArmOutcome) -> serde_json::Value {
         "mux_session_reused": arm.mux_session_reused,
         "first_ms": arm.first_ms,
         "cold_total_ms": arm.cold_total_ms,
+        "pool_key": arm.pool_key,
+        "pool_ready_connections": arm.pool_ready,
+        "pool_ready_wait_ms": arm.pool_wait_ms,
+        "pool_settle_ms": arm.pool_settle_ms,
+        "pool_replicate": arm.pool_replicate,
     })
 }
 
-fn record_json(results: &[PairResult], proto_arms: &[ArmOutcome]) -> serde_json::Value {
+fn record_json(
+    results: &[PairResult],
+    proto_arms: &[ArmOutcome],
+    pool: &PoolArmSet,
+) -> serde_json::Value {
     let arms: Vec<serde_json::Value> = results
         .iter()
         .flat_map(|pair| {
@@ -2240,10 +2651,70 @@ fn record_json(results: &[PairResult], proto_arms: &[ArmOutcome]) -> serde_json:
             to its first echo. mux_dial_ms and protocol_ms are the parts of connect_ms the arm's \
             own topology performs; the chain's parts run inside the binary, after its window \
             opened, and so appear in its first sample instead.",
+        "pool_note": "proxy_chain_pool is the chain arm with exactly one dimension varied: the \
+            hop is pre-paired by a configured [stream.pool], and the arm waits for the pool's \
+            exported ready-connection gauge to report at least one established-and-unpulled \
+            entry for the hop key and then settles for 3 s before its measured window opens. \
+            proxy_chain_pool_ready is the same arm with the settle removed (one dimension), and \
+            proxy_chain_nopool is the unpooled control run immediately before both on its own \
+            fresh process, so all three are on one clock; pool_pairs reports all three arms' \
+            numbers per replication.",
         "arms": arms,
         "proto_arms": proto_arms.iter().map(arm_json).collect::<Vec<_>>(),
+        "pool_arms": pool.settled.iter().map(arm_json).collect::<Vec<_>>(),
+        "pool_ready_arms": pool.ready.iter().map(arm_json).collect::<Vec<_>>(),
+        "pool_control_arms": pool.control.iter().map(arm_json).collect::<Vec<_>>(),
         "deltas": deltas,
+        "pool_pairs": pool_pairs(pool),
     })
+}
+
+/// The pool mitigation, one row per paired replication: the control arm's
+/// cold-connection reading, the pooled arm's with and without the settle after
+/// readiness, all on the same clock, so the difference is the pool (and then
+/// the settle) and nothing else.
+fn pool_pairs(pool: &PoolArmSet) -> Vec<serde_json::Value> {
+    let pair = |a: &ArmOutcome, b: &ArmOutcome| -> serde_json::Value {
+        json!({
+            "control": {
+                "first_ms": a.first_ms,
+                "cold_total_ms": a.cold_total_ms,
+            },
+            "pool": {
+                "pool_ready_connections": b.pool_ready,
+                "pool_ready_wait_ms": b.pool_wait_ms,
+                "pool_settle_ms": b.pool_settle_ms,
+                "first_ms": b.first_ms,
+                "cold_total_ms": b.cold_total_ms,
+            },
+            "cold_total_ms_saved": a.cold_total_ms.zip(b.cold_total_ms).map(|(c, p)| c - p),
+            "cold_total_ms_ratio": a.cold_total_ms.zip(b.cold_total_ms).map(|(c, p)| p / c),
+        })
+    };
+    pool.settled
+        .iter()
+        .zip(&pool.ready)
+        .zip(&pool.control)
+        .map(|((settled, ready), control)| {
+            json!({
+                "regime": settled.regime,
+                "shape": settled.shape,
+                "replicate": settled.pool_replicate,
+                "pool_key": settled.pool_key,
+                "at_readiness_only": pair(control, ready),
+                "after_settle": pair(control, settled),
+                "settle_saved_ms": settled
+                    .pool_settle_ms
+                    .map(|_| {
+                        ready
+                            .cold_total_ms
+                            .zip(settled.cold_total_ms)
+                            .map(|(r, s)| r - s)
+                            .unwrap_or_default()
+                    }),
+            })
+        })
+        .collect()
 }
 
 /// One arm's row in the per-arm table, plus its slow-sample shape line when it
@@ -2299,7 +2770,7 @@ fn print_arm(arm: &ArmOutcome) {
 /// run inside the binary after its window opened and so appear in `first`.
 /// `reused` marks a dial that found a live mux session, which is not a
 /// cold-connection reading.
-fn print_cold_table(results: &[PairResult], proto_arms: &[ArmOutcome]) {
+fn print_cold_table(results: &[PairResult], proto_arms: &[ArmOutcome], pool: &PoolArmSet) {
     println!("\n=== cold connection: connect() + first echo, request/response shape (ms) ===");
     println!(
         "{:<10} {:<17} {:>9} {:>10} {:>9} {:>8} {:>11} {:>7} {:>9}",
@@ -2353,9 +2824,120 @@ fn print_cold_table(results: &[PairResult], proto_arms: &[ArmOutcome]) {
         }
         cell(arm);
     }
+    // The pool arms and their control are request/response arms too, and their
+    // first sample is the whole point of them — so they get rows in the same
+    // cold table, on the same clock as each other.
+    for arm in pool.all() {
+        if arm.shape != "rr" {
+            continue;
+        }
+        cell(arm);
+    }
 }
 
-fn print_table(results: &[PairResult], proto_arms: &[ArmOutcome]) {
+/// The stream-pool mitigation, paired replication by paired replication: what
+/// the pool banked and how long it took to bank it, what the first echo then
+/// cost on the pooled chain with the window opened immediately and after the
+/// settle, and what the same run's unpooled control cost. The summary row is
+/// the median of the replications' readings; every replication is printed
+/// above it rather than averaged into invisibility.
+fn print_pool_table(pool: &PoolArmSet) {
+    if pool.is_empty() {
+        return;
+    }
+    println!("\n=== stream.pool mitigation: cold connection, rr shape, one clock (ms) ===");
+    println!(
+        "{:<10} {:>4} {:>9} {:>10} {:>11} {:>12} {:>13} {:>10} {:>8}",
+        "regime",
+        "rep",
+        "pool_wait",
+        "pool_ready",
+        "ctl_total",
+        "ready_total",
+        "settled_total",
+        "saved",
+        "ratio"
+    );
+    let ms = |v: Option<f64>| match v {
+        Some(v) => format!("{v:.1}"),
+        None => "-".to_string(),
+    };
+    for ((settled, ready), control) in pool.settled.iter().zip(&pool.ready).zip(&pool.control) {
+        let saved = control
+            .cold_total_ms
+            .zip(settled.cold_total_ms)
+            .map(|(c, p)| c - p);
+        let ratio = control
+            .cold_total_ms
+            .zip(settled.cold_total_ms)
+            .map(|(c, p)| p / c);
+        println!(
+            "{:<10} {:>4} {:>9} {:>10} {:>11} {:>12} {:>13} {:>10} {:>8}",
+            settled.regime,
+            settled
+                .pool_replicate
+                .map_or("-".to_string(), |r| r.to_string()),
+            ms(settled.pool_wait_ms),
+            ms(settled.pool_ready),
+            ms(control.cold_total_ms),
+            ms(ready.cold_total_ms),
+            ms(settled.cold_total_ms),
+            ms(saved),
+            ratio.map_or("-".to_string(), |r| format!("{r:.3}")),
+        );
+    }
+    // One summary row per regime: the medians of the paired readings, so the
+    // arm states a central value without discarding the spread printed above.
+    let mut regimes: Vec<&str> = Vec::new();
+    for arm in &pool.settled {
+        if !regimes.contains(&arm.regime) {
+            regimes.push(arm.regime);
+        }
+    }
+    for regime in regimes {
+        let mut controls: Vec<f64> = Vec::new();
+        let mut readies: Vec<f64> = Vec::new();
+        let mut settleds: Vec<f64> = Vec::new();
+        let mut ratios: Vec<f64> = Vec::new();
+        let mut waits: Vec<f64> = Vec::new();
+        for ((settled, ready), control) in pool.settled.iter().zip(&pool.ready).zip(&pool.control) {
+            if settled.regime != regime {
+                continue;
+            }
+            if let Some(wait) = settled.pool_wait_ms {
+                waits.push(wait);
+            }
+            if let Some(v) = control.cold_total_ms {
+                controls.push(v);
+            }
+            if let Some(v) = ready.cold_total_ms {
+                readies.push(v);
+            }
+            if let Some(v) = settled.cold_total_ms {
+                settleds.push(v);
+            }
+            if let Some((c, p)) = control.cold_total_ms.zip(settled.cold_total_ms) {
+                ratios.push(p / c);
+            }
+        }
+        println!(
+            "{:<10} {:>4} {:>9} {:>10} {:>11} {:>12} {:>13} {:>10} {:>8}",
+            regime,
+            "med",
+            ms(Some(percentile(&waits, 0.5))),
+            "-",
+            ms(Some(percentile(&controls, 0.5))),
+            ms(Some(percentile(&readies, 0.5))),
+            ms(Some(percentile(&settleds, 0.5))),
+            ms(Some(
+                percentile(&controls, 0.5) - percentile(&settleds, 0.5)
+            )),
+            format!("{:.3}", percentile(&ratios, 0.5)),
+        );
+    }
+}
+
+fn print_table(results: &[PairResult], proto_arms: &[ArmOutcome], pool: &PoolArmSet) {
     println!("\n=== proxy-path diagnosis: per-arm measurements ===");
     println!(
         "{:<16} {:<10} {:<8} {:>7} {:>7} {:>8} {:>8} {:>8} {:>9} {:>8} {:>7} {:>6} {:>6}",
@@ -2403,6 +2985,9 @@ fn print_table(results: &[PairResult], proto_arms: &[ArmOutcome]) {
     // The protocol-only arms are one per topology and regime, so they print
     // after the pair matrix rather than once per pair.
     for arm in proto_arms {
+        print_arm(arm);
+    }
+    for arm in pool.all() {
         print_arm(arm);
     }
     println!("\n=== matched-RTT delta: proxy - direct (ms) ===");
@@ -2506,6 +3091,7 @@ async fn proxy_path_matched_rtt_delta() {
     let (echo, echo_scope) = spawn_tcp_echo().await;
     let mut results: Vec<PairResult> = Vec::new();
     let mut proto_arms: Vec<ArmOutcome> = Vec::new();
+    let mut pool = PoolArmSet::default();
 
     // The fault runs a reduced matrix: the guard it exercises is shared with
     // every arm, so a cheap single pair demonstrates the vacuity.
@@ -2609,6 +3195,39 @@ async fn proxy_path_matched_rtt_delta() {
             results.push(pair);
         }
 
+        // The stream-pool arm: exactly one dimension varied from this regime's
+        // own `rr` chain arm — the hop is pre-paired by a configured
+        // `[stream.pool]`, and the arm waits until it observes that pool warm
+        // before opening its window. Both RTT scales, because the mitigation's
+        // value is a claim about a scale as much as about a config. Under the
+        // `pool_unwarmed` injection the same arm runs against a config with no
+        // pool, so its readiness barrier must fail.
+        if fault.is_none() || fault == Some(Fault::PoolUnwarmed) {
+            let replications = if fault.is_some() {
+                1
+            } else {
+                POOL_REPLICATIONS
+            };
+            for replicate in 0..replications {
+                let rep = run_pool_replication(
+                    regime,
+                    Shape::RoundTrip {
+                        window: interactive_window,
+                    },
+                    echo,
+                    replicate,
+                    fault,
+                )
+                .await;
+                rep.control.assert_sane();
+                rep.ready.assert_sane();
+                rep.settled.assert_sane();
+                pool.control.push(rep.control);
+                pool.ready.push(rep.ready);
+                pool.settled.push(rep.settled);
+            }
+        }
+
         // The proxy-protocol arm: the same binary's `proxy_server`, entered by
         // the harness's own protocol client, so the chain's ingress stage (the
         // TCP accept, the chain selection, the pooled connect at the access
@@ -2701,10 +3320,11 @@ async fn proxy_path_matched_rtt_delta() {
         results.push(pair);
     }
 
-    print_table(&results, &proto_arms);
-    print_cold_table(&results, &proto_arms);
+    print_table(&results, &proto_arms, &pool);
+    print_cold_table(&results, &proto_arms, &pool);
+    print_pool_table(&pool);
     echo_scope.reap_ready();
-    let report = record_json(&results, &proto_arms);
+    let report = record_json(&results, &proto_arms, &pool);
     let path = out_path();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();

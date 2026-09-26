@@ -38,9 +38,10 @@ python3 tools/check-ignored.py
   asserts **only instrument sanity and delivery integrity** (something was
   measured, nothing was left unanswered, every echo matched, every arm dialed,
   the topologies really were compared at the same end-to-end base RTT — the
-  protocol-only arm against its regime's calibration — and the direct arm
-  really carried bulk traffic). It asserts **no product bound**.
-  See "The deployed-path diagnosis" below.
+  protocol-only arm against its regime's calibration — the direct arm really
+  carried bulk traffic, and every stream-pool arm really observed a ready pool
+  entry before its window opened). It asserts **no product bound**. See "The
+  deployed-path diagnosis" below.
 - **unrunnable** — a test whose triggering condition cannot be produced on
   this host. `basics` waits for a real OS suspend/resume notification
   (`spawn_suspend_watcher` with the system clock); that cannot be faked in a
@@ -117,16 +118,21 @@ integrity, every arm dialed, matched base RTT, bulk traffic actually carried)
 and it restates no mandate bound: those live in `rtp_mux/GATE.md` §Performance
 and the mandate metrics are reported, never gated here.
 
-**Cost.** Measured 292 s and 260 s wall-clock on a warm release build over 40
-arms (34 pair arms plus 6 protocol-only arms); the earlier figure was 234 s over
-the 34-arm set on a quieter machine, and the 6 new arms cost about 7 s each. It
-starts the real binary once per proxy arm (5–9 per
-run, plus one per protocol-only arm), one in-process `rtp_mux` server + two
-`NetemPair` instances per direct arm, and spends 4 s of interactive load (plus
-a 2 s drain) or a 3 s + 5 s bulk window per arm. The controls added alongside
-the client-fronting and byte-relay pair cost 3 cadence arms at 25 ms OWD
-(`direct_front_relay` twice, at 25 ms and 100 ms, and its two relay-stack
-siblings once each) plus one warm-cadence arm at each 25 ms-OWD scale.
+**Cost.** Measured 414 s wall-clock on a warm release build over 67 arms (34
+pair arms, 6 protocol-only arms, 27 stream-pool arms), on a host also running
+three concurrent agent builds; earlier figures were 292 s and 260 s over the
+40-arm set on a quieter machine, and 234 s over the 34-arm set. It starts the
+real binary once per proxy arm (5–9 per run, plus one per protocol-only arm and
+three per stream-pool replication — control, pooled-at-readiness, pooled with
+settle), one in-process `rtp_mux` server + two `NetemPair` instances per direct
+arm, and spends 4 s of interactive load (plus a 2 s drain) or a 3 s + 5 s bulk
+window per arm. The pool arms add 27 binary starts (3 replications × 3 arms ×
+3 regimes), each 4 s of load, plus the pool's own readiness wait (0.3 s at
+25 ms OWD, 1.1 s at 100 ms) and a 3 s settle on the settled arm. The controls
+added alongside the client-fronting and byte-relay pair cost 3 cadence arms at
+25 ms OWD (`direct_front_relay` twice, at 25 ms and 100 ms, and its two
+relay-stack siblings once each) plus one warm-cadence arm at each 25 ms-OWD
+scale.
 
 **Coverage.** Baseline: the tri-mandate `clean` impairment shape, the 256 B
 interactive message, the `rtpmux` hop. Arms vary one dimension from it:
@@ -143,6 +149,8 @@ interactive message, the `rtpmux` hop. Arms vary one dimension from it:
 | attribution: those two stages stacked — the chain minus the proxy protocol, its stream wrappers and its chain plumbing | `direct_front_relay` (cadence, 25 ms and 100 ms OWD) |
 | attribution: the proxy's own relay implementation, one wrapper layer per arm — `TimeoutStreamShared` plus the proxy's `copy_bidirectional` fork, then that plus `async_speed_limit::Limiter::new(f64::INFINITY)` | `direct_front_relay_tout`, `direct_front_relay_timed` (cadence, 25 ms OWD) |
 | window: the measured window opening on the client's first write vs after one warm round trip | `cadence` vs `cadence_steady` (25 ms OWD) |
+| mitigation: a configured, background-pre-paired `[stream.pool]` vs no pool | `proxy_chain_pool` vs `proxy_chain_nopool`, paired per replication, at all three regimes |
+| warm-up: the window opening the moment the pool reports ready vs 3 s later | `proxy_chain_pool_ready` vs `proxy_chain_pool`, one dimension apart |
 | attribution: the chain's access-server ingress (TCP accept, chain selection, pooled connect) | `direct_proto` — the same binary with only `proxy_server` listeners, entered by the harness's own protocol client (rr + cadence, every regime) |
 | clock: the connection's establishment measured on the arm's own side of `connect()` vs charged to the chain's first message | every arm's `connect_ms`; the chain's establishment appears in its `first_ms` instead |
 | metric: p50/p75/p90/p95/p99/p99.9/max, over-250 ms count, the slow samples' index span / episode count / longest run, per-segment wire multiple, delivery | every arm |
@@ -167,10 +175,17 @@ attribute. The protocol-only arm's *cadence* row at 100 ms OWD has the same
 shape for the same reason and is quoted, not attributed. **The split of the
 `rtp_mux` lane pairing into the `rtp` session handshake and the mux pairing is
 not measured**: that needs an arm against `rtp`'s own public session API, in a
-crate this workspace does not own, and the pairing is reported whole. **The
-stream pool as a mitigation is not measured**: the config declares no pool, so
-its cold path is a keyed miss on both sides (see below), and a configured pool
-would need a pool-readiness signal the harness has no way to observe.
+crate this workspace does not own, and the pairing is reported whole. **Why a
+freshly born mux session is unusable for about a second** — the settle the pool
+arms need (see "The `[stream.pool]` mitigation" below) — is not attributed: the
+instrument shows the effect, not its cause, and the candidates (the session's
+own path exploration settling, its send-window ramp, the second lane's lazy
+birth) are listed as candidates only. **The pool's behaviour above its 16-entry
+queue depth is not measured**: every pool arm dials one flow, so what a burst of
+more than 16 concurrent new flows pays, and whether the queue drains in time for
+a 17th, is outside this scenario. **The pool's lifetime across a config reload
+or a system resume is not measured either**; the reload path replaces the pool
+wholesale and no arm reloads.
 
 **Matched RTT.** Because the chain has more hops than the direct arm, the
 delta is only interpretable at matched end-to-end client-to-echo base RTT, and
@@ -247,19 +262,75 @@ the honest bound is: the chain's ingress plus its extra relay leg is at most a
 two-base-RTT effect and never a large share of the charge, and this instrument
 cannot resolve it further without more samples of the same arm.
 
-**The remaining steps, each bounded or empty.** The pool is not a factor: the
-config declares no pool, so `connect_with_pool`'s `pull` is a keyed miss that
-returns immediately, on the access server's hop connect and on the proxy
-server's upstream connect alike; both sides take the same fallback dial. The
-upstream connect is a loopback TCP connect inside the proxy server, and the
-protocol-only arm pays it too, so it is inside the one-RTT residue, not in the
-charge. **The locus is `rtp_mux`'s dual-lane birth**, reached through
+**The remaining steps, each bounded or empty.** The pool is not a factor for
+any arm *above*: those configs declare no pool, so `connect_with_pool`'s `pull`
+is a keyed miss that returns immediately, on the access server's hop connect and
+on the proxy server's upstream connect alike; both sides take the same fallback
+dial. The upstream connect is a loopback TCP connect inside the proxy server,
+and the protocol-only arm pays it too, so it is inside the one-RTT residue, not
+in the charge. **The locus is `rtp_mux`'s dual-lane birth**, reached through
 `rtp_mux::RtpMuxConnector::connect_stream_with_lane`; `proxy` does not own that
 crate, so the finding is reported here with its evidence and no change is made
-to it. A deployment that wants the charge off the request path can pre-pair the
-hop through the stream pool (`[stream.pool]`), whose entries connect in the
-background at start-up; this scenario does not measure that, because it needs a
-pool-readiness signal the harness has no way to observe (see the empty cells).
+to it.
+
+**The `[stream.pool]` mitigation, measured.** A deployment can move the charge
+off the request path by pre-pairing the hop through the stream pool
+(`[stream.pool]`), whose entries connect in the background at start-up. Three
+arms per replication measure that, all on one clock: `proxy_chain_nopool` (the
+same chain with no pool), `proxy_chain_pool_ready` (pooled, window opened the
+moment the pool reports a ready entry) and `proxy_chain_pool` (pooled, window
+opened 3 s after that readiness). Warm-ness is observed from *outside* the
+binary, which is what the previous revision could not do: the pool now exports
+`stream.pool.ready{key}` on the monitor listener — established-and-unpulled
+connections per key, moved by the three events that push a connection into or
+out of the queue — and each pooled arm asserts it observed at least one such
+entry for its own hop key before opening its window, so an arm that merely
+configured a pool cannot race its own first dial. The pool banked its full
+queue (16 of 16) every time, after a wait that is **one pairing's worth**, not
+dial×16: 314–393 ms at 25 ms OWD and 1088–1102 ms at 100 ms OWD. That is what
+per-address session reuse would predict — the first entry pairs the session and
+the rest open streams on it — but the instrument sees the queue depth, not which
+entry paid for it, so the sharing is an inference and the wait is the
+observation.
+
+| regime | replication | control (no pool) | pooled, window at readiness | pooled, +3 s settle |
+| --- | --- | --- | --- | --- |
+| `clean25` (41.2 ms base) | A / B / C | 425.5 / 518.7 / 438.9 | 388.4 / 397.3 / 356.3 | **66.6 / 70.9 / 61.2** |
+| `jitter25` (41.2 ms base) | A / B / C | 456.8 / 402.7 / 467.9 | 440.6 / 348.3 / 326.7 | **57.9 / 113.4 / 58.1** |
+| `field100` (191.8 ms base) | A / B / C | 1321.6 / 1291.7 / 1420.8 | 386.6 / 481.0 / 702.2 | **206.8 / 206.6 / 201.9** |
+| `clean25` median | | 438.9 | 388.4 | **66.6 (0.139×)** |
+| `jitter25` median | | 456.8 | 348.3 | **58.1 (0.127×)** |
+| `field100` median | | 1321.6 | 481.0 | **206.6 (0.156×)** |
+
+**The pool removes the charge almost entirely — but only once the session has
+settled, and that is not observable.** The settled arm's cold-connection total
+is 0.13–0.16× the unpooled control's at every regime: 438.9 → 66.6 ms at
+`clean25`, 456.8 → 58.1 at `jitter25`, 1321.6 → 206.6 at `field100`: from
+10.7–11.1 base RTTs down to 1.4–1.6 at 25 ms OWD, and from 6.9 down to 1.1 at
+100 ms OWD. That is better than the
+direct transport's own cold path (386–387 ms, 1299–1320 ms), because the direct
+arm pays the same pairing inside its `connect()`. The spread is small — six of
+the nine settled replications lie within 5 ms of their regime's median, one
+`jitter25` replication at 113.4 ms being the only outlier — so this is a
+decisive positive, not a noise reading. Every number in the table is a reported
+arm; the settle curve quoted just below is probe evidence instead (one
+replication per point, kept because it is what the arm's 3 s constant is chosen
+from).
+
+What it does **not** fix is the window between readiness and usability. An arm
+that opens its window the moment the pool reports a ready entry — which is what
+"configure the pool and dial" amounts to, and what an arm without a readiness
+probe would measure by accident — still pays most of the charge at `clean25`
+(388.4 ms, 0.88× the control) and gets a wild reading at `field100` (386.6 /
+481.0 / 702.2 ms, 0.29–0.53×). A probe on this revision measured the settle
+curve directly: 0 / 1 / 3 s costs 369 / 65 / 61 ms at 25 ms OWD and
+579 / 205 / 212 ms at 100 ms OWD. So a freshly born mux session is not usable
+for about a second even though its pool has already banked sixteen streams on
+it, and **the pool's exported warm-ness is necessary but not sufficient: nothing
+observable distinguishes "banked" from "usable"**. A deployment that restarts
+and takes traffic immediately therefore pays the full charge for its first flow
+(or its first second), and the mitigation's value is realized only after that.
+The remaining empty cells name what is not attributed here.
 
 **Run-to-run stability.** Both full runs are green on this revision's healthy
 path and are the two columns of the cold table. The lane pairing reproduces
@@ -277,15 +348,24 @@ against the 0.477 MiB/s floor. That is the harness under host load, not the
 change — the bulk arm's own goodput varies 0.28–0.99× between runs — so the bulk
 cell is quoted, never gated.
 
+**The pool run.** One further full run on the revision that adds the pool arms
+(58 arms, 414 s, on a host also running three concurrent agent builds) is the
+run the stream-pool table and the pool's readiness waits are quoted from. It
+reproduced every calibration base (41.2/41.2, 41.4/41.1, 191.8/192.0 ms) and
+the unwarmed arms' charge (the `clean25` chain `rr` arm still 511.6 ms, the
+`field100` one 1305.9 ms, the `jitter25` one 418.9 ms), so the pool arms are
+additive readings beside the existing matrix rather than a re-measurement of it.
+
 **Vacuity.** `PROXY_PATH_PERF_FAULT=zero_samples` empties an arm,
 `PROXY_PATH_PERF_FAULT=unanswered` issues a request that is never answered,
 `PROXY_PATH_PERF_FAULT=warm_unanswered` leaves the warm arm's pre-window round
 trip unanswered — the steady arm's own instrument path, rather than its load
-shape — and `PROXY_PATH_PERF_FAULT=undialed` discards an arm's dial record after
-it ran, so an arm with samples reports no cold-connection reading. All four must
-fail the shared guard that every arm — every topology, the control arms and the
-warm arm — goes through. Demonstrated on the committed revision, each a separate
-run at exit 101:
+shape — `PROXY_PATH_PERF_FAULT=undialed` discards an arm's dial record after
+it ran, so an arm with samples reports no cold-connection reading, and
+`PROXY_PATH_PERF_FAULT=pool_unwarmed` runs the pooled arm against a config that
+declares no pool, so its readiness barrier must fail. All five must fail the
+guard their own path shares with the healthy runs. Demonstrated on the
+committed revision, each a separate run at exit 101:
 
 | injection | failing arm and message |
 | --- | --- |
@@ -293,10 +373,18 @@ run at exit 101:
 | `unanswered` | `INSTRUMENT: arm proxy_chain/rr left 1 request(s) unanswered` |
 | `warm_unanswered` | `INSTRUMENT: arm proxy_chain/cadence_steady measured zero samples` (a warm-up that never completed produced no sample, so the zero-sample assertion is the one that fires) |
 | `undialed` | `INSTRUMENT: arm proxy_chain/rr never dialed, so it measured no connection` |
+| `pool_unwarmed` | `INSTRUMENT: the stream pool never banked 1 ready connection(s) for key rtpmux://127.0.0.1:60402 within 10 s, so this arm cannot tell a warm pool from a cold one and must not claim to have measured one (last error: None; pool samples seen: [])` |
 
-The guard that `unanswered` exercises is real in healthy runs too: it is
-what caught the cadence arm's own write-half teardown truncating in-flight
-echoes, which is now fixed by holding the write half open across the drain.
+The `pool_unwarmed` message is the vacuity that matters for the mitigation:
+`last error: None` proves the monitor endpoint answered every poll, and
+`pool samples seen: []` proves the barrier failed because the pool had nothing
+to report rather than because the instrument could not ask. The barrier is the
+same code path in the pooled runs, so an unwarmed pool cannot be reported as
+warm there either.
+
+The guard that `unanswered` exercises is real in healthy runs too: it is what
+caught the cadence arm's own write-half teardown truncating in-flight echoes,
+which is now fixed by holding the write half open across the drain.
 
 ## Residual limitations
 
