@@ -117,10 +117,10 @@ integrity, every arm dialed, matched base RTT, bulk traffic actually carried)
 and it restates no mandate bound: those live in `rtp_mux/GATE.md` §Performance
 and the mandate metrics are reported, never gated here.
 
-**Cost.** Measured 292 s wall-clock on a warm release build over 40 arms (34
-pair arms plus 6 protocol-only arms), at a load average of 12; the previous
-revision's 34-arm set measured 234 s on a quieter machine, and the 6 new arms
-cost about 7 s each. It starts the real binary once per proxy arm (5–9 per
+**Cost.** Measured 292 s and 260 s wall-clock on a warm release build over 40
+arms (34 pair arms plus 6 protocol-only arms); the earlier figure was 234 s over
+the 34-arm set on a quieter machine, and the 6 new arms cost about 7 s each. It
+starts the real binary once per proxy arm (5–9 per
 run, plus one per protocol-only arm), one in-process `rtp_mux` server + two
 `NetemPair` instances per direct arm, and spends 4 s of interactive load (plus
 a 2 s drain) or a 3 s + 5 s bulk window per arm. The controls added alongside
@@ -211,34 +211,41 @@ against +242 and +296 ms for the unwarmed arms in the same run.
 Because the windows open at different points, one arm's first-sample latency
 cannot be compared across topologies on its own. Each arm records what its own
 `connect()` did, and `connect_ms + first echo` is then the same clock on every
-topology: the client's first act of connecting to its first echo. It attributes
-the charge:
+topology: the client's first act of connecting to its first echo. Two full runs
+(A, then B) attribute the charge:
 
-| regime | topology | connect | `rtp_mux` lane pairing | proxy protocol | first echo | total |
-| --- | --- | --- | --- | --- | --- | --- |
-| `clean25` (2 % loss) | `proxy_chain` | 0.2 | – | – | 447.0 | 447.2 |
-| `clean25` | `direct_transport` | 341.4 | 341.3 | – | 44.7 | 386.1 |
-| `clean25` | `direct_proto` | 330.7 | 330.5 | 0.3 | 62.0 | 392.8 |
-| `jitter25` (0 % loss) | `proxy_chain` | 0.2 | – | – | 410.1 | 410.3 |
-| `jitter25` | `direct_transport` | 299.2 | 299.2 | – | 46.7 | 346.0 |
-| `jitter25` | `direct_proto` | 298.1 | 298.1 | 0.0 | 65.5 | 363.6 |
-| `field100` | `proxy_chain` | 0.1 | – | – | 1286.5 | 1286.6 |
-| `field100` | `direct_transport` | 1105.7 | 1105.7 | – | 193.7 | 1299.4 |
-| `field100` | `direct_proto` | 1098.7 | 1098.7 | 0.0 | 222.1 | 1320.8 |
+| regime | topology | run | connect | of which lane pairing | of which protocol | first echo | total |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `clean25` (2 % loss) | `proxy_chain` | A / B | 0.2 / 0.1 | – | – | 447.0 / 531.3 | 447.2 / 531.4 |
+| `clean25` | `direct_transport` | A / B | 341.4 / 339.4 | 341.3 / 339.4 | – | 44.7 / 47.8 | 386.1 / 387.2 |
+| `clean25` | `direct_proto` | A / B | 330.7 / 336.2 | 330.5 / 336.2 | 0.3 / 0.0 | 62.0 / 69.1 | 392.8 / 405.3 |
+| `jitter25` (0 % loss) | `proxy_chain` | A / B | 0.2 / 0.1 | – | – | 410.1 / 415.4 | 410.3 / 415.4 |
+| `jitter25` | `direct_transport` | A / B | 299.2 / 327.7 | 299.2 / 327.7 | – | 46.7 / 49.2 | 346.0 / 376.9 |
+| `jitter25` | `direct_proto` | A / B | 298.1 / 351.2 | 298.1 / 351.2 | 0.0 / 0.0 | 65.5 / 67.5 | 363.6 / 418.7 |
+| `field100` | `proxy_chain` | A / B | 0.1 / 0.1 | – | – | 1286.5 / 1299.1 | 1286.6 / 1299.2 |
+| `field100` | `direct_transport` | A / B | 1105.7 / 1127.0 | 1105.7 / 1127.0 | – | 193.7 / 193.2 | 1299.4 / 1320.2 |
+| `field100` | `direct_proto` | A / B | 1098.7 / 1099.3 | 1098.7 / 1099.3 | 0.0 / 0.0 | 222.1 / 224.5 | 1320.8 / 1323.8 |
 
-**The charge is the `rtp_mux` lane pairing.** It is 7.3–8.3 base RTTs at the
+**The charge is the `rtp_mux` lane pairing.** It is 7.3-8.3 base RTTs at the
 two 25 ms-OWD scales and 5.8 at 100 ms OWD, and the **proxy-free** direct
-transport pays all of it before its window even opens. The proxy protocol's own
-bytes (flow kind, preamble, relay header) cost at most 0.3 ms, and removing the
-loss takes only 12 % of the pairing (341 → 299 ms at 25 ms OWD), so the cost is
-structural rather than a loss realisation. The chain's ingress stage and its
-extra relay leg are bounded by the difference from the protocol-only arm: 54 ms
-at `clean25` and 47 ms at `jitter25` — about one base RTT, 12 % of the charge —
-and at 100 ms OWD the chain measures 34 ms *faster* than the protocol-only arm,
-inside the noise of a single-sample reading. So the `+242 ms` proxy-minus-direct
-p99 the unwarmed cadence reports at `clean25` is a **clock-placement artifact**:
-on one clock the two topologies agree to within one RTT, and the direct arm's
-`connect()` hides the same pairing the chain charges to its first message.
+transport pays all of it before its window even opens. Across the two runs the
+pairing reproduces within 12 % (339-341 ms at `clean25`, 299-328 at `jitter25`,
+1099-1127 at `field100`), and the lossless regime removes only 12-16 % of it, so
+the cost is structural rather than a loss realisation. The proxy protocol's own
+bytes (flow kind, preamble, relay header) cost at most 0.3 ms. So the `+242 ms`
+proxy-minus-direct p99 the unwarmed cadence reports at `clean25` is a
+**clock-placement artifact**: on one clock the direct transport pays the same
+pairing the chain charges to its first message.
+
+**The chain's ingress stage and its extra relay leg are bounded, not
+resolved.** Their contribution is the difference from the protocol-only arm,
+which is a single sample per regime per run: run A gives +54 ms at `clean25`,
++47 at `jitter25` and −34 at `field100`, run B +126, −3 and −25 ms. The spread
+(two runs, same revision, same seeds; ~1.3 base RTT at the 25 ms scales, and the
+sign flips at 100 ms) is the run-to-run spread of the unwarmed first sample, so
+the honest bound is: the chain's ingress plus its extra relay leg is at most a
+two-base-RTT effect and never a large share of the charge, and this instrument
+cannot resolve it further without more samples of the same arm.
 
 **The remaining steps, each bounded or empty.** The pool is not a factor: the
 config declares no pool, so `connect_with_pool`'s `pull` is a keyed miss that
@@ -254,16 +261,20 @@ hop through the stream pool (`[stream.pool]`), whose entries connect in the
 background at start-up; this scenario does not measure that, because it needs a
 pool-readiness signal the harness has no way to observe (see the empty cells).
 
-**Run-to-run stability.** The table is one full run. The chain's own cold totals
-reproduce the previous revision's independently measured cold connection (404–
-494 ms at 41 ms base RTT, 1416 ms at 192 ms) within that measurement's own
-spread, and the proxy-free direct arm reproduces the pairing in the same run. A
-second attempt under a load average of 25 reproduced every calibration base
-(41.4/41.6, 41.4/41.2, 192.0/191.4 ms) but failed the pre-existing
-bulk-saturation instrument assertion before the cold table printed: the direct
-arm carried 0.381 MiB/s against the 0.477 MiB/s floor. That is the harness, not
-the change — the bulk arm's own goodput varies with host load (0.28–0.99×
-between runs) — so the cold reading here has one full-run sample and the bulk
+**Run-to-run stability.** Both full runs are green on this revision's healthy
+path and are the two columns of the cold table. The lane pairing reproduces
+within 12 %; the chain's own unwarmed first sample does not (`clean25` 447 then
+531 ms) and neither does the ingress residue, which is why the ingress bound
+above is stated as a bound. The chain's totals do sit within the previous
+revision's independently measured cold connection (404–494 ms at 41 ms base
+RTT, 1416 ms at 192 ms), whose own spread is the same shape. The previous
+revision's caveat stands: the control arms' per-arm p99 varies tens to ~200 ms
+run to run, while the over-250 ms counts are stable. A third attempt at a load
+average of 25 reproduced every calibration base (41.4/41.6, 41.4/41.2,
+192.0/191.4 ms) but failed the pre-existing bulk-saturation instrument
+assertion before the cold table printed: the direct arm carried 0.381 MiB/s
+against the 0.477 MiB/s floor. That is the harness under host load, not the
+change — the bulk arm's own goodput varies 0.28–0.99× between runs — so the bulk
 cell is quoted, never gated.
 
 **Vacuity.** `PROXY_PATH_PERF_FAULT=zero_samples` empties an arm,
