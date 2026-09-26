@@ -18,6 +18,34 @@ use super::IoConnection;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
+/// The number of this key's pooled connections that are **established and
+/// still waiting to be pulled**, i.e. how much of the key's pre-pairing is
+/// actually banked right now.
+///
+/// It is the only way to observe the pool from outside the process, and the
+/// pool is only deployable if its warm-ness is observable: a configured pool
+/// whose entries are still pairing looks exactly like no pool at all on the
+/// request path, and a `pull` cannot report the difference without consuming
+/// the entry it is asking about. The three events that move a connection in or
+/// out of the queue are counted where they happen — a successful
+/// [`PoolConnector::connect`] (the pool task pushes it next), a successful
+/// `pull` in [`connect_with_pool`], and a failed [`PoolHeartbeat`] (the cell
+/// is dropped without ever being pulled) — so the gauge is the queue's own
+/// depth outside the window in which a completed connect has not been pushed
+/// yet. The end-to-end verification is
+/// `server/tests/proxy_path_perf.rs`'s pool arms: each asserts it observed its
+/// own key at or above the minimum before opening its measured window, and
+/// `PROXY_PATH_PERF_FAULT=pool_unwarmed` asserts the same barrier fails for a
+/// config that declares no pool. The heartbeat's decrement needs a run longer
+/// than one heartbeat interval (30 s) to be exercised; no arm is that long.
+const POOL_READY_GAUGE: &str = "stream.pool.ready";
+
+/// The readiness gauge for one pool key. Per key, because a key that is still
+/// pairing must not be able to borrow another key's warm entries.
+fn pool_ready_gauge(key: &RouteAddr) -> metrics::Gauge {
+    metrics::gauge!(POOL_READY_GAUGE, "key" => key.to_string())
+}
+
 pub type StreamPoolBuilder = PoolBuilder;
 pub type StreamConnPool = ConnPool<RouteAddr, Box<dyn IoConnection>>;
 
@@ -106,25 +134,30 @@ impl tokio_conn_pool::Connect for PoolConnector {
     type Connection = Box<dyn IoConnection>;
     async fn connect(&self) -> Option<Self::Connection> {
         let addr = self.conn.address.clone();
-        if let Some((_, name)) = addr.reverse_tunnel() {
-            return self
-                .connector_table
+        let conn = if let Some((_, name)) = addr.reverse_tunnel() {
+            self.connector_table
                 .timed_connect_named(&addr.protocol, name, HEARTBEAT_INTERVAL)
                 .await
-                .ok();
+                .ok()
+        } else {
+            let sock_addrs = addr.address.to_socket_addrs().await.ok()?;
+            let (stream, _sock_addr) = self
+                .connector_table
+                .timed_connect_any(
+                    &self.conn.address.protocol,
+                    sock_addrs,
+                    Some(*self.conn.header_crypto.key()),
+                    HEARTBEAT_INTERVAL,
+                )
+                .await
+                .ok()?;
+            Some(stream)
+        };
+        if conn.is_some() {
+            // The pool task pushes it into the queue as soon as this returns.
+            pool_ready_gauge(&addr).increment(1.0);
         }
-        let sock_addrs = addr.address.to_socket_addrs().await.ok()?;
-        let (stream, _sock_addr) = self
-            .connector_table
-            .timed_connect_any(
-                &self.conn.address.protocol,
-                sock_addrs,
-                Some(*self.conn.header_crypto.key()),
-                HEARTBEAT_INTERVAL,
-            )
-            .await
-            .ok()?;
-        Some(stream)
+        conn
     }
 }
 
@@ -136,14 +169,21 @@ struct PoolHeartbeat {
 impl tokio_conn_pool::Heartbeat for PoolHeartbeat {
     type Connection = Box<dyn IoConnection>;
     async fn heartbeat(&self, mut conn: Self::Connection) -> Option<Self::Connection> {
-        send_keep_alive(
+        match send_keep_alive(
             &mut conn,
             HEARTBEAT_INTERVAL,
             &self.conn.header_crypto.clone(),
         )
         .await
-        .ok()?;
-        Some(conn)
+        {
+            Ok(()) => Some(conn),
+            Err(_) => {
+                // The cell is dropped without a pull, so the ready count has to
+                // drop with it or the gauge would over-report warm-ness.
+                pool_ready_gauge(&self.conn.address).decrement(1.0);
+                None
+            }
+        }
     }
 }
 
@@ -155,6 +195,11 @@ pub async fn connect_with_pool(
     timeout: Duration,
 ) -> Result<(Box<dyn IoConnection>, SocketAddr), ConnectError> {
     let stream = stream_context.pool.inner().pull(addr);
+    if stream.is_some() {
+        // A pull takes the entry out of the queue whether or not the caller can
+        // use it, so the ready count moves here rather than at the return.
+        pool_ready_gauge(addr).decrement(1.0);
+    }
     let sock_addr = stream.as_ref().and_then(|s| s.peer_addr().ok());
     if let (Some(stream), Some(sock_addr)) = (stream, sock_addr) {
         return Ok((stream, sock_addr));
