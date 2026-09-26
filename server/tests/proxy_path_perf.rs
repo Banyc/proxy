@@ -88,6 +88,7 @@
 
 use std::{
     future::Future,
+    io,
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{
@@ -97,7 +98,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use common::{
+    header::{codec::timed_write_header_async, preamble},
+    proxy_runtime::{addr::RouteAddr, header::StreamRequestHeader},
+};
 use netem_test::{NetemConfig, NetemPair};
+use protocol::stream_proto::streams::mux::{MuxFlowKind, write_flow_kind};
 use rtp_mux::{
     LaneClass, ObfuscationKey, RtpMuxConnector, RtpMuxConnectorConfig, RtpMuxServer,
     RtpMuxServerConfig, SessionSpawner,
@@ -630,6 +636,133 @@ impl DirectHandle {
     }
 }
 
+// ──────────────────── the proxy-protocol-only arm ─────────────────────────
+
+/// The chain minus its access-server ingress: the real `proxy` binary run
+/// from a config file that declares **only** `proxy_server` listeners, with the
+/// same impaired `rtp_mux` hop, and the harness itself acting as the chain's
+/// first hop — pairing the mux session and writing the flow-kind byte, the
+/// upgrade preamble and the relay header that
+/// `common::proxy_runtime::client::stream::establish` writes for the deployed
+/// chain. Everything after the client's first write is the deployed binary's
+/// own `proxy_server` path: the protocol read, the upstream connect and the
+/// production relay.
+///
+/// It answers the one question the chain-versus-direct pair cannot: is the
+/// chain's establishment charge its *ingress stage* (the TCP accept at the
+/// access server, the chain selection, the pool) or the steps every topology
+/// pays (the `rtp_mux` lane pairing, the preamble and header, the upstream
+/// connect)?
+///
+/// Process readiness is observed through a second, TCP `proxy_server` listener
+/// in the same config. It is built in the same prepare pass as the `rtp_mux`
+/// listener and spawned in the same commit, so accepting on it proves the mux
+/// listener is bound; a bare TCP connect that is closed before any preamble is
+/// written puts no traffic on the impaired hop and no session on the mux
+/// listener. Observing readiness through the *access* server's listener
+/// instead would make the probe itself drive a chain establishment on the very
+/// hop the arm measures.
+struct ProtoServerHandle {
+    child: tokio::process::Child,
+    hop: ImpairedHop,
+    /// The address a client dials to reach the proxy server through the
+    /// impaired hop (the hop's client-side socket).
+    addr: SocketAddr,
+    connector: Arc<RtpMuxConnector>,
+    scope: TaskScope,
+    dir: PathBuf,
+}
+
+/// The config for the `direct_proto` arm: `proxy_server` listeners only, and
+/// no access server at all.
+fn write_proto_config(dir: &Path, proxy_addr: SocketAddr, probe_port: u16) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let config = format!(
+        r#"[[proxy_server.rtp_mux_server]]
+listen_addr = "127.0.0.1:{proxy_port}"
+header_key = "{HEADER_KEY}"
+allow_loopback = true
+
+# Process-readiness probe only; see `ProtoServerHandle`.
+[[proxy_server.tcp_server]]
+listen_addr = "127.0.0.1:{probe_port}"
+header_key = "{HEADER_KEY}"
+allow_loopback = true
+"#,
+        proxy_port = proxy_addr.port(),
+    );
+    let path = dir.join("config.toml");
+    std::fs::write(&path, config).unwrap();
+    path
+}
+
+/// Start the real `proxy` binary with `proxy_server` listeners only, with the
+/// mux listener reached through `c2s`/`s2c`, and a fresh mux connector whose
+/// obfuscation key is the listener's own header key.
+async fn start_proto_server(
+    tag: &str,
+    regime: &Regime,
+    extra_owd: Duration,
+    proto: &ProtoClient,
+) -> ProtoServerHandle {
+    let (proxy_port, _proxy_bulk) = alloc_adjacent_udp_pair();
+    let proxy_addr = localhost(proxy_port);
+    let hop = ImpairedHop::spawn(proxy_addr, &regime.c2s(extra_owd), &regime.s2c(extra_owd));
+    let probe_port = alloc_tcp_port();
+    let dir = unique_temp_dir(tag);
+    let path = write_proto_config(&dir, proxy_addr, probe_port);
+
+    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_proxy"))
+        .arg(&path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn the proxy binary");
+
+    // Wait for the same process's TCP proxy-server listener to accept: it is
+    // prepared and committed with the mux listener, so this is the process's
+    // own readiness, not a guess at a sleep.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if TcpStream::connect(localhost(probe_port)).await.is_ok() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the proxy binary never opened its readiness listener"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let scope = TaskScope::new();
+    let bind: rtp_mux::BindSelector = Arc::new(|_addr: SocketAddr| localhost(0));
+    let (connector, driver) = RtpMuxConnector::with_config(
+        RtpMuxConnectorConfig::standard(bind).with_obfuscation_key(Some(ObfuscationKey::from_bytes(
+            *proto.header_crypto.key(),
+        ))),
+    );
+    let connector = Arc::new(connector);
+    scope.spawn(driver);
+    ProtoServerHandle {
+        child,
+        addr: hop.client_addr,
+        hop,
+        connector,
+        scope,
+        dir,
+    }
+}
+
+impl ProtoServerHandle {
+    async fn shutdown(mut self) {
+        let _ = self.child.kill().await;
+        self.hop.stop();
+        self.scope.reap_ready();
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
 // ───────────────────────────── load shapes ────────────────────────────────
 
 #[derive(Clone, Copy, Debug)]
@@ -687,6 +820,58 @@ fn elapsed_ms(since: Instant) -> f64 {
     since.elapsed().as_secs_f64() * 1000.0
 }
 
+/// The proxy protocol's client half, as the deployed chain's first hop speaks
+/// it: a flow-kind byte, the upgrade preamble, then the relay header naming the
+/// destination. `common::proxy_runtime::client::stream::establish` writes
+/// exactly these three things on a chain's first hop, so a harness that writes
+/// them itself puts the same bytes on the wire as the access server would.
+struct ProtoClient {
+    /// The key the `proxy_server` listener is configured with; it both signs
+    /// the relay header and obfuscates the `rtp_mux` transport to that listener.
+    header_crypto: tokio_chacha20::config::Config,
+    /// The destination the relay header asks for: the same `tcp://<echo>` the
+    /// chain's `access_server.tcp_server` is configured with.
+    upstream: RouteAddr,
+}
+
+/// The protocol client the `direct_proto` arm speaks with.
+fn proto_client(echo: SocketAddr) -> ProtoClient {
+    ProtoClient {
+        header_crypto: tokio_chacha20::config::ConfigBuilder(HEADER_KEY.to_string())
+            .build()
+            .expect("the config's own header key must build"),
+        upstream: format!("tcp://{echo}")
+            .parse()
+            .expect("the echo destination parses as a route address"),
+    }
+}
+
+/// Write the three wire elements a chain's first hop writes to its next hop.
+async fn speak_proxy_protocol<S>(
+    stream: &mut S,
+    header_crypto: &tokio_chacha20::config::Config,
+    upstream: &RouteAddr,
+) -> io::Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
+    write_flow_kind(stream, MuxFlowKind::Stream).await?;
+    preamble::send_upgrade(stream, common::STREAM_IO_TIMEOUT, header_crypto)
+        .await
+        .map_err(io::Error::other)?;
+    let header = StreamRequestHeader {
+        upstream: Some(upstream.clone()),
+    };
+    timed_write_header_async(
+        stream,
+        &header,
+        *header_crypto.key(),
+        common::STREAM_IO_TIMEOUT,
+    )
+    .await
+    .map_err(io::Error::other)
+}
+
 /// What one [`Target::connect`] actually did, and how long each part took.
 ///
 /// The deployed chain's client-side `connect()` is only a TCP accept at the
@@ -736,6 +921,15 @@ enum TargetKind {
         connector: Arc<RtpMuxConnector>,
         addr: SocketAddr,
     },
+    /// The `direct_proto` arm: an `rtp_mux` stream to the proxy binary's
+    /// `proxy_server`, with the harness itself writing the flow-kind byte, the
+    /// upgrade preamble and the relay header.
+    Proto {
+        connector: Arc<RtpMuxConnector>,
+        addr: SocketAddr,
+        header_crypto: tokio_chacha20::config::Config,
+        upstream: RouteAddr,
+    },
 }
 
 impl Target {
@@ -752,6 +946,20 @@ impl Target {
 
     fn direct(connector: Arc<RtpMuxConnector>, addr: SocketAddr) -> Self {
         Self::new(TargetKind::Direct { connector, addr })
+    }
+
+    fn proto(
+        connector: Arc<RtpMuxConnector>,
+        addr: SocketAddr,
+        header_crypto: tokio_chacha20::config::Config,
+        upstream: RouteAddr,
+    ) -> Self {
+        Self::new(TargetKind::Proto {
+            connector,
+            addr,
+            header_crypto,
+            upstream,
+        })
     }
 
     /// Take this target's dial records, leaving it empty.
@@ -788,6 +996,41 @@ impl Target {
                         connect_ms: 0.0,
                         mux_dial_ms: Some(elapsed_ms(paired)),
                         protocol_ms: None,
+                        mux_session_reused: reused,
+                    },
+                )
+            }
+            TargetKind::Proto {
+                connector,
+                addr,
+                header_crypto,
+                upstream,
+            } => {
+                let reused = connector.probe_session(*addr).is_some();
+                let paired = Instant::now();
+                // The obfuscation key is the header key: the `proxy_server`
+                // derives its `rtp_mux` listener's key from the same header
+                // key, exactly as the chain's first hop passes
+                // `header_crypto.key()` to its connector.
+                let mut stream = connector
+                    .connect_stream_with_lane_and_key(
+                        *addr,
+                        LaneClass::Interactive,
+                        Some(ObfuscationKey::from_bytes(*header_crypto.key())),
+                    )
+                    .await
+                    .expect("connect the direct_proto rtp_mux stream");
+                let mux_dial_ms = elapsed_ms(paired);
+                let spoke = Instant::now();
+                speak_proxy_protocol(&mut stream, header_crypto, upstream)
+                    .await
+                    .expect("write the proxy protocol to the proxy_server");
+                (
+                    Box::new(stream),
+                    Dial {
+                        connect_ms: 0.0,
+                        mux_dial_ms: Some(mux_dial_ms),
+                        protocol_ms: Some(elapsed_ms(spoke)),
                         mux_session_reused: reused,
                     },
                 )
@@ -1707,6 +1950,55 @@ async fn run_relay_stack_arm(
     outcome
 }
 
+/// Run one shape against the `direct_proto` topology — the proxy binary's
+/// `proxy_server` alone, entered with the harness's own protocol client — on a
+/// fresh process, so its mux lane pairing is a cold one.
+async fn run_proto_arm(
+    regime: &Regime,
+    shape: Shape,
+    calibration: Duration,
+    echo: SocketAddr,
+    fault: Option<Fault>,
+) -> ArmOutcome {
+    let proto = proto_client(echo);
+    let server = start_proto_server(
+        &format!("proto-{}", regime.name),
+        regime,
+        calibration,
+        &proto,
+    )
+    .await;
+    let target = Target::proto(
+        Arc::clone(&server.connector),
+        server.addr,
+        proto.header_crypto.clone(),
+        proto.upstream.clone(),
+    );
+    let outcome = run_shape("direct_proto", regime, &target, shape, &server.hop, fault).await;
+    server.shutdown().await;
+    outcome
+}
+
+/// Assert the `direct_proto` arm's achieved base RTT matches the regime's
+/// calibrated direct base. The arm adds one loopback TCP hop the direct arm
+/// does not have (the `proxy_server`'s connect to the echo), but the chain has
+/// that hop too and was matched against the same base, so a disagreement beyond
+/// the tolerance means this arm is measuring a different path length rather
+/// than the protocol's stages. Instrument sanity, not a product bound.
+fn assert_proto_rtt_matched(regime: &Regime, arm: &ArmOutcome, calibrated_direct_ms: f64) {
+    let delta = (arm.base_rtt_ms - calibrated_direct_ms).abs();
+    assert!(
+        Duration::from_secs_f64(delta / 1000.0) <= RTT_MATCH_TOL,
+        "INSTRUMENT: direct_proto / {} compared at mismatched base RTT: arm {:.1} ms vs the \
+         regime's calibrated direct base {:.1} ms (delta {:.1} ms > tolerance {} ms)",
+        regime.name,
+        arm.base_rtt_ms,
+        calibrated_direct_ms,
+        delta,
+        RTT_MATCH_TOL.as_millis(),
+    );
+}
+
 /// Measure the chain's and the direct transport's achieved base RTT, and return
 /// the one-way correction that matches them together with the round-trip pair
 /// it was measured on. When a correction is needed the pair is re-measured with
@@ -1810,7 +2102,7 @@ fn arm_json(arm: &ArmOutcome) -> serde_json::Value {
     })
 }
 
-fn record_json(results: &[PairResult]) -> serde_json::Value {
+fn record_json(results: &[PairResult], proto_arms: &[ArmOutcome]) -> serde_json::Value {
     let arms: Vec<serde_json::Value> = results
         .iter()
         .flat_map(|pair| {
@@ -1826,6 +2118,7 @@ fn record_json(results: &[PairResult]) -> serde_json::Value {
             .into_iter()
             .flatten()
         })
+        .chain(proto_arms.iter())
         .map(arm_json)
         .collect();
 
@@ -1917,6 +2210,7 @@ fn record_json(results: &[PairResult]) -> serde_json::Value {
             own topology performs; the chain's parts run inside the binary, after its window \
             opened, and so appear in its first sample instead.",
         "arms": arms,
+        "proto_arms": proto_arms.iter().map(arm_json).collect::<Vec<_>>(),
         "deltas": deltas,
     })
 }
@@ -1974,7 +2268,7 @@ fn print_arm(arm: &ArmOutcome) {
 /// run inside the binary after its window opened and so appear in `first`.
 /// `reused` marks a dial that found a live mux session, which is not a
 /// cold-connection reading.
-fn print_cold_table(results: &[PairResult]) {
+fn print_cold_table(results: &[PairResult], proto_arms: &[ArmOutcome]) {
     println!("\n=== cold connection: connect() + first echo, request/response shape (ms) ===");
     println!(
         "{:<10} {:<17} {:>9} {:>10} {:>9} {:>8} {:>11} {:>7} {:>9}",
@@ -2010,9 +2304,15 @@ fn print_cold_table(results: &[PairResult]) {
         cell(&pair.proxy);
         cell(&pair.direct);
     }
+    for arm in proto_arms {
+        if arm.shape != "rr" {
+            continue;
+        }
+        cell(arm);
+    }
 }
 
-fn print_table(results: &[PairResult]) {
+fn print_table(results: &[PairResult], proto_arms: &[ArmOutcome]) {
     println!("\n=== proxy-path diagnosis: per-arm measurements ===");
     println!(
         "{:<16} {:<10} {:<8} {:>7} {:>7} {:>8} {:>8} {:>8} {:>9} {:>8} {:>7} {:>6} {:>6}",
@@ -2056,6 +2356,11 @@ fn print_table(results: &[PairResult]) {
                 goodput / direct,
             );
         }
+    }
+    // The protocol-only arms are one per topology and regime, so they print
+    // after the pair matrix rather than once per pair.
+    for arm in proto_arms {
+        print_arm(arm);
     }
     println!("\n=== matched-RTT delta: proxy - direct (ms) ===");
     println!(
@@ -2157,6 +2462,7 @@ async fn proxy_path_matched_rtt_delta() {
     let fault = fault_from_env();
     let (echo, echo_scope) = spawn_tcp_echo().await;
     let mut results: Vec<PairResult> = Vec::new();
+    let mut proto_arms: Vec<ArmOutcome> = Vec::new();
 
     // The fault runs a reduced matrix: the guard it exercises is shared with
     // every arm, so a cheap single pair demonstrates the vacuity.
@@ -2260,6 +2566,32 @@ async fn proxy_path_matched_rtt_delta() {
             results.push(pair);
         }
 
+        // The proxy-protocol arm: the same binary's `proxy_server`, entered by
+        // the harness's own protocol client, so the chain's ingress stage (the
+        // TCP accept, the chain selection, the pooled connect at the access
+        // server) is the one thing it does not have. It runs the request /
+        // response shape the cold-connection charge is measured on and the
+        // pipelined shape the charge was found in, each on its own fresh
+        // process so the lane pairing is cold.
+        if fault.is_none() {
+            for shape in [
+                Shape::RoundTrip {
+                    window: interactive_window,
+                },
+                Shape::Cadence {
+                    window: interactive_window,
+                    interval: Duration::from_millis(5),
+                },
+            ] {
+                let outcome = run_proto_arm(regime, shape, correction, echo, fault).await;
+                outcome.assert_sane();
+                if matches!(shape, Shape::RoundTrip { .. }) {
+                    assert_proto_rtt_matched(regime, &outcome, matched_direct_base);
+                }
+                proto_arms.push(outcome);
+            }
+        }
+
         // The multiplexed access-flow shape is the shape question; it is asked
         // at one RTT scale rather than at every scale.
         if fault.is_none() && regime.name == "clean25" {
@@ -2326,10 +2658,10 @@ async fn proxy_path_matched_rtt_delta() {
         results.push(pair);
     }
 
-    print_table(&results);
-    print_cold_table(&results);
+    print_table(&results, &proto_arms);
+    print_cold_table(&results, &proto_arms);
     echo_scope.reap_ready();
-    let report = record_json(&results);
+    let report = record_json(&results, &proto_arms);
     let path = out_path();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();

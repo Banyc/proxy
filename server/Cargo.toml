@@ -44,6 +44,11 @@ serde_json = { workspace = true }
 # that production relay's contribution on the direct transport without a proxy
 # in the path.
 async-speed-limit = { workspace = true }
+# The `direct_proto` arm speaks the proxy protocol itself, so it needs the same
+# header/payload key type the chain's config builds (`ConfigBuilder` -> blake3
+# key) to derive the hop's obfuscation key and to sign its own relay header.
+# Test-only: the server's production dependency set is unchanged.
+tokio_chacha20 = { workspace = true }
 
 [features]
 default = []
