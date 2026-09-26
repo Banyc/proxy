@@ -29,6 +29,16 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+[dev-dependencies]
+# The deterministic, seeded `sch_netem`-faithful impairment instrument, consumed
+# by path so the proxy-path perf scenario impairs the chain's own RTP hop with
+# the same instrument the tri-mandate arms use.
+netem-test = { path = "../../netem_test/netem-test" }
+# The proxy chain's transport, so the same-load-shape direct-transport baseline
+# can be built without a proxy in the path.
+rtp_mux = { workspace = true }
+serde_json = { workspace = true }
+
 [features]
 default = []
 dhat-heap = ["dhat"]

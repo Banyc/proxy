@@ -1,0 +1,1666 @@
+//! The deployed-path diagnosis: is the proxy chain adding a tail the
+//! `rtp_mux`-direct arms cannot see, at matched end-to-end client-to-echo RTT?
+//!
+//! This scenario is an **instrument**, not a mandate. `proxy` owns no
+//! performance bound: the tri-mandate constitution's bounds, arms and
+//! derivations live in `rtp_mux/GATE.md` §Performance and are never restated
+//! here. What this scenario asserts is only its own instrument sanity
+//! (something was measured, nothing was left unanswered, every echo matched,
+//! the two topologies' base RTTs really are matched, the emulated capacity is
+//! really achievable on the direct arm) and its own echo/delivery integrity.
+//! The mandate metrics are **reported**, and any tail this scenario finds is a
+//! finding *for `rtp_mux`*, reported as a target with evidence.
+//!
+//! # What it drives
+//!
+//! Two topologies, the same impaired hop, the same load shape:
+//!
+//! - **proxy chain** — the real `proxy` binary, run from a real config file
+//!   (`access_server.tcp_server` -> `stream.upstream` hop `rtpmux://…` ->
+//!   `proxy_server.rtp_mux_server` -> a loopback TCP echo upstream). Traffic
+//!   enters through the access server's own TCP listener, exactly as the
+//!   operator's client does, and every byte crosses the chain's `rtp_mux` hop.
+//! - **direct transport** — an `rtp_mux` connection with no proxy in the path,
+//!   built from the same public `rtp_mux` server/connector the chain's hop uses,
+//!   with the same echo shape.
+//!
+//! Both topologies' `rtp_mux` hop is impaired by the same seeded
+//! `netem_test` instrument, applied to the hop's *two* lanes (interactive and
+//! its adjacent bulk port) through one `NetemPair` each.
+//!
+//! # Matched RTT
+//!
+//! The chain's extra hops are loopback TCP, but "loopback is negligible" is an
+//! assumption, so the scenario measures it instead: it runs the direct arm,
+//! compares the achieved base (min) client-to-echo RTT against the chain's, and
+//! re-runs the direct arm with the direct link's one-way delay corrected by
+//! half the difference. Both achieved base RTTs and the applied correction are
+//! reported, and the arms are asserted to be matched within `RTT_MATCH_TOL`.
+//! Only then is the residual difference attributable to the proxy layer.
+//!
+//! # Shape
+//!
+//! Two shapes probe the differences `server/config.toml` names and the direct
+//! arms never exercise: a request/response shape at depth 1 (the field
+//! client's shape) and a pipelined ~5 ms cadence; plus a many-flows arm (four
+//! concurrent access flows multiplexed onto the hop) and a rate-shaped bulk
+//! arm. The bulk arm states its emulated capacity explicitly and asserts the
+//! direct arm reaches it, so a chain fraction against a rate nobody achieved
+//! cannot be reported vacuously.
+//!
+//! # Running it
+//!
+//! ```sh
+//! cargo test --release -p server --test proxy_path_perf -- --ignored --nocapture
+//! ```
+//!
+//! Evidence: a human table on stdout and `report.json` under
+//! `$CARGO_TARGET_DIR/proxy_path_perf/` (or `PROXY_PATH_PERF_OUT`). Tier, cost
+//! and coverage are declared in `GATE.md`.
+//!
+//! Fault injection for the vacuity demonstration:
+//! `PROXY_PATH_PERF_FAULT=zero_samples` empties one arm's samples and
+//! `PROXY_PATH_PERF_FAULT=unanswered` drops responses; both must fail the
+//! shared instrument-sanity guard.
+
+use std::{
+    future::Future,
+    net::{Ipv4Addr, SocketAddr},
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
+
+use netem_test::{NetemConfig, NetemPair};
+use rtp_mux::{
+    LaneClass, ObfuscationKey, RtpMuxConnector, RtpMuxConnectorConfig, RtpMuxServer,
+    RtpMuxServerConfig, SessionSpawner,
+};
+use serde_json::json;
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+    task::JoinSet,
+};
+
+/// The proxy chain's `rtp_mux` hop obfuscation / header key. Any fixed key
+/// works; both ends of the chain take it from the config.
+const HEADER_KEY: &str = "cHJveHktZXhhbXBsZS1rZXk";
+/// The hop's datagram-obfuscation key, used by both topologies so the wire
+/// shapes are comparable.
+const OBFUSCATION_KEY: [u8; 32] = [0x42; 32];
+
+/// Interactive message size, in bytes. Matches the tri-mandate arms' 256 B
+/// interactive payload so the reported percentiles are comparable to theirs.
+const MESSAGE_BYTES: usize = 256;
+
+/// Instrument-sanity tolerance for the matched-RTT check: the two topologies'
+/// achieved base RTTs must agree within this, or the delta below is measuring
+/// path length rather than the proxy layer.
+const RTT_MATCH_TOL: Duration = Duration::from_millis(20);
+
+/// Bulk arm: the emulated capacity the rate shaper is configured with, and the
+/// steady-state measurement window. The capacity is a *stated* number, and the
+/// direct arm must reach it or the chain's fraction is meaningless.
+const BULK_CAPACITY_BPS: u64 = 8_000_000;
+const BULK_WARMUP: Duration = Duration::from_secs(3);
+const BULK_WINDOW: Duration = Duration::from_secs(5);
+/// The direct transport must reach this fraction of the stated capacity for the
+/// rate shaper to be a usable denominator. This is an assertion about the
+/// *instrument* (the emulated capacity is achievable), not about the product.
+const DIRECT_BULK_SATURATION: f64 = 0.5;
+
+// ───────────────────────────── port allocation ────────────────────────────
+
+/// Allocate a pair of adjacent free UDP ports, released before use. `rtp_mux`
+/// addresses its bulk lane as the interactive port plus one, so the pair is
+/// the unit that has to be free.
+fn alloc_adjacent_udp_pair() -> (u16, u16) {
+    for _ in 0..256 {
+        let Ok(first) = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)) else {
+            continue;
+        };
+        let port = first.local_addr().unwrap().port();
+        match port.checked_add(1) {
+            None => continue,
+            Some(next) => {
+                let Ok(second) = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, next)) else {
+                    continue;
+                };
+                drop(first);
+                drop(second);
+                return (port, next);
+            }
+        }
+    }
+    panic!("no adjacent free UDP port pair in 256 draws");
+}
+
+fn alloc_tcp_port() -> u16 {
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    port
+}
+
+fn localhost(port: u16) -> SocketAddr {
+    SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port)
+}
+
+// ──────────────────────────────── regimes ─────────────────────────────────
+
+/// An impairment + scale regime. One dimension per regime, varied from the
+/// stated baseline, so a result attributes to that dimension.
+#[derive(Clone, Copy)]
+struct Regime {
+    name: &'static str,
+    /// One-way delay added to every datagram on the impaired hop.
+    owd: Duration,
+    jitter: Duration,
+    /// Independent per-datagram loss threshold (`u32::MAX` = 100 %).
+    loss: u32,
+    /// Rate limit in bits/s for the impaired hop; `0` disables shaping.
+    rate_bps: u64,
+    seed: u64,
+}
+
+impl Regime {
+    /// The tri-mandate `clean` arm's impairment: 2 % iid loss, 25 ms one-way,
+    /// 5 ms jitter, unshaped.
+    const fn clean25() -> Self {
+        Self {
+            name: "clean25",
+            owd: Duration::from_millis(25),
+            jitter: Duration::from_millis(5),
+            loss: u32::MAX / 50,
+            rate_bps: 0,
+            seed: 42,
+        }
+    }
+
+    /// The field's scale: ~190 ms client-to-echo ⇒ ~100 ms one-way.
+    const fn field100() -> Self {
+        Self {
+            name: "field100",
+            owd: Duration::from_millis(100),
+            jitter: Duration::from_millis(5),
+            loss: u32::MAX / 50,
+            rate_bps: 0,
+            seed: 43,
+        }
+    }
+
+    /// [`Self::clean25`] with **no loss** — one dimension varied, so a tail
+    /// that appears here cannot be a loss-realization artifact of the seeded
+    /// drop pattern.
+    const fn jitter25() -> Self {
+        Self {
+            loss: 0,
+            ..Self::clean25()
+        }
+    }
+
+    /// [`Self::clean25`] plus the stated bulk capacity.
+    const fn clean25_shaped() -> Self {
+        Self {
+            name: "clean25_shaped",
+            rate_bps: BULK_CAPACITY_BPS,
+            ..Self::clean25()
+        }
+    }
+
+    fn c2s(&self, extra_owd: Duration) -> NetemConfig {
+        NetemConfig {
+            latency: self.owd + extra_owd,
+            jitter: self.jitter,
+            loss: self.loss,
+            rate: self.rate_bps,
+            seed: self.seed,
+            ..NetemConfig::default()
+        }
+    }
+
+    fn s2c(&self, extra_owd: Duration) -> NetemConfig {
+        NetemConfig {
+            seed: self.seed.wrapping_add(1),
+            ..self.c2s(extra_owd)
+        }
+    }
+}
+
+// ────────────────────────── the impaired rtp_mux hop ──────────────────────
+
+/// One impaired `rtp_mux` hop: a `NetemPair` on each of the hop's two lanes.
+struct ImpairedHop {
+    interactive: NetemPair,
+    bulk: NetemPair,
+    /// The address a client dials to reach the hop (the interactive lane's
+    /// netem client-side socket; the bulk lane is derived as port + 1).
+    client_addr: SocketAddr,
+}
+
+impl ImpairedHop {
+    fn spawn(server_interactive: SocketAddr, c2s: &NetemConfig, s2c: &NetemConfig) -> Self {
+        let (client_port, bulk_client_port) = alloc_adjacent_udp_pair();
+        let bulk_server = localhost(server_interactive.port() + 1);
+        let interactive = NetemPair::spawn_on(
+            server_interactive,
+            c2s.clone(),
+            s2c.clone(),
+            localhost(client_port),
+            localhost(0),
+        )
+        .expect("bind the interactive-lane netem pair");
+        let bulk = NetemPair::spawn_on(
+            bulk_server,
+            c2s.clone(),
+            s2c.clone(),
+            localhost(bulk_client_port),
+            localhost(0),
+        )
+        .expect("bind the bulk-lane netem pair");
+        let client_addr = interactive.client_addr();
+        Self {
+            interactive,
+            bulk,
+            client_addr,
+        }
+    }
+
+    fn stop(self) {
+        self.interactive.stop();
+        self.bulk.stop();
+    }
+}
+
+// ───────────────────────────── echo upstream ──────────────────────────────
+
+/// An explicitly owned, actively reaped task scope. Every background task a test
+/// object starts lives in one of these, so nothing is detached into the runtime
+/// and a panicked task surfaces on the next [`TaskScope::reap_ready`] rather
+/// than being swallowed. Locking is only for the spawn and the non-blocking
+/// reap, so the scope never parks a caller.
+#[derive(Clone)]
+struct TaskScope {
+    tasks: Arc<std::sync::Mutex<JoinSet<()>>>,
+}
+
+impl TaskScope {
+    fn new() -> Self {
+        Self {
+            tasks: Arc::new(std::sync::Mutex::new(JoinSet::new())),
+        }
+    }
+
+    fn spawn<F>(&self, fut: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.tasks.lock().unwrap().spawn(fut);
+    }
+
+    /// The `rtp_mux` session spawner backed by this scope.
+    fn session_spawner(&self) -> SessionSpawner {
+        let scope = self.clone();
+        SessionSpawner::new(move |fut| scope.spawn(fut))
+    }
+
+    /// Reap every task that has finished, re-raising a panic. Non-blocking, so
+    /// a long-lived listener task does not park the caller.
+    fn reap_ready(&self) {
+        let mut tasks = self.tasks.lock().unwrap();
+        while let Some(joined) = tasks.try_join_next() {
+            joined.expect("a scoped task panicked");
+        }
+    }
+}
+
+/// A loopback TCP echo server: reads and writes back, counts bytes. This is the
+/// chain's upstream destination; the direct arm uses the in-process equivalent.
+async fn spawn_tcp_echo() -> (SocketAddr, TaskScope) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let scope = TaskScope::new();
+    let accepted = scope.clone();
+    scope.spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            accepted.spawn(async move {
+                let mut buf = vec![0u8; 64 * 1024];
+                loop {
+                    match stream.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => {
+                            if stream.write_all(&buf[..n]).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+    (addr, scope)
+}
+
+// ─────────────────────────── the proxy chain arm ──────────────────────────
+
+struct ChainHandle {
+    child: tokio::process::Child,
+    hop: ImpairedHop,
+    access_addr: SocketAddr,
+    dir: PathBuf,
+}
+
+fn write_chain_config(
+    dir: &Path,
+    hop_addr: SocketAddr,
+    proxy_addr: SocketAddr,
+    access_port: u16,
+    echo: SocketAddr,
+) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let config = format!(
+        r#"[stream.upstream]
+"hop" = {{ address = "rtpmux://{hop_addr}", header_key = "{HEADER_KEY}" }}
+
+[access_server.stream.conn_selector]
+"default" = {{ chains = [ {{ weight = 1, chain = ["hop"] }} ], probe_rtt = false, active_chains = 1 }}
+
+[[access_server.tcp_server]]
+listen_addr = "127.0.0.1:{access_port}"
+destination = "tcp://{echo}"
+conn_selector = "default"
+
+[[proxy_server.rtp_mux_server]]
+listen_addr = "127.0.0.1:{proxy_port}"
+header_key = "{HEADER_KEY}"
+allow_loopback = true
+"#,
+        proxy_port = proxy_addr.port(),
+    );
+    let path = dir.join("config.toml");
+    std::fs::write(&path, config).unwrap();
+    path
+}
+
+/// Start the real `proxy` binary from a real config file, with the chain's
+/// `rtp_mux` hop impaired by `c2s`/`s2c`, and return a handle whose drop kills
+/// the process and the netem threads.
+async fn start_chain(
+    tag: &str,
+    regime: &Regime,
+    extra_owd: Duration,
+    echo: SocketAddr,
+) -> ChainHandle {
+    let (proxy_port, _proxy_bulk) = alloc_adjacent_udp_pair();
+    let proxy_addr = localhost(proxy_port);
+    let hop = ImpairedHop::spawn(proxy_addr, &regime.c2s(extra_owd), &regime.s2c(extra_owd));
+    let access_port = alloc_tcp_port();
+    let dir = unique_temp_dir(tag);
+    let path = write_chain_config(&dir, hop.client_addr, proxy_addr, access_port, echo);
+
+    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_proxy"))
+        .arg(&path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn the proxy binary");
+
+    // Wait for the access server's own listener to accept.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if TcpStream::connect(localhost(access_port)).await.is_ok() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the proxy binary never opened its access listener"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    ChainHandle {
+        child,
+        hop,
+        access_addr: localhost(access_port),
+        dir,
+    }
+}
+
+impl ChainHandle {
+    async fn shutdown(mut self) {
+        let _ = self.child.kill().await;
+        self.hop.stop();
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn unique_temp_dir(tag: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "proxy-path-perf-{tag}-{}-{nanos}",
+        std::process::id()
+    ))
+}
+
+// ───────────────────────── the direct transport arm ───────────────────────
+
+struct DirectHandle {
+    scope: TaskScope,
+    hop: ImpairedHop,
+    connector: Arc<RtpMuxConnector>,
+    addr: SocketAddr,
+    /// When set, the accepted mux stream is relayed to the TCP echo server
+    /// instead of being echoed in-process: a faithful byte relay with no proxy
+    /// protocol in it. Flipped between arms so one server can serve both.
+    relay_mode: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Start a bare `rtp_mux` server whose accepted streams are echoed (or, with
+/// `relay_mode` set, relayed to the TCP echo server), impaired by the same
+/// `NetemPair` shape as the chain's hop.
+async fn start_direct(regime: &Regime, extra_owd: Duration, echo: SocketAddr) -> DirectHandle {
+    let scope = TaskScope::new();
+    let spawner = scope.session_spawner();
+    let server = RtpMuxServer::bind(
+        "127.0.0.1:0",
+        RtpMuxServerConfig {
+            obfuscation_key: Some(ObfuscationKey::from_bytes(OBFUSCATION_KEY)),
+        },
+    )
+    .await
+    .expect("bind the direct rtp_mux server");
+    let server_addr = server.listener().local_addr();
+    let relay_mode = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let server_relay_mode = Arc::clone(&relay_mode);
+    let handler_scope = scope.clone();
+    scope.spawn(async move {
+        let _ = server
+            .serve(spawner, move |mut stream| {
+                let relay = server_relay_mode.load(Ordering::Relaxed);
+                handler_scope.spawn(async move {
+                    if relay {
+                        let Ok(mut tcp) = TcpStream::connect(echo).await else {
+                            return;
+                        };
+                        let _ = tokio::io::copy_bidirectional(&mut stream, &mut tcp).await;
+                        return;
+                    }
+                    let mut buf = vec![0u8; 64 * 1024];
+                    loop {
+                        match stream.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => {
+                                if stream.write_all(&buf[..n]).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                });
+            })
+            .await;
+    });
+
+    let hop = ImpairedHop::spawn(server_addr, &regime.c2s(extra_owd), &regime.s2c(extra_owd));
+
+    let bind: rtp_mux::BindSelector = Arc::new(|_addr: SocketAddr| localhost(0));
+    let (connector, driver) = RtpMuxConnector::with_config(
+        RtpMuxConnectorConfig::standard(bind)
+            .with_obfuscation_key(Some(ObfuscationKey::from_bytes(OBFUSCATION_KEY))),
+    );
+    let connector = Arc::new(connector);
+    scope.spawn(driver);
+    DirectHandle {
+        scope,
+        addr: hop.client_addr,
+        hop,
+        connector,
+        relay_mode,
+    }
+}
+
+impl DirectHandle {
+    fn shutdown(self) {
+        self.hop.stop();
+    }
+}
+
+// ───────────────────────────── load shapes ────────────────────────────────
+
+#[derive(Clone, Copy, Debug)]
+enum Shape {
+    /// One outstanding request, as the field client behaves.
+    RoundTrip { window: Duration },
+    /// ~5 ms pipelined cadence, the tri-mandate interactive cadence.
+    Cadence {
+        window: Duration,
+        interval: Duration,
+    },
+    /// `flows` concurrent round-trip flows — the multiplexed access-flow shape.
+    Flows { flows: usize, window: Duration },
+    /// A saturating bulk upload with the echo drained concurrently, measured
+    /// over a steady-state window rather than end-to-end: the goodput is the
+    /// echo counter's delta across the window, sampled while the pump still
+    /// runs, so the connection ramp is not divided into the reading.
+    Bulk { warmup: Duration, window: Duration },
+}
+
+impl Shape {
+    fn name(self) -> String {
+        match self {
+            Shape::RoundTrip { .. } => "rr".into(),
+            Shape::Cadence { .. } => "cadence".into(),
+            Shape::Flows { flows, .. } => format!("flows{flows}"),
+            Shape::Bulk { .. } => "bulk".into(),
+        }
+    }
+    fn is_bulk(self) -> bool {
+        matches!(self, Shape::Bulk { .. })
+    }
+}
+
+trait DynStream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> DynStream for T {}
+
+/// A dialable client: the chain's access listener or the direct transport.
+#[derive(Clone)]
+enum Target {
+    Access(SocketAddr),
+    Direct {
+        connector: Arc<RtpMuxConnector>,
+        addr: SocketAddr,
+    },
+}
+
+impl Target {
+    async fn connect(&self) -> Box<dyn DynStream> {
+        match self {
+            Target::Access(addr) => Box::new(
+                TcpStream::connect(addr)
+                    .await
+                    .expect("connect the access listener"),
+            ),
+            Target::Direct { connector, addr } => Box::new(
+                connector
+                    .connect_stream_with_lane(*addr, LaneClass::Interactive)
+                    .await
+                    .expect("connect the direct rtp_mux stream"),
+            ),
+        }
+    }
+}
+
+fn payload_for(seq: u64) -> [u8; MESSAGE_BYTES] {
+    let mut buf = [0u8; MESSAGE_BYTES];
+    buf[..8].copy_from_slice(&seq.to_le_bytes());
+    for (i, byte) in buf.iter_mut().enumerate().skip(8) {
+        *byte = (i as u8) ^ (seq as u8);
+    }
+    buf
+}
+
+/// One arm's measured outcome. Every arm goes through
+/// [`ArmOutcome::assert_sane`], including the fault-injection arms, so the
+/// vacuity demonstration exercises the same guard the real runs do.
+#[derive(Default)]
+struct ArmOutcome {
+    topology: &'static str,
+    regime: &'static str,
+    shape: String,
+    owd_ms: u64,
+    /// Whether this arm measured a bulk transfer rather than per-message
+    /// latencies; the two need different sanity checks.
+    bulk: bool,
+    /// Achieved base (minimum) client-to-echo RTT.
+    base_rtt_ms: f64,
+    latencies_ms: Vec<f64>,
+    unanswered: u64,
+    mismatches: u64,
+    offered_bytes: u64,
+    delivered_bytes: u64,
+    wire_interactive_c2s_bytes: u64,
+    wire_interactive_s2c_bytes: u64,
+    wire_bulk_c2s_bytes: u64,
+    netem_dropped: u64,
+    netem_delayed: u64,
+    netem_forwarded: u64,
+    goodput_mib_s: Option<f64>,
+    echo_elapsed_s: Option<f64>,
+}
+
+impl ArmOutcome {
+    fn label(&self) -> String {
+        format!("{}/{}", self.topology, self.shape)
+    }
+
+    fn percentile(&self, q: f64) -> f64 {
+        percentile(&self.latencies_ms, q)
+    }
+
+    fn over_ceiling(&self) -> usize {
+        self.latencies_ms.iter().filter(|&&v| v > 250.0).count()
+    }
+
+    fn wire_multiple(&self) -> f64 {
+        if self.offered_bytes == 0 {
+            f64::NAN
+        } else {
+            self.wire_interactive_c2s_bytes as f64 / self.offered_bytes as f64
+        }
+    }
+
+    /// The shared instrument-sanity guard. It fails when nothing was measured,
+    /// when a request was left unanswered, or when an echo did not match — the
+    /// three ways an instrument silently stops measuring. It asserts nothing
+    /// about latency: the mandate bounds live in `rtp_mux/GATE.md`.
+    fn assert_sane(&self) {
+        if self.bulk {
+            assert!(
+                self.offered_bytes > 0,
+                "INSTRUMENT: bulk arm {} offered zero bytes",
+                self.label()
+            );
+        } else {
+            assert!(
+                !self.latencies_ms.is_empty(),
+                "INSTRUMENT: arm {} measured zero samples",
+                self.label()
+            );
+        }
+        assert!(
+            self.unanswered == 0,
+            "INSTRUMENT: arm {} left {} request(s) unanswered",
+            self.label(),
+            self.unanswered
+        );
+        assert!(
+            self.mismatches == 0,
+            "INSTRUMENT: arm {} had {} echo mismatch(es); delivery integrity broken",
+            self.label(),
+            self.mismatches
+        );
+        assert!(
+            self.delivered_bytes == self.offered_bytes,
+            "INSTRUMENT: arm {} delivered {} of {} offered bytes",
+            self.label(),
+            self.delivered_bytes,
+            self.offered_bytes
+        );
+    }
+}
+
+fn percentile(sorted: &[f64], q: f64) -> f64 {
+    if sorted.is_empty() {
+        return f64::NAN;
+    }
+    let mut v = sorted.to_vec();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let rank = (q * (v.len() as f64 - 1.0)).round() as usize;
+    v[rank.min(v.len() - 1)]
+}
+
+/// Run the load shape against a freshly dialed target and collect the outcome.
+async fn run_shape(
+    topology: &'static str,
+    regime: &Regime,
+    target: &Target,
+    shape: Shape,
+    hop: &ImpairedHop,
+    fault: Option<Fault>,
+) -> ArmOutcome {
+    let mut outcome = ArmOutcome {
+        topology,
+        regime: regime.name,
+        shape: shape.name(),
+        owd_ms: regime.owd.as_millis() as u64,
+        bulk: shape.is_bulk(),
+        ..ArmOutcome::default()
+    };
+
+    if fault == Some(Fault::ZeroSamples) {
+        // Instrument sanity is checked on an arm that measured nothing.
+        let mut latencies = Vec::new();
+        latencies.clear();
+        outcome.latencies_ms = latencies;
+        return outcome;
+    }
+
+    // Instrument sanity is exercised on an arm that measured nothing.
+    if fault == Some(Fault::ZeroSamples) {
+        return outcome;
+    }
+
+    // Snapshot the hop's counters around the arm so each arm reports its own
+    // per-segment wire, even when two arms share one impaired hop.
+    let hop_before = hop.interactive.snapshot_c2s();
+    let hop_before_s2c = hop.interactive.snapshot_s2c();
+    let hop_before_bulk = hop.bulk.snapshot_c2s();
+
+    let latencies = match shape {
+        Shape::RoundTrip { window } => {
+            let (latencies, unanswered) = round_trip_arm(target, window, fault).await;
+            outcome.unanswered = unanswered;
+            latencies
+        }
+        Shape::Cadence { window, interval } => {
+            let (latencies, unanswered) = cadence_arm(target, window, interval).await;
+            outcome.unanswered = unanswered;
+            latencies
+        }
+        Shape::Flows { flows, window } => {
+            let (latencies, unanswered) = flows_arm(target, flows, window).await;
+            outcome.unanswered = unanswered;
+            latencies
+        }
+        Shape::Bulk { warmup, window } => {
+            let (goodput_mib_s, sent, delivered) = bulk_arm(target, warmup, window).await;
+            outcome.goodput_mib_s = Some(goodput_mib_s);
+            outcome.echo_elapsed_s = Some(window.as_secs_f64());
+            outcome.offered_bytes = sent;
+            outcome.delivered_bytes = delivered;
+            Vec::new()
+        }
+    };
+
+    // Every non-bulk shape reports one latency per completed request and books
+    // the request/response payload as offered/delivered bytes.
+    if !shape.is_bulk() {
+        outcome.offered_bytes = latencies.len() as u64 * MESSAGE_BYTES as u64;
+        outcome.delivered_bytes = outcome.offered_bytes;
+    }
+    outcome.latencies_ms = latencies;
+
+    let c2s = hop.interactive.snapshot_c2s();
+    let s2c = hop.interactive.snapshot_s2c();
+    let bulk = hop.bulk.snapshot_c2s();
+    outcome.wire_interactive_c2s_bytes = c2s
+        .stats
+        .forwarded_bytes
+        .saturating_sub(hop_before.stats.forwarded_bytes);
+    outcome.wire_interactive_s2c_bytes = s2c
+        .stats
+        .forwarded_bytes
+        .saturating_sub(hop_before_s2c.stats.forwarded_bytes);
+    outcome.wire_bulk_c2s_bytes = bulk
+        .stats
+        .forwarded_bytes
+        .saturating_sub(hop_before_bulk.stats.forwarded_bytes);
+    outcome.netem_dropped = c2s.stats.dropped.saturating_sub(hop_before.stats.dropped)
+        + s2c
+            .stats
+            .dropped
+            .saturating_sub(hop_before_s2c.stats.dropped);
+    outcome.netem_delayed = c2s.stats.delayed.saturating_sub(hop_before.stats.delayed)
+        + s2c
+            .stats
+            .delayed
+            .saturating_sub(hop_before_s2c.stats.delayed);
+    outcome.netem_forwarded = c2s
+        .stats
+        .forwarded
+        .saturating_sub(hop_before.stats.forwarded)
+        + s2c
+            .stats
+            .forwarded
+            .saturating_sub(hop_before_s2c.stats.forwarded);
+    outcome.base_rtt_ms = outcome
+        .latencies_ms
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    if !outcome.base_rtt_ms.is_finite() {
+        outcome.base_rtt_ms = 0.0;
+    }
+    outcome
+}
+
+/// A request/response shape at depth one: write one message, read the echo,
+/// repeat until the window closes. Returns one latency per completed exchange
+/// and the number of requests that were never answered.
+async fn round_trip_arm(
+    target: &Target,
+    window: Duration,
+    fault: Option<Fault>,
+) -> (Vec<f64>, u64) {
+    let mut stream = target.connect().await;
+    let deadline = Instant::now() + window;
+    let mut latencies = Vec::new();
+    let mut unanswered = 0u64;
+    let mut seq = 0u64;
+    let mut buf = [0u8; MESSAGE_BYTES];
+    while Instant::now() < deadline {
+        let sent = payload_for(seq);
+        let start = Instant::now();
+        if fault == Some(Fault::Unanswered) && seq >= 3 {
+            // The instrument's own failure mode: a request is issued and never
+            // answered, after a few real exchanges so the guard is exercised on
+            // a measured arm rather than on an empty one.
+            let _ = stream.write_all(&sent).await;
+            unanswered += 1;
+            break;
+        }
+        if stream.write_all(&sent).await.is_err() {
+            break;
+        }
+        match tokio::time::timeout(Duration::from_secs(30), stream.read_exact(&mut buf)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => {
+                // The request went out and nothing ever came back.
+                unanswered += 1;
+                break;
+            }
+        }
+        latencies.push(start.elapsed().as_secs_f64() * 1000.0);
+        assert_eq!(
+            &buf[..],
+            &sent[..],
+            "INSTRUMENT: request/response payload mismatch at seq {seq}"
+        );
+        seq += 1;
+    }
+    (latencies, unanswered)
+}
+
+/// A pipelined cadence: writes are paced at `interval` regardless of replies,
+/// so several requests are in flight, and each reply's latency is measured from
+/// its own write. Returns one latency per completed exchange and the number of
+/// requests whose reply never arrived.
+async fn cadence_arm(target: &Target, window: Duration, interval: Duration) -> (Vec<f64>, u64) {
+    let stream = target.connect().await;
+    let (mut reader, mut writer) = tokio::io::split(stream);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Instant>(65536);
+    let send_deadline = Instant::now() + window;
+    let writer_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer_finished_flag = Arc::clone(&writer_finished);
+    let drain_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer_drain = Arc::clone(&drain_done);
+    let mut tasks = JoinSet::new();
+    tasks.spawn(async move {
+        let mut seq = 0u64;
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        while Instant::now() < send_deadline {
+            ticker.tick().await;
+            let sent = payload_for(seq);
+            let start = Instant::now();
+            if writer.write_all(&sent).await.is_err() {
+                break;
+            }
+            if tx.send(start).await.is_err() {
+                break;
+            }
+            seq += 1;
+        }
+        // Do **not** close the write half here: shutting it down now would make
+        // the peer tear the stream down while replies are still in flight, and
+        // the unread echoes would look like unanswered requests. Hold it open
+        // until the reader has drained.
+        writer_finished_flag.store(true, Ordering::Relaxed);
+        while !writer_drain.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let _ = writer.shutdown().await;
+    });
+
+    // Once the writer has stopped, silence for this long means every outstanding
+    // reply that was coming has arrived. Comfortably above the tail the
+    // diagnosis itself measures, and far above the base RTT at both scales.
+    const SILENCE_GRACE: Duration = Duration::from_secs(2);
+    let mut latencies = Vec::new();
+    let mut buf = [0u8; MESSAGE_BYTES];
+    let mut expected = 0u64;
+    let read_deadline = Instant::now() + window + Duration::from_secs(10);
+    loop {
+        // Before the writer stops, wait as long as the arm allows; after it
+        // stops, the reply stream is finite, so a short silence ends it.
+        let read = if writer_finished.load(Ordering::Relaxed) {
+            tokio::time::timeout(SILENCE_GRACE, reader.read_exact(&mut buf)).await
+        } else {
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(read_deadline),
+                reader.read_exact(&mut buf),
+            )
+            .await
+        };
+        match read {
+            Ok(Ok(_)) => {
+                let start = match rx.recv().await {
+                    Some(start) => start,
+                    None => break,
+                };
+                let sent = payload_for(expected);
+                assert_eq!(
+                    &buf[..],
+                    &sent[..],
+                    "INSTRUMENT: cadence payload mismatch at seq {expected}"
+                );
+                latencies.push(start.elapsed().as_secs_f64() * 1000.0);
+                expected += 1;
+            }
+            Ok(Err(_)) => break,
+            Err(_) => break,
+        }
+    }
+    drain_done.store(true, Ordering::Relaxed);
+    let _ = tasks.join_next().await;
+    // Any instant still queued with no matching reply is a request that was
+    // never answered.
+    let mut unanswered = 0u64;
+    while rx.try_recv().is_ok() {
+        unanswered += 1;
+    }
+    (latencies, unanswered)
+}
+
+/// `flows` concurrent round-trip flows on one hop — the multiplexed access-flow
+/// shape the direct arms never send. Returns the pooled latencies across flows
+/// and the total number of unanswered requests.
+async fn flows_arm(target: &Target, flows: usize, window: Duration) -> (Vec<f64>, u64) {
+    let mut set = JoinSet::new();
+    for _ in 0..flows {
+        let target = target.clone();
+        set.spawn(async move { round_trip_arm(&target, window, None).await });
+    }
+    let mut pooled = Vec::new();
+    let mut unanswered = 0u64;
+    while let Some(joined) = set.join_next().await {
+        let (latencies, missing) = joined.expect("a flow panicked");
+        pooled.extend(latencies);
+        unanswered += missing;
+    }
+    (pooled, unanswered)
+}
+
+/// A saturating bulk upload with the echo drained concurrently. Returns the
+/// steady-state end-to-end goodput in MiB/s (the echo counter's delta across
+/// `window`, sampled while the pump still runs), the bytes written, and the
+/// bytes echoed back. A non-zero warmup keeps the connection ramp out of the
+/// reading.
+async fn bulk_arm(target: &Target, warmup: Duration, window: Duration) -> (f64, u64, u64) {
+    let stream = target.connect().await;
+    let (mut reader, mut writer) = tokio::io::split(stream);
+    let delivered = Arc::new(AtomicU64::new(0));
+    let sent = Arc::new(AtomicU64::new(0));
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let reader_count = Arc::clone(&delivered);
+    let mut tasks = JoinSet::new();
+    tasks.spawn(async move {
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            match reader.read(&mut buf).await {
+                Ok(0) | Err(_) => return,
+                Ok(n) => {
+                    reader_count.fetch_add(n as u64, Ordering::Relaxed);
+                }
+            }
+        }
+    });
+
+    let writer_count = Arc::clone(&sent);
+    let writer_stop = Arc::clone(&stop);
+    let drain_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer_drain = Arc::clone(&drain_done);
+    let writer_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer_finished_flag = Arc::clone(&writer_finished);
+    tasks.spawn(async move {
+        let chunk = vec![0x5au8; 64 * 1024];
+        while !writer_stop.load(Ordering::Relaxed) {
+            if writer.write_all(&chunk).await.is_err() {
+                return;
+            }
+            writer_count.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+        }
+        // The offered total is final only now; the flag is set after the last
+        // increment so the caller cannot read a mid-flight count.
+        writer_finished_flag.store(true, Ordering::Relaxed);
+        // Hold the write half open until the echo of everything written has
+        // been read, so the teardown cannot cut the transfer short.
+        while !writer_drain.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let _ = writer.shutdown().await;
+    });
+
+    tokio::time::sleep(warmup).await;
+    let before = delivered.load(Ordering::Relaxed);
+    tokio::time::sleep(window).await;
+    let after = delivered.load(Ordering::Relaxed);
+    let goodput_mib_s = (after - before) as f64 / window.as_secs_f64() / (1024.0 * 1024.0);
+
+    stop.store(true, Ordering::Relaxed);
+    let settle = Instant::now() + Duration::from_secs(10);
+    while !writer_finished.load(Ordering::Relaxed) && Instant::now() < settle {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let total_sent = sent.load(Ordering::Relaxed);
+    // Drain the echo of everything written, so delivery integrity is checked on
+    // the whole transfer rather than on the sampled window.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while delivered.load(Ordering::Relaxed) < total_sent && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    drain_done.store(true, Ordering::Relaxed);
+    // The writer finishes once released; the reader is aborted, its count taken.
+    while let Some(joined) = tasks.join_next().await {
+        joined.expect("a bulk task panicked");
+    }
+    let total_delivered = delivered.load(Ordering::Relaxed);
+    (goodput_mib_s, total_sent, total_delivered)
+}
+
+// ────────────────────────────── the scenario ──────────────────────────────
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Fault {
+    /// An arm measures nothing.
+    ZeroSamples,
+    /// A request is never answered.
+    Unanswered,
+}
+
+fn fault_from_env() -> Option<Fault> {
+    match std::env::var("PROXY_PATH_PERF_FAULT").ok().as_deref() {
+        Some("zero_samples") => Some(Fault::ZeroSamples),
+        Some("unanswered") => Some(Fault::Unanswered),
+        _ => None,
+    }
+}
+
+/// A loopback TCP front: every accepted TCP connection is relayed to a fresh
+/// `rtp_mux` stream on the direct connector. This reproduces the one stage the
+/// deployed chain interposes and the plain direct arm does not — the
+/// application writing into a kernel TCP socket that a relay drains into the
+/// mux stream — so a tail that needs this stage can be told apart from a tail
+/// the proxy protocol or the transport itself causes.
+async fn spawn_tcp_front(
+    connector: Arc<RtpMuxConnector>,
+    upstream: SocketAddr,
+) -> (SocketAddr, TaskScope) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let scope = TaskScope::new();
+    let accepted = scope.clone();
+    scope.spawn(async move {
+        loop {
+            let Ok((mut tcp, _)) = listener.accept().await else {
+                return;
+            };
+            let connector = Arc::clone(&connector);
+            accepted.spawn(async move {
+                let Ok(mut stream) = connector
+                    .connect_stream_with_lane(upstream, LaneClass::Interactive)
+                    .await
+                else {
+                    return;
+                };
+                let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
+            });
+        }
+    });
+    (addr, scope)
+}
+
+/// The matched-RTT calibration and the arm pair it makes comparable.
+struct PairResult {
+    proxy: ArmOutcome,
+    direct: ArmOutcome,
+    /// The same shape and impairment on the direct transport with a TCP front
+    /// interposed; run only where it is needed to attribute a tail.
+    fronted: Option<ArmOutcome>,
+    /// The same shape and impairment on the direct transport whose server-side
+    /// handler is a plain byte relay to the TCP echo server — the chain's
+    /// server stage without the proxy protocol or the access server.
+    relayed: Option<ArmOutcome>,
+    applied_correction: Duration,
+    /// The regime's calibration base RTTs (from the round-trip arm), which are
+    /// what the matched-RTT check is about. A pipelined arm's own minimum is
+    /// polluted by its standing queue, so it is reported but never used to
+    /// claim the two links are matched.
+    matched_base_proxy_ms: f64,
+    matched_base_direct_ms: f64,
+}
+
+/// Run a shape on both topologies in a regime, with the direct arm's one-way
+/// delay corrected so the two achieved base RTTs match. The correction is
+/// derived from the round-trip arm's minimum (base) RTT: the chain's extra
+/// loopback hops are measured, never assumed.
+async fn run_pair(
+    regime: &Regime,
+    shape: Shape,
+    calibration: Duration,
+    echo: SocketAddr,
+    fault: Option<Fault>,
+    with_front: bool,
+    with_relay: bool,
+) -> PairResult {
+    let chain = start_chain(
+        &format!("pair-{}", regime.name),
+        regime,
+        Duration::ZERO,
+        echo,
+    )
+    .await;
+    let proxy = run_shape(
+        "proxy_chain",
+        regime,
+        &Target::Access(chain.access_addr),
+        shape,
+        &chain.hop,
+        fault,
+    )
+    .await;
+    chain.shutdown().await;
+
+    let direct_handle = start_direct(regime, calibration, echo).await;
+    let direct_target = Target::Direct {
+        connector: Arc::clone(&direct_handle.connector),
+        addr: direct_handle.addr,
+    };
+    let direct = run_shape(
+        "direct_transport",
+        regime,
+        &direct_target,
+        shape,
+        &direct_handle.hop,
+        fault,
+    )
+    .await;
+    let fronted = if with_front {
+        let (front_addr, front_scope) =
+            spawn_tcp_front(Arc::clone(&direct_handle.connector), direct_handle.addr).await;
+        let outcome = run_shape(
+            "direct_tcp_front",
+            regime,
+            &Target::Access(front_addr),
+            shape,
+            &direct_handle.hop,
+            fault,
+        )
+        .await;
+        front_scope.reap_ready();
+        Some(outcome)
+    } else {
+        None
+    };
+    let relayed = if with_relay {
+        direct_handle.relay_mode.store(true, Ordering::Relaxed);
+        Some(
+            run_shape(
+                "direct_relay",
+                regime,
+                &direct_target,
+                shape,
+                &direct_handle.hop,
+                fault,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+    direct_handle.scope.reap_ready();
+    direct_handle.shutdown();
+
+    PairResult {
+        proxy,
+        direct,
+        fronted,
+        relayed,
+        applied_correction: calibration,
+        matched_base_proxy_ms: 0.0,
+        matched_base_direct_ms: 0.0,
+    }
+}
+
+/// Measure the chain's and the direct transport's achieved base RTT, and return
+/// the one-way correction that matches them together with the round-trip pair
+/// it was measured on. When a correction is needed the pair is re-measured with
+/// it applied, so the returned pair is always the matched one and doubles as
+/// the round-trip arm's result.
+async fn calibrate(regime: &Regime, echo: SocketAddr) -> (Duration, PairResult) {
+    let shape = Shape::RoundTrip {
+        window: Duration::from_secs(4),
+    };
+    let first = run_pair(regime, shape, Duration::ZERO, echo, None, false, false).await;
+    let correction_ms =
+        ((first.proxy.base_rtt_ms - first.direct.base_rtt_ms) / 2.0).clamp(-150.0, 150.0);
+    let correction = if correction_ms.abs() < 1.0 {
+        Duration::ZERO
+    } else {
+        Duration::from_millis(correction_ms.round() as u64)
+    };
+    if correction.is_zero() {
+        (correction, first)
+    } else {
+        let second = run_pair(regime, shape, correction, echo, None, false, false).await;
+        (correction, second)
+    }
+}
+
+fn out_path() -> PathBuf {
+    if let Ok(path) = std::env::var("PROXY_PATH_PERF_OUT") {
+        return PathBuf::from(path);
+    }
+    let base = std::env::var("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target"));
+    base.join("proxy_path_perf").join("report.json")
+}
+
+fn record_json(results: &[PairResult]) -> serde_json::Value {
+    let arms: Vec<serde_json::Value> = results
+        .iter()
+        .flat_map(|pair| {
+            [
+                Some(&pair.proxy),
+                Some(&pair.direct),
+                pair.fronted.as_ref(),
+                pair.relayed.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+        })
+        .map(|arm| {
+            json!({
+                "topology": arm.topology,
+                "regime": arm.regime,
+                "shape": arm.shape,
+                "owd_ms": arm.owd_ms,
+                "samples": arm.latencies_ms.len(),
+                "unanswered": arm.unanswered,
+                "mismatches": arm.mismatches,
+                "base_rtt_ms": arm.base_rtt_ms,
+                "p50_ms": arm.percentile(0.50),
+                "p90_ms": arm.percentile(0.90),
+                "p99_ms": arm.percentile(0.99),
+                "p999_ms": arm.percentile(0.999),
+                "max_ms": arm.percentile(1.0),
+                "over_250ms": arm.over_ceiling(),
+                "offered_bytes": arm.offered_bytes,
+                "delivered_bytes": arm.delivered_bytes,
+                "wire_segment": "rtpmux lanes, client->server",
+                "wire_dominant_segment": if arm.wire_interactive_c2s_bytes
+                    >= arm.wire_bulk_c2s_bytes
+                {
+                    "interactive"
+                } else {
+                    "bulk"
+                },
+                "wire_interactive_c2s_bytes": arm.wire_interactive_c2s_bytes,
+                "wire_interactive_s2c_bytes": arm.wire_interactive_s2c_bytes,
+                "wire_bulk_lane_c2s_bytes": arm.wire_bulk_c2s_bytes,
+                "wire_multiple_interactive": arm.wire_multiple(),
+                "wire_multiple_dominant_lane": if arm.offered_bytes == 0 {
+                    f64::NAN
+                } else {
+                    arm.wire_interactive_c2s_bytes.max(arm.wire_bulk_c2s_bytes) as f64
+                        / arm.offered_bytes as f64
+                },
+                "netem_interactive_forwarded_events": arm.netem_forwarded,
+                "netem_interactive_dropped_events": arm.netem_dropped,
+                "netem_interactive_delayed_events": arm.netem_delayed,
+                "goodput_mib_s": arm.goodput_mib_s,
+                "echo_elapsed_s": arm.echo_elapsed_s,
+            })
+        })
+        .collect();
+
+    let deltas: Vec<serde_json::Value> = results
+        .iter()
+        .map(|pair| {
+            json!({
+                "regime": pair.proxy.regime,
+                "shape": pair.proxy.shape,
+                "applied_direct_owd_correction_ms": pair.applied_correction.as_millis() as u64,
+                "regime_matched_base_proxy_ms": pair.matched_base_proxy_ms,
+                "regime_matched_base_direct_ms": pair.matched_base_direct_ms,
+                "regime_matched_base_delta_ms": pair.matched_base_proxy_ms
+                    - pair.matched_base_direct_ms,
+                "proxy_base_rtt_ms": pair.proxy.base_rtt_ms,
+                "direct_base_rtt_ms": pair.direct.base_rtt_ms,
+                "matched_rtt_delta_ms": pair.matched_base_proxy_ms
+                    - pair.matched_base_direct_ms,
+                "proxy_minus_direct_p50_ms": pair.proxy.percentile(0.50) - pair.direct.percentile(0.50),
+                "proxy_minus_direct_p99_ms": pair.proxy.percentile(0.99) - pair.direct.percentile(0.99),
+                "proxy_minus_direct_p999_ms": pair.proxy.percentile(0.999) - pair.direct.percentile(0.999),
+                "proxy_minus_direct_max_ms": pair.proxy.percentile(1.0) - pair.direct.percentile(1.0),
+                "proxy_over_250ms": pair.proxy.over_ceiling(),
+                "direct_over_250ms": pair.direct.over_ceiling(),
+                "fronted_p99_ms": pair.fronted.as_ref().map(|f| f.percentile(0.99)),
+                "fronted_over_250ms": pair.fronted.as_ref().map(|f| f.over_ceiling()),
+                "proxy_minus_fronted_p99_ms": pair
+                    .fronted
+                    .as_ref()
+                    .map(|f| pair.proxy.percentile(0.99) - f.percentile(0.99)),
+                "relayed_p99_ms": pair.relayed.as_ref().map(|r| r.percentile(0.99)),
+                "relayed_over_250ms": pair.relayed.as_ref().map(|r| r.over_ceiling()),
+                "relayed_minus_direct_p99_ms": pair
+                    .relayed
+                    .as_ref()
+                    .map(|r| r.percentile(0.99) - pair.direct.percentile(0.99)),
+                "proxy_minus_relayed_p99_ms": pair
+                    .relayed
+                    .as_ref()
+                    .map(|r| pair.proxy.percentile(0.99) - r.percentile(0.99)),
+            })
+        })
+        .collect();
+
+    json!({
+        "scenario": "proxy_path_perf",
+        "kind": "diagnosis",
+        "bounds_authority": "crates/rtp_mux/GATE.md §Performance (not restated here)",
+        "binary": env!("CARGO_BIN_EXE_proxy"),
+        "emulated_bulk_shaped_rate_bps": BULK_CAPACITY_BPS,
+        "effective_capacity_note": "the direct arm's own measured bulk goodput is the effective \
+            capacity; no fraction is computed against the shaped rate because neither arm \
+            reaches it",
+        "rtt_match_tolerance_ms": RTT_MATCH_TOL.as_millis() as u64,
+        "arms": arms,
+        "deltas": deltas,
+    })
+}
+
+fn print_table(results: &[PairResult]) {
+    println!("\n=== proxy-path diagnosis: per-arm measurements ===");
+    println!(
+        "{:<16} {:<10} {:<8} {:>7} {:>7} {:>8} {:>8} {:>8} {:>9} {:>8} {:>7} {:>6} {:>6}",
+        "topology",
+        "regime",
+        "shape",
+        "base",
+        "p50",
+        "p99",
+        "p99.9",
+        "max",
+        ">250ms",
+        "n",
+        "unans",
+        "wire",
+        "drop_ev"
+    );
+    for pair in results {
+        for arm in [
+            Some(&pair.proxy),
+            Some(&pair.direct),
+            pair.fronted.as_ref(),
+            pair.relayed.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            // Report the wire against the lane that actually carried the arm:
+            // the interactive lane for the interactive shapes, the bulk lane
+            // once a bulk flow has migrated onto it.
+            let dominant = arm.wire_interactive_c2s_bytes.max(arm.wire_bulk_c2s_bytes);
+            let multiple = if arm.offered_bytes == 0 {
+                f64::NAN
+            } else {
+                dominant as f64 / arm.offered_bytes as f64
+            };
+            println!(
+                "{:<16} {:<10} {:<8} {:>7.1} {:>7.1} {:>8.1} {:>8.1} {:>8.1} {:>9} {:>8} {:>7} {:>6.2} {:>6}",
+                arm.topology,
+                arm.regime,
+                arm.shape,
+                arm.base_rtt_ms,
+                arm.percentile(0.50),
+                arm.percentile(0.99),
+                arm.percentile(0.999),
+                arm.percentile(1.0),
+                arm.over_ceiling(),
+                arm.latencies_ms.len(),
+                arm.unanswered,
+                multiple,
+                arm.netem_dropped,
+            );
+        }
+        if let Some(goodput) = pair.proxy.goodput_mib_s {
+            let direct = pair.direct.goodput_mib_s.unwrap_or(f64::NAN);
+            println!(
+                "  bulk: proxy {:.3} MiB/s vs direct {:.3} MiB/s (effective capacity = direct; \
+                 shaped rate {:.3} MiB/s, reached by neither) => proxy = {:.3}x direct",
+                goodput,
+                direct,
+                BULK_CAPACITY_BPS as f64 / 8.0 / (1024.0 * 1024.0),
+                goodput / direct,
+            );
+        }
+    }
+    println!("\n=== matched-RTT delta: proxy - direct (ms) ===");
+    println!(
+        "{:<10} {:<8} {:>9} {:>9} {:>8} {:>9} {:>9} {:>9} {:>9} {:>9}",
+        "regime",
+        "shape",
+        "cal_P",
+        "cal_D",
+        "corr",
+        "d_p50",
+        "d_p99",
+        "d_p99.9",
+        "p99vfront",
+        "p99vrelay"
+    );
+    for pair in results {
+        let fronted = match &pair.fronted {
+            Some(fronted) => {
+                format!(
+                    "{:>9.1}",
+                    pair.proxy.percentile(0.99) - fronted.percentile(0.99)
+                )
+            }
+            None => "        -".to_string(),
+        };
+        let relayed = match &pair.relayed {
+            Some(relayed) => {
+                format!(
+                    "{:>9.1}",
+                    pair.proxy.percentile(0.99) - relayed.percentile(0.99)
+                )
+            }
+            None => "        -".to_string(),
+        };
+        println!(
+            "{:<10} {:<8} {:>9.1} {:>9.1} {:>8} {:>9.1} {:>9.1} {:>9.1} {:>9} {:>9}",
+            pair.proxy.regime,
+            pair.proxy.shape,
+            pair.matched_base_proxy_ms,
+            pair.matched_base_direct_ms,
+            pair.applied_correction.as_millis(),
+            pair.proxy.percentile(0.50) - pair.direct.percentile(0.50),
+            pair.proxy.percentile(0.99) - pair.direct.percentile(0.99),
+            pair.proxy.percentile(0.999) - pair.direct.percentile(0.999),
+            fronted,
+            relayed,
+        );
+    }
+    println!();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "diagnosis: drives the real proxy binary under seeded impairment; opt-in, see GATE.md"]
+async fn proxy_path_matched_rtt_delta() {
+    let fault = fault_from_env();
+    let (echo, echo_scope) = spawn_tcp_echo().await;
+    let mut results: Vec<PairResult> = Vec::new();
+
+    // The fault runs a reduced matrix: the guard it exercises is shared with
+    // every arm, so a cheap single pair demonstrates the vacuity.
+    let interactive_window = if fault.is_some() {
+        Duration::from_secs(2)
+    } else {
+        Duration::from_secs(4)
+    };
+    let regimes: Vec<Regime> = if fault.is_some() {
+        vec![Regime::clean25()]
+    } else {
+        vec![Regime::clean25(), Regime::jitter25(), Regime::field100()]
+    };
+
+    for regime in &regimes {
+        let (correction, mut cal_pair) = calibrate(regime, echo).await;
+        let matched_proxy_base = cal_pair.proxy.base_rtt_ms;
+        let matched_direct_base = cal_pair.direct.base_rtt_ms;
+        println!(
+            "CALIBRATION regime={} correction_ms={} proxy_base={:.1} direct_base={:.1}",
+            regime.name,
+            correction.as_millis(),
+            cal_pair.proxy.base_rtt_ms,
+            cal_pair.direct.base_rtt_ms
+        );
+        if fault.is_none() {
+            // The calibration pair is the round-trip arm: re-measuring the same
+            // shape would only spend another window.
+            cal_pair.proxy.assert_sane();
+            cal_pair.direct.assert_sane();
+            assert_matched_rtt(&cal_pair);
+            cal_pair.matched_base_proxy_ms = matched_proxy_base;
+            cal_pair.matched_base_direct_ms = matched_direct_base;
+            results.push(cal_pair);
+        }
+
+        for shape in [
+            Shape::RoundTrip {
+                window: interactive_window,
+            },
+            Shape::Cadence {
+                window: interactive_window,
+                interval: Duration::from_millis(5),
+            },
+        ] {
+            if fault.is_none() && matches!(shape, Shape::RoundTrip { .. }) {
+                continue;
+            }
+            // The two control arms run only on the pipelined cadence at the
+            // two 25 ms-OWD scales — the shape and the scale the main
+            // comparison finds a delta at — so the attribution costs one run
+            // per control rather than one per arm of the matrix.
+            let with_front = fault.is_none() && matches!(shape, Shape::Cadence { .. });
+            let with_relay = with_front && regime.name != "field100";
+            let pair = run_pair(
+                regime, shape, correction, echo, fault, with_front, with_relay,
+            )
+            .await;
+            pair.proxy.assert_sane();
+            pair.direct.assert_sane();
+            if let Some(fronted) = &pair.fronted {
+                fronted.assert_sane();
+            }
+            if let Some(relayed) = &pair.relayed {
+                relayed.assert_sane();
+            }
+            // The matched-RTT claim belongs to the regime's calibration, not to
+            // this shape's own minimum: a queued pipelined arm has no clean
+            // floor, and reporting its minimum as a "base RTT" would confuse a
+            // standing queue with a longer link.
+            let mut pair = pair;
+            pair.matched_base_proxy_ms = matched_proxy_base;
+            pair.matched_base_direct_ms = matched_direct_base;
+            results.push(pair);
+        }
+
+        // The multiplexed access-flow shape is the shape question; it is asked
+        // at one RTT scale rather than at every scale.
+        if fault.is_none() && regime.name == "clean25" {
+            let pair = run_pair(
+                regime,
+                Shape::Flows {
+                    flows: 4,
+                    window: interactive_window,
+                },
+                correction,
+                echo,
+                None,
+                false,
+                false,
+            )
+            .await;
+            pair.proxy.assert_sane();
+            pair.direct.assert_sane();
+            let mut pair = pair;
+            pair.matched_base_proxy_ms = matched_proxy_base;
+            pair.matched_base_direct_ms = matched_direct_base;
+            results.push(pair);
+        }
+    }
+
+    // The shaped regime differs from clean25 only by the rate shaper, so its
+    // base RTT is already matched by clean25's calibration and a second
+    // calibration pair would only spend another window.
+    let clean25_matched = results
+        .iter()
+        .find(|pair| pair.proxy.regime == Regime::clean25().name)
+        .map(|pair| (pair.matched_base_proxy_ms, pair.matched_base_direct_ms))
+        .unwrap_or((0.0, 0.0));
+
+    if fault.is_none() {
+        let shaped = Regime::clean25_shaped();
+        let pair = run_pair(
+            &shaped,
+            Shape::Bulk {
+                warmup: BULK_WARMUP,
+                window: BULK_WINDOW,
+            },
+            Duration::ZERO,
+            echo,
+            None,
+            false,
+            false,
+        )
+        .await;
+        pair.proxy.assert_sane();
+        pair.direct.assert_sane();
+        // Instrument sanity, not a product bound: the direct arm's own measured
+        // goodput is the effective capacity, and the relay is reported as a
+        // fraction of *that*. A fraction of the shaped rate would be vacuous,
+        // because neither arm reaches it.
+        let direct_goodput = pair.direct.goodput_mib_s.unwrap_or(0.0);
+        let shaped_mib_s = BULK_CAPACITY_BPS as f64 / 8.0 / (1024.0 * 1024.0);
+        assert!(
+            direct_goodput >= DIRECT_BULK_SATURATION * shaped_mib_s,
+            "INSTRUMENT: the direct arm carried only {direct_goodput:.3} MiB/s over a link shaped \
+             at {shaped_mib_s:.3} MiB/s, so the bulk comparison is not measuring bulk traffic"
+        );
+        let mut pair = pair;
+        pair.matched_base_proxy_ms = clean25_matched.0;
+        pair.matched_base_direct_ms = clean25_matched.1;
+        results.push(pair);
+    }
+
+    print_table(&results);
+    echo_scope.reap_ready();
+    let report = record_json(&results);
+    let path = out_path();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+    println!("JSON written to {}", path.display());
+}
+
+/// Assert the two topologies were actually compared at matched end-to-end RTT.
+/// This is an assertion about the instrument, not about the product.
+fn assert_matched_rtt(pair: &PairResult) {
+    let delta = (pair.proxy.base_rtt_ms - pair.direct.base_rtt_ms).abs();
+    assert!(
+        Duration::from_secs_f64(delta / 1000.0) <= RTT_MATCH_TOL,
+        "INSTRUMENT: {} / {} compared at mismatched base RTT: proxy {:.1} ms vs direct {:.1} ms \
+         (delta {:.1} ms > tolerance {} ms), so the delta below would measure path length, not \
+         the proxy layer",
+        pair.proxy.regime,
+        pair.proxy.shape,
+        pair.proxy.base_rtt_ms,
+        pair.direct.base_rtt_ms,
+        delta,
+        RTT_MATCH_TOL.as_millis(),
+    );
+}

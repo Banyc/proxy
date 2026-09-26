@@ -1480,6 +1480,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "netem-test"
+version = "0.1.0"
+dependencies = [
+ "dfsql",
+ "parking_lot 0.12.5",
+ "serde",
+]
+
+[[package]]
 name = "noop-waker"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2255,8 +2264,11 @@ dependencies = [
  "file_watcher_tokio",
  "metrics",
  "metrics-exporter-prometheus",
+ "netem-test",
  "protocol",
+ "rtp_mux",
  "serde",
+ "serde_json",
  "swap",
  "thiserror 2.0.20",
  "tokio",

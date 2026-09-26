@@ -32,6 +32,14 @@ python3 tools/check-ignored.py
   benchmark adds the bulk-throughput measurement on top. The checker
   requires its body to keep an assertion token, so the integrity check
   cannot silently evaporate while staying ignored.
+
+  `proxy_path_matched_rtt_delta` is `perf` for the same reason — an end-to-end
+  run against the real `proxy` binary, too slow for the default suite — but it
+  asserts **only instrument sanity and delivery integrity** (something was
+  measured, nothing was left unanswered, every echo matched, the two
+  topologies really were compared at the same end-to-end base RTT, and the
+  direct arm really carried bulk traffic). It asserts **no product bound**.
+  See "The deployed-path diagnosis" below.
 - **unrunnable** — a test whose triggering condition cannot be produced on
   this host. `basics` waits for a real OS suspend/resume notification
   (`spawn_suspend_watcher` with the system clock); that cannot be faked in a
@@ -50,6 +58,7 @@ Each line is `RELATIVE_PATH::fn = classification`. The set must equal the
 ```ignored-manifest
 tests/src/stream.rs::perf_bulk_rtp_mux = perf
 common/src/lifecycle/suspend.rs::basics = unrunnable
+server/tests/proxy_path_perf.rs::proxy_path_matched_rtt_delta = perf
 ```
 
 ## Performance: the tri-mandate constitution (pointer)
@@ -79,11 +88,82 @@ cargo test --release -p rtp_mux --test dual_lane_mandates -- \
     --ignored bulk_lane_goodput_stays_above_capacity_fraction --nocapture --test-threads=1
 ```
 
-Proxy owns no performance oracle yet: its layer's per-stream/per-byte
-allocation and relay freedoms are pinned by its own default-tier tests, and
-any future proxy perf lane that asserts a mandate must land in `proxy` and be
-recorded here; until then the constitution's three gates live with their
-topology owner.
+Proxy owns no mandate bound. The layer's per-stream/per-byte allocation and
+relay freedoms are pinned by its own default-tier tests, and the constitution's
+gates live with their topology owner. `proxy` does own one **diagnosis** (the
+`perf`-tier scenario below); a diagnosis reports, and any threshold it asserts
+is about its own instrument.
+
+## The deployed-path diagnosis (`perf` tier)
+
+`server/tests/proxy_path_perf.rs::proxy_path_matched_rtt_delta` measures the
+assembled artifact the operator runs — the `proxy` binary from a real config
+file, entered through the access server's own TCP listener, with
+`access_server` → `stream.upstream` hop `rtpmux://…` → `proxy_server`, and the
+hop impaired by the same seeded `netem_test` instrument the tri-mandate arms
+use — against the same load shape on the same `rtp_mux` transport with no proxy
+in the path, at **matched end-to-end client-to-echo base RTT**.
+
+```sh
+cargo test --release -p server --test proxy_path_perf -- --ignored --nocapture
+```
+
+**Tier.** `perf` — opt-in, report-only with respect to the product. It asserts
+only its instrument (non-zero samples, zero unanswered requests, echo
+integrity, matched base RTT, bulk traffic actually carried) and it restates no
+mandate bound: those live in `rtp_mux/GATE.md` §Performance and the mandate
+metrics are reported, never gated here.
+
+**Cost.** Measured 144–173 s wall-clock on a warm release build (the final run:
+164 s). It starts the real binary once per proxy arm (5–9 per run), one
+in-process `rtp_mux` server + two `NetemPair` instances per direct arm, and
+spends 4 s of interactive load (plus a 2 s drain) or a 3 s + 5 s bulk window
+per arm over 16 arms.
+
+**Coverage.** Baseline: the tri-mandate `clean` impairment shape, the 256 B
+interactive message, the `rtpmux` hop. Arms vary one dimension from it:
+
+| cell | covered by |
+| --- | --- |
+| scale: 25 ms vs 100 ms one-way (≈50 ms vs ≈190 ms RTT) | `regime=clean25`, `regime=field100` |
+| impairment: 2 % iid loss vs lossless, jitter held | `clean25` vs `jitter25` |
+| load shape: request/response depth 1 vs ~5 ms pipelined cadence | `shape=rr` vs `shape=cadence` |
+| multiplexing: one vs four concurrent access flows on one hop | `shape=flows4` |
+| lane: interactive lane under a bulk flow (the flow migrates to the bulk lane) | `shape=bulk` on `clean25_shaped` |
+| layer: proxy chain vs direct transport | every pair, both topologies |
+| attribution: client-side TCP fronting, server-side byte relay | `direct_tcp_front`, `direct_relay` (cadence, 25 ms OWD) |
+| metric: p50/p90/p99/p99.9/max, over-250 ms count, per-segment wire multiple, delivery | every arm |
+
+**Deliberately empty cells.** Burst (Gilbert-Elliot) impairment: the
+tri-mandate `hostile` arm's model is measured at the `rtp_mux` layer, and this
+scenario's job is the *level* delta, which the iid-loss and lossless arms
+bracket. Residual-loss / retransmission accounting above the transport: the
+per-segment wire multiple is reported, its cause is not decomposed. The bulk
+arm is a **composite** (rate shaping plus flow migration) and is reported as a
+range because it varied 0.28–0.99× of the direct arm across three runs; it is
+not attributed. Cross-host RTT asymmetry and real NIC/scheduler paths: every
+arm is loopback, so host-local CPU and loopback TCP are inside the measurement.
+
+**Matched RTT.** Because the chain has more hops than the direct arm, the
+delta is only interpretable at matched end-to-end client-to-echo base RTT, and
+"loopback is negligible" is measured rather than assumed: each regime is
+calibrated on the round-trip arm, and the direct link's one-way delay is
+corrected by half the difference. Measured correction was `0 ms` in every
+regime (chain 41.2 ms vs direct 41.1 ms at 25 ms OWD; 191.5 ms vs 193.1 ms at
+100 ms OWD), so the chain's extra loopback hops add no measurable baseline. The
+per-arm `base` column is the shape's own minimum and is **not** the matched
+baseline — a queued pipelined arm has none; the delta table prints the
+calibration pair's `cal_P`/`cal_D` instead.
+
+**Vacuity.** `PROXY_PATH_PERF_FAULT=zero_samples` empties an arm and
+`PROXY_PATH_PERF_FAULT=unanswered` issues a request that is never answered;
+both must fail the shared guard that every arm — including both control arms —
+goes through. Demonstrated on the committed revision: exit 101 with `INSTRUMENT:
+arm proxy_chain/rr measured zero samples` and `INSTRUMENT: arm proxy_chain/rr
+left 1 request(s) unanswered`. The guard that `unanswered` exercises is real in
+healthy runs too: it is what caught the cadence arm's own write-half teardown
+truncating in-flight echoes, which is now fixed by holding the write half open
+across the drain.
 
 ## Residual limitations
 
