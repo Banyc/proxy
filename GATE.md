@@ -112,16 +112,27 @@ harness's own protocol client (the chain minus its access-server ingress), at
 cargo test --release -p server --test proxy_path_perf -- --ignored --nocapture
 ```
 
-**Tier.** `perf` — opt-in, report-only with respect to the product. It asserts
+**Tier.** `perf` in this file's own inventory — and `full` in the shared gate
+manifest, because the shared checker reserves `perf` for a report-only
+scenario (see "Two vocabularies share the word `perf`") — opt-in, report-only
+with respect to the product. It asserts
 only its instrument (non-zero samples, zero unanswered requests, echo
 integrity, every arm dialed, matched base RTT, bulk traffic actually carried)
 and it restates no mandate bound: those live in `rtp_mux/GATE.md` §Performance
 and the mandate metrics are reported, never gated here.
 
-**Cost.** Measured 414 s wall-clock on a warm release build over 67 arms (34
-pair arms, 6 protocol-only arms, 27 stream-pool arms), on a host also running
-three concurrent agent builds; earlier figures were 292 s and 260 s over the
-40-arm set on a quieter machine, and 234 s over the 34-arm set. It starts the
+**Cost.** Measured 414 s wall-clock on a warm release build over 65 arms (32
+pair arms and 6 protocol-only arms, which are the run's own `arms` list — 38
+entries — less its `proto_arms` list, 6; plus the 27 stream-pool arms in its
+three `pool_*_arms` lists), on a host also running three concurrent agent builds;
+earlier figures were 292 s and 260 s over the 40-arm set on a quieter machine,
+and 234 s over the 34-arm set. An earlier revision of this section said 67 arms
+over "34 pair arms, 6 protocol-only arms, 27 stream-pool arms"; that does not
+add up on any revision, because 34 is the *total* arm count of the revision
+before the protocol-only arms existed (its `report.json` lists 34 arms and no
+`direct_proto` arm), so the line mixed one revision's total with another's
+breakdown. The counts are stable only if they are read from the run's own
+`report.json`, which is why they are quoted that way here. It starts the
 real binary once per proxy arm (5–9 per run, plus one per protocol-only arm and
 three per stream-pool replication — control, pooled-at-readiness, pooled with
 settle), one in-process `rtp_mux` server + two `NetemPair` instances per direct
@@ -398,6 +409,199 @@ warm there either.
 The guard that `unanswered` exercises is real in healthy runs too: it is what
 caught the cadence arm's own write-half teardown truncating in-flight echoes,
 which is now fixed by holding the write half open across the drain.
+
+## The dual-mandate declaration (time and coverage)
+
+`netem_test/tools/check-gate.py` is the shared checker that enforces the
+perf-test dual mandate of `AGENTS.md` ("The perf-test dual mandate — time and
+coverage") from a crate's own `GATE.md`: `gate-perf-design` names each declared
+scenario with its tier, its nominal cost, how it stands to a reference row and
+the coverage cells it claims; `gate-budgets` states each tier's budget and the
+reference rows; and `gate-coverage-gaps` records the cells the set does not
+cover, with the reason. It reads three further blocks: `gate-manifest` (the
+shared tier taxonomy, `target::test = tier`, for the scenario directory the
+invocation is pointed at — the same set this file's `ignored-manifest` records
+in `tools/check-ignored.py`'s vocabulary), `gate-asserting` (the asserting /
+report-only split) and `gate-perf-guard-helpers` (the asserting helpers a
+report-only `perf` scenario reaches — empty here, see below).
+
+One invocation covers **one package and one scenario directory**, so the command
+names the package that owns this workspace's perf scenario:
+
+```sh
+python3 ../netem_test/tools/check-gate.py --crate . server server/tests GATE.md
+```
+
+The three blocks it needs that this file did not have before are below. The
+`gate-manifest` block is scoped to `server/tests` (the directory the invocation
+is pointed at), and `gate-perf-guard-helpers` is empty because no scenario of
+this package is in the report-only `perf` tier.
+
+```gate-manifest
+proxy_path_perf::proxy_path_matched_rtt_delta = full
+```
+
+```gate-asserting
+proxy_path_perf::proxy_path_matched_rtt_delta
+```
+
+```gate-perf-guard-helpers
+```
+
+`tests`'s `perf_bulk_rtp_mux` (a `--lib` unit test of the package `tests`) and
+`common`'s `basics` are outside this invocation; they stay recorded in
+`ignored-manifest` and checked by `tools/check-ignored.py`.
+
+### Two vocabularies share the word `perf`
+
+This file's `ignored-manifest` calls `proxy_path_matched_rtt_delta` `perf`,
+meaning *an asserting end-to-end performance scenario, kept opt-in because it is
+slow*. The shared checker's `perf` tier means **report-only**: it scans the
+scenario's own body for an assertion token and refuses a `perf` row that has
+one, then scans every asserting helper the scenario reaches. This scenario
+asserts its own instrument — one `assert!` in the body itself, plus its
+`assert_sane` guard, `assert_matched_rtt`, `assert_proto_rtt_matched` and the
+pooled arms' readiness barrier below it — so the shared taxonomy files it as
+`full`. Both labels describe the same `#[ignore]`d opt-in scenario; only the
+contract each one names differs, and nothing about the test changes.
+
+### The declared rows, and why only two
+
+The checker's row identity is a compiled test: a `gate-perf-design` row is
+`<target>::<test>`, resolved from the compiled test binaries, and a family needs
+at least two rows — its reference and a row stating a relation against it. Two
+consequences fix the shape of this declaration:
+
+- **Every arm of the diagnosis is inside one test.** The 65 arms the scenario
+records are internal — the loops over regimes, shapes, controls and pool
+replications in `server/tests/proxy_path_perf.rs` — not 65 tests, so no arm can
+be a row. A row per arm needs the scenario split into 65 test functions (a
+change to the perf scenario itself, which this declaration may not make) or a
+grammar extension in the shared tooling, which this crate does not own. The
+arm-level inventory, its cells and its attribution are therefore the prose and
+the `gate-coverage-gaps` lines below, not rows.
+- **The `server` package owns exactly one opt-in scenario**, so the reference
+row cannot be a sibling measurement. It is the cheapest scenario in the same
+directory that the diagnosis's instrument actually depends on:
+`monitor::the_monitor_router_serves_health_metrics_and_both_session_tables`
+serves and asserts the `/metrics` route the pooled arms' readiness barrier
+polls (`wait_pool_ready` → `http_get` → `pool_ready_from_metrics`). The
+diagnosis stands against it as a **composite**, which is the honest reading: it
+varies five dimensions from that reference, and there is no sibling arm one
+dimension away from it.
+
+The `default` budget below covers only the rows declared here, not the
+package's whole default tier (which this declaration does not enumerate).
+
+```gate-perf-design
+monitor::the_monitor_router_serves_health_metrics_and_both_session_tables = default | 0.2 | baseline | proxy-instrument@layer=monitor+route=metrics-and-sessions+metric=routes-served
+proxy_path_perf::proxy_path_matched_rtt_delta = full | 403.6 | composite(hop,impairment,metric,scale,shape) | proxy-path@hop=rtpmux+impairment=iid2pct-and-lossless-and-shaped+scale=owd25-and-owd100+shape=rr-cadence-flows4-bulk+metric=latency-and-cold-connection-and-goodput
+```
+
+```gate-budgets
+default = 5
+full = 480
+baseline = monitor::the_monitor_router_serves_health_metrics_and_both_session_tables
+drift = 0.5
+drift_floor_s = 2.0
+```
+
+### The arm inventory the grammar cannot hold
+
+The diagnosis records **65 arms**: 32 pair arms (a `proxy_chain` and a
+`direct_transport` arm per shape and regime, plus the attribution ladder and
+the two controls), 6 protocol-only arms and 27 stream-pool arms. Each line below
+is an arm group, the dimension it varies from the group above it, and the
+regimes it runs at — the one-dimension-per-arm rule applied to the scenario's
+own structure rather than to a row set.
+
+| arm group | arms | dimension varied | regimes |
+| --- | --- | --- | --- |
+| `rr` calibration pair (`proxy_chain/rr`, `direct_transport/rr`) | 6 | reference (256 B, depth 1, 4 s window) | clean25, jitter25, field100 |
+| `cadence` pair (`proxy_chain/cadence`, `direct_transport/cadence`) | 6 | `shape`: rr → 5 ms cadence | all three |
+| `direct_tcp_front/cadence` | 3 | `stage`: the client-side TCP front the access server interposes | all three |
+| `direct_relay/cadence` | 2 | `stage`: the server-side byte relay, no protocol | clean25, jitter25 |
+| `direct_front_relay/cadence` | 3 | **composite(`stage`)**: front + relay stacked at once | all three |
+| `direct_front_relay_tout`, `direct_front_relay_timed` (cadence) | 4 | `relay-impl`: harness copy → `TimeoutStreamShared` → plus the limiter | clean25, jitter25 |
+| `cadence_steady` pair | 4 | `window`: opens cold → after one warm round trip | clean25, jitter25 |
+| `direct_proto` (`rr`, `cadence`) | 6 | `layer`: chain-minus-ingress, entered by the protocol client | all three |
+| `flows4` pair | 2 | `flows`: 1 → 4 concurrent access flows | clean25 |
+| `bulk` pair on `clean25_shaped` | 2 | **composite(`shape`,`rate`)**: bulk upload + 8 Mbps shaper | clean25_shaped |
+| pool set (`proxy_chain_nopool`, `_pool_ready`, `_pool`) × 3 replications | 27 | `mitigation`: no pool → pooled; then `settle`: 0 s → 3 s | all three |
+| (total) | **65** | | |
+
+**Where the attribution costs something, and what it costs.** The ladder is
+one dimension per step except in three places, all of them named in the prose
+above and none of them a defect of the arms:
+
+- `direct_front_relay` varies two stages at once by construction (it is the
+  "both stages, no proxy protocol" control); its one-dimension relatives are
+  `direct_front_relay_tout` and `direct_front_relay_timed`, so what it
+  attributes is the relay *implementation*, not the two stages separately. The
+  two stages separately are `direct_tcp_front` and `direct_relay`, which vary
+  one each from `direct_transport`.
+- The bulk pair varies shape **and** the shaper's rate against the cadence arm,
+  and no arm in the set varies either alone (an unshaped bulk arm, or a shaped
+  interactive arm), so the rate axis is unattributable here and the prose
+  quotes the pair as a 0.28–0.99× range instead. This is the one arm group in
+  the scenario with no one-dimension relative at all.
+- `proxy_chain_nopool` re-measures `proxy_chain/rr` — the same configuration,
+  on its own fresh process — so the pool step is read against a second
+  realization of the reference rather than against the reference itself. That
+  is deliberate (all three pool arms must share one clock and one host
+  condition) and it is the only re-measurement in the set.
+
+`direct_proto` is a single declared dimension (`layer`) even though it differs
+from `direct_transport` in two implementation stages (the ingress stage and the
+protocol preamble), because the arm pairs them by construction and its cells
+claim one layer contrast; a reader who needs the two separated has
+`direct_front_relay`'s relation instead.
+
+### Cost, measured rather than cited
+
+Neither row's cost is recorded in any document, and the shared checker refuses
+a guessed number, so both were measured on this checkout's dependencies
+(published tags: `rtp v0.0.97`, `rtp_mux v0.0.24`), on a warm release build, with
+`/usr/bin/time -p` around a single-test invocation and libtest's own
+`finished in` line as the per-test number (`proxy`'s toolchain is **stable**, so
+libtest's `-Z unstable-options --report-time` stamp is unavailable and the
+whole-binary total is the test's own time because the invocation selects one
+test):
+
+| row | command | measured |
+| --- | --- | --- |
+| `monitor::the_monitor_router_serves_health_metrics_and_both_session_tables` | `cargo test --release -p server --test monitor` | 0.20 s (`finished in 0.20s`; `/usr/bin/time` real 0.35 s) |
+| `proxy_path_perf::proxy_path_matched_rtt_delta` | `cargo test --release -p server --test proxy_path_perf -- --ignored --nocapture` | 403.6 s (`finished in 403.64s`; `/usr/bin/time` real 403.79 s) |
+
+The diagnosis was measured on a host whose 1-minute load average was 11.6 at
+start (other work on the machine); that invocation exited 0 with every
+instrument assertion holding and recorded the same 65 arms as the earlier full
+run, so the two are comparable measurements of one scenario rather than two
+shapes. The same scenario measured 414.6 s on the earlier full run the `Cost.`
+paragraph above cites as 414 s — the 65-arm shape, with the pool arms — and
+143.6–172.9 s on a quieter host at the pre-pool revision. The spread is host
+load, not a change in the arms, so the `full` budget is the measured cost with
+headroom rather than a tight bound: 403.6 s + 72.6 s (18 %), rounded up to a
+whole ten seconds, is the 480 s budget the `gate-budgets` block above declares.
+That budget covers the declared rows only; the ruling figure is printed by the
+checker itself in its `gate-budgets:` summary line.
+
+```gate-coverage-gaps
+arm-row@granularity=test-not-arm = a `gate-perf-design` row is a compiled test (`<target>::<test>`), and all 65 arms of the diagnosis are internal to one `#[ignore]`d test function, so no arm can be a row. The repair is one of two changes this declaration may not make: split the scenario into one test per arm (a change to the perf scenario itself), or extend the shared grammar with an arm-level row identity (tooling this crate does not own). What the arms do cover is recorded instead as the inventory table above and the lines below.
+attribution@baseline-family=proxy-path = the diagnosis is declared as a `composite(hop,impairment,metric,scale,shape)` against the only row in the same package it can stand against, the monitor-route instrument test, so the declaration attributes nothing about the diagnosis: no sibling arm one declared dimension away exists in this package, and the arm-level structure that *is* one dimension per step (the `direct_tcp_front`/`direct_relay`/`direct_front_relay_tout` ladder, the `rr`→`cadence` and clean→jitter→field regime steps, the pool and settle steps) is not expressible as rows for the reason on the `arm-row` line. A second opt-in scenario in this package one dimension from the diagnosis would close the attribution half; a grammar change would close both.
+proxy-path@impairment=GE-burst = the tri-mandate `hostile` arm's Gilbert-Elliot model is measured at the `rtp_mux` layer; this scenario's job is the level delta, which the iid-loss and lossless arms bracket, so no burst arm is claimed here.
+proxy-path@topology=cross-host = every arm is loopback, so host-local CPU and loopback TCP are inside the measurement; a cross-host path would need a second host, which a single-process harness cannot supply.
+proxy-path@layer=rtp-session-handshake = the `rtp` session handshake and the mux lane pairing are reported whole (`mux_dial_ms`), not split; separating them needs an arm against `rtp`'s own public session API, in a crate this workspace does not own.
+proxy-path@metric=residual-retransmission-accounting = the per-segment wire multiple is reported (`wire_interactive_c2s_bytes / offered_bytes`); its decomposition into retransmissions and FEC parity is not, and belongs to the transport layer that owns those counters.
+proxy-path@scale=pool-queue-depth-above-16 = every pool arm dials one flow, so what a burst of more than the pool's 16-entry queue depth pays, and whether the queue drains in time for a 17th, is outside the scenario.
+proxy-path@state=config-reload-and-suspend = the pool's lifetime across a config reload or a system resume is not measured: the reload path replaces the pool wholesale and no arm reloads, and a real suspend cannot be produced in a test process (see `basics` above).
+proxy-path@state=pool-warm-versus-usable = the readiness barrier observes the pool's exported gauge, which is *established and unpulled* — necessary but not sufficient for usability — and the 3 s settle the settled arm takes is a constant chosen from a probe's settle curve, not a measurement of what makes a fresh session unusable. The instrument shows the effect, not its cause; the candidates (the session's own path exploration settling, its send-window ramp, the second lane's lazy birth) remain candidates.
+proxy-path@arm=relay-stack-at-owd100 = `direct_front_relay_tout` and `direct_front_relay_timed` are not run at 100 ms OWD: they exist to separate the relay implementation from the delta the 25 ms-OWD cadence carries, and the 100 ms-OWD direct arm is itself a harness queueing artifact, so a further control there would not attribute.
+proxy-path@arm=protocol-only-cadence-at-owd100 = the protocol-only cadence arm at 100 ms OWD has the same queueing shape for the same reason: it is quoted in the prose, not attributed.
+framework@package=tests = the workspace's other perf scenario, `tests::perf_bulk_rtp_mux` (a `--lib` unit test of the package `tests` that pushes 32 MiB through a real chain and asserts byte-exact delivery), cannot be declared in this block: the checker takes one package and one scenario directory per invocation, and its `gate-manifest` block must equal the ignored set of the directory it is pointed at, so a block carrying both packages' rows fails in both invocations. The repair is a second declaration file for the `tests` package (or a gate that spans the workspace), neither of which this change may add; the scenario stays recorded in `ignored-manifest`, checked by `tools/check-ignored.py`.
+framework@taxonomy=perf = the shared checker's `perf` tier means report-only and this workspace's `ignored-manifest` uses `perf` for an asserting opt-in benchmark, so the same test carries two labels that read as a contradiction until the difference is stated (see "Two vocabularies share the word `perf`"). The repair is a rename in one vocabulary, or a shared tier whose name does not collide; until then the two blocks must be read together.
+framework@family=two-row-minimum = a family needs a reference row plus a row stated against it, and this package owns one opt-in scenario, so the reference row is a functional monitor-route test rather than a sibling measurement. The repair is a sibling arm one dimension from the diagnosis in the same package, or shared-tooling support for a single-row family.
+```
 
 ## Residual limitations
 
