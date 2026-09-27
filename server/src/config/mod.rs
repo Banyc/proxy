@@ -91,6 +91,17 @@ pub fn spawn_watch_tasks(
 /// its runtime outlives every abort/reap performed on `process_tasks`; process
 /// exit terminates it with the receiver still open, so a late callback can
 /// never observe a closed channel.
+///
+/// A watch whose path is **absent** is re-armed rather than reported. `notify`
+/// cannot establish a watch on a path that is not there, and a config path is
+/// legitimately absent for a moment: a deployment that removes the file and
+/// recreates it, an atomic rename racing the arming, an operator editing it.
+/// `main` treats a failed root task as fatal, and by the time this thread runs
+/// a valid configuration has already been read and bound, so reporting the
+/// absence would shut the process down and drop every live session over a path
+/// that is about to come back. Any other failure — one a retry cannot fix — is
+/// still reported, and is what makes a process with a dead watcher visible to
+/// its supervisor.
 fn run_watch_thread(path: Arc<str>, watcher: ConfigWatcher) -> RootTaskExit {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -99,16 +110,36 @@ fn run_watch_thread(path: Arc<str>, watcher: ConfigWatcher) -> RootTaskExit {
         Ok(runtime) => runtime,
         Err(error) => return watcher_failure(path.as_ref(), error),
     };
-    let outcome = runtime.block_on(file_watcher_tokio::watch_file(path.as_ref(), watcher));
-    // Reached only when the watch ends on its own; on the healthy path the
-    // thread parks in `watch_file` until process exit drops nothing.
-    match outcome {
-        Ok(()) => RootTaskExit::Completed {
-            task: "config_watcher",
-        },
-        Err(error) => watcher_failure(path.as_ref(), error),
+    loop {
+        let outcome = runtime.block_on(file_watcher_tokio::watch_file(
+            path.as_ref(),
+            watcher.clone(),
+        ));
+        // Reached only when the watch ends on its own; on the healthy path the
+        // thread parks in `watch_file` until process exit drops nothing.
+        match outcome {
+            Ok(()) => {
+                return RootTaskExit::Completed {
+                    task: "config_watcher",
+                };
+            }
+            Err(error) => {
+                if std::path::Path::new(path.as_ref()).exists() {
+                    return watcher_failure(path.as_ref(), error);
+                }
+                tracing::warn!(
+                    path = path.as_ref(),
+                    %error,
+                    "Config path is absent; re-arming the watcher"
+                );
+                std::thread::sleep(WATCH_REARM_INTERVAL);
+            }
+        }
     }
 }
+
+/// How long to wait before trying again to watch a path that is absent.
+const WATCH_REARM_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 fn watcher_failure(path: &str, error: impl std::fmt::Display) -> RootTaskExit {
     RootTaskExit::Failed {
@@ -172,36 +203,23 @@ mod tests {
         }
     }
 
+    /// A config path that is **absent when the watch is established** must not
+    /// be reported as a terminal watcher failure, and the watcher must re-arm
+    /// once the path exists.
+    ///
+    /// `notify` cannot watch a path that is not there, and a config path is
+    /// legitimately absent for a moment — a deployment that removes the file
+    /// and recreates it, an atomic rename racing the arming, an operator
+    /// editing it. `main` treats a failed root task as fatal, and a valid
+    /// configuration has already been read and bound by the time this thread
+    /// runs, so reporting the absence would shut the process down and drop
+    /// every live session over a path that is about to come back. Both
+    /// directions are observed here: no terminal exit within a bounded window
+    /// while the path is absent, and a change delivered after the path exists.
     #[tokio::test]
-    async fn a_missing_config_file_surfaces_as_a_fatal_watcher_exit() {
-        let path: Arc<str> = Arc::from("/nonexistent/config-does-not-exist.toml");
-        let mut process_tasks: tokio::task::JoinSet<RootTaskExit> = tokio::task::JoinSet::new();
-        let _signal = spawn_watch_tasks(&mut process_tasks, std::slice::from_ref(&path));
-        let joined =
-            tokio::time::timeout(std::time::Duration::from_secs(5), process_tasks.join_next())
-                .await
-                .expect("a failed watcher must surface instead of parking")
-                .expect("the task set must yield the coordinator")
-                .expect("the coordinator must not be cancelled");
-        match joined {
-            RootTaskExit::Failed { task, detail } => {
-                assert_eq!(task, "config_watcher");
-                assert!(detail.contains("config-does-not-exist.toml"), "{detail}");
-            }
-            RootTaskExit::Completed { .. } => panic!("a missing file must be fatal"),
-        }
-    }
-
-    /// Every configured config file must get its own watcher. The serve loop
-    /// merges all of them, so a file whose edits are not watched is edited
-    /// with no reload and no error — the operator's change is silently not
-    /// applied. Each watcher's own failure names the file it was pointed at,
-    /// so the details asserted below prove the tasks are attached to their own
-    /// path, not merely that three tasks exist.
-    #[tokio::test]
-    async fn every_configured_config_file_gets_its_own_watcher() {
+    async fn a_config_path_that_is_absent_at_arming_is_re_armed_not_reported_as_fatal() {
         let dir = std::env::temp_dir().join(format!(
-            "proxy-watch-paths-{}-{}",
+            "proxy-watch-absent-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -209,47 +227,128 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let paths: Vec<Arc<str>> = ["a.toml", "b.toml", "c.toml"]
-            .iter()
-            .map(|name| Arc::<str>::from(dir.join(name).to_str().unwrap()))
-            .collect();
+        let file = dir.join("config.toml");
+        let path: Arc<str> = Arc::from(file.to_str().unwrap());
 
         let mut process_tasks: tokio::task::JoinSet<RootTaskExit> = tokio::task::JoinSet::new();
-        let _signal = spawn_watch_tasks(&mut process_tasks, &paths);
-        assert_eq!(
-            process_tasks.len(),
-            paths.len(),
-            "every configured config file must have its own watcher"
+        let signal = spawn_watch_tasks(&mut process_tasks, std::slice::from_ref(&path));
+        let mut subscription = signal.subscription();
+
+        // The path does not exist yet: the watcher must retry rather than
+        // report a terminal exit, which `main` would treat as a shutdown.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), process_tasks.join_next())
+                .await
+                .is_err(),
+            "a watcher whose path is absent must re-arm, not report a terminal exit that shuts \
+             the serving process down"
         );
 
-        let mut details = Vec::new();
-        while let Some(exit) = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            process_tasks.join_next(),
-        )
-        .await
-        .expect("a watcher that cannot watch its file must report an exit instead of parking")
-        {
-            match exit.expect("the watcher coordinator must not be cancelled") {
-                RootTaskExit::Failed { task, detail } => {
-                    assert_eq!(task, "config_watcher");
-                    details.push(detail);
-                }
-                RootTaskExit::Completed { .. } => panic!("a missing config file must be fatal"),
+        // Create the path and keep editing it; the watcher must arm on it and
+        // deliver a change. The notification is the success condition and each
+        // attempt is bounded, so a watcher that never re-arms fails instead of
+        // hanging.
+        let mut notified = false;
+        for attempt in 0..20 {
+            std::fs::write(&file, format!("change = {attempt}\n")).unwrap();
+            if tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                subscription.notified(),
+            )
+            .await
+            .is_ok()
+            {
+                notified = true;
+                break;
             }
         }
-        assert_eq!(
-            details.len(),
-            paths.len(),
-            "every configured config file must report its own watcher exit: {details:?}"
+        assert!(
+            notified,
+            "the watcher must re-arm on the path once it exists: no change to {path} signalled \
+             after the path was recreated"
         );
-        for path in &paths {
-            assert!(
-                details.iter().any(|detail| detail.contains(path.as_ref())),
-                "the watcher for {path} must report a failure naming that file: {details:?}"
-            );
-        }
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                process_tasks.join_next()
+            )
+            .await
+            .is_err(),
+            "a re-armed watcher must not report a terminal exit"
+        );
+
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Every configured config file must get its own watcher. The serve loop
+    /// merges all of them, so a file whose edits are not watched is edited with
+    /// no reload and no error — the operator's change is silently not applied.
+    ///
+    /// The three files sit in **different directories**, so no single watch can
+    /// cover them: a signal after a write to each file can only come from a
+    /// watcher on that file's own path. A fresh subscription per file keeps the
+    /// notifications attributable to that file's write.
+    #[test]
+    fn every_configured_config_file_gets_its_own_watcher() {
+        let root = std::env::temp_dir().join(format!(
+            "proxy-watch-paths-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths: Vec<Arc<str>> = ["a", "b", "c"]
+            .iter()
+            .map(|name| {
+                let dir = root.join(name);
+                std::fs::create_dir_all(&dir).unwrap();
+                let file = dir.join("config.toml");
+                std::fs::write(&file, "initial = 1\n").unwrap();
+                Arc::<str>::from(file.to_str().unwrap())
+            })
+            .collect();
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut process_tasks: tokio::task::JoinSet<RootTaskExit> = tokio::task::JoinSet::new();
+            let signal = spawn_watch_tasks(&mut process_tasks, &paths);
+            assert_eq!(
+                process_tasks.len(),
+                paths.len(),
+                "every configured config file must have its own watcher"
+            );
+            for (index, path) in paths.iter().enumerate() {
+                // A subscription created now does not observe earlier
+                // broadcasts, so the wakeup below belongs to this file's write.
+                let mut subscription = signal.subscription();
+                let mut notified = false;
+                for attempt in 0..20 {
+                    std::fs::write(path.as_ref(), format!("change = {index}-{attempt}\n")).unwrap();
+                    if tokio::time::timeout(
+                        std::time::Duration::from_millis(500),
+                        subscription.notified(),
+                    )
+                    .await
+                    .is_ok()
+                    {
+                        notified = true;
+                        break;
+                    }
+                }
+                assert!(
+                    notified,
+                    "no watcher signalled for {path}: a configured config file with no watcher is \
+                     edited with no reload and no error"
+                );
+            }
+        });
+        drop(runtime);
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// Every event kind that can edit a config file's contents must signal a

@@ -477,14 +477,33 @@ replacing it with a directory, or making it unreadable does not stop the
 service: each drives a refused reload with the live generation still serving,
 and the watcher keeps watching the path so a later valid write is applied
 (`reload_safety.rs::
-the_watcher_survives_every_failure_mode_of_its_config_path`). Replacing the file
-atomically — write a sibling, rename it over the watched path, the common
-deployment shape — is a normal successful reload that keeps the socket and the
-live session (`reload_safety.rs::
-an_atomically_replaced_config_file_is_applied_and_keeps_the_live_session`). A
-path that is missing *at startup* is still fatal, because the watcher cannot
-watch it: `server/tests/config_watch.rs` pins the change signal, and the
-startup-contract tests in `server/tests/binary.rs` pin the refusals.
+the_watcher_survives_every_failure_mode_of_its_config_path`, whose cases open
+with a barrier — a committed handler swap — that proves the watch is armed
+before the path is broken, so the case is the armed-path one and not the
+arming race below). Replacing the file atomically — write a sibling, rename it
+over the watched path, the common deployment shape — is a normal successful
+reload that keeps the socket and the live session (`reload_safety.rs::
+an_atomically_replaced_config_file_is_applied_and_keeps_the_live_session`).
+
+**A path that is absent when the watch is established is re-armed, not
+reported.** `notify` cannot establish a watch on a path that is not there, and
+`main` treats a failed root task as fatal; by the time the watcher thread runs,
+a valid configuration has already been read and bound, so reporting the
+absence would shut the process down and drop every live session over a path
+that is about to come back. The watcher therefore retries while the path is
+absent and reports only a failure a retry cannot fix
+(`server/src/config/mod.rs::
+run_watch_thread`; pinned by
+`a_config_path_that_is_absent_at_arming_is_re_armed_not_reported_as_fatal`,
+which requires no terminal exit while the path is absent and a delivered
+change once it exists, and by
+`every_configured_config_file_gets_its_own_watcher`, which places three paths
+in three directories so a signal after a write to each can only come from that
+path's own watcher). A config path missing at *startup* is still refused, by
+`read_validated_config` before any side effect: `server/tests/binary.rs::
+a_missing_config_file_is_refused_before_any_side_effect` and
+`an_empty_config_file_is_refused_before_any_side_effect`, plus
+`server/tests/config_watch.rs` for the change signal itself.
 
 **A change landing during the initial generation is not lost.** The serve loop
 subscribes to the config-change signal *before* it reads the initial config, so
@@ -504,7 +523,12 @@ owns): the reloaded generation dials its hop, and the superseded one stops.
 **Not covered.** The reload path holds the whole binary, not the transport: a
 reload's effect on the *stream pool* and on a live `rtp_mux` session's internals
 is not measured here (see the `proxy-path@state=config-reload-and-suspend`
-coverage gap below).
+coverage gap below). The watcher's *terminal* failure path — the one that
+reports a `Failed` root task when a retry cannot fix the watch — has no
+end-to-end test, because its trigger (a watch that fails while the path exists)
+cannot be produced deterministically on this host; the path that is
+reachable — an absent path — is the one that must *not* be terminal, and it is
+pinned above.
 
 ## The dual-mandate declaration (time and coverage)
 
