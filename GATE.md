@@ -603,6 +603,121 @@ framework@taxonomy=perf = the shared checker's `perf` tier means report-only and
 framework@family=two-row-minimum = a family needs a reference row plus a row stated against it, and this package owns one opt-in scenario, so the reference row is a functional monitor-route test rather than a sibling measurement. The repair is a sibling arm one dimension from the diagnosis in the same package, or shared-tooling support for a single-row family.
 ```
 
+## The env-scaled opt-in surface
+
+Six names in this crate's scenario sources are read from the process
+environment rather than fixed by the `#[ignore]` set, so no `gate-manifest`
+tier, no `gate-perf-design` row and no `ignored-manifest` line can see them.
+They are the scale of the **lifecycle soak**, the fault and role controls of
+the **deployed-path diagnosis** and the **config-watcher teardown
+regression**, and the **diagnosis's evidence sink** — the instruments of the
+deployed shape, whose numbers an operator's deployment decision rested on.
+They are declared in the `gate-env-tier` block below, which is what makes each
+of them visible to the checker: a name this crate's sources read and no
+declared surface names is an error, and a declared name the sources never read
+is a stale declaration.
+
+All three rows are **scriptless** (`-`). The checker's `_crate_scripts` finds
+this crate's own scripts (`tools/check-ignored.py`, `tools/check-clock-seam.py`;
+the local `local/` helpers are untracked and not in the checkout), and none of
+them names any of the six — these surfaces are set by whoever invokes the test,
+not by a script of this crate, so the runner field can only record `-`.
+
+### The lifecycle soak's scale: `PROXY_SOAK_INSTANCES`, `PROXY_SOAK_CYCLES`, `PROXY_SOAK_BURST`
+
+`server/tests/lifecycle_soak.rs` drives one real `proxy` process per instance
+through repeated reload cycles and asserts, every cycle, the lifecycle facts a
+single scripted sequence can miss: a committed generation's probe hop is
+dialed, a new listener is bound, a live listener adopts a new handler without
+moving its port, a config that deserializes but cannot resolve installs
+nothing, sessions in flight across a reload keep the destination they were
+opened against, and a retired listener's socket closes. It closes with an
+accounting check — the session table must settle to exactly the sessions still
+open — and every relayed token is checked byte-exact against its echo. All
+three variables are read in `Knobs::from_env` (`:144`), through a local `knob`
+helper that hands its name to `std::env::var`:
+
+- `PROXY_SOAK_CYCLES` (default 2, `:154`) is the **cost key**: the cycle count
+each instance runs. The cycle is the trial unit — each is a full six-phase
+reload protocol on a fresh generation — and the run's detection limit is the
+rule-of-three bound `3/cycles` per cycle, which the test's own summary prints.
+- `PROXY_SOAK_INSTANCES` (default 4, `:153`) is the **concurrency**: that many
+real `proxy` processes are driven in parallel, so it multiplies the cycle
+count without multiplying the wall clock. It is the surface's second cost key.
+- `PROXY_SOAK_BURST` (default 6, `:155`) is a **volume knob**: the burst of
+concurrent sessions each of the spawn, replace and refused-preparation phases
+opens, and, halved and floored at 2, the spanning set
+(`spanning()`, `:160`). A larger burst relays more sessions per cycle, not a
+longer cycle, so it sizes the run's volume and not its duration — recorded in
+the load as a shape value, like `MUX_FAIR_STREAMS`, and not a factor of the
+total.
+
+The load records the **default shape**, which is the shape an ordinary
+`cargo test -p server` pays and the one the test's own summary prints. Its
+`total=PROXY_SOAK_INSTANCES*PROXY_SOAK_CYCLES` is **derived** — arithmetic over
+the surface's own two cost keys, and over no measured quantity — and its `wall`
+is measured: one `--test-threads=1 --nocapture` run of the target at the
+default shape reported `instances=4 cycles/instance=2 burst=6 spanning=3 =>
+8 cycles, 48 reloads, 156 sessions in 17.585580958s` and libtest's own
+`finished in 17.59s` (real 17.73 s), exit 0, four `ok` instance lines. The
+row's `bound=3.75e-1/cycle` is the rule of three at 8 cycles (3/8), the value
+that same summary line states.
+
+A deepened run of the same target shows the arithmetic holds and the bound
+tightens: `PROXY_SOAK_INSTANCES=4 PROXY_SOAK_CYCLES=10 PROXY_SOAK_BURST=6`
+reported `40 cycles, 208 reloads, 764 sessions in 58.620149875s`, exit 0, four
+`ok` instance lines, with the rule-of-three bound `0.0750` per cycle — the same
+test at four times the cycles on the same shape. Raising the variables is the
+whole mechanism; nothing in the sources is retuned to deepen the soak.
+
+### The red-proof controls: `PROXY_PATH_PERF_FAULT` and `PROXY_CONFIG_WATCH_TEARDOWN_CHILD`
+
+Two names select which failure a test demonstrates rather than measuring
+anything. Both are **unset in every real run**.
+
+- `PROXY_PATH_PERF_FAULT` (`server/tests/proxy_path_perf.rs:1869`) selects one
+of five perturbations of the deployed-path diagnosis's own input, each of
+which must fail the guard its healthy path shares: `zero_samples` empties an
+arm's samples, `unanswered` drops responses, `warm_unanswered` leaves the
+steady arm's pre-window round trip unanswered, `undialed` discards an arm's
+dial record after it ran, and `pool_unwarmed` runs the pooled arm against a
+config with no pool so its readiness barrier must fail. The scenario's own
+module doc (`:124-130`) names each injection, and the section above records
+each one's failing message. It perturbs an input, so a load over it would be
+invented arithmetic.
+- `PROXY_CONFIG_WATCH_TEARDOWN_CHILD`
+(`server/tests/config_watch_teardown.rs:22`, read at `:29`) selects the
+**re-executed child role** of the config-watcher teardown regression. The test
+re-execs itself with the name set and runs the teardown body in the child, so
+the `file_watcher_tokio` teardown abort it guards against surfaces as a
+non-zero child exit instead of killing the harness — it is the mechanism that
+makes the regression *fail-able*, not an input the product is given. Like the
+injections it sizes nothing.
+
+These two share **one load-free row**, the way `rtp_mux`'s
+`vacuity-fault-selectors` row carries its four injections: they are the same
+kind of thing — an input or a role selected only for a red proof — and the
+row's cells name each one's target. Neither names a count, so the grammar has
+no honest `total` for them and the load is refused rather than invented.
+
+### The diagnosis's evidence sink: `PROXY_PATH_PERF_OUT`
+
+`PROXY_PATH_PERF_OUT` (`server/tests/proxy_path_perf.rs:2469`, in `out_path()`)
+names the file the diagnosis writes its `report.json` to, overriding the
+default `$CARGO_TARGET_DIR/proxy_path_perf/report.json`. It is a **diagnostic
+output path**: it decides where an arm's evidence lands, and the arm counts
+quoted above are read from the artifact it writes. It sizes nothing — no
+window, count or cadence depends on it — so its load is refused for the same
+reason as the injections', and it carries a row of its own because a sink is
+not a fault: a reader asking where a run's evidence went must find that here,
+not folded into a red-proof row.
+
+```gate-env-tier
+lifecycle-soak-scale = PROXY_SOAK_INSTANCES,PROXY_SOAK_CYCLES,PROXY_SOAK_BURST | - | the lifecycle soak's own scale: PROXY_SOAK_CYCLES is the per-instance cycle count, the trial unit whose rule-of-three detection limit the run's own summary prints, PROXY_SOAK_INSTANCES is the number of real proxy processes driven in parallel, and PROXY_SOAK_BURST is the concurrent sessions each spawn, replace and refused-preparation burst opens plus, halved and floored at 2, the spanning set; the soak asserts per cycle that a committed generation's probe hop is dialed, a new listener binds, a live listener adopts a new handler without moving its port, an unresolvable config installs nothing, sessions in flight keep their destination across a reload, a retired listener's socket closes, every relayed token is echoed byte-exact, and the session table settles to exactly the sessions still open | proxy-lifecycle@phases=probe-spawn-replace-refused-retire+metric=reload-effect, session-accounting@metric=table-settles-to-open-set, relay-integrity@metric=token-echo-byte-exact, live-session@metric=route-stable-across-reload, proxy-lifecycle-rate@metric=rule-of-three+unit=cycle | PROXY_SOAK_INSTANCES=4,PROXY_SOAK_CYCLES=2,PROXY_SOAK_BURST=6,total=PROXY_SOAK_INSTANCES*PROXY_SOAK_CYCLES,wall=17.59s,bound=3.75e-1/cycle
+red-proof-controls = PROXY_PATH_PERF_FAULT,PROXY_CONFIG_WATCH_TEARDOWN_CHILD | - | the red-proof selector controls, not measurements: PROXY_PATH_PERF_FAULT selects one of five perturbations of the deployed-path diagnosis's own input (an emptied arm, a dropped response, an unanswered warm-up round, a discarded dial record, or the pooled arm run against a pool-less config), each of which must fail the guard its healthy path shares, and PROXY_CONFIG_WATCH_TEARDOWN_CHILD selects the re-executed child role in which the config-watcher teardown body runs so an abort surfaces as a non-zero child exit; both are unset in every real run, neither sizes anything, and no arithmetic derives from them, so their load is refused rather than invented | path-perf-vacuity@fault=PROXY_PATH_PERF_FAULT+targets=zero-samples-unanswered-warm-unanswered-undialed-pool-unwarmed, config-watch-vacuity@fault=PROXY_CONFIG_WATCH_TEARDOWN_CHILD+targets=file-watcher-teardown-abort
+path-perf-evidence-sink = PROXY_PATH_PERF_OUT | - | the deployed-path diagnosis's evidence sink: names the file the scenario writes its per-arm report.json to, overriding the default under CARGO_TARGET_DIR, and decides where a run's evidence lands rather than measuring anything; it sizes no window, count or cadence, so its load is refused rather than invented | path-perf-evidence@artifact=report-json+sink=PROXY_PATH_PERF_OUT
+```
+
 ## Residual limitations
 
 The checker is regex-and-brace-counting, the same tool level as the netem_test
