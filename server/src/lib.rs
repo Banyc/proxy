@@ -161,6 +161,17 @@ where
     };
 
     let cancellation = CancellationToken::new();
+    // Subscribe **before** the initial generation is read. The watcher thread
+    // is already running (`spawn_watch_tasks`) and broadcasts a generation
+    // bump for every config-file change; a subscription only observes bumps
+    // that happen after it exists, so a subscription taken below — after the
+    // initial read, its binds and its commits — silently drops a change that
+    // lands while the first generation is being built. The operator's edit
+    // would then never be applied at all, which is a reload that never happens
+    // rather than one that is refused. Taken here, such a change is pending on
+    // the subscription and the first pass of the serve loop's reload machine
+    // reads the config again.
+    let mut config_changed = serve_context.config_changed.subscription();
     // Initial configuration preparation. Nothing races it: the connector
     // drivers already in `server_tasks` cannot complete — each runs until the
     // connector handles held by `runtime` drop — and every arm of theirs that
@@ -184,7 +195,6 @@ where
         return Err(ServerServeError::Commit(e));
     }
     let mut _cancellation_guard = guard;
-    let mut config_changed = serve_context.config_changed.subscription();
     let mut reload = ServerReloadMachine::new();
 
     let outcome = loop {

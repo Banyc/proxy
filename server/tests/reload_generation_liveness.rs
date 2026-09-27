@@ -319,3 +319,111 @@ async fn a_reload_installs_a_live_generation_and_retires_the_one_it_replaces() {
 
     tasks.shutdown().await;
 }
+
+/// A [`ReadConfig`] that broadcasts a config change from **inside** its first
+/// read. That is precisely the window the serve loop must not miss: the initial
+/// generation is still being built, so a subscription taken only after the
+/// initial commit cannot observe the broadcast, and the change is dropped.
+struct BroadcastingReader {
+    configs: std::sync::Mutex<Vec<String>>,
+    reads: tokio::sync::mpsc::Sender<usize>,
+    count: AtomicUsize,
+    signal: ConfigChangeSignal,
+}
+
+impl BroadcastingReader {
+    fn new(configs: Vec<String>, reads: tokio::sync::mpsc::Sender<usize>) -> Self {
+        Self {
+            configs: std::sync::Mutex::new(configs),
+            reads,
+            count: AtomicUsize::new(0),
+            signal: ConfigChangeSignal::new(),
+        }
+    }
+}
+
+impl ReadConfig for BroadcastingReader {
+    type Config = ServerConfig;
+
+    async fn read_config(&self) -> Result<ServerConfig, AnyError> {
+        let index = self.count.fetch_add(1, Ordering::SeqCst);
+        let src = {
+            let configs = self.configs.lock().unwrap();
+            configs
+                .get(index)
+                .or_else(|| configs.last())
+                .cloned()
+                .expect("the scripted reader always has a config")
+        };
+        // The first read is the initial generation's. Broadcasting here lands
+        // before the serve loop can have subscribed unless it subscribes before
+        // it starts reading.
+        if index == 0 {
+            self.signal.notify_waiters();
+        }
+        let _ = self.reads.send(index).await;
+        let config: ServerConfig = toml::from_str(&src)?;
+        Ok(config)
+    }
+}
+
+/// A config change that lands while the **initial** generation is being built
+/// must not be lost.
+///
+/// The watcher thread is started before `serve`, so a change can be broadcast
+/// at any instant from process start; a `Notify` subscription only observes
+/// broadcasts that happen after it exists. If the serve loop subscribes only
+/// after its initial read and commit, an edit that lands in that window is
+/// silently dropped — not refused, simply never applied — and the process keeps
+/// serving the config it started on until some *later* edit happens to occur.
+///
+/// The oracle is the reader itself: this one broadcasts on its first call, so
+/// the change is guaranteed to land inside the window. The loop's next read is
+/// the assertion; with a late subscription no second read ever happens and the
+/// bounded wait reports it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_change_during_the_initial_generation_is_not_lost() {
+    const CONFIG: &str = r#"
+[access_server.stream.conn_selector]
+"default" = { chains = [] }
+
+[[access_server.tcp_server]]
+listen_addr = "127.0.0.1:0"
+destination = "tcp://127.0.0.1:9"
+conn_selector = "default"
+"#;
+
+    let (reads_tx, mut reads_rx) = tokio::sync::mpsc::channel(16);
+    let reader = BroadcastingReader::new(vec![CONFIG.to_string()], reads_tx);
+    let signal = reader.signal.clone();
+    let (retention_actor, retention) = RetentionActor::new();
+    let context = ServeContext {
+        stream_session_table: None,
+        udp_session_table: None,
+        config_changed: signal,
+        system_resume: SystemResumeSignal(Notify::new()),
+        retention,
+    };
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(async move {
+        let _exit = retention_actor.run().await;
+    });
+    tasks.spawn(async move {
+        let _exit = serve(reader, context).await;
+    });
+
+    assert_eq!(
+        recv_config(&mut reads_rx).await,
+        Some(0),
+        "serve must read the initial config"
+    );
+    assert_eq!(
+        recv_config(&mut reads_rx).await,
+        Some(1),
+        "a config change broadcast while the initial generation was being built must start a \
+         reload: the serve loop subscribed after its initial commit, so the broadcast was \
+         dropped and the operator's edit was never applied"
+    );
+
+    tasks.shutdown().await;
+}
