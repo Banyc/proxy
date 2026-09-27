@@ -410,6 +410,102 @@ The guard that `unanswered` exercises is real in healthy runs too: it is what
 caught the cadence arm's own write-half teardown truncating in-flight echoes,
 which is now fixed by holding the write half open across the drain.
 
+## The config-reload contract
+
+The `proxy` binary watches its config path(s) (`file_watcher_tokio`, one
+detached watcher thread per path) and reloads the running process when one
+changes. The process holds every session the operator's client has — the client
+multiplexes its traffic over one long-lived mux session — so a reload that
+drops a session costs a cold establishment the client cannot get back, and a
+reload that crashes the process costs every session at once. The contract below
+is what the running process does; every clause names the test that asserts it.
+
+**A bad reload is refused and the live generation is retained.** A config the
+process cannot read, parse or resolve is reported once (`Failed to prepare
+reload; live config unchanged`) and nothing is committed: the listener keeps
+its socket, its handler and its route, and every session in flight keeps being
+served and keeps the destination it was opened against. The four shapes are
+pinned by `server/tests/reload_safety.rs::
+an_invalid_reload_is_refused_and_the_live_generation_keeps_serving` (bytes that
+do not parse; a schema-invalid field; a missing required field; an address that
+does not resolve). `server/tests/reload_partial_commit.rs` pins the one state
+where a commit *does* partially fail — a listener that died between preparation
+and commit — and which pieces of the new generation are live in it.
+
+**A good reload costs a live session nothing.** A config that resolves is
+committed in place: a listener whose key is unchanged adopts the new handler on
+the socket it already owns, so no connection is ever refused, and a session
+opened before the reload keeps serving and keeps the destination it was routed
+to. `reload_safety.rs::
+a_valid_reload_never_refuses_a_connection_and_keeps_the_live_session` hammers
+the listener with fresh connections across the reload window and fails on a
+single refusal; `server/tests/lifecycle_soak.rs` asserts the same property
+under repeated reloads, including a listener retired by a reload while a
+session on it stays in flight.
+
+**A zero-byte config file is refused, not applied.** A writer that truncates a
+file and then writes it leaves a zero-byte file on disk between the two
+syscalls. Read then, the file parses as the default configuration, which has no
+listeners at all: applying it retires every listener and drops every session on
+them, and the write that follows restores a listener nobody is connected to.
+The reader therefore refuses an empty file, naming the path
+(`server/src/config/multi_file_config.rs`), on the reload path and at startup
+alike; on a reload it is reported and the live generation is retained. Pinned
+end to end by `reload_safety.rs::
+a_truncated_config_file_is_refused_and_the_live_session_survives`, and at the
+reader by `a_zero_byte_config_file_is_refused_and_named` with
+`a_comment_only_config_file_is_accepted_as_an_empty_configuration` as its
+control — a comment-only file is still a valid listenerless configuration, and
+it is the idiom the lifecycle soak writes to retire a generation. At startup it
+is `server/tests/binary.rs::
+an_empty_config_file_is_refused_before_any_side_effect`: the refusal names the
+path and precedes every side effect.
+
+**A write storm is one reload of the last complete file.** Two writes in quick
+succession collapse into a single reload that reads the second, so the first
+write's destination serves nothing
+(`reload_safety.rs::
+a_reload_storm_collapses_to_the_last_write_and_never_applies_the_truncated_file`).
+A truncate followed within the debounce window (1 s, `RELOAD_DEBOUNCE`) by a
+write never applies the zero-byte state, because every watcher event restarts
+the window. The window is what makes a *stalled* truncation — a writer that
+holds the file empty for longer than the debounce — the one case the debounce
+cannot cover, and is why the reader-level refusal above exists.
+
+**The watcher's own path is part of the contract.** Deleting the config file,
+replacing it with a directory, or making it unreadable does not stop the
+service: each drives a refused reload with the live generation still serving,
+and the watcher keeps watching the path so a later valid write is applied
+(`reload_safety.rs::
+the_watcher_survives_every_failure_mode_of_its_config_path`). Replacing the file
+atomically — write a sibling, rename it over the watched path, the common
+deployment shape — is a normal successful reload that keeps the socket and the
+live session (`reload_safety.rs::
+an_atomically_replaced_config_file_is_applied_and_keeps_the_live_session`). A
+path that is missing *at startup* is still fatal, because the watcher cannot
+watch it: `server/tests/config_watch.rs` pins the change signal, and the
+startup-contract tests in `server/tests/binary.rs` pin the refusals.
+
+**A change landing during the initial generation is not lost.** The serve loop
+subscribes to the config-change signal *before* it reads the initial config, so
+a broadcast that lands while the first generation is being built is pending on
+the subscription and drives a reload instead of being dropped
+(`server/tests/reload_generation_liveness.rs::
+a_change_during_the_initial_generation_is_not_lost`). Without the early
+subscription the operator's edit is never applied at all — a reload that never
+happens, rather than one that is refused.
+
+**A listener generation is retired when the generation that replaces it is
+committed.** `server/tests/reload_generation_liveness.rs::
+a_reload_installs_a_live_generation_and_retires_the_one_it_replaces` reads both
+directions from the same observable (the route-chain RTT probes each generation
+owns): the reloaded generation dials its hop, and the superseded one stops.
+
+**Not covered.** The reload path holds the whole binary, not the transport: a
+reload's effect on the *stream pool* and on a live `rtp_mux` session's internals
+is not measured here (see the `proxy-path@state=config-reload-and-suspend`
+coverage gap below).
+
 ## The dual-mandate declaration (time and coverage)
 
 `netem_test/tools/check-gate.py` is the shared checker that enforces the
