@@ -22,7 +22,15 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 
 #[derive(Debug, Parser)]
 struct Args {
-    /// Paths to the configuration files.
+    /// Paths to the configuration files, merged in the order given; at most
+    /// two (the arity the deployed launcher uses).
+    // Reason for the bound: `run-proxy` passes one path for the hop role and
+    // two for the access role (a base config merged with its filter file), and
+    // every path given is read and merged — so an argument nobody meant as a
+    // config file would be merged as one. Keeping the rationale out of the doc
+    // comment keeps `--help` readable; the bound itself is what an operator
+    // needs to know.
+    #[arg(num_args = 1..=2)]
     config_file_paths: Vec<Arc<str>>,
 
     /// Listen address for monitoring
@@ -42,6 +50,13 @@ async fn main() -> AnyResult {
         tracing::error!("No config files provided. Check --help for usage.");
         std::process::exit(1);
     }
+    // Entry contract: a config that cannot be read, parsed or validated must
+    // fail here, before the process spawns a watcher thread, opens a CSV log,
+    // or binds the monitoring listener — and before the serve loop binds the
+    // config's own listeners. Without this, a mistyped word on the command
+    // line is taken as a config path and the process performs that start-up
+    // work before noticing the file is not there.
+    server::read_validated_config(&args.config_file_paths).await?;
     if let Some(path) = args.record_dir {
         common::proxy_runtime::log::stream::init_logger(path.clone());
         common::proxy_runtime::log::udp::init_logger(path.clone());

@@ -1,5 +1,6 @@
-//! Exercise the `proxy` binary as a process: the CLI surface (`--help`, the
-//! no-config error), the running server with its monitoring HTTP server and
+//! Exercise the `proxy` binary as a process: the CLI entry contract (which
+//! arguments are refused, and whether anything is started or bound before a
+//! config failure), the running server with its monitoring HTTP server and
 //! CSV record directory, and the session tables that server's `/sessions`
 //! view reads. The binary is located through cargo's `CARGO_BIN_EXE_proxy`,
 //! so the test drives the real production entry point.
@@ -173,7 +174,7 @@ fn strip_ansi(line: &str) -> String {
     out
 }
 
-/// Spawn the binary on `config_path` with an ephemeral monitor listener and
+/// Spawn the binary on one config path with an ephemeral monitor listener and
 /// return the child plus the monitor and access-server addresses it logged.
 /// The access-server address is the one its listener actually bound, so both
 /// ports come from the OS and neither can be taken by another process.
@@ -183,8 +184,19 @@ fn strip_ansi(line: &str) -> String {
 async fn spawn_and_learn_addrs(
     config_path: &std::path::Path,
 ) -> (tokio::process::Child, String, String) {
-    let mut child = tokio::process::Command::new(proxy_bin())
-        .arg(config_path.to_str().unwrap())
+    spawn_and_learn_addrs_with(&[config_path]).await
+}
+
+/// The same, for the multi-file invocation the `run-proxy` launcher's access
+/// role uses (a base config merged with its filter file).
+async fn spawn_and_learn_addrs_with(
+    config_paths: &[&std::path::Path],
+) -> (tokio::process::Child, String, String) {
+    let mut command = tokio::process::Command::new(proxy_bin());
+    for path in config_paths {
+        command.arg(path);
+    }
+    let mut child = command
         .args(["--monitor-listen-addr", "127.0.0.1:0"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -235,72 +247,336 @@ fn session_blocks(response: &str) -> (Vec<&str>, Vec<&str>) {
     (lines(stream), lines(udp))
 }
 
-/// A config path that does not exist makes the watcher root task fail, which
-/// is fatal to the process. The run still binds and starts the monitoring
-/// server first, so it exercises the monitor branch and the root-task
-/// failure path and then exits normally (letting the coverage runtime flush).
+/// A loopback listener the test holds for the duration, plus its address. A
+/// port known to be taken is the discriminator for *ordering*: a binary that
+/// binds its monitor before it validates its config fails with an address
+/// error naming this address, and one that validates first fails with the
+/// config error instead.
+async fn held_listener() -> (TcpListener, String) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("binding an ephemeral loopback listener must succeed");
+    let addr = listener
+        .local_addr()
+        .expect("a bound listener has a local address")
+        .to_string();
+    (listener, addr)
+}
+
+/// A config that is valid *and* whose own listener cannot bind, because its
+/// port is already held. The run therefore reaches the monitor branch and the
+/// CSV loggers and then fails on the listener bind — which is what lets the
+/// short-flag test below tell "the flag was accepted" (exit 1, monitor line)
+/// from "clap rejected the flag" (exit 2, usage error).
+fn unboundable_config(held_addr: &str) -> String {
+    format!(
+        r#"
+[access_server.stream.conn_selector]
+"default" = {{ chains = [] }}
+
+[[access_server.tcp_server]]
+listen_addr = "{held_addr}"
+destination = "tcp://127.0.0.1:1"
+conn_selector = "default"
+"#
+    )
+}
+
+/// The combined text of a finished process, stdout and stderr.
+fn combined(output: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+/// A config path that does not exist must be refused **before any side
+/// effect**: no watcher thread, no CSV logger, and no monitoring listener
+/// bound. The monitor address is one this test holds, so a binary that bound
+/// before validating would fail with an address error naming it; the config
+/// error naming the path is what proves the ordering instead.
 #[tokio::test]
-async fn a_missing_config_file_is_fatal_after_the_monitor_starts() {
+async fn a_missing_config_file_is_refused_before_any_side_effect() {
     let dir = unique_temp_dir("missing");
     std::fs::create_dir_all(&dir).unwrap();
     let missing = dir.join("does-not-exist.toml");
     let record_dir = dir.join("records");
-    std::fs::create_dir_all(&record_dir).unwrap();
+    let (held, held_addr) = held_listener().await;
+
     let output = tokio::process::Command::new(proxy_bin())
         .arg(missing.to_str().unwrap())
-        .args(["--monitor-listen-addr", "127.0.0.1:0"])
+        .args(["--monitor-listen-addr", &held_addr])
         .arg("--record-dir")
         .arg(record_dir.to_str().unwrap())
         .output()
         .await
         .unwrap();
+    let text = combined(&output);
     assert_eq!(
         output.status.code(),
         Some(1),
-        "a missing config must be fatal"
-    );
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        "a missing config must be fatal: {text}"
     );
     assert!(
-        text.contains("Monitoring HTTP server listening addr:"),
-        "the monitor branch must run before the fatal config failure: {text}"
+        text.contains(missing.to_str().unwrap()),
+        "the refusal must name the config path it could not read: {text}"
     );
     assert!(
-        text.contains("config_watcher"),
-        "the exit must name the failed root task: {text}"
-    );
-    // `--record-dir` installs both CSV loggers, which open their first epoch
-    // file before the fatal config failure.
-    assert!(
-        record_dir.join("stream_record").join("0.csv").exists(),
-        "the stream record logger must be installed"
+        !text.contains("Monitoring HTTP server listening addr:"),
+        "no listener may be bound before the config is validated: {text}"
     );
     assert!(
-        record_dir.join("udp_record").join("0.csv").exists(),
-        "the udp record logger must be installed"
+        !text.contains(&held_addr),
+        "the monitoring listener was bound (its address appears in a bind failure) although the \
+         config could not be read, so validation does not precede the bind: {text}"
     );
+    assert!(
+        !record_dir.exists(),
+        "`--record-dir` must not install a CSV logger before the config is validated: {}",
+        record_dir.display()
+    );
+    drop(held);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// An unreadable path that exists — a directory — must be refused with the
+/// path named. An `io::Error` from reading carries only the OS message, so
+/// without the reader naming it the operator is told `Is a directory` and not
+/// *which* configured path was a directory.
+#[tokio::test]
+async fn a_directory_as_a_config_path_is_refused_and_named() {
+    let dir = unique_temp_dir("directory");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (held, held_addr) = held_listener().await;
+
+    let output = tokio::process::Command::new(proxy_bin())
+        .arg(dir.to_str().unwrap())
+        .args(["--monitor-listen-addr", &held_addr])
+        .output()
+        .await
+        .unwrap();
+    let text = combined(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a directory is not a config file: {text}"
+    );
+    assert!(
+        text.contains(dir.to_str().unwrap()),
+        "the refusal must name the path that is not a config file: {text}"
+    );
+    assert!(
+        !text.contains("Monitoring HTTP server listening addr:"),
+        "no listener may be bound before the config is validated: {text}"
+    );
+    drop(held);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A file that parses as TOML but does not match the config schema must be
+/// refused, naming the file, before anything is started.
+#[tokio::test]
+async fn a_schema_invalid_config_is_refused_and_named() {
+    let dir = unique_temp_dir("schema");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("wrong-type.toml");
+    std::fs::write(&path, "schema_version = \"not-a-number\"\n").unwrap();
+    let (held, held_addr) = held_listener().await;
+
+    let output = tokio::process::Command::new(proxy_bin())
+        .arg(path.to_str().unwrap())
+        .args(["--monitor-listen-addr", &held_addr])
+        .output()
+        .await
+        .unwrap();
+    let text = combined(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a schema-invalid config must be fatal: {text}"
+    );
+    assert!(
+        text.contains(path.to_str().unwrap()),
+        "the refusal must name the offending file: {text}"
+    );
+    assert!(
+        !text.contains("Monitoring HTTP server listening addr:"),
+        "no listener may be bound before the config is validated: {text}"
+    );
+    drop(held);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// An unknown flag is a usage error naming the flag, not a config path and
+/// not something to ignore.
+#[tokio::test]
+async fn an_unknown_flag_is_refused_and_named() {
+    let output = tokio::process::Command::new(proxy_bin())
+        .arg("--nonsense")
+        .output()
+        .await
+        .unwrap();
+    let text = combined(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an unknown flag is a usage error: {text}"
+    );
+    assert!(
+        text.contains("--nonsense"),
+        "the usage error must name the offending flag: {text}"
+    );
+}
+
+/// The binary embeds no version string — a deployed artifact is identified by
+/// hashing it — so a version probe must be refused rather than answered. This
+/// pins the behaviour the deployment runbook depends on: `--version`, `-V`
+/// and `-v` are all rejected, so nobody can mistake a hash check for a
+/// version check.
+#[tokio::test]
+async fn every_version_probe_is_refused_and_named() {
+    for probe in ["--version", "-V", "-v"] {
+        let output = tokio::process::Command::new(proxy_bin())
+            .arg(probe)
+            .output()
+            .await
+            .unwrap();
+        let text = combined(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "`{probe}` must be a usage error: {text}"
+        );
+        assert!(
+            text.contains(probe),
+            "the usage error must name `{probe}`: {text}"
+        );
+    }
+}
+
+/// A third positional argument is refused by the parser. The deployment's
+/// positional arity is the launcher's — one config path for the hop role, two
+/// for the access role — and every path given is read and merged, so an
+/// argument nobody meant as a config file would otherwise be merged as one.
+#[tokio::test]
+async fn a_third_positional_config_path_is_refused_and_named() {
+    let dir = unique_temp_dir("arity");
+    std::fs::create_dir_all(&dir).unwrap();
+    let first = dir.join("a.toml");
+    let second = dir.join("b.toml");
+    let third = dir.join("c.toml");
+    for path in [&first, &second, &third] {
+        std::fs::write(path, "").unwrap();
+    }
+
+    // Bounded, and killed on drop: with the arity bound removed the process
+    // *starts* on the three (valid, empty) config files and never exits, so a
+    // bare `output()` would hang the suite instead of failing it.
+    let child = tokio::process::Command::new(proxy_bin())
+        .arg(first.to_str().unwrap())
+        .arg(second.to_str().unwrap())
+        .arg(third.to_str().unwrap())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let output = tokio::time::timeout(Duration::from_secs(20), child.wait_with_output())
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "a third config path must be refused; the process instead accepted it and started \
+                 (it was still running after 20 s)"
+            )
+        })
+        .unwrap();
+    let text = combined(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a third config path is a usage error: {text}"
+    );
+    assert!(
+        text.contains(third.to_str().unwrap()),
+        "the usage error must name the extra argument: {text}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The invocation the `run-proxy` launcher's access role uses — two positional
+/// config paths, merged — must still start the service, and both files must
+/// contribute. Neither file is a complete config: the selector comes from the
+/// first and the listener that selects it from the second, so a run that
+/// dropped or ignored either one would not reach a bound listener.
+#[tokio::test(flavor = "multi_thread")]
+async fn two_positional_config_paths_are_merged_and_start_the_service() {
+    let responder = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("binding an ephemeral loopback listener must succeed");
+    let responder_port = responder.local_addr().unwrap().port();
+
+    let dir = unique_temp_dir("two-positional");
+    std::fs::create_dir_all(&dir).unwrap();
+    let base = dir.join("config.toml");
+    let filter = dir.join("filter.toml");
+    std::fs::write(
+        &base,
+        "[access_server.stream.conn_selector]\n\"default\" = { chains = [] }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &filter,
+        format!(
+            r#"
+[[access_server.tcp_server]]
+listen_addr = "127.0.0.1:0"
+destination = "tcp://127.0.0.1:{responder_port}"
+conn_selector = "default"
+"#
+        ),
+    )
+    .unwrap();
+
+    let (mut child, monitor, access) = spawn_and_learn_addrs_with(&[&base, &filter]).await;
+    assert!(
+        monitor.starts_with("127.0.0.1:") && access.starts_with("127.0.0.1:"),
+        "both files must be applied: the monitoring listener and the access-server listener must \
+         have bound (monitor {monitor}, access {access})"
+    );
+
+    // The merged config must be live, not merely parsed: a connection offered
+    // to the access server must be dialed to the destination the second file
+    // names.
+    let _ = tokio::net::TcpStream::connect(&access).await;
+    tokio::time::timeout(Duration::from_secs(30), responder.accept())
+        .await
+        .expect("the access server must dial the destination configured in the second file")
+        .expect("the responder must accept the access server's dial");
+
+    child.kill().await.ok();
     std::fs::remove_dir_all(&dir).ok();
 }
 
 /// The CLI's short flags and documented aliases are part of the operator's
 /// interface: `-m`/`--monitor` and `-r`/`--csv-log-path` must be accepted
 /// exactly like the long names. A rejected flag is clap's usage error (exit
-/// code 2), so a run that reaches the fatal missing-config exit (code 1)
-/// after starting the monitor and installing both record loggers is what
-/// proves the flag was accepted.
+/// code 2), so a run that reaches the fatal listener-bind exit (code 1) after
+/// starting the monitor and installing both record loggers is what proves the
+/// flag was accepted. The config is valid, so the run gets past validation and
+/// fails on the listener port this test holds.
 #[tokio::test]
 async fn the_cli_short_flags_and_aliases_are_accepted() {
     for (monitor_flag, record_flag) in [("-m", "-r"), ("--monitor", "--csv-log-path")] {
         let dir = unique_temp_dir("cli-alias");
         std::fs::create_dir_all(&dir).unwrap();
-        let missing = dir.join("does-not-exist.toml");
+        let (held, held_addr) = held_listener().await;
+        let config_path = dir.join("bound.toml");
+        std::fs::write(&config_path, unboundable_config(&held_addr)).unwrap();
         let record_dir = dir.join("records");
         std::fs::create_dir_all(&record_dir).unwrap();
         let output = tokio::process::Command::new(proxy_bin())
-            .arg(missing.to_str().unwrap())
+            .arg(config_path.to_str().unwrap())
             .arg(monitor_flag)
             .arg("127.0.0.1:0")
             .arg(record_flag)
@@ -308,11 +584,7 @@ async fn the_cli_short_flags_and_aliases_are_accepted() {
             .output()
             .await
             .unwrap();
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let text = combined(&output);
         assert_eq!(
             output.status.code(),
             Some(1),
@@ -324,6 +596,11 @@ async fn the_cli_short_flags_and_aliases_are_accepted() {
             "`{monitor_flag}` must select the monitor listener: {text}"
         );
         assert!(
+            text.contains(&held_addr),
+            "the run must reach the configured listener bind, so the run reached the serve path: \
+             {text}"
+        );
+        assert!(
             record_dir.join("stream_record").join("0.csv").exists(),
             "`{record_flag}` must install the stream record logger"
         );
@@ -331,6 +608,7 @@ async fn the_cli_short_flags_and_aliases_are_accepted() {
             record_dir.join("udp_record").join("0.csv").exists(),
             "`{record_flag}` must install the udp record logger"
         );
+        drop(held);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

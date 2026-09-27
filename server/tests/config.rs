@@ -111,3 +111,28 @@ async fn multi_file_reader_reports_the_path_of_a_malformed_file() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A read that fails before there is any source text to quote — a directory,
+/// a permission denial — must still name the configured path. The `io::Error`
+/// carries only the OS message, so a reader that only names the file on a
+/// *parse* error tells the operator `Is a directory` without telling them
+/// which of the configured paths it was.
+#[tokio::test]
+async fn multi_file_reader_reports_the_path_of_an_unreadable_file() {
+    let dir = unique_temp_dir("unreadable");
+    std::fs::create_dir_all(&dir).unwrap();
+    let not_a_file: Arc<str> = Arc::from(dir.to_str().unwrap());
+
+    let reader = MultiFileConfigReader::<Fragment>::new(vec![not_a_file.clone()].into());
+    let error = reader
+        .read_config()
+        .await
+        .expect_err("a directory must not be accepted as a config file");
+    let text = format!("{error}");
+    assert!(
+        text.contains(not_a_file.as_ref()),
+        "the read error must name the offending path: {text}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}

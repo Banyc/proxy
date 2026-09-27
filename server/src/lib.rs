@@ -69,6 +69,34 @@ fn udp_time_validator() -> TimeValidator {
     TimeValidator::new(VALIDATOR_UDP_WINDOW)
 }
 
+/// Read and validate every configured file — existence, readability,
+/// TOML syntax, schema and merge — exactly as [`serve`] will, but without any
+/// side effect.
+///
+/// [`serve`] builds its listener set from this same reader, but it can only
+/// reach that read after `main` has already spawned the config watchers, the
+/// suspend watcher and the retention actor, and (when asked) bound the
+/// monitoring listener. So a mistyped word on the command line — which the
+/// positional argument accepts as a config *path* — makes the process start
+/// that work and bind those sockets before the missing file is noticed. The
+/// entry contract is a start only when the operator is actually starting
+/// something, so `main` runs this first and a failure is reported with the
+/// offending path before any of it happens.
+///
+/// The reader is the one `serve` uses, so there is a single authority for what
+/// a config file is and this cannot pass something the serve path would
+/// reject.
+pub async fn read_validated_config(
+    config_file_paths: &[Arc<str>],
+) -> Result<ServerConfig, ServerServeError> {
+    let reader = config::multi_file_config::MultiFileConfigReader::<ServerConfig>::new(
+        config_file_paths.to_vec().into(),
+    );
+    config::ReadConfig::read_config(&reader)
+        .await
+        .map_err(ServerServeError::Config)
+}
+
 pub async fn serve<CR>(
     config_reader: CR,
     serve_context: ServeContext,
