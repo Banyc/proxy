@@ -88,8 +88,13 @@ async fn http_get(addr: &str, path: &str) -> String {
 async fn the_process_serves_the_monitor_routes_and_writes_records() {
     let dir = unique_temp_dir("monitor");
     std::fs::create_dir_all(&dir).unwrap();
+    // A comment-only file: an empty *configuration*, but not an empty *file*.
+    // A zero-byte file is refused as a truncated write (see
+    // `an_empty_config_file_is_refused_before_any_side_effect`), because the
+    // reader cannot tell one from a writer that has truncated the file and not
+    // yet written it.
     let config_path = dir.join("empty.toml");
-    std::fs::write(&config_path, "").unwrap();
+    std::fs::write(&config_path, "# no listeners\n").unwrap();
     let record_dir = dir.join("records");
     std::fs::create_dir_all(&record_dir).unwrap();
 
@@ -374,6 +379,55 @@ async fn a_directory_as_a_config_path_is_refused_and_named() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// An empty *file* is refused, naming it, before anything is started. A
+/// zero-byte file is what a writer's truncate leaves on disk before its write,
+/// and read then it parses as the default configuration — which has no
+/// listeners. Applied at startup that is a healthy-looking process serving
+/// nothing; applied on the reload path it retires every listener of the live
+/// generation and drops every session on them. An intentionally empty
+/// configuration is written as a comment instead (see the monitor test above),
+/// so refusing the zero-byte file costs an operator nothing and closes that
+/// window.
+#[tokio::test]
+async fn an_empty_config_file_is_refused_before_any_side_effect() {
+    let dir = unique_temp_dir("empty");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("empty.toml");
+    std::fs::write(&path, "").unwrap();
+    let record_dir = dir.join("records");
+    let (held, held_addr) = held_listener().await;
+
+    let output = tokio::process::Command::new(proxy_bin())
+        .arg(path.to_str().unwrap())
+        .args(["--monitor-listen-addr", &held_addr])
+        .arg("--record-dir")
+        .arg(record_dir.to_str().unwrap())
+        .output()
+        .await
+        .unwrap();
+    let text = combined(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an empty config file must be fatal: {text}"
+    );
+    assert!(
+        text.contains(path.to_str().unwrap()),
+        "the refusal must name the empty config file: {text}"
+    );
+    assert!(
+        !text.contains("Monitoring HTTP server listening addr:"),
+        "no listener may be bound before the config is validated: {text}"
+    );
+    assert!(
+        !record_dir.exists(),
+        "`--record-dir` must not install a CSV logger before the config is validated: {}",
+        record_dir.display()
+    );
+    drop(held);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A file that parses as TOML but does not match the config schema must be
 /// refused, naming the file, before anything is started.
 #[tokio::test]
@@ -471,8 +525,9 @@ async fn a_third_positional_config_path_is_refused_and_named() {
     }
 
     // Bounded, and killed on drop: with the arity bound removed the process
-    // *starts* on the three (valid, empty) config files and never exits, so a
-    // bare `output()` would hang the suite instead of failing it.
+    // would read the three config files and exit with a config error rather
+    // than start, so a bare `output()` would return — but the bound keeps the
+    // test from hanging if that ever changes.
     let child = tokio::process::Command::new(proxy_bin())
         .arg(first.to_str().unwrap())
         .arg(second.to_str().unwrap())
