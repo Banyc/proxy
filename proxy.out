@@ -1,0 +1,15 @@
+gate manifest OK: 1 ignored scenarios classified
+  full: 1
+  default-required: 0 asserting scenario(s) present
+  gate-asserting: 1 asserting scenario(s) recorded
+  gate-perf-guard-helpers: 0 asserting helper(s) reachable from the perf tier
+  gate-perf-design: 2 perf test row(s), 2 coverage cell(s), 14 gap(s), baseline monitor::the_monitor_router_serves_health_metrics_and_both_session_tables
+  gate-perf-relations: 0 orthogonal, 1 composite, 0 re-measurement, 1 baseline of 2 row(s), stated against monitor::the_monitor_router_serves_health_metrics_and_both_session_tables
+  gate-perf-composite: proxy_path_perf::proxy_path_matched_rtt_delta varies hop, impairment, metric, scale, shape against monitor::the_monitor_router_serves_health_metrics_and_both_session_tables
+  gate-budgets: default 0.20/5.00s
+  gate-budgets: full 403.60/480.00s
+  gate-env-tier: 3 env-scaled surface(s), 6 variable(s), 8 coverage cell(s)
+  gate-env-tier-surface: lifecycle-soak-scale (no script runner) PROXY_SOAK_INSTANCES, PROXY_SOAK_CYCLES, PROXY_SOAK_BURST - the lifecycle soak's own scale: PROXY_SOAK_CYCLES is the per-instance cycle count, the trial unit whose rule-of-three detection limit the run's own summary prints, PROXY_SOAK_INSTANCES is the number of real proxy processes driven in parallel, and PROXY_SOAK_BURST is the concurrent sessions each spawn, replace and refused-preparation burst opens plus, halved and floored at 2, the spanning set; the soak asserts per cycle that a committed generation's probe hop is dialed, a new listener binds, a live listener adopts a new handler without moving its port, an unresolvable config installs nothing, sessions in flight keep their destination across a reload, a retired listener's socket closes, every relayed token is echoed byte-exact, and the session table settles to exactly the sessions still open
+  gate-env-tier-load: lifecycle-soak-scale PROXY_SOAK_INSTANCES*PROXY_SOAK_CYCLES = 8, 17.59s, bound 3.75e-1/cycle
+  gate-env-tier-surface: red-proof-controls (no script runner) PROXY_PATH_PERF_FAULT, PROXY_CONFIG_WATCH_TEARDOWN_CHILD - the red-proof selector controls, not measurements: PROXY_PATH_PERF_FAULT selects one of five perturbations of the deployed-path diagnosis's own input (an emptied arm, a dropped response, an unanswered warm-up round, a discarded dial record, or the pooled arm run against a pool-less config), each of which must fail the guard its healthy path shares, and PROXY_CONFIG_WATCH_TEARDOWN_CHILD selects the re-executed child role in which the config-watcher teardown body runs so an abort surfaces as a non-zero child exit; both are unset in every real run, neither sizes anything, and no arithmetic derives from them, so their load is refused rather than invented
+  gate-env-tier-surface: path-perf-evidence-sink (no script runner) PROXY_PATH_PERF_OUT - the deployed-path diagnosis's evidence sink: names the file the scenario writes its per-arm report.json to, overriding the default under CARGO_TARGET_DIR, and decides where a run's evidence lands rather than measuring anything; it sizes no window, count or cadence, so its load is refused rather than invented
