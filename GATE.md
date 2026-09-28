@@ -275,9 +275,12 @@ pairing the chain charges to its first message.
 **Re-measured on the current pins (2026-09-28, 405 s, host load 2-5 on 10
 cores): the 7-8 base RTTs are gone, and the charge is ~3 round trips.** The
 table above was measured with `rtp_mux` before **v0.0.23**, which landed
-`fix(rtp_mux): dial the two lanes' rtp sessions concurrently`; the proxy has
-pinned v0.0.27 since `58710e0ca578`. Both lanes' `rtp` opening handshakes now
-run under one `tokio::try_join!` (`rtp_mux/src/connector/dial.rs:212`) instead
+`fix(rtp_mux): dial the two lanes' rtp sessions concurrently`; the
+re-measurement above ran at the **v0.0.27** the manifest carried then
+(`58710e0ca578`), and the manifest now pins **v0.0.31**. Both lanes' `rtp`
+opening handshakes now run under one `tokio::try_join!` over `interactive` and
+`bulk` in `rtp_mux/src/connector/dial.rs` (`:228` at the pinned v0.0.31; `:212`
+at the v0.0.27 these runs were measured on) instead
 of one after the other, so the second lane's handshake — its two round trips
 plus its random pre-handshake delay — is no longer serialized onto the first's.
 That is the drop: against the two recorded runs the pairing falls by
@@ -303,7 +306,10 @@ arm dials once the fixed term is estimated only to roughly +/-40 ms.
 lockstep legs — `Hello -> HelloAck`, then `Confirm -> ConfirmAck`
 (`rtp/src/traffic_shaping/control/handshake/opening/mod.rs:93`) — and the third
 is the client's first complete mux frame, the server's birth-liveness heartbeat
-written after the server reads the lane hello (`rtp_mux/src/server.rs:916`).
+written after the server reads the lane hello — `rtp_mux/src/server.rs`'s
+`write_birth_heartbeat_result`, called from each post-hello admission branch
+(`:960` at the pinned v0.0.31; `:916` at the v0.0.27 these runs were measured
+on, where that line was the function's own body).
 The birth waits on both lanes under `try_join!`, so the two lanes cost three
 round trips total, not six. The chain adds **0.06 base RTT**: its cold total is
 `+2.7 ms` over the proxy-free direct arm at `clean25` and `+10.4 ms` at
@@ -359,14 +365,20 @@ the ingress dial at all three regimes in every run (`report.json`,
 `ingress_reused`). The `rtp_mux` code path
 agrees: `RtpMuxConnector::connect_with_lane_and_key` returns
 `session.open_stream(lane)` when `live_session` has an entry for the address
-(`rtp_mux/src/connector/mod.rs:353`, pinned v0.0.28), and the proxy's chain uses
-one process-wide connector instance (`protocol/src/stream_proto/connect.rs:110`,
+(`rtp_mux/src/connector/mod.rs`'s `live_session` inside
+`connect_with_lane_and_key`: `:362` at the pinned v0.0.31, `:353` at the v0.0.28
+these ingress runs were measured on), and the proxy's chain uses one
+process-wide connector instance (`protocol/src/stream_proto/connect.rs`'s
+`build_rtp_mux_connector` at `:102-110`, whose one instance it hands to
 `spawn_mux_connector`).
 
 So the bracket that suggested otherwise — `proxy_chain/flows4` showing four
 over-250 ms samples and `direct_transport/flows4` none — is not four births
 interfering: it is **one** birth per address, deduplicated by the connector's
-in-flight-dial waiters (`rtp_mux/src/connector/mod.rs:804-820`), charged to each
+in-flight-dial waiters (`rtp_mux/src/connector/mod.rs`'s
+`live_session`/`live_dial_waiters`/`in_flight_dials` dedup in the
+`ConnectorCommand::Connect` arm: `:813-838` at the pinned v0.0.31, `:804-820`
+at the v0.0.28 these runs were measured on), charged to each
 of the four flows' first sample, because the chain's `connect()` is only a TCP
 accept while the direct arm's `connect()` absorbs the pairing. The mid-window
 ingress is the case that separates those readings, and it says the operator's
@@ -931,7 +943,8 @@ arm's samples, `unanswered` drops responses, `warm_unanswered` leaves the
 steady arm's pre-window round trip unanswered, `undialed` discards an arm's
 dial record after it ran, and `pool_unwarmed` runs the pooled arm against a
 config with no pool so its readiness barrier must fail. The scenario's own
-module doc (`:124-130`) names each injection, and the section above records
+module doc at the top of the scenario (`:143-155`) names each injection, and
+the section above records
 each one's failing message. It perturbs an input, so a load over it would be
 invented arithmetic.
 - `PROXY_CONFIG_WATCH_TEARDOWN_CHILD`
