@@ -90,6 +90,26 @@
 //! other difference. All three record the same [`Dial`] reading as every other
 //! arm.
 //!
+//! # The mid-window ingress arm
+//!
+//! `flows4` opens four access flows at once, so none of them is established
+//! when the others are born; `cadence_steady` measures an established path but
+//! never adds an ingress to it. Neither answers the operator's shape: an
+//! established flow whose window is running when a **fresh ingress** — a new
+//! client connection to the access server — arrives. `ingress1` is that shape.
+//! The established flow is the `rr` baseline held fixed, and the only varied
+//! dimension is the ingress, opened halfway through the window. The established
+//! flow's own samples before the ingress are the within-arm, interleaved
+//! control for its samples after, and the arm's own `rr` sibling in the same
+//! run is the between-arm one. The ingress records its own first echo, which is
+//! what separates a session **birth** (the whole cold charge) from a **stream
+//! open on the live session** (a couple of base RTTs), and the connector's own
+//! reuse answer where the topology pairs its own session. The arm asserts two
+//! dials, a completed ingress round trip and an ingress index strictly inside
+//! the window; the `ingress_missing`, `ingress_unanswered` and `ingress_at_edge`
+//! injections are the three vacuity probes that must fail those three clauses in
+//! turn.
+//!
 //! # Matched RTT
 //!
 //! The chain's extra hops are loopback TCP, but "loopback is negligible" is an
@@ -127,7 +147,12 @@
 //! trip unanswered, `PROXY_PATH_PERF_FAULT=undialed` discards the arm's dial
 //! record after it ran, and `PROXY_PATH_PERF_FAULT=pool_unwarmed` runs the
 //! stream-pool arm against a config with no pool, so its readiness barrier must
-//! fail; each must fail the guard its own path shares with the healthy runs.
+//! fail; `PROXY_PATH_PERF_FAULT=ingress_missing` never opens the mid-window
+//! ingress, so that arm dials once instead of twice and its own two-dial guard
+//! must fail, while `ingress_unanswered` opens it and never completes its round
+//! trip (without booking it as unanswered) and `ingress_at_edge` records it at
+//! established-sample index 0, so the guard's second and third clauses must fail
+//! in turn; each must fail the guard its own path shares with the healthy runs.
 
 // The per-arm JSON record is built with `serde_json::json!`, whose macro
 // recursion is one level per object entry; the record is deliberately one flat
@@ -969,6 +994,24 @@ enum Shape {
     },
     /// `flows` concurrent round-trip flows — the multiplexed access-flow shape.
     Flows { flows: usize, window: Duration },
+    /// One established request/response flow whose window is already running,
+    /// plus one **fresh ingress** — a new client connection to the access
+    /// server, opened `ingress_at` into the window. This is the operator's
+    /// shape: the client multiplexes everything over a long-lived session, so
+    /// a new ingress arrives while an established flow is already in flight.
+    ///
+    /// It is the one cell no other arm opens. `flows4` opens four connections
+    /// at once, so none of them is *established* when the others are born and
+    /// the shape cannot tell a birth's interference from a first sample's own
+    /// establishment charge; `cadence_steady` opens on an established path but
+    /// never adds an ingress to it. Here the established flow is held fixed
+    /// (depth 1, the `rr` baseline) and the only varied dimension is the
+    /// mid-window ingress, so the established flow's samples *before* the
+    /// ingress are the within-arm, interleaved control for its samples after.
+    Ingress {
+        window: Duration,
+        ingress_at: Duration,
+    },
     /// A saturating bulk upload with the echo drained concurrently, measured
     /// over a steady-state window rather than end-to-end: the goodput is the
     /// echo counter's delta across the window, sampled while the pump still
@@ -983,6 +1026,7 @@ impl Shape {
             Shape::Cadence { .. } => "cadence".into(),
             Shape::CadenceSteady { .. } => "cadence_steady".into(),
             Shape::Flows { flows, .. } => format!("flows{flows}"),
+            Shape::Ingress { .. } => "ingress1".into(),
             Shape::Bulk { .. } => "bulk".into(),
         }
     }
@@ -1077,6 +1121,48 @@ struct Dial {
     /// started, i.e. the connector reused a session instead of pairing one. A
     /// reused dial is not a cold-connection measurement.
     mux_session_reused: bool,
+}
+
+/// What a mid-window fresh ingress did, and where in the established flow's
+/// window it landed.
+///
+/// `first_ms` is the ingress's **own** first echo, measured from its first
+/// write. It is the number that separates the two things a fresh ingress can
+/// be: a session **birth** (which pays the whole cold charge the arm's own
+/// `cold_total_ms` records) or a **stream open on the live session** (a couple
+/// of base RTTs). `reused` is the same distinction read from the connector
+/// where the topology pairs its own session; the chain pairs it inside the
+/// binary and so reports `None`.
+#[derive(Clone, Copy, Debug)]
+struct IngressReading {
+    /// The ingress's own first round-trip latency, in ms. `NaN` when the
+    /// ingress never completed — the vacuity injection, or a lost echo.
+    first_ms: f64,
+    /// How many established-flow samples had completed when the ingress's
+    /// `connect()` was issued. The established samples before this index are
+    /// the with/without control for the samples after it.
+    index: usize,
+    /// Whether the ingress's dial found a live mux session. `None` where the
+    /// topology does not pair its own session (the chain).
+    reused: Option<bool>,
+    /// Wall time from the window opening to the ingress `connect()`, in ms.
+    offset_ms: f64,
+}
+
+impl Default for IngressReading {
+    fn default() -> Self {
+        Self {
+            // `NaN`, not the `0.0` a derived default would give: the guard
+            // tests `first_ms.is_finite()`, so a finite default would let "the
+            // ingress never completed" pass as a completed zero-latency round
+            // trip. Measured: with `0.0` the `ingress_unanswered` injection
+            // stayed green, i.e. the clause could not fail.
+            first_ms: f64::NAN,
+            index: 0,
+            reused: None,
+            offset_ms: 0.0,
+        }
+    }
 }
 
 /// A dialable client: the chain's access listener, the direct transport, or the
@@ -1288,6 +1374,9 @@ struct ArmOutcome {
     /// that run once; the pool arms and their control run
     /// [`POOL_REPLICATIONS`] times each, paired by this index.
     pool_replicate: Option<usize>,
+    /// What a mid-window fresh ingress did. `Some` only on an
+    /// [`Shape::Ingress`] arm; every other arm leaves it `None`.
+    ingress: Option<IngressReading>,
 }
 
 impl ArmOutcome {
@@ -1371,6 +1460,43 @@ impl ArmOutcome {
             self.dials > 0,
             "INSTRUMENT: arm {} never dialed, so it measured no connection",
             self.label()
+        );
+    }
+
+    /// The guard a mid-window-ingress arm adds to the shared sanity set: the
+    /// ingress really opened as a second connection, really completed a round
+    /// trip, and really landed strictly inside the window (so the samples
+    /// before it are a control for the samples after). This is the guard the
+    /// `ingress_missing` injection must fail, and the one that keeps a
+    /// silently absent ingress from being read as "an ingress cost nothing".
+    fn assert_ingress_interleaved(&self) {
+        let Some(ingress) = self.ingress else {
+            return;
+        };
+        assert_eq!(
+            self.dials,
+            2,
+            "INSTRUMENT: the mid-window-ingress arm {} dialed {} connection(s), not 2 (the \
+             established flow plus the fresh ingress), so it did not measure the ingress it \
+             claims",
+            self.label(),
+            self.dials
+        );
+        assert!(
+            ingress.first_ms.is_finite(),
+            "INSTRUMENT: the ingress of arm {} was issued {:.0} ms into the window but never \
+             completed a round trip (first echo = {:?} ms)",
+            self.label(),
+            ingress.offset_ms,
+            ingress.first_ms
+        );
+        assert!(
+            ingress.index > 0 && ingress.index < self.latencies_ms.len(),
+            "INSTRUMENT: the ingress of arm {} landed at established-sample index {} of {} — it \
+             must be strictly inside the window, or there is no before/after to compare",
+            self.label(),
+            ingress.index,
+            self.latencies_ms.len()
         );
     }
 }
@@ -1495,6 +1621,13 @@ async fn run_shape(
         Shape::Flows { flows, window } => {
             let (latencies, unanswered) = flows_arm(target, flows, window).await;
             outcome.unanswered = unanswered;
+            latencies
+        }
+        Shape::Ingress { window, ingress_at } => {
+            let (latencies, unanswered, ingress) =
+                ingress_arm(target, window, ingress_at, fault).await;
+            outcome.unanswered = unanswered;
+            outcome.ingress = Some(ingress);
             latencies
         }
         Shape::Bulk { warmup, window } => {
@@ -1759,6 +1892,127 @@ async fn flows_arm(target: &Target, flows: usize, window: Duration) -> (Vec<f64>
     (pooled, unanswered)
 }
 
+/// One established request/response flow whose window is already running, plus
+/// one **fresh ingress** opened `ingress_at` into it.
+///
+/// The ingress is a second, independent `connect()` on the same target — and
+/// therefore on the same impaired hop — that takes one whole request/response
+/// round trip and is then dropped. It runs in its own task, so it is genuinely
+/// concurrent with the established flow rather than serialized onto it, and
+/// the established flow keeps its depth-1 cadence right across the ingress;
+/// that is what makes the samples before [`IngressReading::index`] the
+/// within-arm, interleaved control for the samples after it.
+///
+/// Returns the established flow's per-message latencies, the number of
+/// requests (established or ingress) that were never answered, and what the
+/// ingress did.
+async fn ingress_arm(
+    target: &Target,
+    window: Duration,
+    ingress_at: Duration,
+    fault: Option<Fault>,
+) -> (Vec<f64>, u64, IngressReading) {
+    let mut stream = target.connect().await;
+    let started = Instant::now();
+    let deadline = started + window;
+    let ingress_due = started + ingress_at;
+    let mut ingress = IngressReading::default();
+    let mut ingress_opened = false;
+    let mut set: JoinSet<(bool, f64, Option<bool>)> = JoinSet::new();
+    let mut latencies: Vec<f64> = Vec::new();
+    let mut unanswered = 0u64;
+    let mut seq = 0u64;
+    let mut buf = [0u8; MESSAGE_BYTES];
+    while Instant::now() < deadline {
+        if !ingress_opened && Instant::now() >= ingress_due {
+            ingress_opened = true;
+            ingress.index = latencies.len();
+            ingress.offset_ms = elapsed_ms(started);
+            if fault == Some(Fault::IngressAtEdge) {
+                // Vacuity for the guard's third clause: an ingress recorded at
+                // index 0 never landed inside the window.
+                ingress.index = 0;
+            }
+            if fault != Some(Fault::IngressMissing) {
+                let ingress_target = target.clone();
+                set.spawn(async move {
+                    let mut s = ingress_target.connect().await;
+                    // The ingress's own dial record, where this topology pairs
+                    // its own session: `Some(true)` is a stream opened on the
+                    // live session, `Some(false)` a fresh birth, `None` the
+                    // chain, whose pairing runs inside the binary.
+                    let reused = {
+                        let dials = ingress_target.dials.lock().unwrap();
+                        dials
+                            .last()
+                            .and_then(|d| d.mux_dial_ms.map(|_| d.mux_session_reused))
+                    };
+                    let sent = payload_for(u64::MAX);
+                    let mut b = [0u8; MESSAGE_BYTES];
+                    let t = Instant::now();
+                    // Vacuity for the guard's second clause: an ingress whose
+                    // round trip never completed. The read is discarded rather
+                    // than performed, so the property (a completed ingress) is
+                    // removed, not re-expressed.
+                    let ok = fault != Some(Fault::IngressUnanswered)
+                        && s.write_all(&sent).await.is_ok()
+                        && matches!(
+                            tokio::time::timeout(Duration::from_secs(30), s.read_exact(&mut b))
+                                .await,
+                            Ok(Ok(_))
+                        );
+                    assert!(
+                        !ok || b[..] == sent[..],
+                        "INSTRUMENT: the ingress's echo did not match what it wrote"
+                    );
+                    (ok, elapsed_ms(t), reused)
+                });
+            }
+        }
+        let sent = payload_for(seq);
+        let start = Instant::now();
+        if stream.write_all(&sent).await.is_err() {
+            break;
+        }
+        match tokio::time::timeout(Duration::from_secs(30), stream.read_exact(&mut buf)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => {
+                unanswered += 1;
+                break;
+            }
+        }
+        latencies.push(start.elapsed().as_secs_f64() * 1000.0);
+        assert_eq!(
+            &buf[..],
+            &sent[..],
+            "INSTRUMENT: request/response payload mismatch at seq {seq}"
+        );
+        seq += 1;
+    }
+    if ingress_opened && fault != Some(Fault::IngressMissing) {
+        // The ingress was opened mid-window, so it has the whole second half to
+        // finish in; wait for it (bounded) and record its own first echo.
+        match tokio::time::timeout(Duration::from_secs(30), set.join_next()).await {
+            Ok(Some(Ok((ok, first_ms, reused)))) => {
+                ingress.reused = reused;
+                if ok {
+                    ingress.first_ms = first_ms;
+                } else if fault != Some(Fault::IngressUnanswered) {
+                    // A lost ingress is an unanswered request in every real run;
+                    // only the vacuity injection withholds that booking, because
+                    // the defect it demonstrates is the *other* clause having to
+                    // catch it.
+                    unanswered += 1;
+                }
+            }
+            Ok(Some(Err(join_error))) => panic!("the ingress task panicked: {join_error}"),
+            Ok(None) => {}
+            Err(_) => panic!("the ingress never completed within 30 s of the window closing"),
+        }
+    }
+    (latencies, unanswered, ingress)
+}
+
 /// A saturating bulk upload with the echo drained concurrently. Returns the
 /// steady-state end-to-end goodput in MiB/s (the echo counter's delta across
 /// `window`, sampled while the pump still runs), the bytes written, and the
@@ -1863,6 +2117,22 @@ enum Fault {
     /// pooled run also goes through, so the two paths differ only in whether a
     /// pool exists.
     PoolUnwarmed,
+    /// The mid-window ingress never opens, so the arm dials once instead of
+    /// twice and its own guard (`assert_ingress_interleaved`) must fail naming
+    /// the connection count. Without it, an arm whose ingress silently
+    /// disappeared would report "an established flow is undisturbed by an
+    /// ingress" from a run in which no ingress happened.
+    IngressMissing,
+    /// The mid-window ingress opens but its round trip never completes, and the
+    /// arm does **not** book it as unanswered — the shape of a lost ingress
+    /// being read as a free one. The dial count reaches two, so the guard's
+    /// second clause must fail naming the missing first echo.
+    IngressUnanswered,
+    /// The mid-window ingress opens and completes, but is recorded as landing at
+    /// established-sample index 0 — before the window was ever running, which is
+    /// the other shape a silent ingress takes. The guard's third clause must
+    /// fail naming the index and the sample count.
+    IngressAtEdge,
 }
 
 fn fault_from_env() -> Option<Fault> {
@@ -1872,6 +2142,9 @@ fn fault_from_env() -> Option<Fault> {
         Some("warm_unanswered") => Some(Fault::WarmUnanswered),
         Some("undialed") => Some(Fault::Undialed),
         Some("pool_unwarmed") => Some(Fault::PoolUnwarmed),
+        Some("ingress_missing") => Some(Fault::IngressMissing),
+        Some("ingress_unanswered") => Some(Fault::IngressUnanswered),
+        Some("ingress_at_edge") => Some(Fault::IngressAtEdge),
         _ => None,
     }
 }
@@ -2537,6 +2810,10 @@ fn arm_json(arm: &ArmOutcome) -> serde_json::Value {
         "pool_ready_wait_ms": arm.pool_wait_ms,
         "pool_settle_ms": arm.pool_settle_ms,
         "pool_replicate": arm.pool_replicate,
+        "ingress_offset_ms": arm.ingress.map(|i| i.offset_ms),
+        "ingress_index": arm.ingress.map(|i| i.index),
+        "ingress_first_ms": arm.ingress.map(|i| i.first_ms),
+        "ingress_reused": arm.ingress.and_then(|i| i.reused),
     })
 }
 
@@ -3052,6 +3329,115 @@ fn print_table(results: &[PairResult], proto_arms: &[ArmOutcome], pool: &PoolArm
     println!();
 }
 
+/// The mid-window-ingress arm: the established flow's own samples **before**
+/// and **after** the ingress, the ingress's own first echo, and the same
+/// regime's plain request/response arm as the no-ingress baseline from the same
+/// run. The before/after split is the within-arm, interleaved control (same
+/// connection, same run, adjacent time); the `rr (none)` rows are the
+/// between-arm one. `ing_off` is when into the window the ingress was issued,
+/// `ing_1st` its own first echo — the number that separates a session birth
+/// (near this arm's `cold_total_ms`) from a stream open on the live session
+/// (a couple of base RTTs) — and `reused` the connector's own answer where the
+/// topology pairs its own session.
+fn print_ingress_table(results: &[PairResult]) {
+    let mut printed_header = false;
+    for pair in results {
+        if pair.proxy.shape != "ingress1" {
+            continue;
+        }
+        if !printed_header {
+            println!("\n=== mid-window fresh ingress: established flow before vs after (ms) ===");
+            println!(
+                "{:<16} {:<10} {:<10} {:>7} {:>7} {:>7} {:>8} {:>6} {:>8} {:>9} {:>7}",
+                "topology",
+                "regime",
+                "phase",
+                "p50",
+                "p90",
+                "p99",
+                "max",
+                "n",
+                "ing_off",
+                "ing_1st",
+                "reused"
+            );
+            printed_header = true;
+        }
+        let baseline = results
+            .iter()
+            .find(|p| p.proxy.regime == pair.proxy.regime && p.proxy.shape == "rr");
+        for arm in [&pair.proxy, &pair.direct] {
+            let Some(ing) = arm.ingress else {
+                continue;
+            };
+            let split = ing.index.min(arm.latencies_ms.len());
+            for (phase, slice) in [
+                ("before", &arm.latencies_ms[..split]),
+                // The established flow's own first message carries this arm's
+                // establishment charge (a birth, identical in kind to the
+                // `rr (none)` baseline's own first sample); excluding it is
+                // what makes the before/after comparison a steady-state one.
+                ("before ex. 1st", &arm.latencies_ms[1.min(split)..split]),
+                ("after", &arm.latencies_ms[split..]),
+                ("full", &arm.latencies_ms[..]),
+            ] {
+                let after = phase == "after";
+                println!(
+                    "{:<16} {:<10} {:<10} {:>7.1} {:>7.1} {:>7.1} {:>8.1} {:>6} {:>8} {:>9} {:>7}",
+                    arm.topology,
+                    arm.regime,
+                    phase,
+                    percentile(slice, 0.50),
+                    percentile(slice, 0.90),
+                    percentile(slice, 0.99),
+                    percentile(slice, 1.0),
+                    slice.len(),
+                    if after {
+                        format!("{:.0}", ing.offset_ms)
+                    } else {
+                        "-".to_string()
+                    },
+                    if after {
+                        format!("{:.1}", ing.first_ms)
+                    } else {
+                        "-".to_string()
+                    },
+                    if !after {
+                        "-".to_string()
+                    } else {
+                        match ing.reused {
+                            Some(true) => "yes".to_string(),
+                            Some(false) => "no".to_string(),
+                            None => "-".to_string(),
+                        }
+                    },
+                );
+            }
+            if let Some(base) = baseline {
+                let b = if arm.topology == "proxy_chain" {
+                    &base.proxy
+                } else {
+                    &base.direct
+                };
+                println!(
+                    "{:<16} {:<10} {:<10} {:>7.1} {:>7.1} {:>7.1} {:>8.1} {:>6} {:>8} {:>9} {:>7}",
+                    b.topology,
+                    b.regime,
+                    "rr (none)",
+                    b.percentile(0.50),
+                    b.percentile(0.90),
+                    b.percentile(0.99),
+                    b.percentile(1.0),
+                    b.latencies_ms.len(),
+                    "-",
+                    "-",
+                    "-",
+                );
+            }
+        }
+    }
+}
+
 /// The relay-stack arms side by side: the chain, the clean stacked control, and
 /// the same stack under the proxy's own relay implementation one wrapper layer
 /// at a time. This is the table that attributes a delta to the relay, so it
@@ -3148,6 +3534,22 @@ async fn proxy_path_matched_rtt_delta() {
                 interval: Duration::from_millis(5),
             });
         }
+        // The mid-window-ingress arm: the operator's shape — an established
+        // flow whose window is already running when a fresh ingress arrives.
+        // Carried at all three regimes (the two 25 ms-OWD scales and the
+        // field's ~190 ms). Under the `ingress_missing` injection the same arm
+        // runs and its own guard must fail.
+        if fault.is_none()
+            || matches!(
+                fault,
+                Some(Fault::IngressMissing | Fault::IngressUnanswered | Fault::IngressAtEdge)
+            )
+        {
+            shapes.push(Shape::Ingress {
+                window: interactive_window,
+                ingress_at: interactive_window / 2,
+            });
+        }
         for shape in shapes {
             if fault.is_none() && matches!(shape, Shape::RoundTrip { .. }) {
                 continue;
@@ -3170,6 +3572,10 @@ async fn proxy_path_matched_rtt_delta() {
             let pair = run_pair(regime, shape, correction, echo, fault, controls).await;
             pair.proxy.assert_sane();
             pair.direct.assert_sane();
+            if matches!(shape, Shape::Ingress { .. }) {
+                pair.proxy.assert_ingress_interleaved();
+                pair.direct.assert_ingress_interleaved();
+            }
             if let Some(fronted) = &pair.fronted {
                 fronted.assert_sane();
             }
@@ -3323,6 +3729,7 @@ async fn proxy_path_matched_rtt_delta() {
     print_table(&results, &proto_arms, &pool);
     print_cold_table(&results, &proto_arms, &pool);
     print_pool_table(&pool);
+    print_ingress_table(&results);
     echo_scope.reap_ready();
     let report = record_json(&results, &proto_arms, &pool);
     let path = out_path();

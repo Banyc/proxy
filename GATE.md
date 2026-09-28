@@ -121,12 +121,17 @@ integrity, every arm dialed, matched base RTT, bulk traffic actually carried)
 and it restates no mandate bound: those live in `rtp_mux/GATE.md` §Performance
 and the mandate metrics are reported, never gated here.
 
-**Cost.** Measured 414 s wall-clock on a warm release build over 65 arms (32
-pair arms and 6 protocol-only arms, which are the run's own `arms` list — 38
+**Cost.** Measured 429.9 s wall-clock on a warm release build over 71 arms (38
+pair arms and 6 protocol-only arms, which are the run's own `arms` list — 44
 entries — less its `proto_arms` list, 6; plus the 27 stream-pool arms in its
-three `pool_*_arms` lists), on a host also running three concurrent agent builds;
+three `pool_*_arms` lists), on a host whose one-minute load average was 5.7–7.9
+at start and 1.9–5.8 at finish (three runs, `finished in 427.65s`, `427.79s` and
+`429.86s`, all exit 0); the previous revision measured 414 s over 65 arms (32 pair arms)
+on a host also running three concurrent agent builds;
 earlier figures were 292 s and 260 s over the 40-arm set on a quieter machine,
-and 234 s over the 34-arm set. An earlier revision of this section said 67 arms
+and 234 s over the 34-arm set. The six arms the mid-window-ingress pair adds
+(carried at all three regimes) are +24 s over the previous revision's declared
+403.6 s. An earlier revision of this section said 67 arms
 over "34 pair arms, 6 protocol-only arms, 27 stream-pool arms"; that does not
 add up on any revision, because 34 is the *total* arm count of the revision
 before the protocol-only arms existed (its `report.json` lists 34 arms and no
@@ -154,6 +159,7 @@ interactive message, the `rtpmux` hop. Arms vary one dimension from it:
 | impairment: 2 % iid loss vs lossless, jitter held | `clean25` vs `jitter25` |
 | load shape: request/response depth 1 vs ~5 ms pipelined cadence | `shape=rr` vs `shape=cadence` |
 | multiplexing: one vs four concurrent access flows on one hop | `shape=flows4` |
+| state: an established flow's own window vs the same window with a **fresh ingress** opened halfway through it | `shape=ingress1`, one dimension from `shape=rr`, at all three regimes |
 | lane: interactive lane under a bulk flow (the flow migrates to the bulk lane) | `shape=bulk` on `clean25_shaped` |
 | layer: proxy chain vs direct transport | every pair, both topologies |
 | attribution: client-side TCP fronting, server-side byte relay | `direct_tcp_front`, `direct_relay` (cadence, 25 ms OWD) |
@@ -325,6 +331,61 @@ the honest bound is: the chain's ingress plus its extra relay leg is at most a
 two-base-RTT effect and never a large share of the charge, and this instrument
 cannot resolve it further without more samples of the same arm.
 
+**A fresh ingress during a running window does not birth a session, and does
+not disturb the established flow (measured, not assumed).** The cell the
+previous revision recorded as empty — "no arm opens a birth while an
+established flow's window runs" — is now `ingress1`: an established depth-1
+request/response flow whose window is already running, with a second client
+connection to the access server opened halfway through it (2023–2148 ms into a
+4 s window). Three runs, same host, adjacent arms, one-minute load 5.7–7.9 at
+start and 1.9–5.8 at finish (`finished in` 427.65 / 427.79 / 429.86 s, all exit
+0); the established flow's own samples before the ingress are the within-arm
+control. The established flow's steady tail is unchanged by the ingress: over
+the two runs that print the first-sample-excluded phase, `clean25` proxy chain
+p99 is 47.9 → 49.5 ms (run B) and 51.0 → 48.7 ms (run C), `jitter25` 48.5 →
+48.7 and 49.9 → 49.0, `field100` 197.5 → 197.0 and 195.2 → 195.2 — deltas of at
+most 2.3 ms and of both signs. The single sample above 250 ms in each chain arm
+is **index 0** in every run — the arm's *own* establishment, the same
+start-of-window charge the plain `rr` arm shows (`proxy_chain/rr` max 252.8–268.9
+ms, `first_idx=0`) — and the `after` phase of every arm contains zero.
+
+The ingress itself is not a birth: across the three runs its own first echo is
+**46.4–51.7 ms at `clean25`, 49.5–50.5 at `jitter25` and 198.1–199.1 at
+`field100`**, against base RTTs of 40.7–41.4 and 191.1–192.4 ms — one base RTT
+to within 10.6 ms (0.14–0.26 RTT at `clean25`, 0.03–0.04 at `field100`) — where
+the *birth* charged to the same arm's first sample is 260–874 ms. The direct
+arm's connector reports the mechanism directly: `mux_session_reused = true` on
+the ingress dial at all three regimes in every run (`report.json`,
+`ingress_reused`). The `rtp_mux` code path
+agrees: `RtpMuxConnector::connect_with_lane_and_key` returns
+`session.open_stream(lane)` when `live_session` has an entry for the address
+(`rtp_mux/src/connector/mod.rs:353`, pinned v0.0.28), and the proxy's chain uses
+one process-wide connector instance (`protocol/src/stream_proto/connect.rs:110`,
+`spawn_mux_connector`).
+
+So the bracket that suggested otherwise — `proxy_chain/flows4` showing four
+over-250 ms samples and `direct_transport/flows4` none — is not four births
+interfering: it is **one** birth per address, deduplicated by the connector's
+in-flight-dial waiters (`rtp_mux/src/connector/mod.rs:804-820`), charged to each
+of the four flows' first sample, because the chain's `connect()` is only a TCP
+accept while the direct arm's `connect()` absorbs the pairing. The mid-window
+ingress is the case that separates those readings, and it says the operator's
+shape pays a fresh ingress about one base RTT plus 6–11 ms and leaves the
+established flow's tail alone. What the arm cannot catch — an ingress to a
+different upstream key, a birth forced by a session death, a disturbance shorter
+than one cadence, and the wire denominator — is recorded in the
+`gate-coverage-gaps` block below.
+
+**Its guard has three clauses and every one is shown fail-able.**
+`ingress_missing` reddens the two-dial clause, `ingress_unanswered` the
+completed-round-trip clause and `ingress_at_edge` the strictly-inside-the-window
+clause (each message in the vacuity table above). The first draft of the
+completed-round-trip clause **could not fail**: `IngressReading`'s derived
+`Default` gave `first_ms = 0.0`, which is finite, so a lost ingress read as a
+completed zero-latency one and `ingress_unanswered` exited 0. The probe caught
+it; the sentinel is now `f64::NAN` in a hand-written `Default`, so the clause
+fails on exactly the condition it names.
+
 **The remaining steps, each bounded or empty.** The pool is not a factor for
 any arm *above*: those configs declare no pool, so `connect_with_pool`'s `pull`
 is a keyed miss that returns immediately, on the access server's hop connect and
@@ -439,7 +500,13 @@ trip unanswered — the steady arm's own instrument path, rather than its load
 shape — `PROXY_PATH_PERF_FAULT=undialed` discards an arm's dial record after
 it ran, so an arm with samples reports no cold-connection reading, and
 `PROXY_PATH_PERF_FAULT=pool_unwarmed` runs the pooled arm against a config that
-declares no pool, so its readiness barrier must fail. All five must fail the
+declares no pool, so its readiness barrier must fail,
+`PROXY_PATH_PERF_FAULT=ingress_missing` never opens the mid-window ingress, so
+that arm dials once instead of twice, `ingress_unanswered` opens it but never
+completes its round trip and does not book it as unanswered, so the guard's
+"never completed" clause must fail instead, and `ingress_at_edge` records it at
+established-sample index 0, so the guard's "strictly inside the window" clause
+must fail. All eight must fail the
 guard their own path shares with the healthy runs. Demonstrated on the
 committed revision, each a separate run at exit 101:
 
@@ -450,6 +517,9 @@ committed revision, each a separate run at exit 101:
 | `warm_unanswered` | `INSTRUMENT: arm proxy_chain/cadence_steady measured zero samples` (a warm-up that never completed produced no sample, so the zero-sample assertion is the one that fires) |
 | `undialed` | `INSTRUMENT: arm proxy_chain/rr never dialed, so it measured no connection` |
 | `pool_unwarmed` | `INSTRUMENT: the stream pool never banked 1 ready connection(s) for key rtpmux://127.0.0.1:60402 within 10 s, so this arm cannot tell a warm pool from a cold one and must not claim to have measured one (last error: None; pool samples seen: [])` |
+| `ingress_missing` | `assertion \`left == right\` failed: INSTRUMENT: the mid-window-ingress arm proxy_chain/ingress1 dialed 1 connection(s), not 2 (the established flow plus the fresh ingress), so it did not measure the ingress it claims` |
+| `ingress_unanswered` | `INSTRUMENT: the ingress of arm proxy_chain/ingress1 was issued 1033 ms into the window but never completed a round trip (first echo = NaN ms)` |
+| `ingress_at_edge` | `INSTRUMENT: the ingress of arm proxy_chain/ingress1 landed at established-sample index 0 of 41 — it must be strictly inside the window, or there is no before/after to compare` |
 
 The `pool_unwarmed` message is the vacuity that matters for the mitigation:
 `last error: None` proves the monitor endpoint answered every poll, and
@@ -644,7 +714,7 @@ The checker's row identity is a compiled test: a `gate-perf-design` row is
 at least two rows — its reference and a row stating a relation against it. Two
 consequences fix the shape of this declaration:
 
-- **Every arm of the diagnosis is inside one test.** The 65 arms the scenario
+- **Every arm of the diagnosis is inside one test.** The 71 arms the scenario
 records are internal — the loops over regimes, shapes, controls and pool
 replications in `server/tests/proxy_path_perf.rs` — not 65 tests, so no arm can
 be a row. A row per arm needs the scenario split into 65 test functions (a
@@ -667,7 +737,7 @@ package's whole default tier (which this declaration does not enumerate).
 
 ```gate-perf-design
 monitor::the_monitor_router_serves_health_metrics_and_both_session_tables = default | 0.2 | baseline | proxy-instrument@layer=monitor+route=metrics-and-sessions+metric=routes-served
-proxy_path_perf::proxy_path_matched_rtt_delta = full | 403.6 | composite(hop,impairment,metric,scale,shape) | proxy-path@hop=rtpmux+impairment=iid2pct-and-lossless-and-shaped+scale=owd25-and-owd100+shape=rr-cadence-flows4-bulk+metric=latency-and-cold-connection-and-goodput
+proxy_path_perf::proxy_path_matched_rtt_delta = full | 429.9 | composite(hop,impairment,metric,scale,shape) | proxy-path@hop=rtpmux+impairment=iid2pct-and-lossless-and-shaped+scale=owd25-and-owd100+shape=rr-cadence-flows4-bulk-ingress1+metric=latency-and-cold-connection-and-goodput
 ```
 
 ```gate-budgets
@@ -680,7 +750,7 @@ drift_floor_s = 2.0
 
 ### The arm inventory the grammar cannot hold
 
-The diagnosis records **65 arms**: 32 pair arms (a `proxy_chain` and a
+The diagnosis records **71 arms**: 38 pair arms (a `proxy_chain` and a
 `direct_transport` arm per shape and regime, plus the attribution ladder and
 the two controls), 6 protocol-only arms and 27 stream-pool arms. Each line below
 is an arm group, the dimension it varies from the group above it, and the
@@ -698,9 +768,10 @@ own structure rather than to a row set.
 | `cadence_steady` pair | 4 | `window`: opens cold → after one warm round trip | clean25, jitter25 |
 | `direct_proto` (`rr`, `cadence`) | 6 | `layer`: chain-minus-ingress, entered by the protocol client | all three |
 | `flows4` pair | 2 | `flows`: 1 → 4 concurrent access flows | clean25 |
+| `ingress1` pair | 6 | `state`: an established flow's running window → the same window with a **fresh ingress** opened halfway through it (one dimension from `rr`; the ingress runs in its own task, so the established flow's depth-1 cadence continues across it) | all three |
 | `bulk` pair on `clean25_shaped` | 2 | **composite(`shape`,`rate`)**: bulk upload + 8 Mbps shaper | clean25_shaped |
 | pool set (`proxy_chain_nopool`, `_pool_ready`, `_pool`) × 3 replications | 27 | `mitigation`: no pool → pooled; then `settle`: 0 s → 3 s | all three |
-| (total) | **65** | | |
+| (total) | **71** | | |
 
 **Where the attribution costs something, and what it costs.** The ladder is
 one dimension per step except in three places, all of them named in the prose
@@ -743,23 +814,26 @@ test):
 | row | command | measured |
 | --- | --- | --- |
 | `monitor::the_monitor_router_serves_health_metrics_and_both_session_tables` | `cargo test --release -p server --test monitor` | 0.20 s (`finished in 0.20s`; `/usr/bin/time` real 0.35 s) |
-| `proxy_path_perf::proxy_path_matched_rtt_delta` | `cargo test --release -p server --test proxy_path_perf -- --ignored --nocapture` | 403.6 s (`finished in 403.64s`; `/usr/bin/time` real 403.79 s) |
+| `proxy_path_perf::proxy_path_matched_rtt_delta` | `cargo test --release -p server --test proxy_path_perf -- --ignored --nocapture` | 429.9 s (`finished in 429.86s`; two earlier runs at 427.65 s and 427.79 s, all exit 0) |
 
-The diagnosis was measured on a host whose 1-minute load average was 11.6 at
-start (other work on the machine); that invocation exited 0 with every
-instrument assertion holding and recorded the same 65 arms as the earlier full
-run, so the two are comparable measurements of one scenario rather than two
-shapes. The same scenario measured 414.6 s on the earlier full run the `Cost.`
-paragraph above cites as 414 s — the 65-arm shape, with the pool arms — and
-143.6–172.9 s on a quieter host at the pre-pool revision. The spread is host
-load, not a change in the arms, so the `full` budget is the measured cost with
-headroom rather than a tight bound: 403.6 s + 72.6 s (18 %), rounded up to a
-whole ten seconds, is the 480 s budget the `gate-budgets` block above declares.
-That budget covers the declared rows only; the ruling figure is printed by the
-checker itself in its `gate-budgets:` summary line.
+The diagnosis was measured on a host whose 1-minute load average was 5.7–7.9 at
+start and 1.9–5.8 at finish (three runs on this revision:
+`finished in 427.65s`, `427.79s` and `429.86s`, all exit 0, all recording the 71
+arms); the earlier full run the
+`Cost.` paragraph above cites as 414 s was on a host also running three
+concurrent agent builds and recorded 65 arms — the same shape less the
+mid-window-ingress pair. The same scenario measured 403.6 s on the host whose
+1-minute load average was 11.6 at start, and 143.6–172.9 s on a quieter host at
+the pre-pool revision. The spread is host load and the added arm group, not a
+change in the existing arms, so the `full` budget **stays 480 s** rather than
+moving to meet the new cost: it was derived as the previous revision's measured
+403.6 s + 72.6 s (18 %), rounded up to a whole ten seconds, and the runs on
+this revision sit inside it at 89–90 %. That budget covers the declared rows
+only; the ruling figure is printed by the checker itself in its `gate-budgets:`
+summary line.
 
 ```gate-coverage-gaps
-arm-row@granularity=test-not-arm = a `gate-perf-design` row is a compiled test (`<target>::<test>`), and all 65 arms of the diagnosis are internal to one `#[ignore]`d test function, so no arm can be a row. The repair is one of two changes this declaration may not make: split the scenario into one test per arm (a change to the perf scenario itself), or extend the shared grammar with an arm-level row identity (tooling this crate does not own). What the arms do cover is recorded instead as the inventory table above and the lines below.
+arm-row@granularity=test-not-arm = a `gate-perf-design` row is a compiled test (`<target>::<test>`), and all 71 arms of the diagnosis are internal to one `#[ignore]`d test function, so no arm can be a row. The repair is one of two changes this declaration may not make: split the scenario into one test per arm (a change to the perf scenario itself), or extend the shared grammar with an arm-level row identity (tooling this crate does not own). What the arms do cover is recorded instead as the inventory table above and the lines below.
 attribution@baseline-family=proxy-path = the diagnosis is declared as a `composite(hop,impairment,metric,scale,shape)` against the only row in the same package it can stand against, the monitor-route instrument test, so the declaration attributes nothing about the diagnosis: no sibling arm one declared dimension away exists in this package, and the arm-level structure that *is* one dimension per step (the `direct_tcp_front`/`direct_relay`/`direct_front_relay_tout` ladder, the `rr`→`cadence` and clean→jitter→field regime steps, the pool and settle steps) is not expressible as rows for the reason on the `arm-row` line. A second opt-in scenario in this package one dimension from the diagnosis would close the attribution half; a grammar change would close both.
 proxy-path@impairment=GE-burst = the tri-mandate `hostile` arm's Gilbert-Elliot model is measured at the `rtp_mux` layer; this scenario's job is the level delta, which the iid-loss and lossless arms bracket, so no burst arm is claimed here.
 proxy-path@topology=cross-host = every arm is loopback, so host-local CPU and loopback TCP are inside the measurement; a cross-host path would need a second host, which a single-process harness cannot supply.
@@ -770,6 +844,9 @@ proxy-path@state=config-reload-and-suspend = the pool's lifetime across a config
 proxy-path@state=pool-warm-versus-usable = the readiness barrier observes the pool's exported gauge, which is *established and unpulled* — necessary but not sufficient for usability — and the 3 s settle the settled arm takes is a constant chosen from a probe's settle curve, not a measurement of what makes a fresh session unusable. The instrument shows the effect, not its cause; the candidates (the session's own path exploration settling, its send-window ramp, the second lane's lazy birth) remain candidates.
 proxy-path@arm=relay-stack-at-owd100 = `direct_front_relay_tout` and `direct_front_relay_timed` are not run at 100 ms OWD: they exist to separate the relay implementation from the delta the 25 ms-OWD cadence carries, and the 100 ms-OWD direct arm is itself a harness queueing artifact, so a further control there would not attribute.
 proxy-path@arm=protocol-only-cadence-at-owd100 = the protocol-only cadence arm at 100 ms OWD has the same queueing shape for the same reason: it is quoted in the prose, not attributed.
+proxy-path@state=ingress-to-a-different-upstream-key = `ingress1`'s ingress reuses the one hop address's live session, so a fresh ingress that resolves to a *different* upstream key — which has no live session for that address and would birth one — is not covered, and neither is a birth forced by a session that died under the established flow. The rig dials a single upstream address, so the cell needs a second hop key.
+proxy-path@state=ingress-under-a-deeper-window = `ingress1`'s established flow is depth 1 (the `rr` baseline), so a disturbance shorter than one request/response cadence — which a deeper in-flight window would expose — is not measured.
+proxy-path@metric=ingress-wire-denominator = `ingress1`'s per-arm wire multiple is not comparable to the `rr` arm's: the ingress's own establishment bytes are in the numerator while its single message is not in the offered-byte denominator (measured 11.6–27.5 against `rr`'s 9.4–16.9).
 framework@package=tests = the workspace's other perf scenario, `tests::perf_bulk_rtp_mux` (a `--lib` unit test of the package `tests` that pushes 32 MiB through a real chain and asserts byte-exact delivery), cannot be declared in this block: the checker takes one package and one scenario directory per invocation, and its `gate-manifest` block must equal the ignored set of the directory it is pointed at, so a block carrying both packages' rows fails in both invocations. The repair is a second declaration file for the `tests` package (or a gate that spans the workspace), neither of which this change may add; the scenario stays recorded in `ignored-manifest`, checked by `tools/check-ignored.py`.
 framework@taxonomy=perf = the shared checker's `perf` tier means report-only and this workspace's `ignored-manifest` uses `perf` for an asserting opt-in benchmark, so the same test carries two labels that read as a contradiction until the difference is stated (see "Two vocabularies share the word `perf`"). The repair is a rename in one vocabulary, or a shared tier whose name does not collide; until then the two blocks must be read together.
 framework@family=two-row-minimum = a family needs a reference row plus a row stated against it, and this package owns one opt-in scenario, so the reference row is a functional monitor-route test rather than a sibling measurement. The repair is a sibling arm one dimension from the diagnosis in the same package, or shared-tooling support for a single-row family.
@@ -847,8 +924,8 @@ whole mechanism; nothing in the sources is retuned to deepen the soak.
 Two names select which failure a test demonstrates rather than measuring
 anything. Both are **unset in every real run**.
 
-- `PROXY_PATH_PERF_FAULT` (`server/tests/proxy_path_perf.rs:1869`) selects one
-of five perturbations of the deployed-path diagnosis's own input, each of
+- `PROXY_PATH_PERF_FAULT` (`server/tests/proxy_path_perf.rs:2139`) selects one
+of eight perturbations of the deployed-path diagnosis's own input, each of
 which must fail the guard its healthy path shares: `zero_samples` empties an
 arm's samples, `unanswered` drops responses, `warm_unanswered` leaves the
 steady arm's pre-window round trip unanswered, `undialed` discards an arm's
@@ -874,7 +951,7 @@ no honest `total` for them and the load is refused rather than invented.
 
 ### The diagnosis's evidence sink: `PROXY_PATH_PERF_OUT`
 
-`PROXY_PATH_PERF_OUT` (`server/tests/proxy_path_perf.rs:2469`, in `out_path()`)
+`PROXY_PATH_PERF_OUT` (`server/tests/proxy_path_perf.rs:2742`, in `out_path()`)
 names the file the diagnosis writes its `report.json` to, overriding the
 default `$CARGO_TARGET_DIR/proxy_path_perf/report.json`. It is a **diagnostic
 output path**: it decides where an arm's evidence lands, and the arm counts
@@ -886,7 +963,7 @@ not folded into a red-proof row.
 
 ```gate-env-tier
 lifecycle-soak-scale = PROXY_SOAK_INSTANCES,PROXY_SOAK_CYCLES,PROXY_SOAK_BURST | - | the lifecycle soak's own scale: PROXY_SOAK_CYCLES is the per-instance cycle count, the trial unit whose rule-of-three detection limit the run's own summary prints, PROXY_SOAK_INSTANCES is the number of real proxy processes driven in parallel, and PROXY_SOAK_BURST is the concurrent sessions each spawn, replace and refused-preparation burst opens plus, halved and floored at 2, the spanning set; the soak asserts per cycle that a committed generation's probe hop is dialed, a new listener binds, a live listener adopts a new handler without moving its port, an unresolvable config installs nothing, sessions in flight keep their destination across a reload, a retired listener's socket closes, every relayed token is echoed byte-exact, and the session table settles to exactly the sessions still open | proxy-lifecycle@phases=probe-spawn-replace-refused-retire+metric=reload-effect, session-accounting@metric=table-settles-to-open-set, relay-integrity@metric=token-echo-byte-exact, live-session@metric=route-stable-across-reload, proxy-lifecycle-rate@metric=rule-of-three+unit=cycle | PROXY_SOAK_INSTANCES=4,PROXY_SOAK_CYCLES=2,PROXY_SOAK_BURST=6,total=PROXY_SOAK_INSTANCES*PROXY_SOAK_CYCLES,wall=17.59s,bound=3.75e-1/cycle
-red-proof-controls = PROXY_PATH_PERF_FAULT,PROXY_CONFIG_WATCH_TEARDOWN_CHILD | - | the red-proof selector controls, not measurements: PROXY_PATH_PERF_FAULT selects one of five perturbations of the deployed-path diagnosis's own input (an emptied arm, a dropped response, an unanswered warm-up round, a discarded dial record, or the pooled arm run against a pool-less config), each of which must fail the guard its healthy path shares, and PROXY_CONFIG_WATCH_TEARDOWN_CHILD selects the re-executed child role in which the config-watcher teardown body runs so an abort surfaces as a non-zero child exit; both are unset in every real run, neither sizes anything, and no arithmetic derives from them, so their load is refused rather than invented | path-perf-vacuity@fault=PROXY_PATH_PERF_FAULT+targets=zero-samples-unanswered-warm-unanswered-undialed-pool-unwarmed, config-watch-vacuity@fault=PROXY_CONFIG_WATCH_TEARDOWN_CHILD+targets=file-watcher-teardown-abort
+red-proof-controls = PROXY_PATH_PERF_FAULT,PROXY_CONFIG_WATCH_TEARDOWN_CHILD | - | the red-proof selector controls, not measurements: PROXY_PATH_PERF_FAULT selects one of eight perturbations of the deployed-path diagnosis's own input (an emptied arm, a dropped response, an unanswered warm-up round, a discarded dial record, the pooled arm run against a pool-less config, the mid-window ingress suppressed, the ingress's round trip left incomplete without being booked unanswered, or the ingress recorded at index 0), each of which must fail the guard its healthy path shares, and PROXY_CONFIG_WATCH_TEARDOWN_CHILD selects the re-executed child role in which the config-watcher teardown body runs so an abort surfaces as a non-zero child exit; both are unset in every real run, neither sizes anything, and no arithmetic derives from them, so their load is refused rather than invented | path-perf-vacuity@fault=PROXY_PATH_PERF_FAULT+targets=zero-samples-unanswered-warm-unanswered-undialed-pool-unwarmed-ingress-missing-ingress-unanswered-ingress-at-edge, config-watch-vacuity@fault=PROXY_CONFIG_WATCH_TEARDOWN_CHILD+targets=file-watcher-teardown-abort
 path-perf-evidence-sink = PROXY_PATH_PERF_OUT | - | the deployed-path diagnosis's evidence sink: names the file the scenario writes its per-arm report.json to, overriding the default under CARGO_TARGET_DIR, and decides where a run's evidence lands rather than measuring anything; it sizes no window, count or cadence, so its load is refused rather than invented | path-perf-evidence@artifact=report-json+sink=PROXY_PATH_PERF_OUT
 ```
 
