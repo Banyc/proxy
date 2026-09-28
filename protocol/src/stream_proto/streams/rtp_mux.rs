@@ -110,7 +110,6 @@ pub async fn build_rtp_mux_proxy_server(
                 *handler.stream.header_crypto().key(),
             )),
             cc_link,
-            ..Default::default()
         },
     )
     .await
