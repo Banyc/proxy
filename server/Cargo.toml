@@ -37,7 +37,7 @@ tracing-subscriber = { workspace = true }
 # exist. It impairs the chain's own RTP hop with the same instrument the
 # tri-mandate arms use. Uncomment the path line to test against the local
 # harness instead of the released one.
-netem-test = { git = "https://github.com/Banyc/netem_test.git", tag = "v0.0.3", features = ["test-kit"] }
+netem-test = { git = "https://github.com/Banyc/netem_test.git", tag = "v0.0.4", features = ["test-kit"] }
 # netem-test = { path = "../../netem_test/netem-test", features = ["test-kit"] }
 # The proxy chain's transport, so the same-load-shape direct-transport baseline
 # can be built without a proxy in the path.
