@@ -509,29 +509,35 @@ async fn every_version_probe_is_refused_and_named() {
     }
 }
 
-/// A third positional argument is refused by the parser. The deployment's
-/// positional arity is the launcher's — one config path for the hop role, two
-/// for the access role — and every path given is read and merged, so an
-/// argument nobody meant as a config file would otherwise be merged as one.
+/// A positional argument that is not a config file must be refused, named, and
+/// must not start the process. Every positional is a config path and all of
+/// them are read and merged, so what keeps a stray word from being merged as a
+/// config file is validation — not a cap on how many paths the caller may
+/// pass. A cap was imposed here once and was wrong: it limited a general merge
+/// feature to the arity of today's launchers, so a legitimate third config
+/// file could not be given.
 #[tokio::test]
-async fn a_third_positional_config_path_is_refused_and_named() {
-    let dir = unique_temp_dir("arity");
+async fn an_argument_that_is_not_a_config_file_is_refused_and_named() {
+    let dir = unique_temp_dir("stray-arg");
     std::fs::create_dir_all(&dir).unwrap();
     let first = dir.join("a.toml");
     let second = dir.join("b.toml");
-    let third = dir.join("c.toml");
-    for path in [&first, &second, &third] {
-        std::fs::write(path, "").unwrap();
+    // Both are readable and valid, so validation cannot be what refuses the
+    // third argument by accident. They are non-empty on purpose: a zero-byte
+    // file is refused as a truncated write, which would mask the property
+    // under test.
+    for path in [&first, &second] {
+        std::fs::write(path, "# intentionally empty\n").unwrap();
     }
+    let stray = "version";
 
-    // Bounded, and killed on drop: with the arity bound removed the process
-    // would read the three config files and exit with a config error rather
-    // than start, so a bare `output()` would return — but the bound keeps the
-    // test from hanging if that ever changes.
+    // Bounded, and killed on drop: if the stray argument were merged instead of
+    // refused, the process would have started and this would hang. It is also
+    // the assertion that no start-up work happens before the refusal.
     let child = tokio::process::Command::new(proxy_bin())
         .arg(first.to_str().unwrap())
         .arg(second.to_str().unwrap())
-        .arg(third.to_str().unwrap())
+        .arg(stray)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -541,21 +547,66 @@ async fn a_third_positional_config_path_is_refused_and_named() {
         .await
         .unwrap_or_else(|_| {
             panic!(
-                "a third config path must be refused; the process instead accepted it and started \
-                 (it was still running after 20 s)"
+                "an argument that is not a config file must be refused; the process instead \
+                 accepted it and started (it was still running after 20 s)"
             )
         })
         .unwrap();
     let text = combined(&output);
     assert_eq!(
         output.status.code(),
-        Some(2),
-        "a third config path is a usage error: {text}"
+        Some(1),
+        "a stray positional is a config error, not a usage error: {text}"
     );
     assert!(
-        text.contains(third.to_str().unwrap()),
-        "the usage error must name the extra argument: {text}"
+        text.contains(stray),
+        "the refusal must name the offending argument: {text}"
     );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// There is no cap on how many positional config paths may be given. A
+/// regression here is invisible to the launcher-shape test above, which passes
+/// one or two paths, so the arity is pinned **through the parser**: three paths
+/// are given, the run gets past validation, and it fails on the listener port
+/// this test holds (exit 1) — where a cap would make it a usage error (exit 2)
+/// naming the third path, before any config was read.
+///
+/// This is deliberately a process-level test. Calling the validator directly
+/// would be blind to the parser, and a check the parser cannot affect is a
+/// check that cannot fail.
+#[tokio::test]
+async fn three_positional_config_paths_are_accepted_by_the_parser() {
+    let dir = unique_temp_dir("three-positional");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (held, held_addr) = held_listener().await;
+    let bound = dir.join("bound.toml");
+    std::fs::write(&bound, unboundable_config(&held_addr)).unwrap();
+    let extra_a = dir.join("extra-a.toml");
+    let extra_b = dir.join("extra-b.toml");
+    for path in [&extra_a, &extra_b] {
+        std::fs::write(path, "# intentionally empty\n").unwrap();
+    }
+
+    let output = tokio::process::Command::new(proxy_bin())
+        .arg(bound.to_str().unwrap())
+        .arg(extra_a.to_str().unwrap())
+        .arg(extra_b.to_str().unwrap())
+        .output()
+        .await
+        .unwrap();
+    let text = combined(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "three config paths must all be read and merged — reaching the fatal bind error — rather \
+         than refused as a usage error: {text}"
+    );
+    assert!(
+        !text.contains("unexpected argument") && !text.contains("Usage:"),
+        "the parser must not reject a third config path: {text}"
+    );
+    drop(held);
     std::fs::remove_dir_all(&dir).ok();
 }
 
