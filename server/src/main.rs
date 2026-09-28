@@ -22,15 +22,6 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 
 #[derive(Debug, Parser)]
 struct Args {
-    /// Paths to the configuration files, merged in the order given; at most
-    /// two (the arity the deployed launcher uses).
-    // Reason for the bound: `run-proxy` passes one path for the hop role and
-    // two for the access role (a base config merged with its filter file), and
-    // every path given is read and merged — so an argument nobody meant as a
-    // config file would be merged as one. Keeping the rationale out of the doc
-    // comment keeps `--help` readable; the bound itself is what an operator
-    // needs to know.
-    #[arg(num_args = 1..=2)]
     config_file_paths: Vec<Arc<str>>,
 
     /// Listen address for monitoring
