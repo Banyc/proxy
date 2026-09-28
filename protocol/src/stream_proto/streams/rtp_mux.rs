@@ -99,6 +99,7 @@ pub async fn build_rtp_mux_proxy_server(
             obfuscation_key: Some(::rtp_mux::ObfuscationKey::from_bytes(
                 *handler.stream.header_crypto().key(),
             )),
+            ..Default::default()
         },
     )
     .await

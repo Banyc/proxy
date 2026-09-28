@@ -425,6 +425,7 @@ impl loading::Build for RtpReverseTunnelResponderBuilder {
             self.listen_addr.address.to_string(),
             rtp_mux::RtpMuxServerConfig {
                 obfuscation_key: Some(rtp_mux::ObfuscationKey::from_bytes(*obfuscation_key.key())),
+                ..Default::default()
             },
         )
         .await?;

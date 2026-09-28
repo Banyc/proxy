@@ -299,6 +299,7 @@ async fn bind_rtp_responder(key: [u8; 32]) -> rtp_mux::RtpMuxServer {
         "127.0.0.1:0",
         rtp_mux::RtpMuxServerConfig {
             obfuscation_key: Some(rtp_mux::ObfuscationKey::from_bytes(key)),
+            ..Default::default()
         },
     )
     .await

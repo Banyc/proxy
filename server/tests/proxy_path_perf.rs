@@ -779,6 +779,7 @@ async fn start_direct(regime: &Regime, extra_owd: Duration, echo: SocketAddr) ->
         "127.0.0.1:0",
         RtpMuxServerConfig {
             obfuscation_key: Some(ObfuscationKey::from_bytes(OBFUSCATION_KEY)),
+            ..Default::default()
         },
     )
     .await
