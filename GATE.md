@@ -584,7 +584,7 @@ pinned above.
 
 ## The dual-mandate declaration (time and coverage)
 
-`netem_test/tools/check-gate.py` is the shared checker that enforces the
+`netem-tools check-gate` is the shared checker that enforces the
 perf-test dual mandate of `AGENTS.md` ("The perf-test dual mandate — time and
 coverage") from a crate's own `GATE.md`: `gate-perf-design` names each declared
 scenario with its tier, its nominal cost, how it stands to a reference row and
@@ -601,7 +601,7 @@ One invocation covers **one package and one scenario directory**, so the command
 names the package that owns this workspace's perf scenario:
 
 ```sh
-python3 ../netem_test/tools/check-gate.py --crate . server server/tests GATE.md
+netem-tools check-gate --crate . server server/tests GATE.md
 ```
 
 The three blocks it needs that this file did not have before are below. The
