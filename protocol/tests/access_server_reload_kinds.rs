@@ -469,6 +469,7 @@ fn runtime(tasks: &mut Tasks) -> Runtime {
     let connector_table = Arc::new(build_concrete_stream_connector_table(
         connector_config,
         ConnectorResetSignal(Notify::new()),
+        None,
         &mut connector_drivers,
         &udp_connector,
     ));

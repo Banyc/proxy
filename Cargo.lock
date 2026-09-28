@@ -2269,6 +2269,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "netem-test",
  "protocol",
+ "rtp",
  "rtp_mux",
  "serde",
  "serde_json",

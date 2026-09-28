@@ -198,6 +198,7 @@ async fn test_stream_runtime(
     let connector_table = Arc::new(build_concrete_stream_connector_table(
         connector_config,
         reset,
+        None,
         &mut connector_drivers,
         udp_connector,
     ));

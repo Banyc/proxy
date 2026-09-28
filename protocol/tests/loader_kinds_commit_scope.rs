@@ -84,6 +84,7 @@ fn runtime(tasks: &mut Tasks) -> Runtime {
     let connector_table = Arc::new(build_concrete_stream_connector_table(
         connector_config,
         ConnectorResetSignal(Notify::new()),
+        None,
         &mut connector_drivers,
         &udp_connector,
     ));
@@ -187,10 +188,14 @@ async fn a_failed_proxy_server_kind_does_not_suppress_the_kinds_after_it() {
     // Generation 1: the first kind's listener alone, so its task can be killed
     // without touching the later kinds.
     let snapshot = loader.snapshot();
-    let prepared =
-        proxy_server::prepare(proxy_config(true, false, false), &snapshot, runtime.clone())
-            .await
-            .expect("generation 1 preparation must succeed");
+    let prepared = proxy_server::prepare(
+        proxy_config(true, false, false),
+        &snapshot,
+        runtime.clone(),
+        None,
+    )
+    .await
+    .expect("generation 1 preparation must succeed");
     loader
         .commit(&mut dying_tasks, prepared)
         .expect("generation 1 commits into an empty loader, so nothing can fail");
@@ -203,10 +208,14 @@ async fn a_failed_proxy_server_kind_does_not_suppress_the_kinds_after_it() {
     // Generation 2: the first kind (a replacement) plus the two later kinds
     // (spawns). Prepare while the first kind is alive, then kill it.
     let snapshot = loader.snapshot();
-    let prepared =
-        proxy_server::prepare(proxy_config(true, true, true), &snapshot, runtime.clone())
-            .await
-            .expect("generation 2 preparation must succeed");
+    let prepared = proxy_server::prepare(
+        proxy_config(true, true, true),
+        &snapshot,
+        runtime.clone(),
+        None,
+    )
+    .await
+    .expect("generation 2 preparation must succeed");
     kill(&mut dying_tasks).await;
 
     let mut live_tasks: ServerTasks = JoinSet::new();

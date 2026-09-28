@@ -209,6 +209,7 @@ pub async fn prepare_reload<CR>(
     server_loader: ServerLoaderSnapshot,
     cancellation: CancellationToken,
     runtime: Runtime,
+    nic: Option<rtp::nic::NicScheduler>,
 ) -> Result<PreparedReload, ServerServeError>
 where
     CR: ReadConfig<Config = ServerConfig> + Send + Sync + 'static,
@@ -255,6 +256,7 @@ where
         config.proxy_server,
         &server_loader.proxy_server,
         runtime.clone(),
+        nic,
     )
     .await
     .map_err(ServerServeError::Load)?;

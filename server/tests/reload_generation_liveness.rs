@@ -251,6 +251,7 @@ async fn a_reload_installs_a_live_generation_and_retires_the_one_it_replaces() {
         config_changed: config_changed.clone(),
         system_resume: SystemResumeSignal(Notify::new()),
         retention,
+        nic: None,
     };
     let mut tasks = tokio::task::JoinSet::new();
     tasks.spawn(async move {
@@ -403,6 +404,7 @@ conn_selector = "default"
         config_changed: signal,
         system_resume: SystemResumeSignal(Notify::new()),
         retention,
+        nic: None,
     };
     let mut tasks = tokio::task::JoinSet::new();
     tasks.spawn(async move {

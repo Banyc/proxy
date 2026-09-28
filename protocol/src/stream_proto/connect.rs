@@ -9,6 +9,8 @@ use common::{
     },
 };
 
+use rtp::nic::NicScheduler;
+
 use super::{
     protos::STREAM_PROTOS,
     streams::{
@@ -37,13 +39,14 @@ use super::{
 pub fn build_concrete_stream_connector_table(
     config: ConnectorConfigReader,
     reset: ConnectorResetSignal,
+    nic: Option<NicScheduler>,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
     udp_connector: &UdpConnector,
 ) -> StreamConnectorTable {
     let init: Vec<(&'static str, Arc<dyn StreamConnect>)> = STREAM_PROTOS
         .iter()
         .map(|(_, ty, build)| {
-            let (connector, dialer) = build(config.clone(), reset.clone(), drivers);
+            let (connector, dialer) = build(config.clone(), reset.clone(), nic.clone(), drivers);
             if let Some(dialer) = dialer {
                 udp_connector.register_dialer((*ty).into(), dialer);
             }
@@ -57,6 +60,7 @@ pub fn build_concrete_stream_connector_table(
 pub fn build_tcp_connector(
     config: ConnectorConfigReader,
     _reset: ConnectorResetSignal,
+    _nic: Option<NicScheduler>,
     _drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     (Arc::new(TcpConnector::new(config.clone())), None)
@@ -64,6 +68,7 @@ pub fn build_tcp_connector(
 pub fn build_tcp_mux_connector(
     config: ConnectorConfigReader,
     reset: ConnectorResetSignal,
+    _nic: Option<NicScheduler>,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     let (connector, driver) = TcpMuxConnector::new(config.clone(), reset);
@@ -72,6 +77,7 @@ pub fn build_tcp_mux_connector(
 pub fn build_kcp_connector(
     config: ConnectorConfigReader,
     _reset: ConnectorResetSignal,
+    _nic: Option<NicScheduler>,
     _drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     (Arc::new(KcpConnector::new(config.clone())), None)
@@ -79,6 +85,7 @@ pub fn build_kcp_connector(
 pub fn build_mptcp_connector(
     _config: ConnectorConfigReader,
     _reset: ConnectorResetSignal,
+    _nic: Option<NicScheduler>,
     _drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     (Arc::new(MptcpConnector), None)
@@ -86,6 +93,7 @@ pub fn build_mptcp_connector(
 pub fn build_rtp_connector(
     config: ConnectorConfigReader,
     _reset: ConnectorResetSignal,
+    _nic: Option<NicScheduler>,
     _drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
     (Arc::new(RtpConnector::new(config.clone(), false)), None)
@@ -93,9 +101,10 @@ pub fn build_rtp_connector(
 pub fn build_rtp_mux_connector(
     config: ConnectorConfigReader,
     reset: ConnectorResetSignal,
+    nic: Option<NicScheduler>,
     drivers: &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>) {
-    let (connector, driver) = RtpMuxConnector::new(config.clone(), reset);
+    let (connector, driver) = RtpMuxConnector::new(config.clone(), reset, nic);
     spawn_mux_connector(connector, driver, drivers)
 }
 

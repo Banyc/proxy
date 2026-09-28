@@ -79,6 +79,7 @@ fn stream_context(tasks: &mut Tasks) -> StreamRuntime {
     let connector_table = Arc::new(build_concrete_stream_connector_table(
         connector_config,
         ConnectorResetSignal(Notify::new()),
+        None,
         &mut connector_drivers,
         &udp_connector,
     ));
@@ -827,6 +828,7 @@ async fn a_non_connect_response_records_the_stream_session() {
     let connector_table = Arc::new(build_concrete_stream_connector_table(
         connector_config,
         ConnectorResetSignal(Notify::new()),
+        None,
         &mut connector_drivers,
         &udp_connector,
     ));

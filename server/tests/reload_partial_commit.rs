@@ -485,6 +485,7 @@ fn runtime(tasks: &mut Tasks, connector_config: ConnectorConfigReader) -> Runtim
     let connector_table = Arc::new(build_concrete_stream_connector_table(
         connector_config,
         ConnectorResetSignal(Notify::new()),
+        None,
         &mut connector_drivers,
         &udp_connector,
     ));
@@ -575,6 +576,7 @@ async fn prepare(
         loader.snapshot(),
         CancellationToken::new(),
         runtime.clone(),
+        None,
     )
     .await
     .unwrap_or_else(|e| panic!("{phase}: preparation must succeed, but it failed: {e}"))

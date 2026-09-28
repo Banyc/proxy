@@ -32,13 +32,18 @@ pub struct RtpMuxProxyServerConfig {
     pub inner: StreamProxyConnHandlerConfig,
 }
 impl RtpMuxProxyServerConfig {
-    pub fn into_builder(self, runtime: Runtime) -> RtpMuxProxyServerBuilder {
+    pub fn into_builder(
+        self,
+        runtime: Runtime,
+        nic: Option<rtp::nic::NicScheduler>,
+    ) -> RtpMuxProxyServerBuilder {
         let listen_addr = Arc::clone(&self.listen_addr);
         let inner = self.inner.into_builder(runtime.stream, listen_addr);
         RtpMuxProxyServerBuilder {
             listen_addr: self.listen_addr,
             inner,
             udp_context: runtime.udp,
+            nic,
         }
     }
 }
@@ -47,6 +52,8 @@ pub struct RtpMuxProxyServerBuilder {
     pub listen_addr: Arc<str>,
     pub inner: StreamProxyConnHandlerBuilder,
     pub udp_context: UdpRuntime,
+    /// The process-level per-NIC scheduler, shared with the connector table.
+    pub nic: Option<rtp::nic::NicScheduler>,
 }
 impl loading::Build for RtpMuxProxyServerBuilder {
     type ConnHandler = MuxProxyHandler;
@@ -55,8 +62,9 @@ impl loading::Build for RtpMuxProxyServerBuilder {
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let session_spawner = self.inner.stream_context.session_spawner.clone();
+        let nic = self.nic.clone();
         let handler = self.build_conn_handler()?;
-        build_rtp_mux_proxy_server(listen_addr.as_ref(), handler, session_spawner)
+        build_rtp_mux_proxy_server(listen_addr.as_ref(), handler, session_spawner, nic)
             .await
             .map_err(Into::into)
     }
@@ -92,6 +100,7 @@ pub async fn build_rtp_mux_proxy_server(
     listen_addr: impl ToSocketAddrs + Clone + std::fmt::Debug,
     handler: MuxProxyHandler,
     session_spawner: SessionSpawner,
+    nic: Option<rtp::nic::NicScheduler>,
 ) -> Result<RtpMuxServer<MuxProxyHandler>, ListenerBindError> {
     let server = ::rtp_mux::RtpMuxServer::bind(
         listen_addr,
@@ -99,6 +108,7 @@ pub async fn build_rtp_mux_proxy_server(
             obfuscation_key: Some(::rtp_mux::ObfuscationKey::from_bytes(
                 *handler.stream.header_crypto().key(),
             )),
+            nic,
             ..Default::default()
         },
     )

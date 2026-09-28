@@ -633,6 +633,7 @@ mod tests {
         let connector_table = Arc::new(build_concrete_stream_connector_table(
             connector_config,
             ConnectorResetSignal(Notify::new()),
+            None,
             &mut connector_drivers,
             &udp_connector,
         ));
@@ -730,9 +731,10 @@ mod tests {
                 addr
             }
             "rtpmux" => {
-                let server = build_rtp_mux_proxy_server("127.0.0.1:0", handler, session_spawner)
-                    .await
-                    .unwrap();
+                let server =
+                    build_rtp_mux_proxy_server("127.0.0.1:0", handler, session_spawner, None)
+                        .await
+                        .unwrap();
                 let addr = server.listener().local_addr();
                 scope.spawn_required(async move {
                     let _set_conn_handler_tx = set_conn_handler_tx;

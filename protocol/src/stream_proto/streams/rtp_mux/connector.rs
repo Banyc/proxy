@@ -30,6 +30,7 @@ impl RtpMuxConnector {
     pub fn new(
         config: ConnectorConfigReader,
         reset: ConnectorResetSignal,
+        nic: Option<rtp::nic::NicScheduler>,
     ) -> (Self, MuxConnectorDriver) {
         let bind = Arc::new(move |addr: SocketAddr| {
             config
@@ -39,9 +40,12 @@ impl RtpMuxConnector {
                 .map(|ip| SocketAddr::new(ip, 0))
                 .unwrap_or_else(|| any_addr(&addr.ip()))
         });
-        let (inner, inner_driver) = ::rtp_mux::RtpMuxConnector::with_config(
-            ::rtp_mux::RtpMuxConnectorConfig::standard(bind),
-        );
+        let mut connector_config = ::rtp_mux::RtpMuxConnectorConfig::standard(bind);
+        // The process-level per-NIC scheduler, shared with every other
+        // connector and server in this process (wired from `server`'s
+        // config).
+        connector_config.nic = nic;
+        let (inner, inner_driver) = ::rtp_mux::RtpMuxConnector::with_config(connector_config);
         let inner = Arc::new(inner);
         let reset_driver = {
             let inner = Arc::clone(&inner);

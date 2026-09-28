@@ -202,6 +202,7 @@ pub async fn prepare(
     config: ProxyServerConfig,
     loader: &ProxyServerLoaderSnapshot,
     context: Runtime,
+    nic: Option<rtp::nic::NicScheduler>,
 ) -> Result<PreparedProxyServer, AnyError> {
     let tcp_server = tcp_prepare(config.tcp_server, &loader.tcp_server, &context).await?;
     let tcp_mux_server =
@@ -211,7 +212,7 @@ pub async fn prepare(
     let mptcp_server = mptcp_prepare(config.mptcp_server, &loader.mptcp_server, &context).await?;
     let rtp_server = rtp_prepare(config.rtp_server, &loader.rtp_server, &context).await?;
     let rtp_mux_server =
-        rtp_mux_prepare(config.rtp_mux_server, &loader.rtp_mux_server, &context).await?;
+        rtp_mux_prepare(config.rtp_mux_server, &loader.rtp_mux_server, &context, nic).await?;
     Ok(PreparedProxyServer {
         tcp_server,
         tcp_mux_server,
@@ -313,12 +314,13 @@ async fn rtp_mux_prepare(
     config: Vec<RtpMuxProxyServerConfig>,
     loader: &loading::LoaderSnapshot<MuxProxyHandler>,
     context: &Runtime,
+    nic: Option<rtp::nic::NicScheduler>,
 ) -> Result<loading::PreparedOps<MuxProxyHandler>, AnyError> {
     loader
         .prepare(
             config
                 .into_iter()
-                .map(|s| s.into_builder(context.clone()))
+                .map(|s| s.into_builder(context.clone(), nic.clone()))
                 .collect(),
         )
         .await

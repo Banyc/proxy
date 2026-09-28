@@ -27,6 +27,7 @@ use protocol::{
     reverse_tunnel::{ReverseTunnelConfig, ReverseTunnelLoader, ReverseTunnelLoaderSnapshot},
     stream_proto::connect::build_concrete_stream_connector_table,
 };
+use rtp::nic::NicScheduler;
 use serde::Deserialize;
 use swap::Swap;
 use thiserror::Error;
@@ -46,6 +47,10 @@ pub struct ServeContext {
     pub config_changed: ConfigChangeSignal,
     pub system_resume: SystemResumeSignal,
     pub retention: RetentionActorSender,
+    /// The process-scoped per-NIC interactive/bulk fair queue (`rtp::nic`),
+    /// built once by `main` from the config and shared by every connector and
+    /// server in the process. `None` keeps the stock per-socket behaviour.
+    pub nic: Option<NicScheduler>,
 }
 impl ServeContext {
     /// The connector-reset authority.
@@ -110,6 +115,12 @@ where
         ReloadStep, ServerReloadMachine, commit_reload, drive_reload, prepare_reload,
     };
 
+    // The process-scoped per-NIC fair queue, constructed by `main` from the
+    // config it already read and carried here so the connector table and
+    // every server builder share one instance. `None` keeps the stock
+    // per-socket behaviour. Deliberately not re-read here: an extra config
+    // read would advance the reader's generation ahead of the serve loop.
+    let process_nic = serve_context.nic.clone();
     let config_reader = Arc::new(config_reader);
     let (session_spawner, mut session_rx) = SessionSpawner::channel();
     let mut sessions = tokio::task::JoinSet::new();
@@ -138,6 +149,7 @@ where
     let stream_connector_table = Arc::new(build_concrete_stream_connector_table(
         connector_config_reader.clone(),
         connector_reset,
+        process_nic.clone(),
         &mut server_tasks,
         &udp_connector,
     ));
@@ -182,6 +194,7 @@ where
         server_loader.snapshot(),
         cancellation.clone(),
         runtime.clone(),
+        process_nic.clone(),
     )
     .await?;
     let (guard, commit_error) = commit_reload(
@@ -225,6 +238,7 @@ where
                             server_loader.snapshot(),
                             CancellationToken::new(),
                             runtime.clone(),
+                            process_nic.clone(),
                         )));
                     }
                     Ok(ReloadStep::Prepared(result)) => match result {
@@ -357,6 +371,28 @@ impl Merge for UdpConfig {
     }
 }
 
+/// The process-scoped per-NIC interactive/bulk fair queue (`rtp::nic`). One
+/// scheduler is built from this at startup and shared by every connector and
+/// server in the process; absent means the stock per-socket behaviour.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NicConfig {
+    /// The egress device's capacity, in bytes per second.
+    pub link_rate_bytes_per_sec: f64,
+    /// The rate held out of the link for interactive traffic, in bytes per
+    /// second. `0` admits bulk across the whole link.
+    #[serde(default)]
+    pub interactive_reserve_bytes_per_sec: f64,
+}
+impl NicConfig {
+    pub fn scheduler(&self) -> NicScheduler {
+        NicScheduler::new(rtp::nic::NicConfig::priority(
+            self.link_rate_bytes_per_sec,
+            self.interactive_reserve_bytes_per_sec,
+        ))
+    }
+}
+
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
@@ -372,6 +408,10 @@ pub struct ServerConfig {
     pub stream: StreamConfig,
     #[serde(default)]
     pub udp: UdpConfig,
+    /// The process-scoped per-NIC fair queue. Absent (the default) leaves the
+    /// stock per-socket behaviour; the first file that declares it wins.
+    #[serde(default)]
+    pub nic: Option<NicConfig>,
 }
 impl Merge for ServerConfig {
     type Error = AnyError;
@@ -386,6 +426,10 @@ impl Merge for ServerConfig {
         let reverse_tunnel = self.reverse_tunnel.merge(other.reverse_tunnel)?;
         let stream = self.stream.merge(other.stream)?;
         let udp = self.udp.merge(other.udp)?;
+        // Process-scoped: the first file to declare `[nic]` wins; a later file
+        // cannot silently replace the device the process already built its
+        // connectors around.
+        let nic = self.nic.or(other.nic);
         Ok(Self {
             access_server,
             proxy_server,
@@ -393,6 +437,7 @@ impl Merge for ServerConfig {
             stream,
             udp,
             connector,
+            nic,
         })
     }
 }
@@ -437,6 +482,7 @@ mod tests {
             config_changed: config_changed.clone(),
             system_resume: system_resume.clone(),
             retention,
+            nic: None,
         };
         let mut reset = serve_context.connector_reset().0.subscription();
 
@@ -501,6 +547,40 @@ mod tests {
         assert!(format!("{err}").contains("Repeated key"), "{err}");
     }
 
+    /// The `[nic]` section builds the process-scoped scheduler: the whole
+    /// process shares one `rtp::nic::NicScheduler`, constructed by `main`
+    /// from the config it already read and carried in `ServeContext`.
+    #[test]
+    fn a_nic_section_builds_the_process_scheduler() {
+        let config = server_config(
+            "[nic]\nlink_rate_bytes_per_sec = 1048576.0\ninteractive_reserve_bytes_per_sec = 262144.0\n",
+        );
+        let nic = config.nic.as_ref().expect("[nic] must parse");
+        assert_eq!(nic.link_rate_bytes_per_sec, 1048576.0);
+        assert_eq!(nic.interactive_reserve_bytes_per_sec, 262144.0);
+        let _scheduler = nic.scheduler();
+    }
+
+    /// An absent `[nic]` leaves the process on the stock per-socket behaviour.
+    #[test]
+    fn a_config_without_a_nic_section_configures_no_scheduler() {
+        assert!(
+            server_config("").nic.is_none(),
+            "[nic] is absent by default"
+        );
+    }
+
+    /// The scheduler is process-scoped: the first file to declare `[nic]`
+    /// wins, so a later file cannot silently replace the device the process
+    /// already built its connectors around.
+    #[test]
+    fn merging_keeps_the_first_nic_section() {
+        let first = server_config("[nic]\nlink_rate_bytes_per_sec = 1.0\n");
+        let second = server_config("[nic]\nlink_rate_bytes_per_sec = 2.0\n");
+        let merged = first.merge(second).unwrap();
+        assert_eq!(merged.nic.unwrap().link_rate_bytes_per_sec, 1.0);
+    }
+
     #[test]
     fn merging_config_files_keeps_every_distinct_upstream_key() {
         let first = server_config(
@@ -551,6 +631,9 @@ allow_loopback = true
 [[reverse_tunnel.responder]]
 listen_addr = "tcp://127.0.0.1:1"
 header_key = "aGVsbG8"
+
+[nic]
+link_rate_bytes_per_sec = 1048576.0
 "#,
         );
         let second = server_config(
@@ -601,6 +684,11 @@ header_key = "aGVsbG8"
         assert_eq!(merged.access_server.tcp_server.len(), 2, "access_server");
         assert_eq!(merged.proxy_server.tcp_server.len(), 2, "proxy_server");
         assert_eq!(merged.reverse_tunnel.responder.len(), 2, "reverse_tunnel");
+        assert_eq!(
+            merged.nic.as_ref().map(|n| n.link_rate_bytes_per_sec),
+            Some(1048576.0),
+            "nic"
+        );
 
         // The pool is an ordered concatenation of the files' entries; a
         // merge taken in the wrong direction would reverse them.

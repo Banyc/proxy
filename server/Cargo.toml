@@ -20,6 +20,7 @@ file_watcher_tokio = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 protocol = { workspace = true }
+rtp = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 swap = { workspace = true }
 thiserror = { workspace = true }
