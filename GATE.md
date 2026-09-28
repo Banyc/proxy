@@ -252,8 +252,11 @@ topology: the client's first act of connecting to its first echo. Two full runs
 | `field100` | `direct_transport` | A / B | 1105.7 / 1127.0 | 1105.7 / 1127.0 | – | 193.7 / 193.2 | 1299.4 / 1320.2 |
 | `field100` | `direct_proto` | A / B | 1098.7 / 1099.3 | 1098.7 / 1099.3 | 0.0 / 0.0 | 222.1 / 224.5 | 1320.8 / 1323.8 |
 
-**The charge is the `rtp_mux` lane pairing.** It is 7.3-8.3 base RTTs at the
-two 25 ms-OWD scales and 5.8 at 100 ms OWD, and the **proxy-free** direct
+**The charge is the `rtp_mux` lane pairing.** (This table and the counts in
+this paragraph were measured on the pins *before* `rtp_mux` v0.0.23; the
+re-measurement below supersedes them, names what changed and why.) It is
+7.3-8.3 base RTTs at the two 25 ms-OWD scales and 5.8 at 100 ms OWD, and the
+**proxy-free** direct
 transport pays all of it before its window even opens. Across the two runs the
 pairing reproduces within 12 % (339-341 ms at `clean25`, 299-328 at `jitter25`,
 1099-1127 at `field100`), and the lossless regime removes only 12-16 % of it, so
@@ -262,6 +265,55 @@ bytes (flow kind, preamble, relay header) cost at most 0.3 ms. So the `+242 ms`
 proxy-minus-direct p99 the unwarmed cadence reports at `clean25` is a
 **clock-placement artifact**: on one clock the direct transport pays the same
 pairing the chain charges to its first message.
+
+**Re-measured on the current pins (2026-09-28, 405 s, host load 2-5 on 10
+cores): the 7-8 base RTTs are gone, and the charge is ~3 round trips.** The
+table above was measured with `rtp_mux` before **v0.0.23**, which landed
+`fix(rtp_mux): dial the two lanes' rtp sessions concurrently`; the proxy has
+pinned v0.0.27 since `58710e0ca578`. Both lanes' `rtp` opening handshakes now
+run under one `tokio::try_join!` (`rtp_mux/src/connector/dial.rs:212`) instead
+of one after the other, so the second lane's handshake — its two round trips
+plus its random pre-handshake delay — is no longer serialized onto the first's.
+That is the drop: against the two recorded runs the pairing falls by
+**125-127 ms at `clean25` and 435-457 ms at `field100`**, against the
+predicted `2 x base RTT + a 0..50 ms opening jitter` of 82-132 ms and
+384-434 ms (run B's `field100` reading sits 23 ms past the top of that range,
+against the two recorded runs' own 21 ms spread at that scale).
+
+| regime | base RTT | chain cold total | lane pairing | pairing / base RTT |
+| --- | --- | --- | --- | --- |
+| `clean25` | 41.0 | 261.0 | 213.9 | 5.2 |
+| `jitter25` | 40.9 | 236.5 | 211.7 | 5.2 |
+| `field100` | 191.8 | 873.7 | 670.3 | 3.5 |
+
+Only two scales are in the set, so the linear read is a bound, not a fit with a
+residual: the pairing falls from 5.2 to 3.5 base RTTs when the base RTT grows
+4.7x, which by itself proves an absolute component. The two points give
+`~3.0 x RTT + ~90 ms`; the ~90 ms is the size of one `rtp` opening jitter draw
+(a random `0..=50 ms` per lane) plus task and flush overhead, and because each
+arm dials once the fixed term is estimated only to roughly +/-40 ms.
+
+**The three round trips, named.** `rtp::udp::FrameDeliveryIo::connect` is two
+lockstep legs — `Hello -> HelloAck`, then `Confirm -> ConfirmAck`
+(`rtp/src/traffic_shaping/control/handshake/opening/mod.rs:93`) — and the third
+is the client's first complete mux frame, the server's birth-liveness heartbeat
+written after the server reads the lane hello (`rtp_mux/src/server.rs:916`).
+The birth waits on both lanes under `try_join!`, so the two lanes cost three
+round trips total, not six. The chain adds **0.06 base RTT**: its cold total is
+`+2.7 ms` over the proxy-free direct arm at `clean25` and `+10.4 ms` at
+`field100`, and `connect_ms` is the TCP accept alone (`0.07-0.15 ms` in every
+arm). The proxy protocol's own bytes remain at most `0.9 ms`.
+
+**There is no ack round trip in the ingress to remove.** The client writes the
+upgrade preamble and the relay header back to back and reads nothing
+(`common/src/proxy_runtime/client/stream.rs:147,153`), and the access server
+replies with a `RouteResponse` only on the echo path
+(`common/src/proxy_runtime/route_header/stream.rs:58`) — for a real ingress the
+header exchange is one-way. So the only round trips a fresh ingress pays are
+the birth's three, and those live in `rtp_mux`.
+
+The raw run is `target/proxy_path_perf/it158_run1.log` (harness JSON beside it
+in `report.json`), produced at `dev` = `499130fa75d6`.
 
 **The chain's ingress stage and its extra relay leg are bounded, not
 resolved.** Their contribution is the difference from the protocol-only arm,
@@ -837,6 +889,45 @@ lifecycle-soak-scale = PROXY_SOAK_INSTANCES,PROXY_SOAK_CYCLES,PROXY_SOAK_BURST |
 red-proof-controls = PROXY_PATH_PERF_FAULT,PROXY_CONFIG_WATCH_TEARDOWN_CHILD | - | the red-proof selector controls, not measurements: PROXY_PATH_PERF_FAULT selects one of five perturbations of the deployed-path diagnosis's own input (an emptied arm, a dropped response, an unanswered warm-up round, a discarded dial record, or the pooled arm run against a pool-less config), each of which must fail the guard its healthy path shares, and PROXY_CONFIG_WATCH_TEARDOWN_CHILD selects the re-executed child role in which the config-watcher teardown body runs so an abort surfaces as a non-zero child exit; both are unset in every real run, neither sizes anything, and no arithmetic derives from them, so their load is refused rather than invented | path-perf-vacuity@fault=PROXY_PATH_PERF_FAULT+targets=zero-samples-unanswered-warm-unanswered-undialed-pool-unwarmed, config-watch-vacuity@fault=PROXY_CONFIG_WATCH_TEARDOWN_CHILD+targets=file-watcher-teardown-abort
 path-perf-evidence-sink = PROXY_PATH_PERF_OUT | - | the deployed-path diagnosis's evidence sink: names the file the scenario writes its per-arm report.json to, overriding the default under CARGO_TARGET_DIR, and decides where a run's evidence lands rather than measuring anything; it sizes no window, count or cadence, so its load is refused rather than invented | path-perf-evidence@artifact=report-json+sink=PROXY_PATH_PERF_OUT
 ```
+
+### The ingress deadline guard, and what it cannot catch
+
+`common::birth_path_deadlines` (unit tests in `common/src/lib.rs`) pins the two
+proxy-side deadlines a fresh ingress can reach against the operator's field
+numbers: the path measures a 190 ms floor with maxima of 1063 ms and 3205 ms,
+and a deadline that expires inside that range fails a live-but-slow ingress —
+worse than the spike, because the reconnect it forces pays the cold
+establishment above.
+
+| test | deadline | value | fires on |
+| --- | --- | --- | --- |
+| `stream_io_timeout_outlasts_the_fields_worst_round_trip` | `common::STREAM_IO_TIMEOUT` | 60 s | idle read/write, header read, upstream connect |
+| `validator_time_frame_outlasts_the_fields_worst_round_trip` | `common::anti_replay::VALIDATOR_TIME_FRAME` | 5 s | a relay header older than the window (or further in the future) |
+
+**Tier and cost.** `default`, measured `0.00 s` for both tests on a warm
+release build (`cargo test --release -p common birth_path_deadlines`) — the
+pair is arithmetic over two constants, not a measurement, so it adds no arm and
+no window.
+
+**Coverage cell.** `proxy-ingress@metric=deadline-vs-field-spike+timers=stream-io-and-header-age`
+— one dimension (which deadline constant) varied from the field's worst
+recorded round trip as the stated baseline, which both must exceed.
+
+**Vacuity.** Lowering `STREAM_IO_TIMEOUT` to 2 s reddens the first test and
+leaves the second green; lowering `VALIDATOR_TIME_FRAME` to 3 s reddens the
+second and leaves the first green — and each reddened run names its own
+constant and the 3.205 s bound in its panic message.
+
+**What it cannot catch.** It is a tripwire on two constants, not a measurement:
+it cannot see a call site that passes a literal shorter than the constant, and
+it does not cover the birth's own timers. Those live in `rtp_mux`
+(`BIRTH_LIVENESS_DEADLINE`, 4 s plus a 250 ms grace that bounds the whole
+birth's liveness race) and `rtp` (`OPENING_LEG_TIMEOUT`, 4 s per handshake
+leg), and are guarded by those crates' own tests. Neither covers the prober's
+`RTT_TIMEOUT` (5 s) or the degradation recycle, and neither needs to: a probe
+timeout only lowers a score and slows the cadence, and a recycle needs five
+consecutive probes at 3x the best `srtt` behind a 600 s pacer, so neither
+fires on the field's transient spike.
 
 ## Residual limitations
 
