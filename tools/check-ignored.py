@@ -24,7 +24,8 @@ The inventory has one of two honest classifications:
   reason to state why it cannot run, so the constraint stays visible.
 
 Files under `target/` are not scanned. The assertion-token set matches
-netem_test's `tools/check-gate.py`, including the debug-only forms; the brace
+netem_test's `netem-tools check-gate` (the Rust port; run from `../netem_test`),
+including the debug-only forms; the brace
 counting is the same regex-level body extraction that harness uses, so all the
 gates agree on what a function body is.
 
