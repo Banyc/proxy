@@ -250,7 +250,7 @@ async fn a_failed_preparation_is_reported_once_with_its_cause_and_the_loop_survi
         config_changed: config_changed.clone(),
         system_resume: SystemResumeSignal(Notify::new()),
         retention,
-        nic: None,
+        cc_link: rtp::cc::CcSignalHub::new(),
     };
     let mut tasks = tokio::task::JoinSet::new();
     tasks.spawn(async move {

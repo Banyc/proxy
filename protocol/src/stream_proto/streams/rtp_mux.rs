@@ -35,7 +35,7 @@ impl RtpMuxProxyServerConfig {
     pub fn into_builder(
         self,
         runtime: Runtime,
-        nic: Option<rtp::nic::NicScheduler>,
+        cc_link: Option<rtp::cc::CcSignalHub>,
     ) -> RtpMuxProxyServerBuilder {
         let listen_addr = Arc::clone(&self.listen_addr);
         let inner = self.inner.into_builder(runtime.stream, listen_addr);
@@ -43,7 +43,7 @@ impl RtpMuxProxyServerConfig {
             listen_addr: self.listen_addr,
             inner,
             udp_context: runtime.udp,
-            nic,
+            cc_link,
         }
     }
 }
@@ -52,8 +52,8 @@ pub struct RtpMuxProxyServerBuilder {
     pub listen_addr: Arc<str>,
     pub inner: StreamProxyConnHandlerBuilder,
     pub udp_context: UdpRuntime,
-    /// The process-level per-NIC scheduler, shared with the connector table.
-    pub nic: Option<rtp::nic::NicScheduler>,
+    /// The process-level per-egress-path scheduler, shared with the connector table.
+    pub cc_link: Option<rtp::cc::CcSignalHub>,
 }
 impl loading::Build for RtpMuxProxyServerBuilder {
     type ConnHandler = MuxProxyHandler;
@@ -62,9 +62,9 @@ impl loading::Build for RtpMuxProxyServerBuilder {
     async fn build_server(self) -> Result<Self::Server, Self::Err> {
         let listen_addr = self.listen_addr.clone();
         let session_spawner = self.inner.stream_context.session_spawner.clone();
-        let nic = self.nic.clone();
+        let cc_link = self.cc_link.clone();
         let handler = self.build_conn_handler()?;
-        build_rtp_mux_proxy_server(listen_addr.as_ref(), handler, session_spawner, nic)
+        build_rtp_mux_proxy_server(listen_addr.as_ref(), handler, session_spawner, cc_link)
             .await
             .map_err(Into::into)
     }
@@ -100,7 +100,7 @@ pub async fn build_rtp_mux_proxy_server(
     listen_addr: impl ToSocketAddrs + Clone + std::fmt::Debug,
     handler: MuxProxyHandler,
     session_spawner: SessionSpawner,
-    nic: Option<rtp::nic::NicScheduler>,
+    cc_link: Option<rtp::cc::CcSignalHub>,
 ) -> Result<RtpMuxServer<MuxProxyHandler>, ListenerBindError> {
     let server = ::rtp_mux::RtpMuxServer::bind(
         listen_addr,
@@ -108,7 +108,7 @@ pub async fn build_rtp_mux_proxy_server(
             obfuscation_key: Some(::rtp_mux::ObfuscationKey::from_bytes(
                 *handler.stream.header_crypto().key(),
             )),
-            nic,
+            cc_link,
             ..Default::default()
         },
     )

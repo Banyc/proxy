@@ -160,7 +160,7 @@ async fn a_reload_is_applied_and_a_failed_prepare_does_not_kill_the_server() {
         config_changed: config_changed.clone(),
         system_resume: SystemResumeSignal(Notify::new()),
         retention,
-        nic: None,
+        cc_link: rtp::cc::CcSignalHub::new(),
     };
     let mut tasks = tokio::task::JoinSet::new();
     tasks.spawn(async move {
@@ -266,7 +266,7 @@ async fn a_config_naming_one_listen_addr_twice_in_one_kind_is_refused() {
         config_changed: ConfigChangeSignal::new(),
         system_resume: SystemResumeSignal(Notify::new()),
         retention,
-        nic: None,
+        cc_link: rtp::cc::CcSignalHub::new(),
     };
     let mut tasks = tokio::task::JoinSet::new();
     tasks.spawn(async move {

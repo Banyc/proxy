@@ -18,7 +18,7 @@ use super::{
 type StreamConnectorBuilder = fn(
     ConnectorConfigReader,
     ConnectorResetSignal,
-    Option<rtp::nic::NicScheduler>,
+    Option<rtp::cc::CcSignalHub>,
     &mut tokio::task::JoinSet<AnyResult>,
 ) -> (Arc<dyn StreamConnect>, Option<Arc<dyn UdpMuxDialer>>);
 type StreamProtoTable = [(ConcreteStreamType, &'static str, StreamConnectorBuilder)];

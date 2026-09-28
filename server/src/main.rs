@@ -8,6 +8,7 @@ use common::{
     lifecycle::retention::RetentionActor,
     lifecycle::suspend::spawn_suspend_watcher,
 };
+use rtp::cc::CcSignalHub;
 use server::{
     ServeContext,
     config::{multi_file_config::MultiFileConfigReader, spawn_watch_tasks},
@@ -47,11 +48,7 @@ async fn main() -> AnyResult {
     // config's own listeners. Without this, a mistyped word on the command
     // line is taken as a config path and the process performs that start-up
     // work before noticing the file is not there.
-    let validated_config = server::read_validated_config(&args.config_file_paths).await?;
-    // One per-NIC interactive/bulk fair queue for the whole process, built
-    // here from the config already read and carried in `ServeContext` so the
-    // connector table and every server builder share the one instance.
-    let process_nic = validated_config.nic.as_ref().map(|c| c.scheduler());
+    server::read_validated_config(&args.config_file_paths).await?;
     if let Some(path) = args.record_dir {
         common::proxy_runtime::log::stream::init_logger(path.clone());
         common::proxy_runtime::log::udp::init_logger(path.clone());
@@ -103,7 +100,7 @@ async fn main() -> AnyResult {
             config_changed,
             system_resume,
             retention,
-            nic: process_nic.clone(),
+            cc_link: CcSignalHub::new(),
         };
     } else {
         serve_context = ServeContext {
@@ -112,7 +109,7 @@ async fn main() -> AnyResult {
             config_changed,
             system_resume,
             retention,
-            nic: process_nic.clone(),
+            cc_link: CcSignalHub::new(),
         };
     }
 
