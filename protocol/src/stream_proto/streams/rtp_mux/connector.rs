@@ -41,9 +41,9 @@ impl RtpMuxConnector {
                 .unwrap_or_else(|| any_addr(&addr.ip()))
         });
         let mut connector_config = ::rtp_mux::RtpMuxConnectorConfig::standard(bind);
-        // The process-level per-egress-path scheduler, shared with every other
-        // connector and server in this process (wired from `server`'s
-        // config).
+        // The process-level per-egress-path congestion-signalling router,
+        // shared with every other connector and server in this process. The
+        // `server` always passes `Some`, so this is on for every mux session.
         connector_config.cc_link = cc_link;
         let (inner, inner_driver) = ::rtp_mux::RtpMuxConnector::with_config(connector_config);
         let inner = Arc::new(inner);

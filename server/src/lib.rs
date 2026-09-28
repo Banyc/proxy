@@ -47,9 +47,11 @@ pub struct ServeContext {
     pub config_changed: ConfigChangeSignal,
     pub system_resume: SystemResumeSignal,
     pub retention: RetentionActorSender,
-    /// The process-scoped per-egress-path interactive/bulk fair queue (`rtp::cc`),
-    /// built once by `main` and shared by every connector and server in the
-    /// process. Always on: strict interactive-before-bulk ordering, no rate.
+    /// The process-scoped per-egress-path congestion-signalling router
+    /// (`rtp::cc`), built once by `main` and shared by every connector and
+    /// server in the process. It routes one presence flag (an interactive lane
+    /// on this path) and carries no rate, credit or token bucket. Always on:
+    /// `main` builds one unconditionally and no configuration key disables it.
     pub cc_link: CcSignalHub,
 }
 impl ServeContext {
@@ -115,11 +117,12 @@ where
         ReloadStep, ServerReloadMachine, commit_reload, drive_reload, prepare_reload,
     };
 
-    // The process-scoped per-egress-path fair queue, constructed by `main` from the
-    // config it already read and carried here so the connector table and
-    // every server builder share one instance. `None` keeps the stock
-    // per-socket behaviour. Deliberately not re-read here: an extra config
-    // read would advance the reader's generation ahead of the serve loop.
+    // The process-scoped per-egress-path congestion-signalling router,
+    // constructed by `main` (unconditionally, not from the config) and carried
+    // here so the connector table and every server builder share one instance.
+    // There is no off switch: the field is a `CcSignalHub`, not an `Option`.
+    // Deliberately not re-read here: an extra config read would advance the
+    // reader's generation ahead of the serve loop.
     let process_cc_link = serve_context.cc_link.clone();
     let config_reader = Arc::new(config_reader);
     let (session_spawner, mut session_rx) = SessionSpawner::channel();
@@ -470,6 +473,31 @@ mod tests {
 
     fn server_config(src: &str) -> ServerConfig {
         toml::from_str(src).unwrap()
+    }
+
+    /// The release notes in `local/deploy/deploy.toml` say the process-wide
+    /// interactive/bulk CC signal hub (`rtp::cc::CcSignalHub`) is wired
+    /// unconditionally and that no configuration key disables it: `main`
+    /// builds one in both `ServeContext` branches (`server/src/main.rs:103`,
+    /// `:112`) and `serve` threads it into the connector table and every
+    /// rtp_mux server builder (`server/src/lib.rs:152`, `:197`, `:241`). This
+    /// pins the "no key" half of that note so the note cannot go stale
+    /// silently: if anyone adds a `[cc_link]` section (or reintroduces the
+    /// retired `[nic]`) to [`ServerConfig`], it stops being an unknown field
+    /// and this test goes red with the parser's own message.
+    #[test]
+    fn the_config_schema_has_no_key_that_can_disable_the_cc_signal_hub() {
+        for section in ["cc_link", "cc-link", "nic"] {
+            let src = format!("[{section}]\n");
+            let err = toml::from_str::<ServerConfig>(&src).expect_err(
+                "a config section that could disable the CC hub must be refused, not accepted",
+            );
+            let msg = format!("{err}");
+            assert!(
+                msg.contains("unknown field") && msg.contains(section),
+                "`[{section}]` must be refused as an unknown field naming it, got: {msg}"
+            );
+        }
     }
 
     /// `serve` judges UDP route headers with `udp_time_validator()`; the peer

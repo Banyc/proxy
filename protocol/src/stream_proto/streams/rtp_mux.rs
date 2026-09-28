@@ -52,7 +52,8 @@ pub struct RtpMuxProxyServerBuilder {
     pub listen_addr: Arc<str>,
     pub inner: StreamProxyConnHandlerBuilder,
     pub udp_context: UdpRuntime,
-    /// The process-level per-egress-path scheduler, shared with the connector table.
+    /// The process-level per-egress-path congestion-signalling router, shared
+    /// with the connector table; `server` always sets it.
     pub cc_link: Option<rtp::cc::CcSignalHub>,
 }
 impl loading::Build for RtpMuxProxyServerBuilder {
