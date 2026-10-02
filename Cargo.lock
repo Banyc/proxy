@@ -20,10 +20,10 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 [[package]]
 name = "ae"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/ae.git?tag=v0.0.4#bfd4ff746a9bd3a3ff65cb6950765b0da24c0200"
+source = "git+https://github.com/Banyc/ae.git?tag=v0.0.5#f5ad0e865f898250aa6b5a0ca5fa7b2372aa1cb5"
 dependencies = [
  "duplicate",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
+ "primitive",
  "rand 0.9.5",
  "thiserror 2.0.21",
  "tokio",
@@ -86,7 +86,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -97,7 +97,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -468,7 +468,7 @@ dependencies = [
  "mux",
  "pin-project-lite",
  "postcard",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
+ "primitive",
  "rand 0.10.3",
  "regex",
  "scopeguard",
@@ -482,7 +482,7 @@ dependencies = [
  "tokio_conn_pool",
  "tokio_throughput",
  "tracing",
- "udp_listener 0.1.0 (git+https://github.com/Banyc/udp_listener.git?tag=v0.0.22)",
+ "udp_listener",
 ]
 
 [[package]]
@@ -691,7 +691,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1255,9 +1255,9 @@ dependencies = [
 
 [[package]]
 name = "lazy_static"
-version = "1.5.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "left-right"
@@ -1432,12 +1432,12 @@ dependencies = [
 [[package]]
 name = "monitor_table"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/monitor_table.git?tag=v0.0.18#d02e9757a459d0c97b6a999da0bafff95c41c8e2"
+source = "git+https://github.com/Banyc/monitor_table.git?tag=v0.0.19#26bcaf08fb0419bec8119cd5c508321b730feb06"
 dependencies = [
  "anyhow",
  "dfsql",
  "hdv",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
+ "primitive",
  "slotmap",
 ]
 
@@ -1457,23 +1457,23 @@ dependencies = [
 [[package]]
 name = "mpudp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/mpudp.git?tag=v0.0.3#6788babd52a88efbfdc1a6963b9a036df1bf4bd5"
+source = "git+https://github.com/Banyc/mpudp.git?tag=v0.0.4#db29f080cd34efe82fa6868fd99aa34524578c2a"
 dependencies = [
  "bytes",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.56)",
- "rand 0.8.8",
+ "primitive",
+ "rand 0.10.3",
  "tokio",
- "udp_listener 0.1.0 (git+https://github.com/Banyc/udp_listener.git?tag=v0.0.13)",
+ "udp_listener",
 ]
 
 [[package]]
 name = "mux"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/mux.git?tag=v0.0.37#ca715be869c4be62ccdcf3375082c3ba1829f982"
+source = "git+https://github.com/Banyc/mux.git?tag=v0.0.38#3ebbce0ccfb7607de4c77cf174bd8e14101fa791"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
+ "primitive",
  "tokio",
  "tokio-util",
  "tracing",
@@ -1529,7 +1529,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1689,27 +1689,7 @@ dependencies = [
 [[package]]
 name = "primitive"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.55#57489ef98acfcfb819e048964805ef16a386787f"
-dependencies = [
- "anyhow",
- "num-traits",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "primitive"
-version = "0.1.0"
-source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.56#3565e3dba8702f5baa3d80ce94780770b369cfc9"
-dependencies = [
- "anyhow",
- "num-traits",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "primitive"
-version = "0.1.0"
-source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.59#9d28d810461acd8d575ca47b97e2ba6d2c1d7c1a"
+source = "git+https://github.com/Banyc/primitive.git?tag=v0.0.61#b8d0b92e325cc6943f1097e3d3e002ce5edc9b46"
 dependencies = [
  "anyhow",
  "atomic-memcpy",
@@ -1768,7 +1748,7 @@ dependencies = [
  "tokio_chacha20",
  "tokio_kcp",
  "tracing",
- "udp_listener 0.1.0 (git+https://github.com/Banyc/udp_listener.git?tag=v0.0.22)",
+ "udp_listener",
 ]
 
 [[package]]
@@ -2032,7 +2012,7 @@ dependencies = [
 [[package]]
 name = "rtp"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.107#e148a737989e072f738a8e6ff04de6bc8597a102"
+source = "git+https://github.com/Banyc/rtp.git?tag=v0.0.108#4f48c2b236bc2c91a472e1a0394fb3ceefee82b5"
 dependencies = [
  "async-trait",
  "async_async_io",
@@ -2041,7 +2021,7 @@ dependencies = [
  "dre",
  "fec",
  "mpudp",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
+ "primitive",
  "rand 0.10.3",
  "self_assign",
  "serde",
@@ -2051,13 +2031,13 @@ dependencies = [
  "tokio-util",
  "tokio_chacha20",
  "tokio_udp",
- "udp_listener 0.1.0 (git+https://github.com/Banyc/udp_listener.git?tag=v0.0.22)",
+ "udp_listener",
 ]
 
 [[package]]
 name = "rtp_mux"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/rtp_mux.git?tag=v0.0.33#edbbd2dd7e25a90e114ac0352e0217db542d8900"
+source = "git+https://github.com/Banyc/rtp_mux.git?tag=v0.0.34#fa9898b28ee22238a12eba1c78c8536a006801c2"
 dependencies = [
  "futures",
  "metrics",
@@ -2342,7 +2322,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2753,20 +2733,10 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "udp_listener"
 version = "0.1.0"
-source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.13#076920b9a83f9472e7d6209502f1fecb58f7d665"
+source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.23#0c1dfeeefc60dd13c01a138370ca30fec9f83a7f"
 dependencies = [
  "bytes",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.55)",
- "tokio",
-]
-
-[[package]]
-name = "udp_listener"
-version = "0.1.0"
-source = "git+https://github.com/Banyc/udp_listener.git?tag=v0.0.22#e739434872a7027a27d4c62d603f3c6fcb9982bc"
-dependencies = [
- "bytes",
- "primitive 0.1.0 (git+https://github.com/Banyc/primitive.git?tag=v0.0.59)",
+ "primitive",
  "tokio",
  "tokio_udp",
  "tracing",
@@ -2931,7 +2901,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

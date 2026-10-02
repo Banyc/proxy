@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.dependencies]
-ae = { git = "https://github.com/Banyc/ae.git", tag = "v0.0.4" }
+ae = { git = "https://github.com/Banyc/ae.git", tag = "v0.0.5" }
 anyhow = "1"
 async-speed-limit = { version = "0.4", features = ["tokio"] }
 async-trait = "0.1"
@@ -31,19 +31,19 @@ hyper = "1"
 hyper-util = "0.1"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
-monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.0.18" }
+monitor_table = { git = "https://github.com/Banyc/monitor_table.git", tag = "v0.0.19" }
 # monitor_table = { path = "../monitor_table" }
 mptcp = { git = "https://github.com/Banyc/mptcp.git", tag = "v0.0.2" }
-mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.37" }
+mux = { git = "https://github.com/Banyc/mux.git", tag = "v0.0.38" }
 # mux = { path = "../mux" }
 pin-project-lite = "0.2"
 postcard = "1"
-primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.59" }
+primitive = { git = "https://github.com/Banyc/primitive.git", tag = "v0.0.61" }
 rand = "0.10"
 regex = "1"
-rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.107" }
+rtp = { git = "https://github.com/Banyc/rtp.git", tag = "v0.0.108" }
 # rtp = { path = "../rtp" }
-rtp_mux = { git = "https://github.com/Banyc/rtp_mux.git", tag = "v0.0.33" }
+rtp_mux = { git = "https://github.com/Banyc/rtp_mux.git", tag = "v0.0.34" }
 # rtp_mux = { path = "../rtp_mux" }
 scopeguard = "1"
 serde = "1"
@@ -60,7 +60,7 @@ tokio_throughput = { git = "https://github.com/Banyc/tokio_throughput.git", tag 
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.22" }
+udp_listener = { git = "https://github.com/Banyc/udp_listener.git", tag = "v0.0.23" }
 # udp_listener = { path = "../udp_listener" }
 common = { path = "common" }
 mitsein = "0.9.0"
