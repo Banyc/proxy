@@ -1,6 +1,7 @@
 #[allow(clippy::module_inception)]
 mod copy;
 mod copy_bidirectional;
+mod live_bytes;
 mod timed_copy_bidirectional;
 mod timeout_stream;
 

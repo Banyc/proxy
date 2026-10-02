@@ -284,6 +284,15 @@ where
     let (up_gauge, dn_gauge) = gauges
         .map(|(r, w)| (Some(r.0), Some(w.0)))
         .unwrap_or((None, None));
+    // Publish the relay's byte/packet series as each datagram moves, not only
+    // when the flow ends: a long-lived flow is the product's central case, and
+    // a series that reads zero until close is blind to it. The handles are
+    // registered once so the per-packet path is an atomic add (the relay's
+    // allocation budget must not grow with packet count).
+    let up_bytes_counter = counter!("udp.relay.up.bytes");
+    let up_packets_counter = counter!("udp.relay.up.packets");
+    let dn_bytes_counter = counter!("udp.relay.dn.bytes");
+    let dn_packets_counter = counter!("udp.relay.dn.packets");
     let mut io_copy_tasks = tokio::task::JoinSet::<Result<(), CopyBiError>>::new();
     io_copy_tasks.spawn({
         let flow = flow.clone();
@@ -291,6 +300,8 @@ where
         let bytes_uplink = Arc::clone(&bytes_uplink);
         let packets_uplink = Arc::clone(&packets_uplink);
         let last_crypto_fail_warn = Arc::clone(&last_crypto_fail_warn);
+        let up_bytes_counter = up_bytes_counter.clone();
+        let up_packets_counter = up_packets_counter.clone();
         let speed_limiter = speed_limiter.clone();
         let payload_crypto = payload_crypto.clone();
         let clock = Arc::clone(&clock);
@@ -345,6 +356,8 @@ where
                     .map_err(CopyBiError::SendUpstream)?;
                 bytes_uplink.fetch_add(packet.len() as u64, Ordering::Relaxed);
                 packets_uplink.fetch_add(1, Ordering::Relaxed);
+                up_bytes_counter.increment(packet.len() as u64);
+                up_packets_counter.increment(1);
                 *last_uplink_packet.write().unwrap() = clock.now();
             }
             Ok(())
@@ -356,6 +369,8 @@ where
         let bytes_downlink = Arc::clone(&bytes_downlink);
         let packets_downlink = Arc::clone(&packets_downlink);
         let last_crypto_fail_warn = Arc::clone(&last_crypto_fail_warn);
+        let dn_bytes_counter = dn_bytes_counter.clone();
+        let dn_packets_counter = dn_packets_counter.clone();
         let payload_crypto = payload_crypto.clone();
         let clock = Arc::clone(&clock);
         let mut downlink_buf = [0; PACKET_BUFFER_LENGTH];
@@ -425,6 +440,8 @@ where
                 .map_err(CopyBiError::SendDownstream)?;
                 bytes_downlink.fetch_add(downlink_n as u64, Ordering::Relaxed);
                 packets_downlink.fetch_add(1, Ordering::Relaxed);
+                dn_bytes_counter.increment(downlink_n as u64);
+                dn_packets_counter.increment(1);
                 *last_downlink_packet.write().unwrap() = clock.now();
             }
             Ok(())
@@ -477,10 +494,6 @@ where
         start,
         end: last_packet,
     };
-    counter!("udp.relay.up.bytes").increment(up.bytes);
-    counter!("udp.relay.up.packets").increment(up.packets);
-    counter!("udp.relay.dn.bytes").increment(dn.bytes);
-    counter!("udp.relay.dn.packets").increment(dn.packets);
     Ok(FlowLog {
         flow,
         timing,
@@ -688,6 +701,24 @@ mod tests {
         }
     }
 
+    /// A datagram source that yields its queued packets and then stays
+    /// pending forever: a live flow, not a closed one.
+    struct LivePackets {
+        packets: std::collections::VecDeque<Vec<u8>>,
+    }
+    impl UdpRecv for LivePackets {
+        async fn trait_recv(&mut self, buf: &mut [u8]) -> Result<usize, AnyError> {
+            match self.packets.pop_front() {
+                Some(pkt) => {
+                    let n = pkt.len();
+                    buf[..n].copy_from_slice(&pkt);
+                    Ok(n)
+                }
+                None => std::future::pending().await,
+            }
+        }
+    }
+
     /// A fixed-capacity datagram sink: counts packets/bytes and echoes the
     /// shutdown outcome. `sink` is pre-sized so receiving the stream does not
     /// grow it (a measurement of the relay must not count the double's own
@@ -715,6 +746,23 @@ mod tests {
         }
         async fn trait_shutdown(&mut self) -> Result<ShutdownOutcome, AnyError> {
             Ok(ShutdownOutcome::Unsupported)
+        }
+    }
+
+    /// A `Sink` that also signals a waiting test the moment a datagram has
+    /// landed, so the test can read the live counters while the flow is open.
+    struct NotifyingSink {
+        inner: Sink,
+        sent: Arc<tokio::sync::Notify>,
+    }
+    impl UdpSend for NotifyingSink {
+        async fn trait_send(&mut self, buf: &[u8]) -> Result<usize, AnyError> {
+            let sent = self.inner.trait_send(buf).await?;
+            self.sent.notify_one();
+            Ok(sent)
+        }
+        async fn trait_shutdown(&mut self) -> Result<ShutdownOutcome, AnyError> {
+            self.inner.trait_shutdown().await
         }
     }
 
@@ -816,5 +864,64 @@ mod tests {
             small_allocs <= 40 && small_bytes <= 5 * PACKET_BUFFER_LENGTH,
             "the fixed relay budget must stay small, observed {small_allocs} allocs / {small_bytes} bytes"
         );
+    }
+
+    /// A UDP flow that is still running must publish the bytes and packets it
+    /// has relayed *now*, not only when it ends: a long-lived flow is the
+    /// product's central case, so this relays one datagram, holds the flow
+    /// open, and reads the relay's series while the copy is still running.
+    #[test]
+    fn a_live_udp_flow_publishes_bytes_before_it_ends() {
+        let recorder = crate::test_metrics::LiveCounterRecorder::default();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        metrics::with_local_recorder(&recorder, || {
+            runtime.block_on(async {
+                const PACKET_LEN: usize = 512;
+                let sent = Arc::new(tokio::sync::Notify::new());
+                let upstream = UpstreamParts {
+                    read: LivePackets {
+                        packets: std::collections::VecDeque::new(),
+                    },
+                    write: NotifyingSink {
+                        inner: Sink::with_capacity(PACKET_LEN),
+                        sent: Arc::clone(&sent),
+                    },
+                };
+                let downstream = DownstreamParts {
+                    read: LivePackets {
+                        packets: vec![vec![7u8; PACKET_LEN]].into(),
+                    },
+                    write: Sink::with_capacity(0),
+                };
+                let mut copy = tokio::task::JoinSet::new();
+                copy.spawn(copy_bidirectional(
+                    flow(),
+                    (upstream, downstream),
+                    unlimited_policy(),
+                ));
+
+                sent.notified().await;
+                assert!(
+                    copy.try_join_next().is_none(),
+                    "the flow must still be open"
+                );
+                assert_eq!(
+                    recorder.counter_value("udp.relay.up.bytes"),
+                    PACKET_LEN as u64,
+                    "a live flow must publish its uplink bytes as they move"
+                );
+                assert_eq!(
+                    recorder.counter_value("udp.relay.up.packets"),
+                    1,
+                    "a live flow must publish its uplink packets as they move"
+                );
+
+                copy.abort_all();
+                let _ = copy.join_next().await;
+            });
+        });
     }
 }

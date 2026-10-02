@@ -3,7 +3,10 @@ use std::{io, time::Instant};
 use async_speed_limit::Limiter;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::{BytesCopied, CopyBiError, TimeoutStreamShared, copy_bidirectional};
+use super::{
+    BytesCopied, CopyBiError, TimeoutStreamShared, copy_bidirectional,
+    live_bytes::BytePublishingStream,
+};
 
 pub async fn timed_copy_bidirectional<A, B>(
     a: A,
@@ -21,6 +24,9 @@ where
     b.set_timeout(Some(crate::STREAM_IO_TIMEOUT));
 
     let a = speed_limiter.limit(a);
+
+    let a = BytePublishingStream::downlink(a);
+    let b = BytePublishingStream::uplink(b);
 
     let mut a = Box::pin(a);
     let mut b = Box::pin(b);

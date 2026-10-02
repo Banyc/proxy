@@ -213,8 +213,10 @@ fn get_log_from_copy_result(
         b_to_a: bytes_downlink,
     } = result.amounts;
 
-    counter!("stream.up.bytes").increment(bytes_uplink);
-    counter!("stream.dn.bytes").increment(bytes_downlink);
+    // The `stream.up.bytes`/`stream.dn.bytes` series is published live by
+    // `BytePublishingStream` as each chunk is written, so a long-lived
+    // session reports its bytes while it runs. These sums are the completion
+    // log's own figure, not a second publish of the same counter.
     let timing = Timing {
         start: conn_context.start,
         end: result.end,
@@ -234,7 +236,7 @@ fn get_log_from_copy_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     /// `a_to_b` on the access-server copy is client-to-server (uplink) and
     /// `b_to_a` is server-to-client (downlink); swapping them mislabels every
@@ -278,5 +280,79 @@ mod tests {
             finished.bytes_downlink, 3,
             "server->client bytes must be reported as downlink"
         );
+    }
+
+    fn access_server_copy(
+        downstream: tokio::io::DuplexStream,
+        upstream: tokio::io::DuplexStream,
+    ) -> CopyBidirectional<tokio::io::DuplexStream, tokio::io::DuplexStream> {
+        let (_actor, retention) = crate::lifecycle::retention::RetentionActor::new();
+        CopyBidirectional {
+            downstream,
+            upstream,
+            payload_crypto: None,
+            speed_limiter: async_speed_limit::Limiter::new(f64::INFINITY),
+            conn_context: ConnContext {
+                start: (Instant::now(), SystemTime::now()),
+                upstream_remote: "tcp://127.0.0.1:1".parse().unwrap(),
+                upstream_remote_sock: "127.0.0.1:1".parse().unwrap(),
+                downstream_remote: None,
+                downstream_local: Arc::from("local"),
+                upstream_local: None,
+                session_table: None,
+                destination: None,
+            },
+            retention,
+        }
+    }
+
+    /// A stream that is still transferring must publish the bytes it has
+    /// moved *now*, not only when it closes. A counter that reads zero until
+    /// end is blind to exactly the long-lived sessions the product exists
+    /// for, so this drives bytes in both directions, holds the stream open,
+    /// and reads the byte series while the relay is still running.
+    #[test]
+    fn a_live_stream_publishes_bytes_before_it_closes() {
+        let recorder = crate::test_metrics::LiveCounterRecorder::default();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        metrics::with_local_recorder(&recorder, || {
+            runtime.block_on(async {
+                let (mut client, downstream) = tokio::io::duplex(64);
+                let (upstream, mut server) = tokio::io::duplex(64);
+                let mut serving = tokio::task::JoinSet::new();
+                serving.spawn(access_server_copy(downstream, upstream).serve_as_access_server());
+
+                // 12 bytes client -> server (uplink), 8 bytes server -> client
+                // (downlink), with the stream left open in between.
+                client.write_all(b"uplink-bytes").await.unwrap();
+                let mut uplink = [0u8; 12];
+                server.read_exact(&mut uplink).await.unwrap();
+                server.write_all(b"downlink").await.unwrap();
+                let mut downlink = [0u8; 8];
+                client.read_exact(&mut downlink).await.unwrap();
+
+                assert!(
+                    serving.try_join_next().is_none(),
+                    "the stream must still be open for this reading to mean anything"
+                );
+                assert_eq!(
+                    recorder.counter_value("stream.up.bytes"),
+                    12,
+                    "a live stream must publish its uplink bytes as they move"
+                );
+                assert_eq!(
+                    recorder.counter_value("stream.dn.bytes"),
+                    8,
+                    "a live stream must publish its downlink bytes as they move"
+                );
+
+                drop(client);
+                drop(server);
+                serving.join_next().await.unwrap().unwrap().1.unwrap();
+            });
+        });
     }
 }
